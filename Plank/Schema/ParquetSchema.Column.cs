@@ -4,40 +4,40 @@ namespace Plank.Schema;
 
 public sealed partial class ParquetSchema
 {
-    public sealed class Column
+public sealed class Column(int ordinal, string name, Type clrType, ColumnOptions options)
+{
+    public Column
     {
-        public Column(int ordinal, string name, Type clrType, ColumnOptions options)
-        {
-            if (ordinal < 0)
-                throw new ArgumentOutOfRangeException(nameof(ordinal), ordinal, "Column ordinal must be non-negative.");
-            ArgumentNullException.ThrowIfNull(name);
-            ArgumentNullException.ThrowIfNull(clrType);
+        if (ordinal < 0)
+            throw new ArgumentOutOfRangeException(nameof(ordinal), ordinal, "Column ordinal must be non-negative.");
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(clrType);
 
-            Ordinal = ordinal;
-            Name = name;
-            ClrType = clrType;
-            PhysicalType = ParquetTypeMap.GetPhysicalType(clrType);
+        Ordinal = ordinal;
+        Name = name;
+        ClrType = clrType;
+        PhysicalType = ParquetTypeMap.GetPhysicalType(clrType);
 
-            var repetition = options.Repetition;
-            if (repetition == ParquetRepetition.Unspecified)
-                repetition = ParquetTypeMap.IsNullable(clrType)
-                    ? ParquetRepetition.Optional
-                    : ParquetRepetition.Required;
+        var repetition = options.Repetition;
+        if (repetition == ParquetRepetition.Unspecified)
+            repetition = ParquetTypeMap.IsNullable(clrType)
+                ? ParquetRepetition.Optional
+                : ParquetRepetition.Required;
 
-            Repetition = repetition;
-            Encodings = options.Encodings.IsDefault ? ImmutableArray<EncodingKind>.Empty : options.Encodings;
-        }
+        Repetition = repetition;
+        Encodings = options.Encodings.IsDefault ? ImmutableArray<EncodingKind>.Empty : options.Encodings;
+    }
 
-        public int Ordinal { get; }
+    public int Ordinal { get; }
 
-        public string Name { get; }
+    public string Name { get; }
 
         public Type ClrType { get; }
 
         public ParquetPhysicalType PhysicalType { get; }
 
-        public ParquetRepetition Repetition { get; }
+    public ParquetRepetition Repetition { get; }
 
-        public ImmutableArray<EncodingKind> Encodings { get; }
-    }
+    public ImmutableArray<EncodingKind> Encodings { get; }
+}
 }
