@@ -16,23 +16,6 @@ public sealed partial class ParquetSchema
 
     public IReadOnlyList<Column> Columns => _columns;
 
-    public Column ColumnAt(int ordinal)
-    {
-        if ((uint)ordinal >= (uint)_columns.Length)
-            throw new ArgumentOutOfRangeException(nameof(ordinal), ordinal, "Column ordinal is out of range.");
-
-        return _columns[ordinal];
-    }
-
-    public Column<TProp> ColumnAt<TProp>(int ordinal)
-    {
-        var column = ColumnAt(ordinal);
-        if (column is Column<TProp> typed)
-            return typed;
-
-        throw new InvalidOperationException($"Column at ordinal {ordinal} is not of type {typeof(TProp)}.");
-    }
-
     public static ParquetSchema Create(params Column[] columns)
     {
         if (columns is null)
