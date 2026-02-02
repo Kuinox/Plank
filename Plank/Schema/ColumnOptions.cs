@@ -2,17 +2,16 @@ using System.Collections.Immutable;
 
 namespace Plank;
 
-public readonly record struct ColumnOptions(ParquetRepetition repetition, ImmutableArray<EncodingKind> encodings)
+public readonly record struct ColumnOptions(ParquetRepetition Repetition, ImmutableArray<EncodingKind> Encodings)
 {
     public static readonly ColumnOptions Default = new(ParquetRepetition.Unspecified, ImmutableArray<EncodingKind>.Empty);
 
-    public ParquetRepetition Repetition { get; } = repetition;
-
-    public ImmutableArray<EncodingKind> Encodings { get; } = encodings.IsDefault ? ImmutableArray<EncodingKind>.Empty : encodings;
-
     public ColumnOptions WithRepetition(ParquetRepetition repetition)
-        => new(repetition, Encodings);
+        => new(repetition, NormalizedEncodings());
 
     public ColumnOptions WithEncoding(EncodingKind encoding)
-        => new(Repetition, Encodings.Add(encoding));
+        => new(Repetition, NormalizedEncodings().Add(encoding));
+
+    ImmutableArray<EncodingKind> NormalizedEncodings()
+        => Encodings.IsDefault ? ImmutableArray<EncodingKind>.Empty : Encodings;
 }
