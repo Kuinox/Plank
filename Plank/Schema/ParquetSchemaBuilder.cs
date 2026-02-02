@@ -1,0 +1,27 @@
+namespace Plank;
+
+public sealed class ParquetSchemaBuilder
+{
+    readonly List<IColumnDefinition> _definitions = new();
+
+    public ColumnSchemaBuilder<TProp> Column<TProp>(string name)
+    {
+        if (name is null)
+            throw new ArgumentNullException(nameof(name));
+
+        var definition = new ColumnDefinition<TProp>(name);
+        _definitions.Add(definition);
+        return new ColumnSchemaBuilder<TProp>(this, definition);
+    }
+
+    public ParquetSchema Build()
+    {
+        var columns = new ParquetSchema.Column[_definitions.Count];
+        for (var i = 0; i < _definitions.Count; i++)
+        {
+            columns[i] = _definitions[i].Create(i);
+        }
+
+        return ParquetSchema.Create(columns);
+    }
+}
