@@ -26,7 +26,7 @@ public sealed class RowGroupWriter : IDisposable
 
     public int RowCount { get; }
 
-    public ColumnWriter<T> Column<T>(IColumn<T> column)
+    public ColumnWriter<T> Column<T>(ParquetSchema.Column<T> column)
     {
         if (column is null)
         {
@@ -41,7 +41,7 @@ public sealed class RowGroupWriter : IDisposable
         return new ColumnWriter<T>(this, column);
     }
 
-    internal SerializedColumn Serialize<T>(IColumn<T> column, ReadOnlySpan<T> values, EncodingKind? encoding, CompressionKind? compression)
+    internal SerializedColumn Serialize<T>(ParquetSchema.Column<T> column, ReadOnlySpan<T> values, EncodingKind? encoding, CompressionKind? compression)
     {
         var ordinal = column.Ordinal;
         if (_staged[ordinal])
@@ -80,7 +80,7 @@ public sealed class RowGroupWriter : IDisposable
         return ValueTask.CompletedTask;
     }
 
-    private static EncodingKind ResolveDefaultEncoding(IColumn column)
+    private static EncodingKind ResolveDefaultEncoding(ParquetSchema.Column column)
     {
         var encodings = column.Encodings;
         return encodings.Length == 0 ? EncodingKind.Plain : encodings[0];

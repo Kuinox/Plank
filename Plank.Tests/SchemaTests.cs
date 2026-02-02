@@ -11,18 +11,10 @@ public sealed class SchemaTests
     [Test]
     public async Task For_ReturnsRegisteredSchema()
     {
-        var colA = Column<Row, int>.Create(
-            "A",
-            0,
-            static (in Row row) => row.A,
-            static (ref Row row, int value) => row.A = value);
-        var colB = Column<Row, int>.Create(
-            "B",
-            1,
-            static (in Row row) => row.B,
-            static (ref Row row, int value) => row.B = value);
-
-        var schema = ParquetSchema.Create(colA, colB);
+        var schema = ParquetSchema.Define()
+            .Column<int>("A")
+            .Column<int>("B")
+            .Build();
         ParquetSchema.Register<Row>(schema);
 
         var resolved = ParquetSchema.For<Row>(_ => { });

@@ -4,26 +4,47 @@ using System.Linq.Expressions;
 
 namespace Plank;
 
-public sealed class ParquetSchema
+public sealed partial class ParquetSchema
 {
     private static readonly ConcurrentDictionary<Type, ParquetSchema> Registry = new();
-    private readonly IColumn[] _columns;
+    private readonly Column[] _columns;
 
-    private ParquetSchema(IColumn[] columns)
+    private ParquetSchema(Column[] columns)
     {
         _columns = columns;
     }
 
-    public IReadOnlyList<IColumn> Columns => _columns;
+    public IReadOnlyList<Column> Columns => _columns;
 
-    public static ParquetSchema Create(params IColumn[] columns)
+    public Column ColumnAt(int ordinal)
+    {
+        if ((uint)ordinal >= (uint)_columns.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ordinal), ordinal, "Column ordinal is out of range.");
+        }
+
+        return _columns[ordinal];
+    }
+
+    public Column<TProp> ColumnAt<TProp>(int ordinal)
+    {
+        var column = ColumnAt(ordinal);
+        if (column is Column<TProp> typed)
+        {
+            return typed;
+        }
+
+        throw new InvalidOperationException($"Column at ordinal {ordinal} is not of type {typeof(TProp)}.");
+    }
+
+    public static ParquetSchema Create(params Column[] columns)
     {
         if (columns is null)
         {
             throw new ArgumentNullException(nameof(columns));
         }
 
-        var copy = new IColumn[columns.Length];
+        var copy = new Column[columns.Length];
         for (var i = 0; i < columns.Length; i++)
         {
             copy[i] = columns[i] ?? throw new ArgumentNullException(nameof(columns), $"Column at index {i} is null.");
@@ -40,9 +61,9 @@ public sealed class ParquetSchema
         return new ParquetSchema(copy);
     }
 
-    public static ColumnSchemaBuilder Define()
+    public static ParquetSchemaBuilder Define()
     {
-        return new ColumnSchemaBuilder();
+        return new ParquetSchemaBuilder();
     }
 
     public static void Register<T>(ParquetSchema schema)
@@ -103,11 +124,11 @@ public sealed class SchemaBuilder<T>
     }
 }
 
-public sealed class ColumnSchemaBuilder
+public sealed class ParquetSchemaBuilder
 {
     private readonly List<IColumnDefinition> _definitions = new();
 
-    public ColumnDefinitionBuilder<TProp> Column<TProp>(string name)
+    public ColumnSchemaBuilder<TProp> Column<TProp>(string name)
     {
         if (name is null)
         {
@@ -116,33 +137,33 @@ public sealed class ColumnSchemaBuilder
 
         var definition = new ColumnDefinition<TProp>(name);
         _definitions.Add(definition);
-        return new ColumnDefinitionBuilder<TProp>(this, definition);
+        return new ColumnSchemaBuilder<TProp>(this, definition);
     }
 
     public ParquetSchema Build()
     {
-        var columns = new IColumn[_definitions.Count];
+        var columns = new ParquetSchema.Column[_definitions.Count];
         for (var i = 0; i < _definitions.Count; i++)
         {
             columns[i] = _definitions[i].Create(i);
         }
 
-        return Create(columns);
+        return ParquetSchema.Create(columns);
     }
 }
 
-public sealed class ColumnDefinitionBuilder<TProp>
+public sealed class ColumnSchemaBuilder<TProp>
 {
-    private readonly ColumnSchemaBuilder _schema;
+    private readonly ParquetSchemaBuilder _schema;
     private readonly ColumnDefinition<TProp> _definition;
 
-    internal ColumnDefinitionBuilder(ColumnSchemaBuilder schema, ColumnDefinition<TProp> definition)
+    internal ColumnSchemaBuilder(ParquetSchemaBuilder schema, ColumnDefinition<TProp> definition)
     {
         _schema = schema;
         _definition = definition;
     }
 
-    public ColumnDefinitionBuilder<TProp> Name(string name)
+    public ColumnSchemaBuilder<TProp> Name(string name)
     {
         if (name is null)
         {
@@ -153,13 +174,13 @@ public sealed class ColumnDefinitionBuilder<TProp>
         return this;
     }
 
-    public ColumnDefinitionBuilder<TProp> Encoding(EncodingKind encoding)
+    public ColumnSchemaBuilder<TProp> Encoding(EncodingKind encoding)
     {
         _definition.Options = _definition.Options.WithEncoding(encoding);
         return this;
     }
 
-    public ColumnDefinitionBuilder<TProp> Encodings(params EncodingKind[] encodings)
+    public ColumnSchemaBuilder<TProp> Encodings(params EncodingKind[] encodings)
     {
         if (encodings is null)
         {
@@ -176,19 +197,19 @@ public sealed class ColumnDefinitionBuilder<TProp>
         return this;
     }
 
-    public ColumnDefinitionBuilder<TProp> Optional()
+    public ColumnSchemaBuilder<TProp> Optional()
     {
         _definition.Options = _definition.Options.WithRepetition(ParquetRepetition.Optional);
         return this;
     }
 
-    public ColumnDefinitionBuilder<TProp> Required()
+    public ColumnSchemaBuilder<TProp> Required()
     {
         _definition.Options = _definition.Options.WithRepetition(ParquetRepetition.Required);
         return this;
     }
 
-    public ColumnDefinitionBuilder<TProp> Column<TNext>(string name)
+    public ColumnSchemaBuilder<TNext> Column<TNext>(string name)
     {
         return _schema.Column<TNext>(name);
     }
@@ -201,7 +222,7 @@ public sealed class ColumnDefinitionBuilder<TProp>
 
 internal interface IColumnDefinition
 {
-    IColumn Create(int ordinal);
+    ParquetSchema.Column Create(int ordinal);
 }
 
 internal sealed class ColumnDefinition<TProp> : IColumnDefinition
@@ -216,9 +237,9 @@ internal sealed class ColumnDefinition<TProp> : IColumnDefinition
 
     public ColumnOptions Options { get; set; }
 
-    public IColumn Create(int ordinal)
+    public ParquetSchema.Column Create(int ordinal)
     {
-        return new Column<TProp>(ordinal, Name, Options);
+        return new ParquetSchema.Column<TProp>(ordinal, Name, Options);
     }
 }
 
