@@ -16,4 +16,19 @@ public readonly struct ColumnWriter
 
     public ValueTask WriteAsync<T>(ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
         => Serialize(values).WriteAsync(cancellationToken);
+
+    public bool Equals(ColumnWriter other)
+        => throw new NotImplementedException();
+
+    public override bool Equals(object? obj)
+        => throw new NotImplementedException();
+
+    public override int GetHashCode()
+        => throw new NotImplementedException();
+
+    public static bool operator ==(ColumnWriter left, ColumnWriter right)
+        => throw new NotImplementedException();
+
+    public static bool operator !=(ColumnWriter left, ColumnWriter right)
+        => throw new NotImplementedException();
 }
