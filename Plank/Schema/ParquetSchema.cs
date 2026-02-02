@@ -6,10 +6,10 @@ namespace Plank;
 
 public sealed partial class ParquetSchema
 {
-    private static readonly ConcurrentDictionary<Type, ParquetSchema> Registry = new();
-    private readonly Column[] _columns;
+    static readonly ConcurrentDictionary<Type, ParquetSchema> Registry = new();
+    readonly Column[] _columns;
 
-    private ParquetSchema(Column[] columns)
+    ParquetSchema(Column[] columns)
     {
         _columns = columns;
     }
@@ -126,7 +126,7 @@ public sealed class SchemaBuilder<T>
 
 public sealed class ParquetSchemaBuilder
 {
-    private readonly List<IColumnDefinition> _definitions = new();
+    readonly List<IColumnDefinition> _definitions = new();
 
     public ColumnSchemaBuilder<TProp> Column<TProp>(string name)
     {
@@ -154,8 +154,8 @@ public sealed class ParquetSchemaBuilder
 
 public sealed class ColumnSchemaBuilder<TProp>
 {
-    private readonly ParquetSchemaBuilder _schema;
-    private readonly ColumnDefinition<TProp> _definition;
+    readonly ParquetSchemaBuilder _schema;
+    readonly ColumnDefinition<TProp> _definition;
 
     internal ColumnSchemaBuilder(ParquetSchemaBuilder schema, ColumnDefinition<TProp> definition)
     {

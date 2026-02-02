@@ -2,8 +2,8 @@ namespace Plank;
 
 public readonly struct ColumnWriter<T>
 {
-    private readonly RowGroupWriter _group;
-    private readonly ParquetSchema.Column<T> _column;
+    readonly RowGroupWriter _group;
+    readonly ParquetSchema.Column<T> _column;
 
     internal ColumnWriter(RowGroupWriter group, ParquetSchema.Column<T> column)
     {
@@ -29,9 +29,9 @@ public readonly struct ColumnWriter<T>
 
 public readonly struct ColumnEncodeStage<T>
 {
-    private readonly RowGroupWriter _group;
-    private readonly ParquetSchema.Column<T> _column;
-    private readonly EncodingKind _encoding;
+    readonly RowGroupWriter _group;
+    readonly ParquetSchema.Column<T> _column;
+    readonly EncodingKind _encoding;
 
     internal ColumnEncodeStage(RowGroupWriter group, ParquetSchema.Column<T> column, EncodingKind encoding)
     {
@@ -58,10 +58,10 @@ public readonly struct ColumnEncodeStage<T>
 
 public readonly struct ColumnCompressStage<T>
 {
-    private readonly RowGroupWriter _group;
-    private readonly ParquetSchema.Column<T> _column;
-    private readonly EncodingKind _encoding;
-    private readonly CompressionKind _compression;
+    readonly RowGroupWriter _group;
+    readonly ParquetSchema.Column<T> _column;
+    readonly EncodingKind _encoding;
+    readonly CompressionKind _compression;
 
     internal ColumnCompressStage(RowGroupWriter group, ParquetSchema.Column<T> column, EncodingKind encoding, CompressionKind compression)
     {

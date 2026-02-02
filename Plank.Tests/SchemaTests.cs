@@ -2,7 +2,7 @@ namespace Plank.Tests;
 
 public sealed class SchemaTests
 {
-    private sealed class Row
+    sealed class Row
     {
         public int A { get; set; }
         public int B { get; set; }

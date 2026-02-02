@@ -2,13 +2,13 @@ namespace Plank;
 
 public sealed class RowGroupWriter : IDisposable
 {
-    private readonly ParquetWriter _writer;
-    private readonly RowGroupOptions _options;
-    private readonly bool[] _staged;
-    private readonly EncodingKind[] _stagedEncoding;
-    private readonly CompressionKind[] _stagedCompression;
-    private readonly int[] _stagedValueCount;
-    private int _nextOrdinal;
+    readonly ParquetWriter _writer;
+    readonly RowGroupOptions _options;
+    readonly bool[] _staged;
+    readonly EncodingKind[] _stagedEncoding;
+    readonly CompressionKind[] _stagedCompression;
+    readonly int[] _stagedValueCount;
+    int _nextOrdinal;
 
     internal RowGroupWriter(ParquetWriter writer, int rowCount, RowGroupOptions options)
     {
@@ -80,7 +80,7 @@ public sealed class RowGroupWriter : IDisposable
         return ValueTask.CompletedTask;
     }
 
-    private static EncodingKind ResolveDefaultEncoding(ParquetSchema.Column column)
+    static EncodingKind ResolveDefaultEncoding(ParquetSchema.Column column)
     {
         var encodings = column.Encodings;
         return encodings.Length == 0 ? EncodingKind.Plain : encodings[0];

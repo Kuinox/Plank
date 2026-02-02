@@ -53,7 +53,7 @@ public sealed partial class ParquetSchema
         {
         }
 
-        private static ParquetRepetition ResolveRepetition(ColumnOptions options)
+        static ParquetRepetition ResolveRepetition(ColumnOptions options)
         {
             var repetition = options.Repetition;
             if (repetition == ParquetRepetition.Unspecified)

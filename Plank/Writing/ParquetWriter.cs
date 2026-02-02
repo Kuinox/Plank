@@ -2,11 +2,11 @@ namespace Plank;
 
 public sealed class ParquetWriter : IDisposable, IAsyncDisposable
 {
-    private readonly Stream _stream;
-    private readonly ParquetSchema _schema;
-    private readonly ParquetWriterOptions _options;
+    readonly Stream _stream;
+    readonly ParquetSchema _schema;
+    readonly ParquetWriterOptions _options;
 
-    private ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options)
+    ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options)
     {
         _stream = stream;
         _schema = schema;
