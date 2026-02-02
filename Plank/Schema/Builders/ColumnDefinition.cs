@@ -2,10 +2,8 @@ using System.Collections.Immutable;
 
 namespace Plank.Schema.Builders;
 
-internal sealed record class ColumnDefinition(string Name, Type ClrType)
+sealed record ColumnDefinition(string Name, Type ClrType, ColumnOptions Options)
 {
-    public ColumnOptions Options { get; set; }
-
     public ParquetSchema.Column Create(int ordinal)
     {
         if (ordinal < 0)
