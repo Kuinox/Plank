@@ -15,18 +15,19 @@ public readonly struct RowGroupWriter : IDisposable, IEquatable<RowGroupWriter>
     public int RowCount
         => _state.RowCount;
 
-    public ColumnWriter Column(ParquetSchema.Column column)
+    public SerializedColumn Serialize<T>(ParquetSchema.Column column, ReadOnlySpan<T> values)
+        => Serialize(column, values, null, null);
+
+    public ValueTask WriteAsync<T>(ParquetSchema.Column column, ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
+        => Serialize(column, values).WriteAsync(cancellationToken);
+
+    internal SerializedColumn Serialize<T>(ParquetSchema.Column column, ReadOnlySpan<T> values, EncodingKind? encoding, CompressionKind? compression)
     {
         ArgumentNullException.ThrowIfNull(column);
 
         if (column.Ordinal < 0 || column.Ordinal >= _state.Staged.Length)
             throw new ArgumentOutOfRangeException(nameof(column), $"Column '{column.Name}' ordinal is out of range.");
 
-        return new ColumnWriter(this, column);
-    }
-
-    internal SerializedColumn Serialize<T>(ParquetSchema.Column column, ReadOnlySpan<T> values, EncodingKind? encoding, CompressionKind? compression)
-    {
         if (column.ClrType != typeof(T))
             throw new InvalidOperationException($"Column '{column.Name}' expects {column.ClrType}, but received {typeof(T)}.");
 
