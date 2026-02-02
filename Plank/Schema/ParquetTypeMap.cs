@@ -16,22 +16,16 @@ internal static class ParquetTypeMap
             throw new ArgumentNullException(nameof(type));
 
         var unwrapped = Nullable.GetUnderlyingType(type) ?? type;
-
-        if (unwrapped == typeof(bool))
-            return ParquetPhysicalType.Boolean;
-        if (unwrapped == typeof(int))
-            return ParquetPhysicalType.Int32;
-        if (unwrapped == typeof(long))
-            return ParquetPhysicalType.Int64;
-        if (unwrapped == typeof(float))
-            return ParquetPhysicalType.Float;
-        if (unwrapped == typeof(double))
-            return ParquetPhysicalType.Double;
-        if (unwrapped == typeof(byte[]))
-            return ParquetPhysicalType.ByteArray;
-        if (unwrapped == typeof(string))
-            return ParquetPhysicalType.ByteArray;
-
-        throw new NotSupportedException($"Unsupported CLR type: {type}.");
+        return unwrapped switch
+        {
+            var t when t == typeof(bool) => ParquetPhysicalType.Boolean,
+            var t when t == typeof(int) => ParquetPhysicalType.Int32,
+            var t when t == typeof(long) => ParquetPhysicalType.Int64,
+            var t when t == typeof(float) => ParquetPhysicalType.Float,
+            var t when t == typeof(double) => ParquetPhysicalType.Double,
+            var t when t == typeof(byte[]) => ParquetPhysicalType.ByteArray,
+            var t when t == typeof(string) => ParquetPhysicalType.ByteArray,
+            _ => throw new NotSupportedException($"Unsupported CLR type: {type}.")
+        };
     }
 }
