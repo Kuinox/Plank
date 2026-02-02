@@ -1,33 +1,24 @@
+using System.Collections.Immutable;
+
 namespace Plank;
 
 public readonly struct ColumnOptions
 {
-    public static readonly ColumnOptions Default = new(ParquetRepetition.Unspecified, Array.Empty<EncodingKind>());
+    public static readonly ColumnOptions Default = new(ParquetRepetition.Unspecified, ImmutableArray<EncodingKind>.Empty);
 
-    public ColumnOptions(ParquetRepetition repetition, EncodingKind[] encodings)
+    public ColumnOptions(ParquetRepetition repetition, ImmutableArray<EncodingKind> encodings)
     {
         Repetition = repetition;
-        Encodings = encodings ?? Array.Empty<EncodingKind>();
+        Encodings = encodings.IsDefault ? ImmutableArray<EncodingKind>.Empty : encodings;
     }
 
     public ParquetRepetition Repetition { get; }
 
-    public EncodingKind[] Encodings { get; }
+    public ImmutableArray<EncodingKind> Encodings { get; }
 
     public ColumnOptions WithRepetition(ParquetRepetition repetition)
-    {
-        return new ColumnOptions(repetition, Encodings);
-    }
+        => new(repetition, Encodings);
 
     public ColumnOptions WithEncoding(EncodingKind encoding)
-    {
-        var updated = new EncodingKind[Encodings.Length + 1];
-        if (Encodings.Length > 0)
-        {
-            Array.Copy(Encodings, updated, Encodings.Length);
-        }
-
-        updated[^1] = encoding;
-        return new ColumnOptions(Repetition, updated);
-    }
+        => new(Repetition, Encodings.Add(encoding));
 }

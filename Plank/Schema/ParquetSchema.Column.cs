@@ -1,10 +1,12 @@
+using System.Collections.Immutable;
+
 namespace Plank;
 
 public sealed partial class ParquetSchema
 {
     public abstract class Column
     {
-        protected Column(int ordinal, string name, ParquetPhysicalType physicalType, ParquetRepetition repetition, EncodingKind[] encodings, Type clrType)
+        protected Column(int ordinal, string name, ParquetPhysicalType physicalType, ParquetRepetition repetition, ImmutableArray<EncodingKind> encodings, Type clrType)
         {
             if (ordinal < 0)
             {
@@ -20,9 +22,7 @@ public sealed partial class ParquetSchema
             Name = name;
             PhysicalType = physicalType;
             Repetition = repetition;
-            Encodings = encodings.Length == 0
-                ? Array.Empty<EncodingKind>()
-                : (EncodingKind[])encodings.Clone();
+            Encodings = encodings.IsDefault ? ImmutableArray<EncodingKind>.Empty : encodings;
             ClrType = clrType ?? throw new ArgumentNullException(nameof(clrType));
         }
 
@@ -34,7 +34,7 @@ public sealed partial class ParquetSchema
 
         public ParquetRepetition Repetition { get; }
 
-        public EncodingKind[] Encodings { get; }
+        public ImmutableArray<EncodingKind> Encodings { get; }
 
         public Type ClrType { get; }
 
