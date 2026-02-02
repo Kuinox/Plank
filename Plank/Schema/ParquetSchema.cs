@@ -55,7 +55,7 @@ public sealed partial class ParquetSchema
         });
     }
 
-    public static ParquetSchema For<T>(Action<SchemaBuilder<T>> configure)
+    public static ParquetSchema For<T>(Action<RowSchemaBuilder<T>> configure)
     {
         if (TryGet<T>(out var schema))
             return schema;
