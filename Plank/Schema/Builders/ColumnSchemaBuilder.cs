@@ -33,9 +33,7 @@ public sealed class ColumnSchemaBuilder<TProp>
 
         var options = _definition.Options;
         for (var i = 0; i < encodings.Length; i++)
-        {
             options = options.WithEncoding(encodings[i]);
-        }
 
         _definition.Options = options;
         return this;
