@@ -1,4 +1,4 @@
-namespace Plank;
+namespace Plank.Writing;
 
 public sealed class RowGroupOptions
 {

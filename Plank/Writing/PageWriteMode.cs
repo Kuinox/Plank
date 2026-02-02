@@ -1,4 +1,4 @@
-namespace Plank;
+namespace Plank.Writing;
 
 public enum PageWriteMode
 {

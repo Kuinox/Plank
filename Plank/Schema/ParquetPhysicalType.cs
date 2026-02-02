@@ -1,4 +1,5 @@
-namespace Plank;
+namespace Plank.Schema;
+#pragma warning disable CA1720
 
 public enum ParquetPhysicalType
 {

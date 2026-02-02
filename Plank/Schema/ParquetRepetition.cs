@@ -1,4 +1,4 @@
-namespace Plank;
+namespace Plank.Schema;
 
 public enum ParquetRepetition
 {

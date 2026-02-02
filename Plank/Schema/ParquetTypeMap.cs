@@ -1,4 +1,4 @@
-namespace Plank;
+namespace Plank.Schema;
 
 internal static class ParquetTypeMap
 {
