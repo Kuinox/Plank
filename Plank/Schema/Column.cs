@@ -1,6 +1,10 @@
 namespace Plank;
 
-public sealed class Column<T, TProp> : IColumn
+public interface IColumn<out TProp> : IColumn
+{
+}
+
+public sealed class Column<T, TProp> : IColumn<TProp>
 {
     public delegate TProp Getter(in T row);
     public delegate void Setter(ref T row, TProp value);
@@ -8,8 +12,9 @@ public sealed class Column<T, TProp> : IColumn
     private readonly Getter _getter;
     private readonly Setter? _setter;
 
-    private Column(string name, ParquetPhysicalType physicalType, ParquetRepetition repetition, EncodingKind[] encodings, Getter getter, Setter? setter)
+    private Column(int ordinal, string name, ParquetPhysicalType physicalType, ParquetRepetition repetition, EncodingKind[] encodings, Getter getter, Setter? setter)
     {
+        Ordinal = ordinal;
         Name = name;
         PhysicalType = physicalType;
         Repetition = repetition;
@@ -19,6 +24,8 @@ public sealed class Column<T, TProp> : IColumn
     }
 
     public string Name { get; }
+
+    public int Ordinal { get; }
 
     public ParquetPhysicalType PhysicalType { get; }
 
@@ -34,6 +41,7 @@ public sealed class Column<T, TProp> : IColumn
 
     public static Column<T, TProp> Create(
         string name,
+        int ordinal,
         Getter getter,
         Setter? setter = null,
         ColumnOptions? options = null)
@@ -46,6 +54,11 @@ public sealed class Column<T, TProp> : IColumn
         if (getter is null)
         {
             throw new ArgumentNullException(nameof(getter));
+        }
+
+        if (ordinal < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ordinal), ordinal, "Column ordinal must be non-negative.");
         }
 
         var resolvedOptions = options ?? ColumnOptions.Default;
@@ -62,6 +75,6 @@ public sealed class Column<T, TProp> : IColumn
             ? Array.Empty<EncodingKind>()
             : (EncodingKind[])resolvedOptions.Encodings.Clone();
 
-        return new Column<T, TProp>(name, physicalType, repetition, encodings, getter, setter);
+        return new Column<T, TProp>(ordinal, name, physicalType, repetition, encodings, getter, setter);
     }
 }

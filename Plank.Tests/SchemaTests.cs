@@ -13,10 +13,12 @@ public sealed class SchemaTests
     {
         var colA = Column<Row, int>.Create(
             "A",
+            0,
             static (in Row row) => row.A,
             static (ref Row row, int value) => row.A = value);
         var colB = Column<Row, int>.Create(
             "B",
+            1,
             static (in Row row) => row.B,
             static (ref Row row, int value) => row.B = value);
 
@@ -27,5 +29,17 @@ public sealed class SchemaTests
 
         await Assert.That(resolved.Columns.Select(c => c.Name).ToArray())
             .IsEqualTo(new[] { "A", "B" });
+    }
+
+    [Test]
+    public async Task Define_AssignsOrdinalsInOrder()
+    {
+        var schema = ParquetSchema.Define()
+            .Column<int>("X")
+            .Column<int>("Y")
+            .Build();
+
+        await Assert.That(schema.Columns.Select(c => c.Ordinal).ToArray())
+            .IsEqualTo(new[] { 0, 1 });
     }
 }
