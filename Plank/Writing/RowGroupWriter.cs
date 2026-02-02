@@ -2,7 +2,7 @@ using Plank.Schema;
 
 namespace Plank.Writing;
 
-public readonly struct RowGroupWriter : IDisposable, IEquatable<RowGroupWriter>
+public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
 {
     const int StagedFree = 0;
     const int StagedWriting = 1;
@@ -72,6 +72,8 @@ public readonly struct RowGroupWriter : IDisposable, IEquatable<RowGroupWriter>
 
         Volatile.Write(ref _state.Staged[ordinal], StagedFree);
         _state.StagedValueCount[ordinal] = 0;
+        if (expected + 1 == _state.Staged.Length)
+            _state.Writer.CompleteRowGroup(rowCount);
         return ValueTask.CompletedTask;
     }
 
@@ -95,10 +97,6 @@ public readonly struct RowGroupWriter : IDisposable, IEquatable<RowGroupWriter>
 
     public static bool operator !=(RowGroupWriter left, RowGroupWriter right)
         => !left.Equals(right);
-
-    public void Dispose()
-    {
-    }
 
     sealed class State
     {
