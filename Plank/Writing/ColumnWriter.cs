@@ -1,6 +1,6 @@
 namespace Plank;
 
-public readonly struct ColumnWriter
+public readonly struct ColumnWriter : IEquatable<ColumnWriter>
 {
     readonly RowGroupWriter _group;
     readonly ParquetSchema.Column _column;
@@ -18,17 +18,18 @@ public readonly struct ColumnWriter
         => Serialize(values).WriteAsync(cancellationToken);
 
     public bool Equals(ColumnWriter other)
-        => throw new NotImplementedException();
+        => ReferenceEquals(_group, other._group)
+           && ReferenceEquals(_column, other._column);
 
     public override bool Equals(object? obj)
-        => throw new NotImplementedException();
+        => obj is ColumnWriter other && Equals(other);
 
     public override int GetHashCode()
-        => throw new NotImplementedException();
+        => HashCode.Combine(_group, _column);
 
     public static bool operator ==(ColumnWriter left, ColumnWriter right)
-        => throw new NotImplementedException();
+        => left.Equals(right);
 
     public static bool operator !=(ColumnWriter left, ColumnWriter right)
-        => throw new NotImplementedException();
+        => !left.Equals(right);
 }

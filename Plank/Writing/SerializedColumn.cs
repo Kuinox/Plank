@@ -1,6 +1,6 @@
 namespace Plank;
 
-public readonly struct SerializedColumn
+public readonly struct SerializedColumn : IEquatable<SerializedColumn>
 {
     readonly RowGroupWriter _group;
     readonly int _ordinal;
@@ -15,17 +15,18 @@ public readonly struct SerializedColumn
         => _group.WriteSerializedAsync(_ordinal, cancellationToken);
 
     public bool Equals(SerializedColumn other)
-        => throw new NotImplementedException();
+        => ReferenceEquals(_group, other._group)
+           && _ordinal == other._ordinal;
 
     public override bool Equals(object? obj)
-        => throw new NotImplementedException();
+        => obj is SerializedColumn other && Equals(other);
 
     public override int GetHashCode()
-        => throw new NotImplementedException();
+        => HashCode.Combine(_group, _ordinal);
 
     public static bool operator ==(SerializedColumn left, SerializedColumn right)
-        => throw new NotImplementedException();
+        => left.Equals(right);
 
     public static bool operator !=(SerializedColumn left, SerializedColumn right)
-        => throw new NotImplementedException();
+        => !left.Equals(right);
 }
