@@ -12,16 +12,15 @@ public sealed class LoggerParquetLog : IParquetLog
         _logger = logger;
     }
 
-    public void RowGroupMetadataCapacityGrownWithoutEstimate(int previousCapacity, int newCapacity)
-        => _logger.LogDebug(
-            "Row group metadata capacity grew from {PreviousCapacity} to {NewCapacity} because no row group count was specified.",
-            previousCapacity,
-            newCapacity);
-
-    public void RowGroupMetadataCapacityGrownBeyondEstimate(int previousCapacity, int newCapacity, int expectedRowGroupCount)
-        => _logger.LogDebug(
-            "Row group metadata capacity grew from {PreviousCapacity} to {NewCapacity} because the expected row group count {ExpectedRowGroupCount} was underspecified.",
-            previousCapacity,
-            newCapacity,
-            expectedRowGroupCount);
+    public void RowGroupMetadataCapacityGrown(int previousCapacity, int newCapacity, int? expectedRowGroupCount)
+        => expectedRowGroupCount.HasValue
+            ? _logger.LogDebug(
+                "Row group metadata capacity grew from {PreviousCapacity} to {NewCapacity} because the expected row group count {ExpectedRowGroupCount} was underspecified.",
+                previousCapacity,
+                newCapacity,
+                expectedRowGroupCount.Value)
+            : _logger.LogDebug(
+                "Row group metadata capacity grew from {PreviousCapacity} to {NewCapacity} because no row group count was specified.",
+                previousCapacity,
+                newCapacity);
 }

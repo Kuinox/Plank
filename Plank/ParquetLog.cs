@@ -8,11 +8,7 @@ public sealed class ParquetLog : IParquetLog
     {
     }
 
-    public void RowGroupMetadataCapacityGrownWithoutEstimate(int previousCapacity, int newCapacity)
-    {
-    }
-
-    public void RowGroupMetadataCapacityGrownBeyondEstimate(int previousCapacity, int newCapacity, int expectedRowGroupCount)
+    public void RowGroupMetadataCapacityGrown(int previousCapacity, int newCapacity, int? expectedRowGroupCount)
     {
     }
 }

@@ -76,9 +76,9 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
         _rowGroups = grown;
 
         if (_expectedRowGroupCount < 0)
-            _log.RowGroupMetadataCapacityGrownWithoutEstimate(previous, newCapacity);
+            _log.RowGroupMetadataCapacityGrown(previous, newCapacity, null);
         else
-            _log.RowGroupMetadataCapacityGrownBeyondEstimate(previous, newCapacity, _expectedRowGroupCount);
+            _log.RowGroupMetadataCapacityGrown(previous, newCapacity, _expectedRowGroupCount);
     }
 
     public void Dispose()
