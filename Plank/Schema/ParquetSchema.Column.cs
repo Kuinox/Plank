@@ -1,10 +1,10 @@
 using System.Collections.Immutable;
 
-namespace Plank;
+namespace Plank.Schema;
 
 public sealed partial class ParquetSchema
 {
-    public sealed class Column
+    public sealed record class Column
     {
         public Column(int ordinal, string name, Type clrType, ColumnOptions options)
         {
