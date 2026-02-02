@@ -8,10 +8,9 @@ public sealed class ParquetSchemaBuilder
     {
         ArgumentNullException.ThrowIfNull(name);
 
-        var definition = new ColumnDefinition(name, typeof(TProp));
-        definition.Options = ColumnOptions.Default;
+        var definition = new ColumnDefinition(name, typeof(TProp), ColumnOptions.Default);
         _definitions.Add(definition);
-        return new ColumnSchemaBuilder<TProp>(this, definition);
+        return new ColumnSchemaBuilder<TProp>(this, _definitions.Count - 1, definition);
     }
 
     public ParquetSchema Build()
@@ -24,4 +23,7 @@ public sealed class ParquetSchemaBuilder
 
         return ParquetSchema.Create(columns);
     }
+
+    internal void ReplaceDefinition(int index, ColumnDefinition definition)
+        => _definitions[index] = definition;
 }
