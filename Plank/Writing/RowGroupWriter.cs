@@ -4,16 +4,20 @@ namespace Plank.Writing;
 
 public readonly struct RowGroupWriter : IDisposable, IEquatable<RowGroupWriter>
 {
+    const int StagedFree = 0;
+    const int StagedWriting = 1;
+    const int StagedReady = 2;
+
     readonly State _state;
 
-    internal RowGroupWriter(ParquetWriter writer, int rowCount, RowGroupOptions options)
+    internal RowGroupWriter(ParquetWriter writer, RowGroupOptions options)
     {
         var columnCount = writer.Schema.Columns.Count;
-        _state = new State(writer, options, rowCount, columnCount);
+        _state = new State(writer, options, columnCount);
     }
 
     public int RowCount
-        => _state.RowCount;
+        => Volatile.Read(ref _state.RowCount);
 
     public SerializedColumn Serialize<T>(ParquetSchema.Column column, ReadOnlySpan<T> values)
         => Serialize(column, values, null, null);
@@ -32,13 +36,13 @@ public readonly struct RowGroupWriter : IDisposable, IEquatable<RowGroupWriter>
             throw new InvalidOperationException($"Column '{column.Name}' expects {column.ClrType}, but received {typeof(T)}.");
 
         var ordinal = column.Ordinal;
-        if (_state.Staged[ordinal])
+        if (Interlocked.CompareExchange(ref _state.Staged[ordinal], StagedWriting, StagedFree) != StagedFree)
             throw new InvalidOperationException($"Column '{column.Name}' is already serialized.");
 
-        _state.Staged[ordinal] = true;
         _state.StagedValueCount[ordinal] = values.Length;
         _state.StagedEncoding[ordinal] = encoding ?? ResolveDefaultEncoding(column);
         _state.StagedCompression[ordinal] = compression ?? CompressionKind.None;
+        Volatile.Write(ref _state.Staged[ordinal], StagedReady);
 
         return new SerializedColumn(this, ordinal);
     }
@@ -48,15 +52,26 @@ public readonly struct RowGroupWriter : IDisposable, IEquatable<RowGroupWriter>
         if (ordinal < 0 || ordinal >= _state.Staged.Length)
             throw new ArgumentOutOfRangeException(nameof(ordinal));
 
-        if (!_state.Staged[ordinal])
+        if (_state.Staged[ordinal] != StagedReady)
             throw new InvalidOperationException($"Column ordinal {ordinal} has no serialized payload.");
 
-        if (ordinal != _state.NextOrdinal)
+        var valueCount = _state.StagedValueCount[ordinal];
+        var rowCount = Volatile.Read(ref _state.RowCount);
+        if (rowCount < 0)
+        {
+            var previous = Interlocked.CompareExchange(ref _state.RowCount, valueCount, -1);
+            rowCount = previous < 0 ? valueCount : previous;
+        }
+
+        if (rowCount != valueCount)
+            throw new InvalidOperationException($"Column ordinal {ordinal} has {valueCount} values but row group expects {rowCount}.");
+
+        var expected = ordinal;
+        if (Interlocked.CompareExchange(ref _state.NextOrdinal, expected + 1, expected) != expected)
             throw new InvalidOperationException($"Column ordinal {ordinal} was written out of order. Expected {_state.NextOrdinal}.");
 
-        _state.Staged[ordinal] = false;
+        Volatile.Write(ref _state.Staged[ordinal], StagedFree);
         _state.StagedValueCount[ordinal] = 0;
-        _state.NextOrdinal++;
         return ValueTask.CompletedTask;
     }
 
@@ -89,19 +104,19 @@ public readonly struct RowGroupWriter : IDisposable, IEquatable<RowGroupWriter>
     {
         internal readonly ParquetWriter Writer;
         internal readonly RowGroupOptions Options;
-        internal readonly bool[] Staged;
+        internal readonly int[] Staged;
         internal readonly EncodingKind[] StagedEncoding;
         internal readonly CompressionKind[] StagedCompression;
         internal readonly int[] StagedValueCount;
-        internal readonly int RowCount;
+        internal int RowCount;
         internal int NextOrdinal;
 
-        internal State(ParquetWriter writer, RowGroupOptions options, int rowCount, int columnCount)
+        internal State(ParquetWriter writer, RowGroupOptions options, int columnCount)
         {
             Writer = writer;
             Options = options;
-            RowCount = rowCount;
-            Staged = new bool[columnCount];
+            RowCount = -1;
+            Staged = new int[columnCount];
             StagedEncoding = new EncodingKind[columnCount];
             StagedCompression = new CompressionKind[columnCount];
             StagedValueCount = new int[columnCount];
