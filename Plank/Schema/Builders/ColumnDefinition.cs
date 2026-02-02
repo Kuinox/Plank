@@ -1,6 +1,6 @@
 namespace Plank;
 
-internal sealed class ColumnDefinition
+internal sealed record class ColumnDefinition
 {
     public ColumnDefinition(string name, Type clrType)
     {
