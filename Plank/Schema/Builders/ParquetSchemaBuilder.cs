@@ -1,4 +1,4 @@
-namespace Plank;
+namespace Plank.Schema.Builders;
 
 public sealed class ParquetSchemaBuilder
 {
@@ -9,6 +9,7 @@ public sealed class ParquetSchemaBuilder
         ArgumentNullException.ThrowIfNull(name);
 
         var definition = new ColumnDefinition(name, typeof(TProp));
+        definition.Options = ColumnOptions.Default;
         _definitions.Add(definition);
         return new ColumnSchemaBuilder<TProp>(this, definition);
     }

@@ -4,7 +4,7 @@ namespace Plank.Schema.Builders;
 
 internal sealed record class ColumnDefinition(string Name, Type ClrType)
 {
-    public ColumnOptions Options { get; set; } = ColumnOptions.Default;
+    public ColumnOptions Options { get; set; }
 
     public ParquetSchema.Column Create(int ordinal)
     {
