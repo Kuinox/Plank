@@ -1,69 +1,69 @@
 namespace Plank;
 
-public readonly struct ColumnWriter<T>
+public readonly struct ColumnWriter
 {
     readonly RowGroupWriter _group;
-    readonly ParquetSchema.Column<T> _column;
+    readonly ParquetSchema.Column _column;
 
-    internal ColumnWriter(RowGroupWriter group, ParquetSchema.Column<T> column)
+    internal ColumnWriter(RowGroupWriter group, ParquetSchema.Column column)
     {
         _group = group;
         _column = column;
     }
 
-    public SerializedColumn Serialize(ReadOnlySpan<T> values)
+    public SerializedColumn Serialize<T>(ReadOnlySpan<T> values)
     {
         return _group.Serialize(_column, values, null, null);
     }
 
-    public ColumnEncodeStage<T> Encode(EncodingKind encoding)
+    public ColumnEncodeStage Encode(EncodingKind encoding)
     {
-        return new ColumnEncodeStage<T>(_group, _column, encoding);
+        return new ColumnEncodeStage(_group, _column, encoding);
     }
 
-    public ValueTask WriteAsync(ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
+    public ValueTask WriteAsync<T>(ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
     {
         return Serialize(values).WriteAsync(cancellationToken);
     }
 }
 
-public readonly struct ColumnEncodeStage<T>
+public readonly struct ColumnEncodeStage
 {
     readonly RowGroupWriter _group;
-    readonly ParquetSchema.Column<T> _column;
+    readonly ParquetSchema.Column _column;
     readonly EncodingKind _encoding;
 
-    internal ColumnEncodeStage(RowGroupWriter group, ParquetSchema.Column<T> column, EncodingKind encoding)
+    internal ColumnEncodeStage(RowGroupWriter group, ParquetSchema.Column column, EncodingKind encoding)
     {
         _group = group;
         _column = column;
         _encoding = encoding;
     }
 
-    public ColumnCompressStage<T> Compress(CompressionKind compression)
+    public ColumnCompressStage Compress(CompressionKind compression)
     {
-        return new ColumnCompressStage<T>(_group, _column, _encoding, compression);
+        return new ColumnCompressStage(_group, _column, _encoding, compression);
     }
 
-    public SerializedColumn Serialize(ReadOnlySpan<T> values)
+    public SerializedColumn Serialize<T>(ReadOnlySpan<T> values)
     {
         return _group.Serialize(_column, values, _encoding, null);
     }
 
-    public ValueTask WriteAsync(ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
+    public ValueTask WriteAsync<T>(ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
     {
         return Serialize(values).WriteAsync(cancellationToken);
     }
 }
 
-public readonly struct ColumnCompressStage<T>
+public readonly struct ColumnCompressStage
 {
     readonly RowGroupWriter _group;
-    readonly ParquetSchema.Column<T> _column;
+    readonly ParquetSchema.Column _column;
     readonly EncodingKind _encoding;
     readonly CompressionKind _compression;
 
-    internal ColumnCompressStage(RowGroupWriter group, ParquetSchema.Column<T> column, EncodingKind encoding, CompressionKind compression)
+    internal ColumnCompressStage(RowGroupWriter group, ParquetSchema.Column column, EncodingKind encoding, CompressionKind compression)
     {
         _group = group;
         _column = column;
@@ -71,12 +71,12 @@ public readonly struct ColumnCompressStage<T>
         _compression = compression;
     }
 
-    public SerializedColumn Serialize(ReadOnlySpan<T> values)
+    public SerializedColumn Serialize<T>(ReadOnlySpan<T> values)
     {
         return _group.Serialize(_column, values, _encoding, _compression);
     }
 
-    public ValueTask WriteAsync(ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
+    public ValueTask WriteAsync<T>(ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
     {
         return Serialize(values).WriteAsync(cancellationToken);
     }

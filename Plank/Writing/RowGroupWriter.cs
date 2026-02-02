@@ -26,7 +26,7 @@ public sealed class RowGroupWriter : IDisposable
 
     public int RowCount { get; }
 
-    public ColumnWriter<T> Column<T>(ParquetSchema.Column<T> column)
+    public ColumnWriter Column(ParquetSchema.Column column)
     {
         if (column is null)
             throw new ArgumentNullException(nameof(column));
@@ -34,11 +34,14 @@ public sealed class RowGroupWriter : IDisposable
         if (column.Ordinal < 0 || column.Ordinal >= _staged.Length)
             throw new ArgumentOutOfRangeException(nameof(column), $"Column '{column.Name}' ordinal is out of range.");
 
-        return new ColumnWriter<T>(this, column);
+        return new ColumnWriter(this, column);
     }
 
-    internal SerializedColumn Serialize<T>(ParquetSchema.Column<T> column, ReadOnlySpan<T> values, EncodingKind? encoding, CompressionKind? compression)
+    internal SerializedColumn Serialize<T>(ParquetSchema.Column column, ReadOnlySpan<T> values, EncodingKind? encoding, CompressionKind? compression)
     {
+        if (column.ClrType != typeof(T))
+            throw new InvalidOperationException($"Column '{column.Name}' expects {column.ClrType}, but received {typeof(T)}.");
+
         var ordinal = column.Ordinal;
         if (_staged[ordinal])
             throw new InvalidOperationException($"Column '{column.Name}' is already serialized.");
@@ -71,7 +74,7 @@ public sealed class RowGroupWriter : IDisposable
     static EncodingKind ResolveDefaultEncoding(ParquetSchema.Column column)
     {
         var encodings = column.Encodings;
-        return encodings.Length == 0 ? EncodingKind.Plain : encodings[0];
+        return encodings.IsEmpty ? EncodingKind.Plain : encodings[0];
     }
 
     public void Dispose()

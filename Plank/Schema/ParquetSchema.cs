@@ -198,7 +198,7 @@ internal sealed class ColumnDefinition<TProp> : IColumnDefinition
 
     public ParquetSchema.Column Create(int ordinal)
     {
-        return new ParquetSchema.Column<TProp>(ordinal, Name, Options);
+        return new ParquetSchema.Column(ordinal, Name, typeof(TProp), Options);
     }
 }
 
