@@ -16,14 +16,10 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
     public static ParquetWriter Create(Stream stream, ParquetSchema schema, ParquetWriterOptions? options = null)
     {
         if (stream is null)
-        {
             throw new ArgumentNullException(nameof(stream));
-        }
 
         if (schema is null)
-        {
             throw new ArgumentNullException(nameof(schema));
-        }
 
         return new ParquetWriter(stream, schema, options ?? ParquetWriterOptions.Default);
     }
@@ -31,9 +27,7 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
     public RowGroupWriter StartRowGroup(int rowCount, RowGroupOptions? options = null)
     {
         if (rowCount < 0)
-        {
             throw new ArgumentOutOfRangeException(nameof(rowCount), rowCount, "Row count must be non-negative.");
-        }
 
         return new RowGroupWriter(this, rowCount, options ?? RowGroupOptions.Default);
     }

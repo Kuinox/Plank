@@ -9,14 +9,9 @@ public sealed partial class ParquetSchema
         protected Column(int ordinal, string name, ParquetPhysicalType physicalType, ParquetRepetition repetition, ImmutableArray<EncodingKind> encodings, Type clrType)
         {
             if (ordinal < 0)
-            {
                 throw new ArgumentOutOfRangeException(nameof(ordinal), ordinal, "Column ordinal must be non-negative.");
-            }
-
             if (name is null)
-            {
                 throw new ArgumentNullException(nameof(name));
-            }
 
             Ordinal = ordinal;
             Name = name;
@@ -37,7 +32,6 @@ public sealed partial class ParquetSchema
         public ImmutableArray<EncodingKind> Encodings { get; }
 
         public Type ClrType { get; }
-
     }
 
     public sealed class Column<TProp> : Column
@@ -57,11 +51,9 @@ public sealed partial class ParquetSchema
         {
             var repetition = options.Repetition;
             if (repetition == ParquetRepetition.Unspecified)
-            {
                 repetition = ParquetTypeMap.IsNullable(typeof(TProp))
                     ? ParquetRepetition.Optional
                     : ParquetRepetition.Required;
-            }
 
             return repetition;
         }

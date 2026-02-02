@@ -29,14 +29,10 @@ public sealed class RowGroupWriter : IDisposable
     public ColumnWriter<T> Column<T>(ParquetSchema.Column<T> column)
     {
         if (column is null)
-        {
             throw new ArgumentNullException(nameof(column));
-        }
 
         if (column.Ordinal < 0 || column.Ordinal >= _staged.Length)
-        {
             throw new ArgumentOutOfRangeException(nameof(column), $"Column '{column.Name}' ordinal is out of range.");
-        }
 
         return new ColumnWriter<T>(this, column);
     }
@@ -45,9 +41,7 @@ public sealed class RowGroupWriter : IDisposable
     {
         var ordinal = column.Ordinal;
         if (_staged[ordinal])
-        {
             throw new InvalidOperationException($"Column '{column.Name}' is already serialized.");
-        }
 
         _staged[ordinal] = true;
         _stagedValueCount[ordinal] = values.Length;
@@ -60,19 +54,13 @@ public sealed class RowGroupWriter : IDisposable
     internal ValueTask WriteSerializedAsync(int ordinal, CancellationToken cancellationToken)
     {
         if (ordinal < 0 || ordinal >= _staged.Length)
-        {
             throw new ArgumentOutOfRangeException(nameof(ordinal));
-        }
 
         if (!_staged[ordinal])
-        {
             throw new InvalidOperationException($"Column ordinal {ordinal} has no serialized payload.");
-        }
 
         if (ordinal != _nextOrdinal)
-        {
             throw new InvalidOperationException($"Column ordinal {ordinal} was written out of order. Expected {_nextOrdinal}.");
-        }
 
         _staged[ordinal] = false;
         _stagedValueCount[ordinal] = 0;

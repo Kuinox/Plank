@@ -19,9 +19,7 @@ public sealed partial class ParquetSchema
     public Column ColumnAt(int ordinal)
     {
         if ((uint)ordinal >= (uint)_columns.Length)
-        {
             throw new ArgumentOutOfRangeException(nameof(ordinal), ordinal, "Column ordinal is out of range.");
-        }
 
         return _columns[ordinal];
     }
@@ -30,9 +28,7 @@ public sealed partial class ParquetSchema
     {
         var column = ColumnAt(ordinal);
         if (column is Column<TProp> typed)
-        {
             return typed;
-        }
 
         throw new InvalidOperationException($"Column at ordinal {ordinal} is not of type {typeof(TProp)}.");
     }
@@ -40,9 +36,7 @@ public sealed partial class ParquetSchema
     public static ParquetSchema Create(params Column[] columns)
     {
         if (columns is null)
-        {
             throw new ArgumentNullException(nameof(columns));
-        }
 
         var copy = new Column[columns.Length];
         for (var i = 0; i < columns.Length; i++)
@@ -53,9 +47,7 @@ public sealed partial class ParquetSchema
         for (var i = 0; i < copy.Length; i++)
         {
             if (copy[i].Ordinal != i)
-            {
                 throw new ArgumentException($"Column '{copy[i].Name}' has ordinal {copy[i].Ordinal} but is at index {i}.", nameof(columns));
-            }
         }
 
         return new ParquetSchema(copy);
@@ -69,17 +61,13 @@ public sealed partial class ParquetSchema
     public static void Register<T>(ParquetSchema schema)
     {
         if (schema is null)
-        {
             throw new ArgumentNullException(nameof(schema));
-        }
 
         var type = typeof(T);
         Registry.AddOrUpdate(type, schema, (_, existing) =>
         {
             if (!ReferenceEquals(existing, schema))
-            {
                 throw new InvalidOperationException($"A schema is already registered for {type}.");
-            }
 
             return existing;
         });
@@ -88,9 +76,7 @@ public sealed partial class ParquetSchema
     public static ParquetSchema For<T>(Action<SchemaBuilder<T>> configure)
     {
         if (TryGet<T>(out var schema))
-        {
             return schema;
-        }
 
         throw new ParquetSchemaNotGeneratedException(typeof(T));
     }
@@ -106,9 +92,7 @@ public sealed class SchemaBuilder<T>
     public ColumnBuilder<T, TProp> Column<TProp>(Expression<Func<T, TProp>> expression)
     {
         if (expression is null)
-        {
             throw new ArgumentNullException(nameof(expression));
-        }
 
         return new ColumnBuilder<T, TProp>(expression);
     }
@@ -116,9 +100,7 @@ public sealed class SchemaBuilder<T>
     public ColumnBuilder<T, TProp> Column<TProp>(Expression<Func<T, TProp>> expression, string name)
     {
         if (name is null)
-        {
             throw new ArgumentNullException(nameof(name));
-        }
 
         return Column(expression).Name(name);
     }
@@ -131,9 +113,7 @@ public sealed class ParquetSchemaBuilder
     public ColumnSchemaBuilder<TProp> Column<TProp>(string name)
     {
         if (name is null)
-        {
             throw new ArgumentNullException(nameof(name));
-        }
 
         var definition = new ColumnDefinition<TProp>(name);
         _definitions.Add(definition);
@@ -166,9 +146,7 @@ public sealed class ColumnSchemaBuilder<TProp>
     public ColumnSchemaBuilder<TProp> Name(string name)
     {
         if (name is null)
-        {
             throw new ArgumentNullException(nameof(name));
-        }
 
         _definition.Name = name;
         return this;
@@ -183,9 +161,7 @@ public sealed class ColumnSchemaBuilder<TProp>
     public ColumnSchemaBuilder<TProp> Encodings(params EncodingKind[] encodings)
     {
         if (encodings is null)
-        {
             throw new ArgumentNullException(nameof(encodings));
-        }
 
         var options = _definition.Options;
         for (var i = 0; i < encodings.Length; i++)
