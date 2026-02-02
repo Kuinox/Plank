@@ -1,3 +1,5 @@
+using Plank.Schema;
+
 namespace Plank.Tests;
 
 public sealed class SchemaTests
@@ -11,13 +13,12 @@ public sealed class SchemaTests
     [Test]
     public async Task For_ReturnsRegisteredSchema()
     {
-        var schema = ParquetSchema.Define()
-            .Column<int>("A")
-            .Column<int>("B")
-            .Build();
+        var schema = ParquetSchema.Create(
+            ColumnDefinition.Create<int>("A"),
+            ColumnDefinition.Create<int>("B"));
         ParquetSchema.Register<Row>(schema);
 
-        var resolved = ParquetSchema.For<Row>(_ => { });
+        var resolved = ParquetSchema.For<Row>(RowSchema<Row>.Create());
 
         await Assert.That(resolved.Columns.Select(c => c.Name).ToArray())
             .IsEqualTo(new[] { "A", "B" });
@@ -26,10 +27,9 @@ public sealed class SchemaTests
     [Test]
     public async Task Define_AssignsOrdinalsInOrder()
     {
-        var schema = ParquetSchema.Define()
-            .Column<int>("X")
-            .Column<int>("Y")
-            .Build();
+        var schema = ParquetSchema.Create(
+            ColumnDefinition.Create<int>("X"),
+            ColumnDefinition.Create<int>("Y"));
 
         await Assert.That(schema.Columns.Select(c => c.Ordinal).ToArray())
             .IsEqualTo(new[] { 0, 1 });

@@ -1,7 +1,8 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 
-namespace Plank;
+namespace Plank.Schema;
 
 public sealed partial class ParquetSchema
 {
@@ -15,29 +16,36 @@ public sealed partial class ParquetSchema
 
     public IReadOnlyList<Column> Columns => _columns;
 
-    public static ParquetSchema Create(params Column[] columns)
+    public static ParquetSchema Create(params ColumnDefinition[] columns)
     {
         ArgumentNullException.ThrowIfNull(columns);
 
-        var copy = new Column[columns.Length];
+        var resolved = new Column[columns.Length];
         for (var i = 0; i < columns.Length; i++)
         {
             if (columns[i] is null)
                 throw new ArgumentNullException(nameof(columns), $"Column at index {i} is null.");
-            copy[i] = columns[i]!;
+
+            var definition = columns[i]!;
+            ArgumentNullException.ThrowIfNull(definition.Name);
+            ArgumentNullException.ThrowIfNull(definition.ClrType);
+
+            var physicalType = ParquetTypeMap.GetPhysicalType(definition.ClrType);
+            var repetition = definition.Options.Repetition;
+            if (repetition == ParquetRepetition.Unspecified)
+                repetition = ParquetTypeMap.IsNullable(definition.ClrType)
+                    ? ParquetRepetition.Optional
+                    : ParquetRepetition.Required;
+
+            var encodings = definition.Options.Encodings.IsDefault
+                ? ImmutableArray<EncodingKind>.Empty
+                : definition.Options.Encodings;
+
+            resolved[i] = new Column(i, definition.Name, definition.ClrType, physicalType, repetition, encodings);
         }
 
-        for (var i = 0; i < copy.Length; i++)
-        {
-            if (copy[i].Ordinal != i)
-                throw new ArgumentException($"Column '{copy[i].Name}' has ordinal {copy[i].Ordinal} but is at index {i}.", nameof(columns));
-        }
-
-        return new ParquetSchema(copy);
+        return new ParquetSchema(resolved);
     }
-
-    public static ParquetSchemaBuilder Define()
-        => new ParquetSchemaBuilder();
 
     public static void Register<T>(ParquetSchema schema)
     {
@@ -53,8 +61,10 @@ public sealed partial class ParquetSchema
         });
     }
 
-    public static ParquetSchema For<T>(Action<RowSchemaBuilder<T>> configure)
+    public static ParquetSchema For<T>(RowSchema<T> rowSchema)
     {
+        _ = rowSchema;
+
         if (TryGet<T>(out var schema))
             return schema;
 
