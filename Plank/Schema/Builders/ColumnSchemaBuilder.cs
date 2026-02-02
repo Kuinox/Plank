@@ -3,9 +3,9 @@ namespace Plank;
 public sealed class ColumnSchemaBuilder<TProp>
 {
     readonly ParquetSchemaBuilder _schema;
-    readonly ColumnDefinition<TProp> _definition;
+    readonly ColumnDefinition _definition;
 
-    internal ColumnSchemaBuilder(ParquetSchemaBuilder schema, ColumnDefinition<TProp> definition)
+    internal ColumnSchemaBuilder(ParquetSchemaBuilder schema, ColumnDefinition definition)
     {
         _schema = schema;
         _definition = definition;

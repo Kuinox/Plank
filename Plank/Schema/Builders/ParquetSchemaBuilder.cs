@@ -2,14 +2,14 @@ namespace Plank;
 
 public sealed class ParquetSchemaBuilder
 {
-    readonly List<IColumnDefinition> _definitions = new();
+    readonly List<ColumnDefinition> _definitions = new();
 
     public ColumnSchemaBuilder<TProp> Column<TProp>(string name)
     {
         if (name is null)
             throw new ArgumentNullException(nameof(name));
 
-        var definition = new ColumnDefinition<TProp>(name);
+        var definition = new ColumnDefinition(name, typeof(TProp));
         _definitions.Add(definition);
         return new ColumnSchemaBuilder<TProp>(this, definition);
     }
