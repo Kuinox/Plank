@@ -28,8 +28,7 @@ public sealed class RowGroupWriter : IDisposable
 
     public ColumnWriter Column(ParquetSchema.Column column)
     {
-        if (column is null)
-            throw new ArgumentNullException(nameof(column));
+        ArgumentNullException.ThrowIfNull(column);
 
         if (column.Ordinal < 0 || column.Ordinal >= _staged.Length)
             throw new ArgumentOutOfRangeException(nameof(column), $"Column '{column.Name}' ordinal is out of range.");

@@ -17,13 +17,14 @@ public sealed partial class ParquetSchema
 
     public static ParquetSchema Create(params Column[] columns)
     {
-        if (columns is null)
-            throw new ArgumentNullException(nameof(columns));
+        ArgumentNullException.ThrowIfNull(columns);
 
         var copy = new Column[columns.Length];
         for (var i = 0; i < columns.Length; i++)
         {
-            copy[i] = columns[i] ?? throw new ArgumentNullException(nameof(columns), $"Column at index {i} is null.");
+            if (columns[i] is null)
+                throw new ArgumentNullException(nameof(columns), $"Column at index {i} is null.");
+            copy[i] = columns[i]!;
         }
 
         for (var i = 0; i < copy.Length; i++)
@@ -40,8 +41,7 @@ public sealed partial class ParquetSchema
 
     public static void Register<T>(ParquetSchema schema)
     {
-        if (schema is null)
-            throw new ArgumentNullException(nameof(schema));
+        ArgumentNullException.ThrowIfNull(schema);
 
         var type = typeof(T);
         Registry.AddOrUpdate(type, schema, (_, existing) =>

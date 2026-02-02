@@ -4,16 +4,14 @@ internal static class ParquetTypeMap
 {
     public static bool IsNullable(Type type)
     {
-        if (type is null)
-            throw new ArgumentNullException(nameof(type));
+        ArgumentNullException.ThrowIfNull(type);
 
         return Nullable.GetUnderlyingType(type) is not null;
     }
 
     public static ParquetPhysicalType GetPhysicalType(Type type)
     {
-        if (type is null)
-            throw new ArgumentNullException(nameof(type));
+        ArgumentNullException.ThrowIfNull(type);
 
         var unwrapped = Nullable.GetUnderlyingType(type) ?? type;
         return unwrapped switch

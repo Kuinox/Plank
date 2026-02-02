@@ -13,8 +13,7 @@ public sealed class ColumnSchemaBuilder<TProp>
 
     public ColumnSchemaBuilder<TProp> Name(string name)
     {
-        if (name is null)
-            throw new ArgumentNullException(nameof(name));
+        ArgumentNullException.ThrowIfNull(name);
 
         _definition.Name = name;
         return this;
@@ -28,8 +27,7 @@ public sealed class ColumnSchemaBuilder<TProp>
 
     public ColumnSchemaBuilder<TProp> Encodings(params EncodingKind[] encodings)
     {
-        if (encodings is null)
-            throw new ArgumentNullException(nameof(encodings));
+        ArgumentNullException.ThrowIfNull(encodings);
 
         var options = _definition.Options;
         for (var i = 0; i < encodings.Length; i++)

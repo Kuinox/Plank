@@ -15,11 +15,8 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
 
     public static ParquetWriter Create(Stream stream, ParquetSchema schema, ParquetWriterOptions? options = null)
     {
-        if (stream is null)
-            throw new ArgumentNullException(nameof(stream));
-
-        if (schema is null)
-            throw new ArgumentNullException(nameof(schema));
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(schema);
 
         return new ParquetWriter(stream, schema, options ?? ParquetWriterOptions.Default);
     }

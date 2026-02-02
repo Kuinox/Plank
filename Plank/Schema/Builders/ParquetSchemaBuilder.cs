@@ -6,8 +6,7 @@ public sealed class ParquetSchemaBuilder
 
     public ColumnSchemaBuilder<TProp> Column<TProp>(string name)
     {
-        if (name is null)
-            throw new ArgumentNullException(nameof(name));
+        ArgumentNullException.ThrowIfNull(name);
 
         var definition = new ColumnDefinition(name, typeof(TProp));
         _definitions.Add(definition);

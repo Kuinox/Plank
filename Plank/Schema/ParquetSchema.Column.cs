@@ -10,10 +10,8 @@ public sealed partial class ParquetSchema
         {
             if (ordinal < 0)
                 throw new ArgumentOutOfRangeException(nameof(ordinal), ordinal, "Column ordinal must be non-negative.");
-            if (name is null)
-                throw new ArgumentNullException(nameof(name));
-            if (clrType is null)
-                throw new ArgumentNullException(nameof(clrType));
+            ArgumentNullException.ThrowIfNull(name);
+            ArgumentNullException.ThrowIfNull(clrType);
 
             Ordinal = ordinal;
             Name = name;
