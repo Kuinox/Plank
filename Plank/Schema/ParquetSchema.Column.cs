@@ -4,28 +4,22 @@ namespace Plank.Schema;
 
 public sealed partial class ParquetSchema
 {
-    public sealed class Column
+    public sealed record class Column
     {
-        public Column(int ordinal, string name, Type clrType, ColumnOptions options)
+        internal Column(
+            int ordinal,
+            string name,
+            Type clrType,
+            ParquetPhysicalType physicalType,
+            ParquetRepetition repetition,
+            ImmutableArray<EncodingKind> encodings)
         {
-            if (ordinal < 0)
-                throw new ArgumentOutOfRangeException(nameof(ordinal), ordinal, "Column ordinal must be non-negative.");
-            ArgumentNullException.ThrowIfNull(name);
-            ArgumentNullException.ThrowIfNull(clrType);
-
             Ordinal = ordinal;
             Name = name;
             ClrType = clrType;
-            PhysicalType = ParquetTypeMap.GetPhysicalType(clrType);
-
-            var repetition = options.Repetition;
-            if (repetition == ParquetRepetition.Unspecified)
-                repetition = ParquetTypeMap.IsNullable(clrType)
-                    ? ParquetRepetition.Optional
-                    : ParquetRepetition.Required;
-
+            PhysicalType = physicalType;
             Repetition = repetition;
-            Encodings = options.Encodings.IsDefault ? ImmutableArray<EncodingKind>.Empty : options.Encodings;
+            Encodings = encodings;
         }
 
         public int Ordinal { get; }
