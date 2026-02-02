@@ -17,11 +17,17 @@ public sealed class ColumnSchemaBuilder<TProp>
     {
         ArgumentNullException.ThrowIfNull(name);
 
-        return With(_definition with { Name = name });
+        var next = _definition with { Name = name };
+        _schema.ReplaceDefinition(_index, next);
+        return new ColumnSchemaBuilder<TProp>(_schema, _index, next);
     }
 
     public ColumnSchemaBuilder<TProp> Encoding(EncodingKind encoding)
-        => With(_definition with { Options = _definition.Options.WithEncoding(encoding) });
+    {
+        var next = _definition with { Options = _definition.Options.WithEncoding(encoding) };
+        _schema.ReplaceDefinition(_index, next);
+        return new ColumnSchemaBuilder<TProp>(_schema, _index, next);
+    }
 
     public ColumnSchemaBuilder<TProp> Encodings(params EncodingKind[] encodings)
     {
@@ -31,24 +37,28 @@ public sealed class ColumnSchemaBuilder<TProp>
         for (var i = 0; i < encodings.Length; i++)
             options = options.WithEncoding(encodings[i]);
 
-        return With(_definition with { Options = options });
+        var next = _definition with { Options = options };
+        _schema.ReplaceDefinition(_index, next);
+        return new ColumnSchemaBuilder<TProp>(_schema, _index, next);
     }
 
     public ColumnSchemaBuilder<TProp> Optional()
-        => With(_definition with { Options = _definition.Options.WithRepetition(ParquetRepetition.Optional) });
+    {
+        var next = _definition with { Options = _definition.Options.WithRepetition(ParquetRepetition.Optional) };
+        _schema.ReplaceDefinition(_index, next);
+        return new ColumnSchemaBuilder<TProp>(_schema, _index, next);
+    }
 
     public ColumnSchemaBuilder<TProp> Required()
-        => With(_definition with { Options = _definition.Options.WithRepetition(ParquetRepetition.Required) });
+    {
+        var next = _definition with { Options = _definition.Options.WithRepetition(ParquetRepetition.Required) };
+        _schema.ReplaceDefinition(_index, next);
+        return new ColumnSchemaBuilder<TProp>(_schema, _index, next);
+    }
 
     public ColumnSchemaBuilder<TNext> Column<TNext>(string name)
         => _schema.Column<TNext>(name);
 
     public ParquetSchema Build()
         => _schema.Build();
-
-    ColumnSchemaBuilder<TProp> With(ColumnDefinition definition)
-    {
-        _schema.ReplaceDefinition(_index, definition);
-        return new ColumnSchemaBuilder<TProp>(_schema, _index, definition);
-    }
 }
