@@ -1,4 +1,6 @@
-namespace Plank;
+using Plank.Schema;
+
+namespace Plank.Writing;
 
 public readonly struct ColumnWriter : IEquatable<ColumnWriter>
 {
@@ -18,7 +20,7 @@ public readonly struct ColumnWriter : IEquatable<ColumnWriter>
         => Serialize(values).WriteAsync(cancellationToken);
 
     public bool Equals(ColumnWriter other)
-        => ReferenceEquals(_group, other._group)
+        => _group.Equals(other._group)
            && ReferenceEquals(_column, other._column);
 
     public override bool Equals(object? obj)

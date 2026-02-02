@@ -1,4 +1,4 @@
-namespace Plank;
+namespace Plank.Writing;
 
 public readonly struct SerializedColumn : IEquatable<SerializedColumn>
 {
@@ -15,7 +15,7 @@ public readonly struct SerializedColumn : IEquatable<SerializedColumn>
         => _group.WriteSerializedAsync(_ordinal, cancellationToken);
 
     public bool Equals(SerializedColumn other)
-        => ReferenceEquals(_group, other._group)
+        => _group.Equals(other._group)
            && _ordinal == other._ordinal;
 
     public override bool Equals(object? obj)
