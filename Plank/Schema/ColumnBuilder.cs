@@ -12,27 +12,17 @@ public sealed class ColumnBuilder<T, TProp>
     internal Expression<Func<T, TProp>> Expression { get; }
 
     public ColumnBuilder<T, TProp> Name(string name)
-    {
-        return this;
-    }
+        => this;
 
     public ColumnBuilder<T, TProp> Encoding(EncodingKind encoding)
-    {
-        return this;
-    }
+        => this;
 
     public ColumnBuilder<T, TProp> Encodings(params EncodingKind[] encodings)
-    {
-        return this;
-    }
+        => this;
 
     public ColumnBuilder<T, TProp> Optional()
-    {
-        return this;
-    }
+        => this;
 
     public ColumnBuilder<T, TProp> Required()
-    {
-        return this;
-    }
+        => this;
 }
