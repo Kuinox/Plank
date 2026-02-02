@@ -16,11 +16,6 @@ public readonly struct ColumnWriter
         return _group.Serialize(_column, values, null, null);
     }
 
-    public ColumnEncodeStage Encode(EncodingKind encoding)
-    {
-        return new ColumnEncodeStage(_group, _column, encoding);
-    }
-
     public ValueTask WriteAsync<T>(ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
     {
         return Serialize(values).WriteAsync(cancellationToken);
