@@ -58,7 +58,7 @@ public sealed partial class ParquetSchema
         if (TryGet<T>(out var schema))
             return schema;
 
-        throw new ParquetSchemaNotGeneratedException(typeof(T));
+        throw new InvalidOperationException($"No generated Parquet schema was registered for {typeof(T)}.");
     }
 
     internal static bool TryGet<T>([NotNullWhen(true)] out ParquetSchema? schema)
