@@ -1,4 +1,6 @@
-namespace Plank;
+using Plank.Schema;
+
+namespace Plank.Writing;
 
 public sealed class ParquetWriter : IDisposable, IAsyncDisposable
 {
@@ -36,9 +38,8 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
     internal ParquetWriterOptions Options => _options;
 
     public void Dispose()
-    {
-    }
+        => _stream.Dispose();
 
     public ValueTask DisposeAsync()
-        => ValueTask.CompletedTask;
+        => _stream.DisposeAsync();
 }
