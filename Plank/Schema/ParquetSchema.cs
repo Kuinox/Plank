@@ -36,9 +36,7 @@ public sealed partial class ParquetSchema
     }
 
     public static ParquetSchemaBuilder Define()
-    {
-        return new ParquetSchemaBuilder();
-    }
+        => new ParquetSchemaBuilder();
 
     public static void Register<T>(ParquetSchema schema)
     {
@@ -64,7 +62,5 @@ public sealed partial class ParquetSchema
     }
 
     internal static bool TryGet<T>([NotNullWhen(true)] out ParquetSchema? schema)
-    {
-        return Registry.TryGetValue(typeof(T), out schema);
-    }
+        => Registry.TryGetValue(typeof(T), out schema);
 }

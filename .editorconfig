@@ -3,3 +3,4 @@ root = true
 [*.cs]
 dotnet_style_require_accessibility_modifiers = never:suggestion
 csharp_prefer_braces = false:suggestion
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion

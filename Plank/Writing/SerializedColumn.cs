@@ -12,7 +12,5 @@ public readonly struct SerializedColumn
     }
 
     public ValueTask WriteAsync(CancellationToken cancellationToken = default)
-    {
-        return _group.WriteSerializedAsync(_ordinal, cancellationToken);
-    }
+        => _group.WriteSerializedAsync(_ordinal, cancellationToken);
 }

@@ -54,12 +54,8 @@ public sealed class ColumnSchemaBuilder<TProp>
     }
 
     public ColumnSchemaBuilder<TNext> Column<TNext>(string name)
-    {
-        return _schema.Column<TNext>(name);
-    }
+        => _schema.Column<TNext>(name);
 
     public ParquetSchema Build()
-    {
-        return _schema.Build();
-    }
+        => _schema.Build();
 }

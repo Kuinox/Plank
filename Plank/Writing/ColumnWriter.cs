@@ -12,12 +12,8 @@ public readonly struct ColumnWriter
     }
 
     public SerializedColumn Serialize<T>(ReadOnlySpan<T> values)
-    {
-        return _group.Serialize(_column, values, null, null);
-    }
+        => _group.Serialize(_column, values, null, null);
 
     public ValueTask WriteAsync<T>(ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
-    {
-        return Serialize(values).WriteAsync(cancellationToken);
-    }
+        => Serialize(values).WriteAsync(cancellationToken);
 }

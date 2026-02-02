@@ -43,7 +43,5 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
     }
 
     public ValueTask DisposeAsync()
-    {
-        return ValueTask.CompletedTask;
-    }
+        => ValueTask.CompletedTask;
 }
