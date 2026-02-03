@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 
 namespace Plank.Schema;
@@ -9,12 +8,14 @@ public sealed partial class ParquetSchema
     static readonly ConcurrentDictionary<Type, ParquetSchema> Registry = new();
     readonly Column[] _columns;
 
-    public ParquetSchema(params ColumnDefinition[] columns)
+    public ParquetSchema(params Column[] columns)
         => _columns = Validate(columns);
 
     public IReadOnlyList<Column> Columns => _columns;
 
-    public static Column[] Validate(params ColumnDefinition[] columns)
+    internal Column[] ColumnArray => _columns;
+
+    public static Column[] Validate(params Column[] columns)
     {
         ArgumentNullException.ThrowIfNull(columns);
 
@@ -24,22 +25,11 @@ public sealed partial class ParquetSchema
             if (columns[i] is null)
                 throw new ArgumentNullException(nameof(columns), $"Column at index {i} is null.");
 
-            var definition = columns[i]!;
-            ArgumentNullException.ThrowIfNull(definition.Name);
-            ArgumentNullException.ThrowIfNull(definition.ClrType);
+            var column = columns[i]!;
+            ArgumentNullException.ThrowIfNull(column.Name);
+            ArgumentNullException.ThrowIfNull(column.ClrType);
 
-            var physicalType = ParquetTypeMap.GetPhysicalType(definition.ClrType);
-            var repetition = definition.Options.Repetition;
-            if (repetition == ParquetRepetition.Unspecified)
-                repetition = ParquetTypeMap.IsNullable(definition.ClrType)
-                    ? ParquetRepetition.Optional
-                    : ParquetRepetition.Required;
-
-            var encodings = definition.Options.Encodings.IsDefault
-                ? ImmutableArray<EncodingKind>.Empty
-                : definition.Options.Encodings;
-
-            resolved[i] = new Column(i, definition.Name, definition.ClrType, physicalType, repetition, encodings);
+            resolved[i] = column;
         }
 
         return resolved;

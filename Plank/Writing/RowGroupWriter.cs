@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Plank.Schema;
 
 namespace Plank.Writing;
@@ -19,28 +20,27 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
     public int RowCount
         => Volatile.Read(ref _state.RowCount);
 
-    public SerializedColumn Serialize<T>(ParquetSchema.Column column, ReadOnlySpan<T> values)
-        => Serialize(column, values, null, null);
+    public SerializedColumn Serialize<T>(int ordinal, ReadOnlySpan<T> values)
+        => Serialize(ordinal, values, null, null);
 
-    public ValueTask WriteAsync<T>(ParquetSchema.Column column, ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
-        => Serialize(column, values).WriteAsync(cancellationToken);
+    public ValueTask WriteAsync<T>(int ordinal, ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
+        => Serialize(ordinal, values).WriteAsync(cancellationToken);
 
-    internal SerializedColumn Serialize<T>(ParquetSchema.Column column, ReadOnlySpan<T> values, EncodingKind? encoding, CompressionKind? compression)
+    internal SerializedColumn Serialize<T>(int ordinal, ReadOnlySpan<T> values, EncodingKind? encoding, CompressionKind? compression)
     {
-        ArgumentNullException.ThrowIfNull(column);
+        if (ordinal < 0 || ordinal >= _state.Staged.Length)
+            throw new ArgumentOutOfRangeException(nameof(ordinal));
 
-        if (column.Ordinal < 0 || column.Ordinal >= _state.Staged.Length)
-            throw new ArgumentOutOfRangeException(nameof(column), $"Column '{column.Name}' ordinal is out of range.");
+        var column = _state.Columns[ordinal];
 
         if (column.ClrType != typeof(T))
             throw new InvalidOperationException($"Column '{column.Name}' expects {column.ClrType}, but received {typeof(T)}.");
 
-        var ordinal = column.Ordinal;
         if (Interlocked.CompareExchange(ref _state.Staged[ordinal], StagedWriting, StagedFree) != StagedFree)
             throw new InvalidOperationException($"Column '{column.Name}' is already serialized.");
 
         _state.StagedValueCount[ordinal] = values.Length;
-        _state.StagedEncoding[ordinal] = encoding ?? ResolveDefaultEncoding(column);
+        _state.StagedEncoding[ordinal] = encoding ?? ResolveDefaultEncoding(column.Options.Encodings);
         _state.StagedCompression[ordinal] = compression ?? CompressionKind.None;
         Volatile.Write(ref _state.Staged[ordinal], StagedReady);
 
@@ -77,11 +77,8 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         return ValueTask.CompletedTask;
     }
 
-    static EncodingKind ResolveDefaultEncoding(ParquetSchema.Column column)
-    {
-        var encodings = column.Encodings;
-        return encodings.IsEmpty ? EncodingKind.Plain : encodings[0];
-    }
+    static EncodingKind ResolveDefaultEncoding(ImmutableArray<EncodingKind> encodings)
+        => encodings.IsDefaultOrEmpty ? EncodingKind.Plain : encodings[0];
 
     public bool Equals(RowGroupWriter other)
         => ReferenceEquals(_state, other._state);
@@ -108,6 +105,7 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         internal readonly int[] StagedValueCount;
         internal int RowCount;
         internal int NextOrdinal;
+        internal readonly Column[] Columns;
 
         internal State(ParquetWriter writer, RowGroupOptions options, int columnCount)
         {
@@ -119,6 +117,7 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
             StagedCompression = new CompressionKind[columnCount];
             StagedValueCount = new int[columnCount];
             NextOrdinal = 0;
+            Columns = writer.Schema.ColumnArray;
         }
     }
 }

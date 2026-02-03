@@ -14,8 +14,8 @@ public sealed class SchemaTests
     public async Task For_ReturnsRegisteredSchema()
     {
         var schema = new ParquetSchema(
-            new ColumnDefinition("A", typeof(int), ColumnOptions.Default),
-            new ColumnDefinition("B", typeof(int), ColumnOptions.Default));
+            new Column("A", typeof(int), ColumnOptions.Default),
+            new Column("B", typeof(int), ColumnOptions.Default));
         ParquetSchema.Register<Row>(schema);
 
         var resolved = ParquetSchema.For<Row>(new RowSchema<Row>(Array.Empty<RowColumnDefinition<Row>>()));
@@ -28,8 +28,8 @@ public sealed class SchemaTests
     public async Task Define_AssignsOrdinalsInOrder()
     {
         var schema = new ParquetSchema(
-            new ColumnDefinition("X", typeof(int), ColumnOptions.Default),
-            new ColumnDefinition("Y", typeof(int), ColumnOptions.Default));
+            new Column("X", typeof(int), ColumnOptions.Default),
+            new Column("Y", typeof(int), ColumnOptions.Default));
 
         await Assert.That(schema.Columns.Select(c => c.Ordinal).ToArray())
             .IsEqualTo(new[] { 0, 1 });
