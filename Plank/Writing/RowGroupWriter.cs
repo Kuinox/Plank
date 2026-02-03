@@ -28,7 +28,8 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
     SerializedColumn SerializeCore<T>(Column column, ReadOnlySpan<T> values)
     {
         ArgumentNullException.ThrowIfNull(column);
-        var ordinal = ResolveOrdinal(column);
+        if (!_state.ColumnOrdinals.TryGetValue(column, out var ordinal))
+            throw new ArgumentException("Column does not belong to this schema.", nameof(column));
         ref var columnState = ref _state.ColumnStates[ordinal];
 
         if (column.ClrType != typeof(T))
@@ -79,13 +80,6 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
     static EncodingKind ResolveDefaultEncoding(ImmutableArray<EncodingKind> encodings)
         => encodings.IsDefaultOrEmpty ? EncodingKind.Plain : encodings[0];
 
-    int ResolveOrdinal(Column column)
-    {
-        if (_state.ColumnOrdinals.TryGetValue(column, out var ordinal))
-            return ordinal;
-
-        throw new ArgumentException("Column does not belong to this schema.", nameof(column));
-    }
 
     public bool Equals(RowGroupWriter other)
         => ReferenceEquals(_state, other._state)
