@@ -9,13 +9,13 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
     const int StagedWriting = 1;
     const int StagedReady = 2;
 
-    readonly State _state;
+    readonly ParquetWriter _writer;
+    readonly ParquetWriter.RowGroupState _state;
 
-    internal RowGroupWriter(ParquetWriter writer, RowGroupOptions options)
+    internal RowGroupWriter(ParquetWriter writer, ParquetWriter.RowGroupState state)
     {
-        var columns = writer.Schema.Columns;
-        var columnCount = columns.Length;
-        _state = new State(writer, options, columns, columnCount);
+        _writer = writer;
+        _state = state;
     }
 
     public int RowCount
@@ -74,7 +74,7 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         Volatile.Write(ref _state.Staged[ordinal], StagedFree);
         _state.StagedValueCount[ordinal] = 0;
         if (expected + 1 == _state.Staged.Length)
-            _state.Writer.CompleteRowGroup(rowCount);
+            _writer.CompleteRowGroup(rowCount);
         return ValueTask.CompletedTask;
     }
 
@@ -82,7 +82,8 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         => encodings.IsDefaultOrEmpty ? EncodingKind.Plain : encodings[0];
 
     public bool Equals(RowGroupWriter other)
-        => ReferenceEquals(_state, other._state);
+        => ReferenceEquals(_state, other._state)
+           && ReferenceEquals(_writer, other._writer);
 
     public override bool Equals(object? obj)
         => obj is RowGroupWriter other && Equals(other);
@@ -95,30 +96,4 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
 
     public static bool operator !=(RowGroupWriter left, RowGroupWriter right)
         => !left.Equals(right);
-
-    sealed class State
-    {
-        internal readonly ParquetWriter Writer;
-        internal readonly RowGroupOptions Options;
-        internal readonly int[] Staged;
-        internal readonly EncodingKind[] StagedEncoding;
-        internal readonly CompressionKind[] StagedCompression;
-        internal readonly int[] StagedValueCount;
-        internal int RowCount;
-        internal int NextOrdinal;
-        internal readonly ImmutableArray<Column> Columns;
-
-        internal State(ParquetWriter writer, RowGroupOptions options, ImmutableArray<Column> columns, int columnCount)
-        {
-            Writer = writer;
-            Options = options;
-            RowCount = -1;
-            Staged = new int[columnCount];
-            StagedEncoding = new EncodingKind[columnCount];
-            StagedCompression = new CompressionKind[columnCount];
-            StagedValueCount = new int[columnCount];
-            NextOrdinal = 0;
-            Columns = columns;
-        }
-    }
 }

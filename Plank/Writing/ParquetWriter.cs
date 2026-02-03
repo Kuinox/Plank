@@ -1,5 +1,6 @@
-using Plank.Schema;
+using System.Collections.Immutable;
 using Plank;
+using Plank.Schema;
 
 namespace Plank.Writing;
 
@@ -10,6 +11,8 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
     readonly ParquetWriterOptions _options;
     readonly uint? _expectedRowGroupCount;
     readonly IParquetLog _log;
+    readonly RowGroupState _rowGroupState;
+    bool _rowGroupActive;
     RowGroupInfo[] _rowGroups;
     int _rowGroupCount;
 
@@ -20,9 +23,11 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
         _options = options;
         _expectedRowGroupCount = expectedRowGroupCount;
         _log = options.Log;
-        var capacity = expectedRowGroupCount.HasValue ? checked((int)expectedRowGroupCount.Value) : 0;
+        var capacity = checked((int)(expectedRowGroupCount ?? 0));
         _rowGroups = capacity > 0 ? new RowGroupInfo[capacity] : [];
         _rowGroupCount = 0;
+        var columns = schema.Columns.IsDefault ? ImmutableArray<Column>.Empty : schema.Columns;
+        _rowGroupState = new RowGroupState(columns);
     }
 
     public static ParquetWriter Create(Stream stream, ParquetSchema schema, ParquetWriterOptions? options = null)
@@ -45,7 +50,14 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
     }
 
     public RowGroupWriter StartRowGroup(RowGroupOptions? options = null)
-        => new RowGroupWriter(this, options ?? RowGroupOptions.Default);
+    {
+        if (_rowGroupActive)
+            throw new InvalidOperationException("A row group is already active for this writer.");
+
+        _rowGroupActive = true;
+        _rowGroupState.Reset(options ?? RowGroupOptions.Default);
+        return new RowGroupWriter(this, _rowGroupState);
+    }
 
     internal Stream Stream => _stream;
 
@@ -60,6 +72,7 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
             GrowRowGroupCapacity(index + 1);
         _rowGroups[index] = new RowGroupInfo(rowCount);
         _rowGroupCount = index + 1;
+        _rowGroupActive = false;
     }
 
     void GrowRowGroupCapacity(int minCapacity)
@@ -90,5 +103,42 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
         }
 
         public int RowCount { get; }
+    }
+
+    internal sealed class RowGroupState
+    {
+        internal readonly ImmutableArray<Column> Columns;
+        internal readonly int[] Staged;
+        internal readonly EncodingKind[] StagedEncoding;
+        internal readonly CompressionKind[] StagedCompression;
+        internal readonly int[] StagedValueCount;
+        internal int RowCount;
+        internal int NextOrdinal;
+        internal RowGroupOptions Options;
+
+        internal RowGroupState(ImmutableArray<Column> columns)
+        {
+            Columns = columns;
+            var count = columns.Length;
+            Staged = count > 0 ? new int[count] : [];
+            StagedEncoding = count > 0 ? new EncodingKind[count] : [];
+            StagedCompression = count > 0 ? new CompressionKind[count] : [];
+            StagedValueCount = count > 0 ? new int[count] : [];
+            RowCount = -1;
+            NextOrdinal = 0;
+            Options = RowGroupOptions.Default;
+        }
+
+        internal void Reset(RowGroupOptions options)
+        {
+            Options = options;
+            RowCount = -1;
+            NextOrdinal = 0;
+            if (Staged.Length > 0)
+            {
+                Array.Clear(Staged);
+                Array.Clear(StagedValueCount);
+            }
+        }
     }
 }
