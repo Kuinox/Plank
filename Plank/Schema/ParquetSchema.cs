@@ -1,11 +1,7 @@
-using System.Collections.Concurrent;
-using System.Diagnostics.CodeAnalysis;
-
 namespace Plank.Schema;
 
 public sealed record ParquetSchema
 {
-    static readonly ConcurrentDictionary<Type, ParquetSchema> Registry = new();
     readonly Column[] _columns;
 
     public ParquetSchema(params Column[] columns)
@@ -35,30 +31,9 @@ public sealed record ParquetSchema
         return resolved;
     }
 
-    public static void Register<T>(ParquetSchema schema)
-    {
-        ArgumentNullException.ThrowIfNull(schema);
-
-        var type = typeof(T);
-        Registry.AddOrUpdate(type, schema, (_, existing) =>
-        {
-            if (!ReferenceEquals(existing, schema))
-                throw new InvalidOperationException($"A schema is already registered for {type}.");
-
-            return existing;
-        });
-    }
-
     public static ParquetSchema For<T>(RowSchema<T> rowSchema)
     {
-        _ = rowSchema;
-
-        if (TryGet<T>(out var schema))
-            return schema;
-
+        ArgumentNullException.ThrowIfNull(rowSchema);
         throw new InvalidOperationException($"No generated Parquet schema was registered for {typeof(T)}.");
     }
-
-    internal static bool TryGet<T>([NotNullWhen(true)] out ParquetSchema? schema)
-        => Registry.TryGetValue(typeof(T), out schema);
 }
