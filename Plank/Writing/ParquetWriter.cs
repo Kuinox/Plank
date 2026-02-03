@@ -22,7 +22,7 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
         _expectedRowGroupCount = expectedRowGroupCount;
         _log = options.Log;
         _sync = new object();
-        _rowGroups = expectedRowGroupCount > 0 ? new RowGroupInfo[expectedRowGroupCount] : Array.Empty<RowGroupInfo>();
+        _rowGroups = expectedRowGroupCount > 0 ? new RowGroupInfo[expectedRowGroupCount] : [];
         _rowGroupCount = 0;
     }
 
