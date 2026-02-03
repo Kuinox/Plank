@@ -29,34 +29,36 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
 
     internal SerializedColumn Serialize<T>(int ordinal, ReadOnlySpan<T> values, EncodingKind? encoding, CompressionKind? compression)
     {
-        if (ordinal < 0 || ordinal >= _state.Staged.Length)
+        if (ordinal < 0 || ordinal >= _state.ColumnStates.Length)
             throw new ArgumentOutOfRangeException(nameof(ordinal));
 
-        var column = _state.Columns[ordinal];
+        var column = _state.SchemaColumns[ordinal];
+        ref var columnState = ref _state.ColumnStates[ordinal];
 
         if (column.ClrType != typeof(T))
             throw new InvalidOperationException($"Column '{column.Name}' expects {column.ClrType}, but received {typeof(T)}.");
 
-        if (Interlocked.CompareExchange(ref _state.Staged[ordinal], StagedWriting, StagedFree) != StagedFree)
+        if (Interlocked.CompareExchange(ref columnState.Staged, StagedWriting, StagedFree) != StagedFree)
             throw new InvalidOperationException($"Column '{column.Name}' is already serialized.");
 
-        _state.StagedValueCount[ordinal] = values.Length;
-        _state.StagedEncoding[ordinal] = encoding ?? ResolveDefaultEncoding(column.Options.Encodings);
-        _state.StagedCompression[ordinal] = compression ?? CompressionKind.None;
-        Volatile.Write(ref _state.Staged[ordinal], StagedReady);
+        columnState.ValueCount = values.Length;
+        columnState.Encoding = encoding ?? ResolveDefaultEncoding(column.Options.Encodings);
+        columnState.Compression = compression ?? CompressionKind.None;
+        Volatile.Write(ref columnState.Staged, StagedReady);
 
         return new SerializedColumn(this, ordinal);
     }
 
     internal ValueTask WriteSerializedAsync(int ordinal, CancellationToken cancellationToken)
     {
-        if (ordinal < 0 || ordinal >= _state.Staged.Length)
+        if (ordinal < 0 || ordinal >= _state.ColumnStates.Length)
             throw new ArgumentOutOfRangeException(nameof(ordinal));
 
-        if (_state.Staged[ordinal] != StagedReady)
+        ref var columnState = ref _state.ColumnStates[ordinal];
+        if (columnState.Staged != StagedReady)
             throw new InvalidOperationException($"Column ordinal {ordinal} has no serialized payload.");
 
-        var valueCount = _state.StagedValueCount[ordinal];
+        var valueCount = columnState.ValueCount;
         var rowCount = Volatile.Read(ref _state.RowCount);
         if (rowCount < 0)
         {
@@ -71,9 +73,9 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         if (Interlocked.CompareExchange(ref _state.NextOrdinal, expected + 1, expected) != expected)
             throw new InvalidOperationException($"Column ordinal {ordinal} was written out of order. Expected {_state.NextOrdinal}.");
 
-        Volatile.Write(ref _state.Staged[ordinal], StagedFree);
-        _state.StagedValueCount[ordinal] = 0;
-        if (expected + 1 == _state.Staged.Length)
+        Volatile.Write(ref columnState.Staged, StagedFree);
+        columnState.ValueCount = 0;
+        if (expected + 1 == _state.ColumnStates.Length)
             _writer.CompleteRowGroup(rowCount);
         return ValueTask.CompletedTask;
     }

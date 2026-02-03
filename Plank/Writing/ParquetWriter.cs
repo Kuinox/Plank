@@ -107,23 +107,17 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
 
     internal sealed class RowGroupState
     {
-        internal readonly ImmutableArray<Column> Columns;
-        internal readonly int[] Staged;
-        internal readonly EncodingKind[] StagedEncoding;
-        internal readonly CompressionKind[] StagedCompression;
-        internal readonly int[] StagedValueCount;
+        internal readonly ImmutableArray<Column> SchemaColumns;
+        internal readonly ColumnState[] ColumnStates;
         internal int RowCount;
         internal int NextOrdinal;
         internal RowGroupOptions Options;
 
         internal RowGroupState(ImmutableArray<Column> columns)
         {
-            Columns = columns;
+            SchemaColumns = columns;
             var count = columns.Length;
-            Staged = count > 0 ? new int[count] : [];
-            StagedEncoding = count > 0 ? new EncodingKind[count] : [];
-            StagedCompression = count > 0 ? new CompressionKind[count] : [];
-            StagedValueCount = count > 0 ? new int[count] : [];
+            ColumnStates = count > 0 ? new ColumnState[count] : [];
             RowCount = -1;
             NextOrdinal = 0;
             Options = RowGroupOptions.Default;
@@ -134,11 +128,16 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
             Options = options;
             RowCount = -1;
             NextOrdinal = 0;
-            if (Staged.Length > 0)
-            {
-                Array.Clear(Staged);
-                Array.Clear(StagedValueCount);
-            }
+            if (ColumnStates.Length > 0)
+                Array.Clear(ColumnStates);
+        }
+
+        internal struct ColumnState
+        {
+            internal int Staged;
+            internal int ValueCount;
+            internal EncodingKind Encoding;
+            internal CompressionKind Compression;
         }
     }
 }
