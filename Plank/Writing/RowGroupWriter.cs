@@ -55,23 +55,23 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
             throw new InvalidOperationException($"Column ordinal {ordinal} has no serialized payload.");
 
         var valueCount = columnState.ValueCount;
-        var rowCount = Volatile.Read(ref _state.RowCount);
+        var rowCount = _state.RowCount;
         if (rowCount < 0)
         {
-            var previous = Interlocked.CompareExchange(ref _state.RowCount, valueCount, -1);
-            rowCount = previous < 0 ? valueCount : previous;
+            _state.RowCount = valueCount;
+            rowCount = valueCount;
         }
 
         if (rowCount != valueCount)
             throw new InvalidOperationException($"Column ordinal {ordinal} has {valueCount} values but row group expects {rowCount}.");
 
-        var expected = ordinal;
-        if (Interlocked.CompareExchange(ref _state.NextOrdinal, expected + 1, expected) != expected)
+        if (ordinal != _state.NextOrdinal)
             throw new InvalidOperationException($"Column ordinal {ordinal} was written out of order. Expected {_state.NextOrdinal}.");
+        _state.NextOrdinal++;
 
         Volatile.Write(ref columnState.Staged, StagedFree);
         columnState.ValueCount = 0;
-        if (expected + 1 == _state.ColumnStates.Length)
+        if (_state.NextOrdinal == _state.ColumnStates.Length)
             _writer.CompleteRowGroup(rowCount);
         return ValueTask.CompletedTask;
     }
