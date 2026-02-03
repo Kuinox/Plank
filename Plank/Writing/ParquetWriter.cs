@@ -135,13 +135,25 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
             Options = options;
             RowCount = -1;
             NextOrdinal = 0;
-            if (ColumnStates.Length > 0)
-                Array.Clear(ColumnStates);
+            var targetLength = options.MaxEncodedBytes;
+            for (var i = 0; i < ColumnStates.Length; i++)
+            {
+                ref var state = ref ColumnStates[i];
+                if (targetLength > 0 && (state.EncodedBuffer is null || state.EncodedBuffer.Length < targetLength))
+                    state.EncodedBuffer = new byte[targetLength];
+
+                state.ValueCount = 0;
+                state.EncodedLength = 0;
+                state.Encoding = default;
+                state.Compression = default;
+            }
         }
 
         internal struct ColumnState
         {
             internal int ValueCount;
+            internal int EncodedLength;
+            internal byte[]? EncodedBuffer;
             internal EncodingKind Encoding;
             internal CompressionKind Compression;
         }
