@@ -1,10 +1,7 @@
 namespace Plank.Schema;
 
-public sealed record Column(string Name, Type ClrType, ColumnOptions Options)
+public sealed record Column(string Name, ParquetPhysicalType PhysicalType, ColumnOptions Options)
 {
     public void Validate()
-    {
-        ArgumentNullException.ThrowIfNull(Name);
-        ArgumentNullException.ThrowIfNull(ClrType);
-    }
+        => ArgumentNullException.ThrowIfNull(Name);
 }

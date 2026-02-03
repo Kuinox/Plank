@@ -18,25 +18,24 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         => _state.RowCount;
 
     public SerializedColumn Serialize<T>(Column column, ReadOnlySpan<T> values)
-        => SerializeCore(column, values);
-
-
-    SerializedColumn SerializeCore<T>(Column column, ReadOnlySpan<T> values)
     {
         ArgumentNullException.ThrowIfNull(column);
         if (!_state.ColumnOrdinals.TryGetValue(column, out var ordinal))
             throw new ArgumentException("Column does not belong to this schema.", nameof(column));
+        
+        var physicalType = ParquetTypeMap.GetPhysicalType(typeof(T));
+        if (column.PhysicalType != physicalType)
+            throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {physicalType}.");
+
         ref var columnState = ref _state.ColumnStates[ordinal];
-
-        if (column.ClrType != typeof(T))
-            throw new InvalidOperationException($"Column '{column.Name}' expects {column.ClrType}, but received {typeof(T)}.");
-
+        
         columnState.ValueCount = values.Length;
         columnState.Encoding = ResolveDefaultEncoding(column.Options.Encodings);
         columnState.Compression = CompressionKind.None;
 
         return new SerializedColumn(this, ordinal);
     }
+
 
     internal ValueTask WriteSerializedAsync(int ordinal, CancellationToken cancellationToken)
     {

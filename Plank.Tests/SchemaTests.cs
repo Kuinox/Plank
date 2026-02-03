@@ -9,8 +9,8 @@ public sealed class SchemaTests
     public async Task Schema_StoresColumnsInOrder()
     {
         var schema = new ParquetSchema(ImmutableArray.Create(
-            new Column("A", typeof(int), ColumnOptions.Default),
-            new Column("B", typeof(int), ColumnOptions.Default)));
+            new Column("A", ParquetPhysicalType.Int32, ColumnOptions.Default),
+            new Column("B", ParquetPhysicalType.Int32, ColumnOptions.Default)));
         schema.Validate();
 
         await Assert.That(schema.Columns.Select(c => c.Name).ToArray())
@@ -21,8 +21,8 @@ public sealed class SchemaTests
     public async Task Schema_RetainsColumnCount()
     {
         var schema = new ParquetSchema(ImmutableArray.Create(
-            new Column("X", typeof(int), ColumnOptions.Default),
-            new Column("Y", typeof(int), ColumnOptions.Default)));
+            new Column("X", ParquetPhysicalType.Int32, ColumnOptions.Default),
+            new Column("Y", ParquetPhysicalType.Int32, ColumnOptions.Default)));
         schema.Validate();
 
         await Assert.That(schema.Columns.Length)
