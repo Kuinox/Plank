@@ -9,14 +9,12 @@ public sealed partial class ParquetSchema
     static readonly ConcurrentDictionary<Type, ParquetSchema> Registry = new();
     readonly Column[] _columns;
 
-    ParquetSchema(Column[] columns)
-    {
-        _columns = columns;
-    }
+    public ParquetSchema(params ColumnDefinition[] columns)
+        => _columns = Validate(columns);
 
     public IReadOnlyList<Column> Columns => _columns;
 
-    public static ParquetSchema Create(params ColumnDefinition[] columns)
+    public static Column[] Validate(params ColumnDefinition[] columns)
     {
         ArgumentNullException.ThrowIfNull(columns);
 
@@ -44,7 +42,7 @@ public sealed partial class ParquetSchema
             resolved[i] = new Column(i, definition.Name, definition.ClrType, physicalType, repetition, encodings);
         }
 
-        return new ParquetSchema(resolved);
+        return resolved;
     }
 
     public static void Register<T>(ParquetSchema schema)

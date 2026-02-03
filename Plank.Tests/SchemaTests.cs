@@ -13,7 +13,7 @@ public sealed class SchemaTests
     [Test]
     public async Task For_ReturnsRegisteredSchema()
     {
-        var schema = ParquetSchema.Create(
+        var schema = new ParquetSchema(
             ColumnDefinition.Create<int>("A"),
             ColumnDefinition.Create<int>("B"));
         ParquetSchema.Register<Row>(schema);
@@ -27,7 +27,7 @@ public sealed class SchemaTests
     [Test]
     public async Task Define_AssignsOrdinalsInOrder()
     {
-        var schema = ParquetSchema.Create(
+        var schema = new ParquetSchema(
             ColumnDefinition.Create<int>("X"),
             ColumnDefinition.Create<int>("Y"));
 
