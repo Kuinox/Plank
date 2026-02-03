@@ -21,18 +21,16 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
     public int RowCount
         => Volatile.Read(ref _state.RowCount);
 
-    public SerializedColumn Serialize<T>(int ordinal, ReadOnlySpan<T> values)
-        => Serialize(ordinal, values, null, null);
+    public SerializedColumn Serialize<T>(Column column, ReadOnlySpan<T> values)
+        => Serialize(column, values, null, null);
 
-    public ValueTask WriteAsync<T>(int ordinal, ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
-        => Serialize(ordinal, values).WriteAsync(cancellationToken);
+    public ValueTask WriteAsync<T>(Column column, ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
+        => Serialize(column, values).WriteAsync(cancellationToken);
 
-    internal SerializedColumn Serialize<T>(int ordinal, ReadOnlySpan<T> values, EncodingKind? encoding, CompressionKind? compression)
+    internal SerializedColumn Serialize<T>(Column column, ReadOnlySpan<T> values, EncodingKind? encoding, CompressionKind? compression)
     {
-        if (ordinal < 0 || ordinal >= _state.ColumnStates.Length)
-            throw new ArgumentOutOfRangeException(nameof(ordinal));
-
-        var column = _state.SchemaColumns[ordinal];
+        ArgumentNullException.ThrowIfNull(column);
+        var ordinal = ResolveOrdinal(column);
         ref var columnState = ref _state.ColumnStates[ordinal];
 
         if (column.ClrType != typeof(T))
@@ -82,6 +80,18 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
 
     static EncodingKind ResolveDefaultEncoding(ImmutableArray<EncodingKind> encodings)
         => encodings.IsDefaultOrEmpty ? EncodingKind.Plain : encodings[0];
+
+    int ResolveOrdinal(Column column)
+    {
+        var columns = _state.SchemaColumns;
+        for (var i = 0; i < columns.Length; i++)
+        {
+            if (ReferenceEquals(columns[i], column))
+                return i;
+        }
+
+        throw new ArgumentException("Column does not belong to this schema.", nameof(column));
+    }
 
     public bool Equals(RowGroupWriter other)
         => ReferenceEquals(_state, other._state)
