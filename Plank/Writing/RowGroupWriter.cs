@@ -22,12 +22,12 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         => Volatile.Read(ref _state.RowCount);
 
     public SerializedColumn Serialize<T>(Column column, ReadOnlySpan<T> values)
-        => Serialize(column, values, null, null);
+        => SerializeCore(column, values);
 
     public ValueTask WriteAsync<T>(Column column, ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
         => Serialize(column, values).WriteAsync(cancellationToken);
 
-    internal SerializedColumn Serialize<T>(Column column, ReadOnlySpan<T> values, EncodingKind? encoding, CompressionKind? compression)
+    SerializedColumn SerializeCore<T>(Column column, ReadOnlySpan<T> values)
     {
         ArgumentNullException.ThrowIfNull(column);
         var ordinal = ResolveOrdinal(column);
@@ -40,8 +40,8 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
             throw new InvalidOperationException($"Column '{column.Name}' is already serialized.");
 
         columnState.ValueCount = values.Length;
-        columnState.Encoding = encoding ?? ResolveDefaultEncoding(column.Options.Encodings);
-        columnState.Compression = compression ?? CompressionKind.None;
+        columnState.Encoding = ResolveDefaultEncoding(column.Options.Encodings);
+        columnState.Compression = CompressionKind.None;
         Volatile.Write(ref columnState.Staged, StagedReady);
 
         return new SerializedColumn(this, ordinal);
