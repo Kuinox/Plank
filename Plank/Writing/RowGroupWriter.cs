@@ -83,12 +83,8 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
 
     int ResolveOrdinal(Column column)
     {
-        var columns = _state.SchemaColumns;
-        for (var i = 0; i < columns.Length; i++)
-        {
-            if (ReferenceEquals(columns[i], column))
-                return i;
-        }
+        if (_state.ColumnOrdinals.TryGetValue(column, out var ordinal))
+            return ordinal;
 
         throw new ArgumentException("Column does not belong to this schema.", nameof(column));
     }

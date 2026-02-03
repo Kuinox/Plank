@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using Plank;
 using Plank.Schema;
@@ -108,6 +109,7 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
     internal sealed class RowGroupState
     {
         internal readonly ImmutableArray<Column> SchemaColumns;
+        internal readonly Dictionary<Column, int> ColumnOrdinals;
         internal readonly ColumnState[] ColumnStates;
         internal int RowCount;
         internal int NextOrdinal;
@@ -118,6 +120,11 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
             SchemaColumns = columns;
             var count = columns.Length;
             ColumnStates = count > 0 ? new ColumnState[count] : [];
+            ColumnOrdinals = count > 0
+                ? new Dictionary<Column, int>(count, ReferenceEqualityComparer.Instance)
+                : new Dictionary<Column, int>(ReferenceEqualityComparer.Instance);
+            for (var i = 0; i < count; i++)
+                ColumnOrdinals[columns[i]] = i;
             RowCount = -1;
             NextOrdinal = 0;
             Options = RowGroupOptions.Default;
