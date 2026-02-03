@@ -24,8 +24,6 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
     public SerializedColumn Serialize<T>(Column column, ReadOnlySpan<T> values)
         => SerializeCore(column, values);
 
-    public ValueTask WriteAsync<T>(Column column, ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
-        => Serialize(column, values).WriteAsync(cancellationToken);
 
     SerializedColumn SerializeCore<T>(Column column, ReadOnlySpan<T> values)
     {
