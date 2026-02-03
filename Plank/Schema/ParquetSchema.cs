@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace Plank.Schema;
 
-public sealed partial class ParquetSchema
+public sealed record ParquetSchema
 {
     static readonly ConcurrentDictionary<Type, ParquetSchema> Registry = new();
     readonly Column[] _columns;
