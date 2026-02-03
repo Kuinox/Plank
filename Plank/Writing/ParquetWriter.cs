@@ -141,7 +141,6 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
 
         internal struct ColumnState
         {
-            internal int Staged;
             internal int ValueCount;
             internal EncodingKind Encoding;
             internal CompressionKind Compression;

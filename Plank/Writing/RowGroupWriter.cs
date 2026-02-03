@@ -5,10 +5,6 @@ namespace Plank.Writing;
 
 public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
 {
-    const int StagedFree = 0;
-    const int StagedWriting = 1;
-    const int StagedReady = 2;
-
     readonly ParquetWriter _writer;
     readonly ParquetWriter.RowGroupState _state;
 
@@ -19,7 +15,7 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
     }
 
     public int RowCount
-        => Volatile.Read(ref _state.RowCount);
+        => _state.RowCount;
 
     public SerializedColumn Serialize<T>(Column column, ReadOnlySpan<T> values)
         => SerializeCore(column, values);
@@ -35,13 +31,9 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         if (column.ClrType != typeof(T))
             throw new InvalidOperationException($"Column '{column.Name}' expects {column.ClrType}, but received {typeof(T)}.");
 
-        if (Interlocked.CompareExchange(ref columnState.Staged, StagedWriting, StagedFree) != StagedFree)
-            throw new InvalidOperationException($"Column '{column.Name}' is already serialized.");
-
         columnState.ValueCount = values.Length;
         columnState.Encoding = ResolveDefaultEncoding(column.Options.Encodings);
         columnState.Compression = CompressionKind.None;
-        Volatile.Write(ref columnState.Staged, StagedReady);
 
         return new SerializedColumn(this, ordinal);
     }
@@ -52,9 +44,6 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
             throw new ArgumentOutOfRangeException(nameof(ordinal));
 
         ref var columnState = ref _state.ColumnStates[ordinal];
-        if (columnState.Staged != StagedReady)
-            throw new InvalidOperationException($"Column ordinal {ordinal} has no serialized payload.");
-
         var valueCount = columnState.ValueCount;
         var rowCount = _state.RowCount;
         if (rowCount < 0)
@@ -70,7 +59,6 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
             throw new InvalidOperationException($"Column ordinal {ordinal} was written out of order. Expected {_state.NextOrdinal}.");
         _state.NextOrdinal++;
 
-        Volatile.Write(ref columnState.Staged, StagedFree);
         columnState.ValueCount = 0;
         if (_state.NextOrdinal == _state.ColumnStates.Length)
             _writer.CompleteRowGroup(rowCount);
