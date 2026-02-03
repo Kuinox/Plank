@@ -8,19 +8,20 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
     readonly Stream _stream;
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
-    readonly uint _expectedRowGroupCount;
+    readonly uint? _expectedRowGroupCount;
     readonly IParquetLog _log;
     RowGroupInfo[] _rowGroups;
     int _rowGroupCount;
 
-    ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options, uint expectedRowGroupCount)
+    ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options, uint? expectedRowGroupCount)
     {
         _stream = stream;
         _schema = schema;
         _options = options;
         _expectedRowGroupCount = expectedRowGroupCount;
         _log = options.Log;
-        _rowGroups = expectedRowGroupCount > 0 ? new RowGroupInfo[expectedRowGroupCount] : [];
+        var capacity = expectedRowGroupCount.HasValue ? checked((int)expectedRowGroupCount.Value) : 0;
+        _rowGroups = capacity > 0 ? new RowGroupInfo[capacity] : [];
         _rowGroupCount = 0;
     }
 
@@ -29,13 +30,16 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(schema);
 
-        return new ParquetWriter(stream, schema, options ?? ParquetWriterOptions.Default, -1);
+        return new ParquetWriter(stream, schema, options ?? ParquetWriterOptions.Default, null);
     }
 
     public static ParquetWriter Create(Stream stream, ParquetSchema schema, uint rowGroupCount, ParquetWriterOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(schema);
+
+        if (rowGroupCount > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(rowGroupCount), rowGroupCount, "Row group count must fit in Int32.");
 
         return new ParquetWriter(stream, schema, options ?? ParquetWriterOptions.Default, rowGroupCount);
     }
@@ -51,33 +55,25 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
 
     internal void CompleteRowGroup(int rowCount)
     {
-        var index = Interlocked.Increment(ref _rowGroupCount) - 1;
-        EnsureRowGroupCapacity(index + 1);
+        var index = _rowGroupCount;
+        if (index == _rowGroups.Length)
+            GrowRowGroupCapacity(index + 1);
         _rowGroups[index] = new RowGroupInfo(rowCount);
+        _rowGroupCount = index + 1;
     }
 
-    void EnsureRowGroupCapacity(int minCapacity)
+    void GrowRowGroupCapacity(int minCapacity)
     {
-        while (true)
-        {
-            var current = _rowGroups;
-            if (current.Length >= minCapacity)
-                return;
+        var previous = _rowGroups.Length;
+        var newCapacity = previous == 0 ? Math.Max(1, minCapacity) : Math.Max(previous * 2, minCapacity);
+        var grown = new RowGroupInfo[newCapacity];
+        Array.Copy(_rowGroups, grown, previous);
+        _rowGroups = grown;
 
-            var previous = current.Length;
-            var newCapacity = previous == 0 ? Math.Max(1, minCapacity) : Math.Max(previous * 2, minCapacity);
-            var grown = new RowGroupInfo[newCapacity];
-            Array.Copy(current, grown, previous);
-
-            if (!ReferenceEquals(Interlocked.CompareExchange(ref _rowGroups, grown, current), current))
-                continue;
-
-            if (_expectedRowGroupCount < 0)
-                _log.RowGroupMetadataCapacityGrown(previous, newCapacity, null);
-            else
-                _log.RowGroupMetadataCapacityGrown(previous, newCapacity, _expectedRowGroupCount);
-            return;
-        }
+        if (_expectedRowGroupCount.HasValue)
+            _log.RowGroupMetadataCapacityGrown(previous, newCapacity, checked((int)_expectedRowGroupCount.Value));
+        else
+            _log.RowGroupMetadataCapacityGrown(previous, newCapacity, null);
     }
 
     public void Dispose()
