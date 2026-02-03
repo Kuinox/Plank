@@ -13,8 +13,9 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
 
     internal RowGroupWriter(ParquetWriter writer, RowGroupOptions options)
     {
-        var columnCount = writer.Schema.Columns.Count;
-        _state = new State(writer, options, columnCount);
+        var columns = writer.Schema.Columns;
+        var columnCount = columns.Length;
+        _state = new State(writer, options, columns, columnCount);
     }
 
     public int RowCount
@@ -105,9 +106,9 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         internal readonly int[] StagedValueCount;
         internal int RowCount;
         internal int NextOrdinal;
-        internal readonly Column[] Columns;
+        internal readonly ImmutableArray<Column> Columns;
 
-        internal State(ParquetWriter writer, RowGroupOptions options, int columnCount)
+        internal State(ParquetWriter writer, RowGroupOptions options, ImmutableArray<Column> columns, int columnCount)
         {
             Writer = writer;
             Options = options;
@@ -117,7 +118,7 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
             StagedCompression = new CompressionKind[columnCount];
             StagedValueCount = new int[columnCount];
             NextOrdinal = 0;
-            Columns = writer.Schema.ColumnArray;
+            Columns = columns;
         }
     }
 }

@@ -1,34 +1,23 @@
+using System.Collections.Immutable;
+
 namespace Plank.Schema;
 
-public sealed record ParquetSchema
+public sealed record ParquetSchema(ImmutableArray<Column> Columns)
 {
-    readonly Column[] _columns;
-
-    public ParquetSchema(params Column[] columns)
-        => _columns = Validate(columns);
-
-    public IReadOnlyList<Column> Columns => _columns;
-
-    internal Column[] ColumnArray => _columns;
-
-    public static Column[] Validate(params Column[] columns)
+    public void Validate()
     {
-        ArgumentNullException.ThrowIfNull(columns);
+        if (Columns.IsDefault)
+            throw new InvalidOperationException("Columns must be initialized.");
 
-        var resolved = new Column[columns.Length];
-        for (var i = 0; i < columns.Length; i++)
+        for (var i = 0; i < Columns.Length; i++)
         {
-            if (columns[i] is null)
-                throw new ArgumentNullException(nameof(columns), $"Column at index {i} is null.");
+            var column = Columns[i];
+            if (column is null)
+                throw new InvalidOperationException($"Column at index {i} is null.");
 
-            var column = columns[i]!;
             ArgumentNullException.ThrowIfNull(column.Name);
             ArgumentNullException.ThrowIfNull(column.ClrType);
-
-            resolved[i] = column;
         }
-
-        return resolved;
     }
 
     public static ParquetSchema For<T>(RowSchema<T> rowSchema)

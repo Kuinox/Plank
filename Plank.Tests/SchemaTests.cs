@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Plank.Schema;
 
 namespace Plank.Tests;
@@ -13,9 +14,9 @@ public sealed class SchemaTests
     [Test]
     public async Task For_ReturnsRegisteredSchema()
     {
-        var schema = new ParquetSchema(
+        var schema = new ParquetSchema(ImmutableArray.Create(
             new Column("A", typeof(int), ColumnOptions.Default),
-            new Column("B", typeof(int), ColumnOptions.Default));
+            new Column("B", typeof(int), ColumnOptions.Default)));
         ParquetSchema.Register<Row>(schema);
 
         var resolved = ParquetSchema.For<Row>(new RowSchema<Row>(Array.Empty<RowColumnDefinition<Row>>()));
@@ -27,9 +28,9 @@ public sealed class SchemaTests
     [Test]
     public async Task Define_AssignsOrdinalsInOrder()
     {
-        var schema = new ParquetSchema(
+        var schema = new ParquetSchema(ImmutableArray.Create(
             new Column("X", typeof(int), ColumnOptions.Default),
-            new Column("Y", typeof(int), ColumnOptions.Default));
+            new Column("Y", typeof(int), ColumnOptions.Default)));
 
         await Assert.That(schema.Columns.Select(c => c.Ordinal).ToArray())
             .IsEqualTo(new[] { 0, 1 });
