@@ -1,6 +1,6 @@
 namespace Plank.Schema;
 
-internal static class ParquetTypeMap
+static class ParquetTypeMap
 {
     public static bool IsNullable(Type type)
     {

@@ -1,6 +1,3 @@
-using System.Buffers.Binary;
-using System.Collections.Immutable;
-using System.Runtime.InteropServices;
 using Plank.Schema;
 
 namespace Plank.Writing;
@@ -29,23 +26,10 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         if (column.PhysicalType != physicalType)
             throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {physicalType}.");
 
-        var encoding = ResolveDefaultEncoding(column.Options.Encodings);
-        if (encoding != EncodingKind.Plain)
-            throw new NotSupportedException($"Encoding '{encoding}' is not supported for column '{column.Name}'.");
-
         ref var columnState = ref _state.ColumnStates[ordinal];
         columnState.ValueCount = values.Length;
-        columnState.Encoding = encoding;
-        columnState.Compression = CompressionKind.None;
-
-        switch (physicalType)
-        {
-            case ParquetPhysicalType.Int32:
-                EncodePlainInt32(MemoryMarshal.Cast<T, int>(values), ref columnState, column.Name);
-                break;
-            default:
-                throw new NotSupportedException($"Physical type '{physicalType}' is not supported.");
-        }
+        ColumnCodec.Encode(column, values, physicalType, _state.Options, ref columnState);
+        ColumnCodec.Compress(ref columnState);
 
         return new SerializedColumn(this, ordinal);
     }
@@ -90,28 +74,6 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         }
 
         return AwaitWriteAsync(writeTask, rowCount, ordinal);
-    }
-
-    static EncodingKind ResolveDefaultEncoding(ImmutableArray<EncodingKind> encodings)
-        => encodings.IsDefaultOrEmpty ? EncodingKind.Plain : encodings[0];
-
-    static void EncodePlainInt32(ReadOnlySpan<int> values, ref ParquetWriter.RowGroupState.ColumnState state, string columnName)
-    {
-        var byteCount = checked(values.Length * sizeof(int));
-        var buffer = state.EncodedBuffer;
-        if (buffer is null || buffer.Length < byteCount)
-            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but MaxEncodedBytes is {buffer?.Length ?? 0}.");
-
-        var destination = buffer.AsSpan(0, byteCount);
-        if (BitConverter.IsLittleEndian)
-            MemoryMarshal.AsBytes(values).CopyTo(destination);
-        else
-        {
-            for (var i = 0; i < values.Length; i++)
-                BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(i * 4, 4), values[i]);
-        }
-
-        state.EncodedLength = byteCount;
     }
 
     void FinishWrite(int rowCount, int ordinal)

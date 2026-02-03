@@ -11,20 +11,24 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
     readonly uint? _expectedRowGroupCount;
+    readonly uint? _rowGroupRowCountHint;
     readonly IParquetLog _log;
     readonly RowGroupState _rowGroupState;
     bool _rowGroupActive;
     RowGroupInfo[] _rowGroups;
     int _rowGroupCount;
 
-    ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options, uint? expectedRowGroupCount)
+    ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options)
     {
         _stream = stream;
         _schema = schema;
         _options = options;
-        _expectedRowGroupCount = expectedRowGroupCount;
+        _expectedRowGroupCount = options.ExpectedRowGroupCount;
+        _rowGroupRowCountHint = options.RowGroupRowCountHint;
         _log = options.Log;
-        var capacity = checked((int)(expectedRowGroupCount ?? 0));
+        if (_expectedRowGroupCount.HasValue && _expectedRowGroupCount.Value > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(options), _expectedRowGroupCount.Value, "Expected row group count must fit in Int32.");
+        var capacity = _expectedRowGroupCount.HasValue ? checked((int)_expectedRowGroupCount.Value) : 0;
         _rowGroups = capacity > 0 ? new RowGroupInfo[capacity] : [];
         _rowGroupCount = 0;
         var columns = schema.Columns.IsDefault ? ImmutableArray<Column>.Empty : schema.Columns;
@@ -36,18 +40,7 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(schema);
 
-        return new ParquetWriter(stream, schema, options ?? ParquetWriterOptions.Default, null);
-    }
-
-    public static ParquetWriter Create(Stream stream, ParquetSchema schema, uint rowGroupCount, ParquetWriterOptions? options = null)
-    {
-        ArgumentNullException.ThrowIfNull(stream);
-        ArgumentNullException.ThrowIfNull(schema);
-
-        if (rowGroupCount > int.MaxValue)
-            throw new ArgumentOutOfRangeException(nameof(rowGroupCount), rowGroupCount, "Row group count must fit in Int32.");
-
-        return new ParquetWriter(stream, schema, options ?? ParquetWriterOptions.Default, rowGroupCount);
+        return new ParquetWriter(stream, schema, options ?? ParquetWriterOptions.Default);
     }
 
     public RowGroupWriter StartRowGroup(RowGroupOptions? options = null)
@@ -56,7 +49,7 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
             throw new InvalidOperationException("A row group is already active for this writer.");
 
         _rowGroupActive = true;
-        _rowGroupState.Reset(options ?? RowGroupOptions.Default);
+        _rowGroupState.Reset(options ?? RowGroupOptions.Default, _rowGroupRowCountHint);
         return new RowGroupWriter(this, _rowGroupState);
     }
 
@@ -130,17 +123,26 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
             Options = RowGroupOptions.Default;
         }
 
-        internal void Reset(RowGroupOptions options)
+        internal void Reset(RowGroupOptions options, uint? rowGroupRowCountHint)
         {
             Options = options;
             RowCount = -1;
             NextOrdinal = 0;
             var targetLength = options.MaxEncodedBytes;
+            var rowCountHint = rowGroupRowCountHint;
             for (var i = 0; i < ColumnStates.Length; i++)
             {
                 ref var state = ref ColumnStates[i];
-                if (targetLength > 0 && (state.EncodedBuffer is null || state.EncodedBuffer.Length < targetLength))
-                    state.EncodedBuffer = new byte[targetLength];
+                var length = targetLength;
+                if (rowCountHint.HasValue && ColumnCodec.TryGetFixedWidthBytes(SchemaColumns[i].PhysicalType, out var width))
+                {
+                    var hintLength = checked((int)rowCountHint.Value * width);
+                    if (hintLength > length)
+                        length = hintLength;
+                }
+
+                if (length > 0 && (state.EncodedBuffer is null || state.EncodedBuffer.Length < length))
+                    state.EncodedBuffer = new byte[length];
 
                 state.ValueCount = 0;
                 state.EncodedLength = 0;
