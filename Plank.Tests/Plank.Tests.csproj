@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <PackageReference Include="TUnit" Version="1.12.15" />
+    <PackageReference Include="ParquetSharp" Version="21.0.0" />
   </ItemGroup>
 
   <ItemGroup>

@@ -3,22 +3,24 @@ using Plank.Schema;
 
 namespace Plank.Tests;
 
-public sealed class SchemaTests
+internal sealed class SchemaTests
 {
+    static readonly string[] ExpectedColumns = ["A", "B"];
+
     [Test]
-    public async Task Schema_StoresColumnsInOrder()
+    public async Task SchemaStoresColumnsInOrder()
     {
         var schema = new ParquetSchema(ImmutableArray.Create(
             new Column("A", ParquetPhysicalType.Int32, ColumnOptions.Default),
             new Column("B", ParquetPhysicalType.Int32, ColumnOptions.Default)));
         schema.Validate();
 
-        await Assert.That(schema.Columns.Select(c => c.Name).ToArray())
-            .IsEqualTo(new[] { "A", "B" });
+        await Assert.That(schema.Columns.Select(c => c.Name).SequenceEqual(ExpectedColumns))
+            .IsTrue();
     }
 
     [Test]
-    public async Task Schema_RetainsColumnCount()
+    public async Task SchemaRetainsColumnCount()
     {
         var schema = new ParquetSchema(ImmutableArray.Create(
             new Column("X", ParquetPhysicalType.Int32, ColumnOptions.Default),

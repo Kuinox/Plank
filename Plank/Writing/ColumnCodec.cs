@@ -76,5 +76,6 @@ static class ColumnCodec
         }
 
         state.EncodedLength = byteCount;
+        state.UncompressedLength = byteCount;
     }
 }
