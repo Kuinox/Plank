@@ -61,8 +61,8 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         if (ordinal < 0 || ordinal >= _state.ColumnStates.Length)
             throw new ArgumentOutOfRangeException(nameof(ordinal));
 
-        await _writer.EnsureHeaderWrittenAsync(cancellationToken).ConfigureAwait(false);
         await _state.WaitForTurnAsync(ordinal, cancellationToken).ConfigureAwait(false);
+        await _writer.EnsureHeaderWrittenAsync(cancellationToken).ConfigureAwait(false);
 
         var columnState = _state.ColumnStates[ordinal];
         var valueCount = columnState.ValueCount;

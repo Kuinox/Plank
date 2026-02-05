@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Collections.Immutable;
 using System.Text;
 using Plank.Schema;
@@ -31,10 +30,9 @@ internal static class ParquetThriftWriter
         return writer.WrittenCount;
     }
 
-    internal static byte[] CreateFileMetaDataBytes(ParquetSchema schema, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
+    internal static int GetFileMetaDataSize(ParquetSchema schema, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
     {
-        var buffer = new ArrayBufferWriter<byte>();
-        var writer = new CompactWriter(buffer);
+        var writer = new CompactSizeCounter();
         var previous = writer.BeginStruct();
 
         writer.WriteFieldI32(1, 1);
@@ -43,10 +41,24 @@ internal static class ParquetThriftWriter
         WriteRowGroups(ref writer, schema, rowGroups, rowGroupCount);
 
         writer.EndStruct(previous);
-        return buffer.WrittenSpan.ToArray();
+        return writer.WrittenCount;
     }
 
-    static void WriteSchema(ref CompactWriter writer, ParquetSchema schema)
+    internal static int WriteFileMetaData(Span<byte> destination, ParquetSchema schema, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
+    {
+        var writer = new CompactSpanWriter(destination);
+        var previous = writer.BeginStruct();
+
+        writer.WriteFieldI32(1, 1);
+        WriteSchema(ref writer, schema);
+        writer.WriteFieldI64(3, CountRows(rowGroups, rowGroupCount));
+        WriteRowGroups(ref writer, schema, rowGroups, rowGroupCount);
+
+        writer.EndStruct(previous);
+        return writer.WrittenCount;
+    }
+
+    static void WriteSchema(ref CompactSizeCounter writer, ParquetSchema schema)
     {
         var columns = schema.Columns.IsDefault ? ImmutableArray<Column>.Empty : schema.Columns;
         var count = columns.Length;
@@ -69,7 +81,7 @@ internal static class ParquetThriftWriter
         }
     }
 
-    static void WriteRowGroups(ref CompactWriter writer, ParquetSchema schema, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
+    static void WriteRowGroups(ref CompactSizeCounter writer, ParquetSchema schema, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
     {
         writer.WriteFieldHeader(4, CompactType.List);
         writer.WriteListHeader(rowGroupCount, CompactType.Struct);
@@ -89,7 +101,7 @@ internal static class ParquetThriftWriter
         }
     }
 
-    static void WriteRowGroupColumns(ref CompactWriter writer, ImmutableArray<Column> columns, ParquetWriter.ColumnChunkMetadata[] metadata)
+    static void WriteRowGroupColumns(ref CompactSizeCounter writer, ImmutableArray<Column> columns, ParquetWriter.ColumnChunkMetadata[] metadata)
     {
         writer.WriteFieldHeader(1, CompactType.List);
         writer.WriteListHeader(columns.Length, CompactType.Struct);
@@ -117,7 +129,7 @@ internal static class ParquetThriftWriter
         }
     }
 
-    static void WriteEncodings(ref CompactWriter writer, EncodingKind dataEncoding)
+    static void WriteEncodings(ref CompactSizeCounter writer, EncodingKind dataEncoding)
     {
         var valueEncoding = GetEncoding(dataEncoding);
         var rleEncoding = GetEncoding(EncodingKind.Rle);
@@ -130,7 +142,98 @@ internal static class ParquetThriftWriter
             writer.WriteI32(rleEncoding);
     }
 
-    static void WritePath(ref CompactWriter writer, string name)
+    static void WritePath(ref CompactSizeCounter writer, string name)
+    {
+        writer.WriteFieldHeader(3, CompactType.List);
+        writer.WriteListHeader(1, CompactType.Binary);
+        writer.WriteBinary(name);
+    }
+
+    static void WriteSchema(ref CompactSpanWriter writer, ParquetSchema schema)
+    {
+        var columns = schema.Columns.IsDefault ? ImmutableArray<Column>.Empty : schema.Columns;
+        var count = columns.Length;
+        writer.WriteFieldHeader(2, CompactType.List);
+        writer.WriteListHeader(count + 1, CompactType.Struct);
+
+        var previous = writer.BeginStruct();
+        writer.WriteFieldString(4, "schema");
+        writer.WriteFieldI32(5, count);
+        writer.EndStruct(previous);
+
+        for (var i = 0; i < count; i++)
+        {
+            var column = columns[i];
+            previous = writer.BeginStruct();
+            writer.WriteFieldI32(1, GetType(column.PhysicalType));
+            writer.WriteFieldI32(3, GetRepetition(column.Options.Repetition));
+            writer.WriteFieldString(4, column.Name);
+            writer.EndStruct(previous);
+        }
+    }
+
+    static void WriteRowGroups(ref CompactSpanWriter writer, ParquetSchema schema, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
+    {
+        writer.WriteFieldHeader(4, CompactType.List);
+        writer.WriteListHeader(rowGroupCount, CompactType.Struct);
+        var columns = schema.Columns.IsDefault ? ImmutableArray<Column>.Empty : schema.Columns;
+
+        for (var i = 0; i < rowGroupCount; i++)
+        {
+            var rowGroup = rowGroups[i];
+            var previous = writer.BeginStruct();
+            WriteRowGroupColumns(ref writer, columns, rowGroup.Columns);
+            writer.WriteFieldI64(2, GetRowGroupTotalUncompressedSize(rowGroup.Columns));
+            writer.WriteFieldI64(3, rowGroup.RowCount);
+            if (columns.Length > 0)
+                writer.WriteFieldI64(5, rowGroup.Columns[0].Offset);
+            writer.WriteFieldI64(6, GetRowGroupTotalCompressedSize(rowGroup.Columns));
+            writer.EndStruct(previous);
+        }
+    }
+
+    static void WriteRowGroupColumns(ref CompactSpanWriter writer, ImmutableArray<Column> columns, ParquetWriter.ColumnChunkMetadata[] metadata)
+    {
+        writer.WriteFieldHeader(1, CompactType.List);
+        writer.WriteListHeader(columns.Length, CompactType.Struct);
+
+        for (var i = 0; i < columns.Length; i++)
+        {
+            var column = columns[i];
+            var chunk = metadata[i];
+            var previous = writer.BeginStruct();
+            writer.WriteFieldI64(2, 0);
+            writer.WriteFieldHeader(3, CompactType.Struct);
+
+            var previousMeta = writer.BeginStruct();
+            writer.WriteFieldI32(1, GetType(column.PhysicalType));
+            WriteEncodings(ref writer, chunk.Encoding);
+            WritePath(ref writer, column.Name);
+            writer.WriteFieldI32(4, GetCompression(chunk.Compression));
+            writer.WriteFieldI64(5, chunk.ValueCount);
+            writer.WriteFieldI64(6, chunk.TotalUncompressedSize);
+            writer.WriteFieldI64(7, chunk.TotalCompressedSize);
+            writer.WriteFieldI64(9, chunk.Offset);
+            writer.EndStruct(previousMeta);
+
+            writer.EndStruct(previous);
+        }
+    }
+
+    static void WriteEncodings(ref CompactSpanWriter writer, EncodingKind dataEncoding)
+    {
+        var valueEncoding = GetEncoding(dataEncoding);
+        var rleEncoding = GetEncoding(EncodingKind.Rle);
+        var count = valueEncoding == rleEncoding ? 1 : 2;
+
+        writer.WriteFieldHeader(2, CompactType.List);
+        writer.WriteListHeader(count, CompactType.I32);
+        writer.WriteI32(valueEncoding);
+        if (count == 2)
+            writer.WriteI32(rleEncoding);
+    }
+
+    static void WritePath(ref CompactSpanWriter writer, string name)
     {
         writer.WriteFieldHeader(3, CompactType.List);
         writer.WriteListHeader(1, CompactType.Binary);
@@ -266,16 +369,21 @@ internal static class ParquetThriftWriter
         Struct = 12
     }
 
-    struct CompactWriter
+    ref struct CompactSpanWriter
     {
-        readonly IBufferWriter<byte> _buffer;
+        readonly Span<byte> _buffer;
+        int _index;
         int _lastFieldId;
 
-        internal CompactWriter(IBufferWriter<byte> buffer)
+        internal CompactSpanWriter(Span<byte> buffer)
         {
             _buffer = buffer;
+            _index = 0;
             _lastFieldId = 0;
         }
+
+        internal int WrittenCount
+            => _index;
 
         internal int BeginStruct()
         {
@@ -333,13 +441,13 @@ internal static class ParquetThriftWriter
             }
         }
 
-        internal void WriteI16(int value)
+        void WriteI16(int value)
             => WriteVarInt32(EncodeZigZag32(value));
 
         internal void WriteI32(int value)
             => WriteVarInt32(EncodeZigZag32(value));
 
-        internal void WriteI64(long value)
+        void WriteI64(long value)
             => WriteVarInt64(EncodeZigZag64(value));
 
         internal void WriteBinary(string value)
@@ -349,23 +457,29 @@ internal static class ParquetThriftWriter
             if (byteCount == 0)
                 return;
 
-            var span = _buffer.GetSpan(byteCount);
-            Utf8.GetBytes(value.AsSpan(), span);
-            _buffer.Advance(byteCount);
+            if (_index > _buffer.Length - byteCount)
+                throw new InvalidOperationException("File metadata buffer is too small.");
+
+            Utf8.GetBytes(value.AsSpan(), _buffer.Slice(_index, byteCount));
+            _index += byteCount;
         }
 
         void WriteByte(byte value)
         {
-            var span = _buffer.GetSpan(1);
-            span[0] = value;
-            _buffer.Advance(1);
+            if ((uint)_index >= (uint)_buffer.Length)
+                throw new InvalidOperationException("File metadata buffer is too small.");
+
+            _buffer[_index] = value;
+            _index++;
         }
 
         void WriteBytes(ReadOnlySpan<byte> data)
         {
-            var span = _buffer.GetSpan(data.Length);
-            data.CopyTo(span);
-            _buffer.Advance(data.Length);
+            if (_index > _buffer.Length - data.Length)
+                throw new InvalidOperationException("File metadata buffer is too small.");
+
+            data.CopyTo(_buffer.Slice(_index));
+            _index += data.Length;
         }
 
         void WriteVarInt32(uint value)
@@ -397,21 +511,13 @@ internal static class ParquetThriftWriter
             => (ulong)((value << 1) ^ (value >> 63));
     }
 
-    ref struct CompactSpanWriter
+    struct CompactSizeCounter
     {
-        readonly Span<byte> _buffer;
-        int _index;
+        int _count;
         int _lastFieldId;
 
-        internal CompactSpanWriter(Span<byte> buffer)
-        {
-            _buffer = buffer;
-            _index = 0;
-            _lastFieldId = 0;
-        }
-
         internal int WrittenCount
-            => _index;
+            => _count;
 
         internal int BeginStruct()
         {
@@ -422,7 +528,7 @@ internal static class ParquetThriftWriter
 
         internal void EndStruct(int previousFieldId)
         {
-            WriteByte((byte)CompactType.Stop);
+            WriteByte();
             _lastFieldId = previousFieldId;
         }
 
@@ -430,10 +536,10 @@ internal static class ParquetThriftWriter
         {
             var delta = fieldId - _lastFieldId;
             if (delta > 0 && delta <= 15)
-                WriteByte((byte)((delta << 4) | (int)type));
+                WriteByte();
             else
             {
-                WriteByte((byte)type);
+                WriteByte();
                 WriteI16(fieldId);
             }
 
@@ -446,42 +552,74 @@ internal static class ParquetThriftWriter
             WriteI32(value);
         }
 
-        void WriteI16(int value)
-            => WriteVarInt32(EncodeZigZag32(value));
-
-        void WriteI32(int value)
-            => WriteVarInt32(EncodeZigZag32(value));
-
-        void WriteByte(byte value)
+        internal void WriteFieldI64(int fieldId, long value)
         {
-            if ((uint)_index >= (uint)_buffer.Length)
-                throw new InvalidOperationException("Data page header buffer is too small.");
-
-            _buffer[_index] = value;
-            _index++;
+            WriteFieldHeader(fieldId, CompactType.I64);
+            WriteI64(value);
         }
 
-        void WriteBytes(ReadOnlySpan<byte> data)
+        internal void WriteFieldString(int fieldId, string value)
         {
-            if (_index > _buffer.Length - data.Length)
-                throw new InvalidOperationException("Data page header buffer is too small.");
-
-            data.CopyTo(_buffer.Slice(_index));
-            _index += data.Length;
+            WriteFieldHeader(fieldId, CompactType.Binary);
+            WriteBinary(value);
         }
+
+        internal void WriteListHeader(int count, CompactType elementType)
+        {
+            if (count < 15)
+                WriteByte();
+            else
+            {
+                WriteByte();
+                WriteVarInt32((uint)count);
+            }
+        }
+
+        internal void WriteI16(int value)
+            => WriteVarInt32(EncodeZigZag32(value));
+
+        internal void WriteI32(int value)
+            => WriteVarInt32(EncodeZigZag32(value));
+
+        internal void WriteI64(long value)
+            => WriteVarInt64(EncodeZigZag64(value));
+
+        internal void WriteBinary(string value)
+        {
+            var byteCount = Utf8.GetByteCount(value);
+            WriteVarInt32((uint)byteCount);
+            _count += byteCount;
+        }
+
+        void WriteByte()
+            => _count += 1;
 
         void WriteVarInt32(uint value)
         {
             while (value >= 0x80)
             {
-                WriteByte((byte)(value | 0x80));
+                WriteByte();
                 value >>= 7;
             }
 
-            WriteByte((byte)value);
+            WriteByte();
+        }
+
+        void WriteVarInt64(ulong value)
+        {
+            while (value >= 0x80)
+            {
+                WriteByte();
+                value >>= 7;
+            }
+
+            WriteByte();
         }
 
         static uint EncodeZigZag32(int value)
             => (uint)((value << 1) ^ (value >> 31));
+
+        static ulong EncodeZigZag64(long value)
+            => (ulong)((value << 1) ^ (value >> 63));
     }
 }

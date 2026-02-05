@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Threading.Tasks.Sources;
 using Plank;
 using Plank.Schema;
 
@@ -8,19 +9,19 @@ namespace Plank.Writing;
 
 public sealed class ParquetWriter : IDisposable, IAsyncDisposable
 {
-    readonly Stream _stream;
+    Stream _stream;
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
     readonly uint? _expectedRowGroupCount;
     readonly uint? _rowGroupRowCountHint;
     readonly IParquetLog _log;
     readonly RowGroupState _rowGroupState;
+    readonly byte[] _footerBuffer;
+    readonly ColumnChunkMetadata[][] _rowGroupColumns;
     long _position;
     bool _rowGroupActive;
     bool _completed;
     bool _headerWritten;
-    Task? _headerWriteTask;
-    readonly object _headerSync;
     RowGroupInfo[] _rowGroups;
     int _rowGroupCount;
     static readonly byte[] FileMagic = [(byte)'P', (byte)'A', (byte)'R', (byte)'1'];
@@ -35,16 +36,30 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
         _log = options.Log;
         if (_expectedRowGroupCount.HasValue && _expectedRowGroupCount.Value > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(options), _expectedRowGroupCount.Value, "Expected row group count must fit in Int32.");
-        var capacity = _expectedRowGroupCount.HasValue ? checked((int)_expectedRowGroupCount.Value) : 0;
+        var capacity = _expectedRowGroupCount.HasValue ? checked((int)_expectedRowGroupCount.Value) : 1;
         _rowGroups = capacity > 0 ? new RowGroupInfo[capacity] : [];
-        _rowGroupCount = 0;
         var columns = schema.Columns.IsDefault ? ImmutableArray<Column>.Empty : schema.Columns;
-        _rowGroupState = new RowGroupState(columns);
+        _rowGroupColumns = capacity > 0 ? new ColumnChunkMetadata[capacity][] : [];
+        if (_rowGroupColumns.Length > 0)
+        {
+            if (columns.Length == 0)
+            {
+                var empty = Array.Empty<ColumnChunkMetadata>();
+                for (var i = 0; i < _rowGroupColumns.Length; i++)
+                    _rowGroupColumns[i] = empty;
+            }
+            else
+            {
+                for (var i = 0; i < _rowGroupColumns.Length; i++)
+                    _rowGroupColumns[i] = new ColumnChunkMetadata[columns.Length];
+            }
+        }
+        _rowGroupCount = 0;
+        _rowGroupState = new RowGroupState(columns, options.RowGroupOptions, _rowGroupRowCountHint);
+        _footerBuffer = options.FooterBufferBytes > 0 ? new byte[options.FooterBufferBytes] : throw new ArgumentOutOfRangeException(nameof(options), options.FooterBufferBytes, "FooterBufferBytes must be positive.");
         _position = 0;
         _completed = false;
         _headerWritten = false;
-        _headerWriteTask = null;
-        _headerSync = new object();
     }
 
     public static ParquetWriter Create(Stream stream, ParquetSchema schema, ParquetWriterOptions? options = null)
@@ -55,6 +70,20 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
         return new ParquetWriter(stream, schema, options ?? ParquetWriterOptions.Default);
     }
 
+    public void Reset(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (_rowGroupActive)
+            throw new InvalidOperationException("Cannot reset while a row group is active.");
+
+        _stream = stream;
+        _position = 0;
+        _rowGroupCount = 0;
+        _rowGroupActive = false;
+        _completed = false;
+        _headerWritten = false;
+    }
+
     public RowGroupWriter StartRowGroup(RowGroupOptions? options = null)
     {
         if (_completed)
@@ -63,8 +92,11 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
         if (_rowGroupActive)
             throw new InvalidOperationException("A row group is already active for this writer.");
 
+        if (options is not null && !ReferenceEquals(options, _options.RowGroupOptions))
+            throw new InvalidOperationException("RowGroupOptions cannot be changed when reuse/no-allocation guarantees are required.");
+
         _rowGroupActive = true;
-        _rowGroupState.Reset(options ?? RowGroupOptions.Default, _rowGroupRowCountHint);
+        _rowGroupState.Reset(options ?? _options.RowGroupOptions);
         return new RowGroupWriter(this, _rowGroupState);
     }
 
@@ -88,8 +120,11 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
     {
         var index = _rowGroupCount;
         if (index == _rowGroups.Length)
-            GrowRowGroupCapacity(index + 1);
-        _rowGroups[index] = new RowGroupInfo(rowCount, SnapshotColumnMetadata(_rowGroupState.ColumnMetadata));
+            throw new InvalidOperationException("Row group capacity exceeded. Set ExpectedRowGroupCount to preallocate sufficient capacity.");
+        var destination = _rowGroupColumns[index];
+        if (destination.Length > 0)
+            Array.Copy(_rowGroupState.ColumnMetadata, destination, destination.Length);
+        _rowGroups[index] = new RowGroupInfo(rowCount, destination);
         _rowGroupCount = index + 1;
         _rowGroupActive = false;
     }
@@ -133,29 +168,18 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
         await _stream.DisposeAsync().ConfigureAwait(false);
     }
 
-    static ColumnChunkMetadata[] SnapshotColumnMetadata(ColumnChunkMetadata[] source)
+    ValueTask WriteFileFooterAsync(CancellationToken cancellationToken)
     {
-        if (source.Length == 0)
-            return [];
+        var metadataSize = ParquetThriftWriter.GetFileMetaDataSize(_schema, _rowGroups, _rowGroupCount);
+        var footerSize = checked(metadataSize + sizeof(int) + FileMagic.Length);
+        if (footerSize > _footerBuffer.Length)
+            throw new InvalidOperationException($"Footer requires {footerSize} bytes but FooterBufferBytes is {_footerBuffer.Length}.");
 
-        var snapshot = new ColumnChunkMetadata[source.Length];
-        Array.Copy(source, snapshot, source.Length);
-        return snapshot;
-    }
-
-    async ValueTask WriteFileFooterAsync(CancellationToken cancellationToken)
-    {
-        var metadata = ParquetThriftWriter.CreateFileMetaDataBytes(_schema, _rowGroups, _rowGroupCount);
-        await _stream.WriteAsync(metadata.AsMemory(), cancellationToken).ConfigureAwait(false);
-        AdvancePosition(metadata.Length);
-
-        var footerLength = new byte[4];
-        BinaryPrimitives.WriteInt32LittleEndian(footerLength, metadata.Length);
-        await _stream.WriteAsync(footerLength.AsMemory(), cancellationToken).ConfigureAwait(false);
-        AdvancePosition(footerLength.Length);
-
-        await _stream.WriteAsync(FileMagic.AsMemory(), cancellationToken).ConfigureAwait(false);
-        AdvancePosition(FileMagic.Length);
+        ParquetThriftWriter.WriteFileMetaData(_footerBuffer.AsSpan(0, metadataSize), _schema, _rowGroups, _rowGroupCount);
+        BinaryPrimitives.WriteInt32LittleEndian(_footerBuffer.AsSpan(metadataSize, sizeof(int)), metadataSize);
+        FileMagic.CopyTo(_footerBuffer.AsSpan(metadataSize + sizeof(int), FileMagic.Length));
+        AdvancePosition(footerSize);
+        return _stream.WriteAsync(_footerBuffer.AsMemory(0, footerSize), cancellationToken);
     }
 
     internal ValueTask EnsureHeaderWrittenAsync(CancellationToken cancellationToken)
@@ -163,32 +187,12 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
         if (_headerWritten)
             return ValueTask.CompletedTask;
 
-        Task? writeTask = Volatile.Read(ref _headerWriteTask);
-        if (writeTask is null)
-        {
-            lock (_headerSync)
-            {
-                if (_headerWritten)
-                    return ValueTask.CompletedTask;
+        if (cancellationToken.IsCancellationRequested)
+            return ValueTask.FromCanceled(cancellationToken);
 
-                if (_headerWriteTask is null)
-                    _headerWriteTask = WriteHeaderAsyncCore();
-
-                writeTask = _headerWriteTask;
-            }
-        }
-
-        if (!cancellationToken.CanBeCanceled)
-            return new ValueTask(writeTask);
-
-        return new ValueTask(writeTask.WaitAsync(cancellationToken));
-    }
-
-    async Task WriteHeaderAsyncCore()
-    {
-        await _stream.WriteAsync(FileMagic.AsMemory(), CancellationToken.None).ConfigureAwait(false);
-        AdvancePosition(FileMagic.Length);
         _headerWritten = true;
+        AdvancePosition(FileMagic.Length);
+        return _stream.WriteAsync(FileMagic.AsMemory(), cancellationToken);
     }
 
     internal readonly struct ColumnChunkMetadata
@@ -244,10 +248,9 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
         internal int RowCount;
         internal int NextOrdinal;
         internal RowGroupOptions Options;
-        readonly object _sync;
-        TaskCompletionSource<bool>?[]? _writeSignals;
+        readonly AsyncOrdinalGate[] _ordinalGates;
 
-        internal RowGroupState(ImmutableArray<Column> columns)
+        internal RowGroupState(ImmutableArray<Column> columns, RowGroupOptions options, uint? rowGroupRowCountHint)
         {
             SchemaColumns = columns;
             var count = columns.Length;
@@ -259,34 +262,27 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
             for (var i = 0; i < count; i++)
                 ColumnOrdinals[columns[i]] = i;
             PageHeaderBuffer = new byte[MaxPageHeaderBytes];
-            _sync = new object();
+            _ordinalGates = count > 0 ? new AsyncOrdinalGate[count] : [];
+            for (var i = 0; i < _ordinalGates.Length; i++)
+                _ordinalGates[i] = new AsyncOrdinalGate();
+            InitializeBuffers(options, rowGroupRowCountHint);
             RowCount = -1;
             NextOrdinal = 0;
             Options = RowGroupOptions.Default;
         }
 
-        internal void Reset(RowGroupOptions options, uint? rowGroupRowCountHint)
+        internal void Reset(RowGroupOptions options)
         {
             Options = options;
             RowCount = -1;
             NextOrdinal = 0;
-            if (_writeSignals is not null)
-                Array.Clear(_writeSignals);
-            var targetLength = options.MaxEncodedBytes;
-            var rowCountHint = rowGroupRowCountHint;
+            for (var i = 0; i < _ordinalGates.Length; i++)
+                _ordinalGates[i].Reset();
             for (var i = 0; i < ColumnStates.Length; i++)
             {
                 ref var state = ref ColumnStates[i];
-                var length = targetLength;
-                if (rowCountHint.HasValue && ColumnCodec.TryGetFixedWidthBytes(SchemaColumns[i].PhysicalType, out var width))
-                {
-                    var hintLength = checked((int)rowCountHint.Value * width);
-                    if (hintLength > length)
-                        length = hintLength;
-                }
-
-                if (length > 0 && (state.EncodedBuffer is null || state.EncodedBuffer.Length < length))
-                    state.EncodedBuffer = new byte[length];
+                if (state.EncodedBuffer is null)
+                    throw new InvalidOperationException($"Column '{SchemaColumns[i].Name}' was not preallocated.");
 
                 state.ValueCount = 0;
                 state.EncodedLength = 0;
@@ -298,55 +294,46 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
             }
         }
 
-        internal ValueTask WaitForTurnAsync(int ordinal, CancellationToken cancellationToken)
+        void InitializeBuffers(RowGroupOptions options, uint? rowGroupRowCountHint)
         {
-            if (ordinal == NextOrdinal)
-                return ValueTask.CompletedTask;
-
-            Task? waitTask;
-            lock (_sync)
+            var targetLength = options.MaxEncodedBytes;
+            var rowCountHint = rowGroupRowCountHint;
+            for (var i = 0; i < ColumnStates.Length; i++)
             {
-                if (ordinal == NextOrdinal)
-                    return ValueTask.CompletedTask;
-
-                if (ordinal < NextOrdinal)
-                    throw new InvalidOperationException($"Column ordinal {ordinal} was already written.");
-
-                _writeSignals ??= new TaskCompletionSource<bool>[ColumnStates.Length];
-                var signal = _writeSignals[ordinal];
-                if (signal is null)
+                var length = targetLength;
+                if (rowCountHint.HasValue && ColumnCodec.TryGetFixedWidthBytes(SchemaColumns[i].PhysicalType, out var width))
                 {
-                    signal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    _writeSignals[ordinal] = signal;
+                    var hintLength = checked((int)rowCountHint.Value * width);
+                    if (hintLength > length)
+                        length = hintLength;
                 }
 
-                waitTask = signal.Task;
+                if (length > 0)
+                    ColumnStates[i].EncodedBuffer = new byte[length];
             }
+        }
+
+        internal ValueTask WaitForTurnAsync(int ordinal, CancellationToken cancellationToken)
+        {
+            var nextOrdinal = Volatile.Read(ref NextOrdinal);
+            if (ordinal == nextOrdinal)
+                return ValueTask.CompletedTask;
+
+            if (ordinal < nextOrdinal)
+                throw new InvalidOperationException($"Column ordinal {ordinal} was already written.");
 
             if (cancellationToken.IsCancellationRequested)
                 return ValueTask.FromCanceled(cancellationToken);
 
-            if (!cancellationToken.CanBeCanceled)
-                return new ValueTask(waitTask);
-
-            return new ValueTask(waitTask.WaitAsync(cancellationToken));
+            return _ordinalGates[ordinal].WaitAsync();
         }
 
         internal int AdvanceOrdinal()
         {
-            TaskCompletionSource<bool>? signal = null;
-            lock (_sync)
-            {
-                NextOrdinal++;
-                if (_writeSignals is not null && NextOrdinal < _writeSignals.Length)
-                {
-                    signal = _writeSignals[NextOrdinal];
-                    _writeSignals[NextOrdinal] = null;
-                }
-            }
-
-            signal?.TrySetResult(true);
-            return NextOrdinal;
+            var nextOrdinal = Interlocked.Increment(ref NextOrdinal);
+            if ((uint)nextOrdinal < (uint)_ordinalGates.Length)
+                _ordinalGates[nextOrdinal].Set();
+            return nextOrdinal;
         }
 
         internal struct ColumnState
@@ -358,6 +345,51 @@ public sealed class ParquetWriter : IDisposable, IAsyncDisposable
             internal byte[]? EncodedBuffer;
             internal EncodingKind Encoding;
             internal CompressionKind Compression;
+        }
+
+        sealed class AsyncOrdinalGate : IValueTaskSource
+        {
+            ManualResetValueTaskSourceCore<bool> _core;
+            int _signaled;
+
+            internal AsyncOrdinalGate()
+            {
+                _core = new ManualResetValueTaskSourceCore<bool>
+                {
+                    RunContinuationsAsynchronously = true
+                };
+            }
+
+            internal void Reset()
+            {
+                _signaled = 0;
+                _core.Reset();
+            }
+
+            internal void Set()
+            {
+                if (Interlocked.Exchange(ref _signaled, 1) != 0)
+                    return;
+
+                _core.SetResult(true);
+            }
+
+            internal ValueTask WaitAsync()
+            {
+                if (Volatile.Read(ref _signaled) != 0)
+                    return ValueTask.CompletedTask;
+
+                return new ValueTask(this, _core.Version);
+            }
+
+            void IValueTaskSource.GetResult(short token)
+                => _core.GetResult(token);
+
+            ValueTaskSourceStatus IValueTaskSource.GetStatus(short token)
+                => _core.GetStatus(token);
+
+            void IValueTaskSource.OnCompleted(Action<object?> continuation, object? state, short token, ValueTaskSourceOnCompletedFlags flags)
+                => _core.OnCompleted(continuation, state, token, flags);
         }
     }
 }

@@ -11,4 +11,8 @@ public sealed class ParquetWriterOptions
     public uint? ExpectedRowGroupCount { get; init; }
 
     public uint? RowGroupRowCountHint { get; init; }
+
+    public RowGroupOptions RowGroupOptions { get; init; } = RowGroupOptions.Default;
+
+    public int FooterBufferBytes { get; init; } = 64 * 1024;
 }
