@@ -19,8 +19,33 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         if (cancellationToken.IsCancellationRequested)
             return ValueTask.FromCanceled(cancellationToken);
 
+        _writer.RegisterValueType(column, typeof(T));
         var physicalType = ParquetTypeMap.GetPhysicalType(typeof(T));
         var ordinal = _state.EncodeColumn(column, values, physicalType);
+        _state.TryDrain(_writer);
+        return _state.GetWriteTask(ordinal, cancellationToken);
+    }
+
+    public ValueTask WriteAsync<T>(Column column, RepeatedValues<T> values, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        if (cancellationToken.IsCancellationRequested)
+            return ValueTask.FromCanceled(cancellationToken);
+
+        _writer.RegisterValueType(column, typeof(T));
+        var physicalType = ParquetTypeMap.GetPhysicalType(typeof(T));
+        var ordinal = _state.EncodeRepeatedColumn(column, values.Rows, physicalType);
+        _state.TryDrain(_writer);
+        return _state.GetWriteTask(ordinal, cancellationToken);
+    }
+
+    public ValueTask WriteAsync(ParquetWriter.SerializedColumn serialized, CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return ValueTask.FromCanceled(cancellationToken);
+
+        _writer.RegisterSerializedColumnType(serialized);
+        var ordinal = _state.AcceptSerialized(serialized);
         _state.TryDrain(_writer);
         return _state.GetWriteTask(ordinal, cancellationToken);
     }

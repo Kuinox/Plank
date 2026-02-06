@@ -31,4 +31,17 @@ internal sealed class SchemaTests
         await Assert.That(schema.Columns.Length)
             .IsEqualTo(2);
     }
+
+    [Test]
+    public async Task SchemaValidateHandlesDefaultAndEmptyColumns()
+    {
+        var defaultSchema = new ParquetSchema(default);
+        defaultSchema.Validate();
+
+        var emptySchema = new ParquetSchema([]);
+        emptySchema.Validate();
+
+        await Assert.That(defaultSchema.Columns.IsDefault).IsTrue();
+        await Assert.That(emptySchema.Columns.Length).IsEqualTo(0);
+    }
 }

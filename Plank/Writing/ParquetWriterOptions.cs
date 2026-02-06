@@ -15,4 +15,10 @@ public sealed class ParquetWriterOptions
     public RowGroupOptions RowGroupOptions { get; init; } = RowGroupOptions.Default;
 
     public int FooterBufferBytes { get; init; } = 64 * 1024;
+
+    public IBufferPool? BufferPool { get; init; }
+
+    public CompressionKind Compression { get; init; } = CompressionKind.None;
+
+    public DateTimeKindHandling DateTimeKindHandling { get; init; } = DateTimeKindHandling.RequireUtc;
 }

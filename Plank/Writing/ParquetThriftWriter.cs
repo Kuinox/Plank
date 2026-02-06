@@ -8,35 +8,37 @@ internal static class ParquetThriftWriter
 {
     static readonly Encoding Utf8 = new UTF8Encoding(false, true);
 
-    internal static int WriteDataPageHeader(Span<byte> destination, int valueCount, EncodingKind encoding, int uncompressedSize, int compressedSize)
+    internal static int WriteDataPageHeader(Span<byte> destination, int valueCount, int nullCount, int rowCount, EncodingKind encoding, int definitionLevelsByteLength, int repetitionLevelsByteLength, int uncompressedSize, int compressedSize, bool isCompressed)
     {
         var writer = new CompactSpanWriter(destination);
         var previous = writer.BeginStruct();
 
-        writer.WriteFieldI32(1, (int)PageType.DataPage);
+        writer.WriteFieldI32(1, (int)PageType.DataPageV2);
         writer.WriteFieldI32(2, uncompressedSize);
         writer.WriteFieldI32(3, compressedSize);
-        writer.WriteFieldHeader(5, CompactType.Struct);
+        writer.WriteFieldHeader(8, CompactType.Struct);
 
         var previousData = writer.BeginStruct();
         writer.WriteFieldI32(1, valueCount);
-        writer.WriteFieldI32(2, GetEncoding(encoding));
-        var levelEncoding = GetEncoding(EncodingKind.Rle);
-        writer.WriteFieldI32(3, levelEncoding);
-        writer.WriteFieldI32(4, levelEncoding);
+        writer.WriteFieldI32(2, nullCount);
+        writer.WriteFieldI32(3, rowCount);
+        writer.WriteFieldI32(4, GetEncoding(encoding));
+        writer.WriteFieldI32(5, definitionLevelsByteLength);
+        writer.WriteFieldI32(6, repetitionLevelsByteLength);
+        writer.WriteFieldBool(7, isCompressed);
         writer.EndStruct(previousData);
 
         writer.EndStruct(previous);
         return writer.WrittenCount;
     }
 
-    internal static int GetFileMetaDataSize(ParquetSchema schema, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
+    internal static int GetFileMetaDataSize(ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, byte[] repeatedElementStates, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
     {
         var writer = new CompactSizeCounter();
         var previous = writer.BeginStruct();
 
         writer.WriteFieldI32(1, 1);
-        WriteSchema(ref writer, schema);
+        WriteSchema(ref writer, schema, columnLogicalTypes, repeatedElementStates);
         writer.WriteFieldI64(3, CountRows(rowGroups, rowGroupCount));
         WriteRowGroups(ref writer, schema, rowGroups, rowGroupCount);
 
@@ -44,13 +46,13 @@ internal static class ParquetThriftWriter
         return writer.WrittenCount;
     }
 
-    internal static int WriteFileMetaData(Span<byte> destination, ParquetSchema schema, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
+    internal static int WriteFileMetaData(Span<byte> destination, ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, byte[] repeatedElementStates, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
     {
         var writer = new CompactSpanWriter(destination);
         var previous = writer.BeginStruct();
 
         writer.WriteFieldI32(1, 1);
-        WriteSchema(ref writer, schema);
+        WriteSchema(ref writer, schema, columnLogicalTypes, repeatedElementStates);
         writer.WriteFieldI64(3, CountRows(rowGroups, rowGroupCount));
         WriteRowGroups(ref writer, schema, rowGroups, rowGroupCount);
 
@@ -58,26 +60,22 @@ internal static class ParquetThriftWriter
         return writer.WrittenCount;
     }
 
-    static void WriteSchema(ref CompactSizeCounter writer, ParquetSchema schema)
+    static void WriteSchema(ref CompactSizeCounter writer, ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, byte[] repeatedElementStates)
     {
         ImmutableArray<Column> columns = schema.Columns.IsDefault ? [] : schema.Columns;
-        var count = columns.Length;
+        var count = GetSchemaNodeCount(columns);
         writer.WriteFieldHeader(2, CompactType.List);
-        writer.WriteListHeader(count + 1, CompactType.Struct);
+        writer.WriteListHeader(count, CompactType.Struct);
 
         var previous = writer.BeginStruct();
         writer.WriteFieldString(4, "schema");
-        writer.WriteFieldI32(5, count);
+        writer.WriteFieldI32(5, columns.Length);
         writer.EndStruct(previous);
 
-        for (var i = 0; i < count; i++)
+        for (var i = 0; i < columns.Length; i++)
         {
             var column = columns[i];
-            previous = writer.BeginStruct();
-            writer.WriteFieldI32(1, GetType(column.PhysicalType));
-            writer.WriteFieldI32(3, GetRepetition(column.Options.Repetition));
-            writer.WriteFieldString(4, column.Name);
-            writer.EndStruct(previous);
+            WriteColumnSchema(ref writer, column, columnLogicalTypes, repeatedElementStates, i);
         }
     }
 
@@ -117,7 +115,7 @@ internal static class ParquetThriftWriter
             var previousMeta = writer.BeginStruct();
             writer.WriteFieldI32(1, GetType(column.PhysicalType));
             WriteEncodings(ref writer, chunk.Encoding);
-            WritePath(ref writer, column.Name);
+            WritePath(ref writer, column);
             writer.WriteFieldI32(4, GetCompression(chunk.Compression));
             writer.WriteFieldI64(5, chunk.ValueCount);
             writer.WriteFieldI64(6, chunk.TotalUncompressedSize);
@@ -149,26 +147,83 @@ internal static class ParquetThriftWriter
         writer.WriteBinary(name);
     }
 
-    static void WriteSchema(ref CompactSpanWriter writer, ParquetSchema schema)
+    static void WritePath(ref CompactSizeCounter writer, Column column)
+    {
+        if (column.Options.Repetition is not ParquetRepetition.Repeated)
+        {
+            WritePath(ref writer, column.Name);
+            return;
+        }
+
+        writer.WriteFieldHeader(3, CompactType.List);
+        writer.WriteListHeader(3, CompactType.Binary);
+        writer.WriteBinary(column.Name);
+        writer.WriteBinary("list");
+        writer.WriteBinary("element");
+    }
+
+    static void WriteSchema(ref CompactSpanWriter writer, ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, byte[] repeatedElementStates)
     {
         ImmutableArray<Column> columns = schema.Columns.IsDefault ? [] : schema.Columns;
-        var count = columns.Length;
+        var count = GetSchemaNodeCount(columns);
         writer.WriteFieldHeader(2, CompactType.List);
-        writer.WriteListHeader(count + 1, CompactType.Struct);
+        writer.WriteListHeader(count, CompactType.Struct);
 
         var previous = writer.BeginStruct();
         writer.WriteFieldString(4, "schema");
-        writer.WriteFieldI32(5, count);
+        writer.WriteFieldI32(5, columns.Length);
         writer.EndStruct(previous);
 
-        for (var i = 0; i < count; i++)
+        for (var i = 0; i < columns.Length; i++)
         {
             var column = columns[i];
-            previous = writer.BeginStruct();
-            writer.WriteFieldI32(1, GetType(column.PhysicalType));
-            writer.WriteFieldI32(3, GetRepetition(column.Options.Repetition));
-            writer.WriteFieldString(4, column.Name);
-            writer.EndStruct(previous);
+            WriteColumnSchema(ref writer, column, columnLogicalTypes, repeatedElementStates, i);
+        }
+    }
+
+    static void WriteConvertedType(ref CompactSizeCounter writer, ColumnLogicalType[] columnLogicalTypes, int columnIndex)
+    {
+        if ((uint)columnIndex >= (uint)columnLogicalTypes.Length)
+            return;
+
+        var logicalType = columnLogicalTypes[columnIndex];
+        switch (logicalType)
+        {
+            case ColumnLogicalType.TimestampMicrosUtc:
+                writer.WriteFieldI32(6, (int)ConvertedType.TimestampMicros);
+                break;
+            case ColumnLogicalType.Utf8:
+                writer.WriteFieldI32(6, (int)ConvertedType.Utf8);
+                break;
+            case ColumnLogicalType.Date:
+                writer.WriteFieldI32(6, (int)ConvertedType.Date);
+                break;
+            case ColumnLogicalType.TimeMicros:
+                writer.WriteFieldI32(6, (int)ConvertedType.TimeMicros);
+                break;
+        }
+    }
+
+    static void WriteConvertedType(ref CompactSpanWriter writer, ColumnLogicalType[] columnLogicalTypes, int columnIndex)
+    {
+        if ((uint)columnIndex >= (uint)columnLogicalTypes.Length)
+            return;
+
+        var logicalType = columnLogicalTypes[columnIndex];
+        switch (logicalType)
+        {
+            case ColumnLogicalType.TimestampMicrosUtc:
+                writer.WriteFieldI32(6, (int)ConvertedType.TimestampMicros);
+                break;
+            case ColumnLogicalType.Utf8:
+                writer.WriteFieldI32(6, (int)ConvertedType.Utf8);
+                break;
+            case ColumnLogicalType.Date:
+                writer.WriteFieldI32(6, (int)ConvertedType.Date);
+                break;
+            case ColumnLogicalType.TimeMicros:
+                writer.WriteFieldI32(6, (int)ConvertedType.TimeMicros);
+                break;
         }
     }
 
@@ -208,7 +263,7 @@ internal static class ParquetThriftWriter
             var previousMeta = writer.BeginStruct();
             writer.WriteFieldI32(1, GetType(column.PhysicalType));
             WriteEncodings(ref writer, chunk.Encoding);
-            WritePath(ref writer, column.Name);
+            WritePath(ref writer, column);
             writer.WriteFieldI32(4, GetCompression(chunk.Compression));
             writer.WriteFieldI64(5, chunk.ValueCount);
             writer.WriteFieldI64(6, chunk.TotalUncompressedSize);
@@ -238,6 +293,21 @@ internal static class ParquetThriftWriter
         writer.WriteFieldHeader(3, CompactType.List);
         writer.WriteListHeader(1, CompactType.Binary);
         writer.WriteBinary(name);
+    }
+
+    static void WritePath(ref CompactSpanWriter writer, Column column)
+    {
+        if (column.Options.Repetition is not ParquetRepetition.Repeated)
+        {
+            WritePath(ref writer, column.Name);
+            return;
+        }
+
+        writer.WriteFieldHeader(3, CompactType.List);
+        writer.WriteListHeader(3, CompactType.Binary);
+        writer.WriteBinary(column.Name);
+        writer.WriteBinary("list");
+        writer.WriteBinary("element");
     }
 
     static long CountRows(ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
@@ -278,10 +348,98 @@ internal static class ParquetThriftWriter
             _ => throw new NotSupportedException($"Physical type '{type}' is not supported.")
         };
 
+    static int GetSchemaNodeCount(ImmutableArray<Column> columns)
+    {
+        var count = 1;
+        for (var i = 0; i < columns.Length; i++)
+            count += columns[i].Options.Repetition is ParquetRepetition.Repeated ? 3 : 1;
+        return count;
+    }
+
+    static void WriteColumnSchema(ref CompactSizeCounter writer, Column column, ColumnLogicalType[] columnLogicalTypes, byte[] repeatedElementStates, int columnIndex)
+    {
+        if (column.Options.Repetition is not ParquetRepetition.Repeated)
+        {
+            var previous = writer.BeginStruct();
+            writer.WriteFieldI32(1, GetType(column.PhysicalType));
+            writer.WriteFieldI32(3, GetRepetition(column.Options.Repetition));
+            writer.WriteFieldString(4, column.Name);
+            WriteConvertedType(ref writer, columnLogicalTypes, columnIndex);
+            writer.EndStruct(previous);
+            return;
+        }
+
+        var outer = writer.BeginStruct();
+        writer.WriteFieldI32(3, (int)FieldRepetitionType.Required);
+        writer.WriteFieldString(4, column.Name);
+        writer.WriteFieldI32(5, 1);
+        writer.WriteFieldI32(6, (int)ConvertedType.List);
+        writer.EndStruct(outer);
+
+        var middle = writer.BeginStruct();
+        writer.WriteFieldI32(3, (int)FieldRepetitionType.Repeated);
+        writer.WriteFieldString(4, "list");
+        writer.WriteFieldI32(5, 1);
+        writer.EndStruct(middle);
+
+        var element = writer.BeginStruct();
+        writer.WriteFieldI32(1, GetType(column.PhysicalType));
+        writer.WriteFieldI32(3, GetRepeatedElementRepetition(repeatedElementStates, columnIndex));
+        writer.WriteFieldString(4, "element");
+        WriteConvertedType(ref writer, columnLogicalTypes, columnIndex);
+        writer.EndStruct(element);
+    }
+
+    static void WriteColumnSchema(ref CompactSpanWriter writer, Column column, ColumnLogicalType[] columnLogicalTypes, byte[] repeatedElementStates, int columnIndex)
+    {
+        if (column.Options.Repetition is not ParquetRepetition.Repeated)
+        {
+            var previous = writer.BeginStruct();
+            writer.WriteFieldI32(1, GetType(column.PhysicalType));
+            writer.WriteFieldI32(3, GetRepetition(column.Options.Repetition));
+            writer.WriteFieldString(4, column.Name);
+            WriteConvertedType(ref writer, columnLogicalTypes, columnIndex);
+            writer.EndStruct(previous);
+            return;
+        }
+
+        var outer = writer.BeginStruct();
+        writer.WriteFieldI32(3, (int)FieldRepetitionType.Required);
+        writer.WriteFieldString(4, column.Name);
+        writer.WriteFieldI32(5, 1);
+        writer.WriteFieldI32(6, (int)ConvertedType.List);
+        writer.EndStruct(outer);
+
+        var middle = writer.BeginStruct();
+        writer.WriteFieldI32(3, (int)FieldRepetitionType.Repeated);
+        writer.WriteFieldString(4, "list");
+        writer.WriteFieldI32(5, 1);
+        writer.EndStruct(middle);
+
+        var element = writer.BeginStruct();
+        writer.WriteFieldI32(1, GetType(column.PhysicalType));
+        writer.WriteFieldI32(3, GetRepeatedElementRepetition(repeatedElementStates, columnIndex));
+        writer.WriteFieldString(4, "element");
+        WriteConvertedType(ref writer, columnLogicalTypes, columnIndex);
+        writer.EndStruct(element);
+    }
+
+    static int GetRepeatedElementRepetition(byte[] repeatedElementStates, int columnIndex)
+    {
+        if ((uint)columnIndex < (uint)repeatedElementStates.Length && repeatedElementStates[columnIndex] == 2)
+            return (int)FieldRepetitionType.Optional;
+        return (int)FieldRepetitionType.Required;
+    }
+
     static int GetCompression(CompressionKind compression)
         => compression switch
         {
             CompressionKind.None => (int)CompressionCodec.Uncompressed,
+            CompressionKind.Snappy => (int)CompressionCodec.Snappy,
+            CompressionKind.Gzip => (int)CompressionCodec.Gzip,
+            CompressionKind.Brotli => (int)CompressionCodec.Brotli,
+            CompressionKind.Lz4 => (int)CompressionCodec.Lz4,
+            CompressionKind.Zstd => (int)CompressionCodec.Zstd,
             _ => throw new NotSupportedException($"Compression '{compression}' is not supported.")
         };
 
@@ -312,7 +470,7 @@ internal static class ParquetThriftWriter
 
     enum PageType
     {
-        DataPage = 0
+        DataPageV2 = 3
     }
 
     enum ParquetType
@@ -349,7 +507,21 @@ internal static class ParquetThriftWriter
 
     enum CompressionCodec
     {
-        Uncompressed = 0
+        Uncompressed = 0,
+        Snappy = 1,
+        Gzip = 2,
+        Brotli = 4,
+        Lz4 = 5,
+        Zstd = 6
+    }
+
+    enum ConvertedType
+    {
+        Utf8 = 0,
+        List = 3,
+        Date = 6,
+        TimeMicros = 8,
+        TimestampMicros = 10
     }
 
     enum CompactType : byte
@@ -428,6 +600,11 @@ internal static class ParquetThriftWriter
         {
             WriteFieldHeader(fieldId, CompactType.Binary);
             WriteBinary(value);
+        }
+
+        internal void WriteFieldBool(int fieldId, bool value)
+        {
+            WriteFieldHeader(fieldId, value ? CompactType.BooleanTrue : CompactType.BooleanFalse);
         }
 
         internal void WriteListHeader(int count, CompactType elementType)
@@ -563,6 +740,9 @@ internal static class ParquetThriftWriter
             WriteFieldHeader(fieldId, CompactType.Binary);
             WriteBinary(value);
         }
+
+        internal void WriteFieldBool(int fieldId, bool value)
+            => WriteFieldHeader(fieldId, value ? CompactType.BooleanTrue : CompactType.BooleanFalse);
 
         internal void WriteListHeader(int count, CompactType _)
         {

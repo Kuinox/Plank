@@ -18,7 +18,11 @@ static class ParquetTypeMap
         {
             var t when t == typeof(bool) => ParquetPhysicalType.Boolean,
             var t when t == typeof(int) => ParquetPhysicalType.Int32,
+            var t when t == typeof(DateOnly) => ParquetPhysicalType.Int32,
             var t when t == typeof(long) => ParquetPhysicalType.Int64,
+            var t when t == typeof(DateTime) => ParquetPhysicalType.Int64,
+            var t when t == typeof(DateTimeOffset) => ParquetPhysicalType.Int64,
+            var t when t == typeof(TimeOnly) => ParquetPhysicalType.Int64,
             var t when t == typeof(float) => ParquetPhysicalType.Float,
             var t when t == typeof(double) => ParquetPhysicalType.Double,
             var t when t == typeof(byte[]) => ParquetPhysicalType.ByteArray,
