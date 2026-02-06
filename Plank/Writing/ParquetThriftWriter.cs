@@ -60,7 +60,7 @@ internal static class ParquetThriftWriter
 
     static void WriteSchema(ref CompactSizeCounter writer, ParquetSchema schema)
     {
-        var columns = schema.Columns.IsDefault ? ImmutableArray<Column>.Empty : schema.Columns;
+        ImmutableArray<Column> columns = schema.Columns.IsDefault ? [] : schema.Columns;
         var count = columns.Length;
         writer.WriteFieldHeader(2, CompactType.List);
         writer.WriteListHeader(count + 1, CompactType.Struct);
@@ -85,7 +85,7 @@ internal static class ParquetThriftWriter
     {
         writer.WriteFieldHeader(4, CompactType.List);
         writer.WriteListHeader(rowGroupCount, CompactType.Struct);
-        var columns = schema.Columns.IsDefault ? ImmutableArray<Column>.Empty : schema.Columns;
+        ImmutableArray<Column> columns = schema.Columns.IsDefault ? [] : schema.Columns;
 
         for (var i = 0; i < rowGroupCount; i++)
         {
@@ -151,7 +151,7 @@ internal static class ParquetThriftWriter
 
     static void WriteSchema(ref CompactSpanWriter writer, ParquetSchema schema)
     {
-        var columns = schema.Columns.IsDefault ? ImmutableArray<Column>.Empty : schema.Columns;
+        ImmutableArray<Column> columns = schema.Columns.IsDefault ? [] : schema.Columns;
         var count = columns.Length;
         writer.WriteFieldHeader(2, CompactType.List);
         writer.WriteListHeader(count + 1, CompactType.Struct);
@@ -176,7 +176,7 @@ internal static class ParquetThriftWriter
     {
         writer.WriteFieldHeader(4, CompactType.List);
         writer.WriteListHeader(rowGroupCount, CompactType.Struct);
-        var columns = schema.Columns.IsDefault ? ImmutableArray<Column>.Empty : schema.Columns;
+        ImmutableArray<Column> columns = schema.Columns.IsDefault ? [] : schema.Columns;
 
         for (var i = 0; i < rowGroupCount; i++)
         {
@@ -382,7 +382,7 @@ internal static class ParquetThriftWriter
             _lastFieldId = 0;
         }
 
-        internal int WrittenCount
+        internal readonly int WrittenCount
             => _index;
 
         internal int BeginStruct()
@@ -478,7 +478,7 @@ internal static class ParquetThriftWriter
             if (_index > _buffer.Length - data.Length)
                 throw new InvalidOperationException("File metadata buffer is too small.");
 
-            data.CopyTo(_buffer.Slice(_index));
+            data.CopyTo(_buffer[_index..]);
             _index += data.Length;
         }
 
@@ -516,7 +516,7 @@ internal static class ParquetThriftWriter
         int _count;
         int _lastFieldId;
 
-        internal int WrittenCount
+        internal readonly int WrittenCount
             => _count;
 
         internal int BeginStruct()
@@ -532,7 +532,7 @@ internal static class ParquetThriftWriter
             _lastFieldId = previousFieldId;
         }
 
-        internal void WriteFieldHeader(int fieldId, CompactType type)
+        internal void WriteFieldHeader(int fieldId, CompactType _)
         {
             var delta = fieldId - _lastFieldId;
             if (delta > 0 && delta <= 15)
@@ -564,7 +564,7 @@ internal static class ParquetThriftWriter
             WriteBinary(value);
         }
 
-        internal void WriteListHeader(int count, CompactType elementType)
+        internal void WriteListHeader(int count, CompactType _)
         {
             if (count < 15)
                 WriteByte();

@@ -1,85 +1,79 @@
-using System.Collections.Immutable;
 using Plank.Schema;
 using Plank.Writing;
 using PlankColumn = Plank.Schema.Column;
 
-#pragma warning disable CA2007
 namespace Plank.Tests;
 
 internal sealed class AllocationTests
 {
-    static readonly int[] SampleValues = Enumerable.Range(0, 1024).ToArray();
-    static readonly ParquetSchema Schema = new(ImmutableArray.Create(
-        new PlankColumn("A", ParquetPhysicalType.Int32, ColumnOptions.Default)));
+    static readonly int[] SampleValues = [.. Enumerable.Range(0, 1024)];
+    static readonly ParquetSchema Schema = new([
+        new PlankColumn("A", ParquetPhysicalType.Int32, ColumnOptions.Default)
+    ]);
+    const int StreamCapacityBytes = 64 * 1024;
 
     [Test]
-    public async Task MeasureAllocationsForSingleFileWrite()
+    public async Task AllocationDetectorFindsPositiveAndNegativeCases()
     {
-        var allocatedBytes = await MeasureAllocatedBytesAsync(WriteSingleFileAsync);
-        Console.WriteLine($"Single file write allocated bytes: {allocatedBytes}");
-        await Assert.That(allocatedBytes).IsGreaterThan(0L);
+        _ = new byte[8];
+
+        var noAllocation = MeasureAllocatedBytes(() =>
+        {
+            var sum = 0;
+            for (var i = 0; i < 32; i++)
+                sum += i;
+            _ = sum;
+        });
+        var withAllocation = MeasureAllocatedBytes(() => _ = new byte[64]);
+
+        await Assert.That(noAllocation).IsEqualTo(0L);
+        await Assert.That(withAllocation).IsGreaterThan(0L);
     }
 
     [Test]
-    public async Task MeasureAllocationsForWriterReuseAcrossFiles()
+    public async Task ReusedWriterSteadyStateWriteIsZeroAllocation()
     {
-        var allocatedBytes = await MeasureAllocatedBytesAsync(WriteManyFilesWithSingleWriterAsync);
-        Console.WriteLine($"Writer reuse allocated bytes: {allocatedBytes}");
-        await Assert.That(allocatedBytes).IsGreaterThan(0L);
-    }
-
-    static async ValueTask WriteSingleFileAsync()
-    {
-        await using var stream = new MemoryStream(64 * 1024);
-        await using var writer = ParquetWriter.Create(stream, Schema, new ParquetWriterOptions
+        using var stream = new MemoryStream(StreamCapacityBytes);
+        using var writer = ParquetWriter.Create(stream, Schema, new ParquetWriterOptions
         {
             ExpectedRowGroupCount = 1,
             RowGroupRowCountHint = (uint)SampleValues.Length
         });
-        var rowGroup = writer.StartRowGroup();
-        await rowGroup.WriteAsync(Schema.Columns[0], SampleValues).ConfigureAwait(false);
-        await writer.CompleteAsync().ConfigureAwait(false);
-    }
 
-    static async ValueTask WriteManyFilesWithSingleWriterAsync()
-    {
-        const int fileCount = 32;
-        var options = new ParquetWriterOptions
+        WriteOneFileSync(writer);
+
+        long totalAllocated = 0;
+        const int iterations = 200;
+        for (var i = 0; i < iterations; i++)
         {
-            ExpectedRowGroupCount = 1,
-            RowGroupRowCountHint = (uint)SampleValues.Length
-        };
-
-        await using var initialStream = new MemoryStream(64 * 1024);
-        await using var writer = ParquetWriter.Create(initialStream, Schema, options);
-        await WriteOneFileAsync(writer).ConfigureAwait(false);
-
-        for (var i = 1; i < fileCount; i++)
-        {
-            await using var stream = new MemoryStream(64 * 1024);
+            stream.Position = 0;
+            stream.SetLength(0);
             writer.Reset(stream);
-            await WriteOneFileAsync(writer).ConfigureAwait(false);
+            totalAllocated += MeasureAllocatedBytes(() => WriteOneFileSync(writer));
         }
+
+        await Assert.That(totalAllocated).IsEqualTo(0L);
     }
 
-    static async ValueTask WriteOneFileAsync(ParquetWriter writer)
+    static void WriteOneFileSync(ParquetWriter writer)
     {
         var rowGroup = writer.StartRowGroup();
-        await rowGroup.WriteAsync(Schema.Columns[0], SampleValues).ConfigureAwait(false);
-        await writer.CompleteAsync().ConfigureAwait(false);
+        var write = rowGroup.WriteAsync(Schema.Columns[0], SampleValues);
+        if (!write.IsCompletedSuccessfully)
+            throw new InvalidOperationException("WriteAsync must complete synchronously in the sync write pipeline.");
+
+        writer.CloseFile();
     }
 
-    static async ValueTask<long> MeasureAllocatedBytesAsync(Func<ValueTask> action)
+    static long MeasureAllocatedBytes(Action action)
     {
-        await action().ConfigureAwait(false);
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
-        var before = GC.GetTotalAllocatedBytes(true);
-        await action().ConfigureAwait(false);
-        var after = GC.GetTotalAllocatedBytes(true);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        action();
+        var after = GC.GetAllocatedBytesForCurrentThread();
         return after - before;
     }
 }
-#pragma warning restore CA2007

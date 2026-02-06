@@ -11,4 +11,8 @@ public sealed class ParquetLog : IParquetLog
     public void RowGroupMetadataCapacityGrown(int previousCapacity, int newCapacity, int? expectedRowGroupCount)
     {
     }
+
+    public void FooterBufferCapacityGrown(int previousCapacity, int newCapacity, int requiredCapacity)
+    {
+    }
 }

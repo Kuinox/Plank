@@ -16,6 +16,12 @@ public sealed class LoggerParquetLog : IParquetLog
             new EventId(2, nameof(RowGroupMetadataCapacityGrown)),
             "Row group metadata capacity grew from {PreviousCapacity} to {NewCapacity} because no row group count was specified.");
 
+    static readonly Action<ILogger, int, int, int, Exception?> FooterBufferGrown =
+        LoggerMessage.Define<int, int, int>(
+            LogLevel.Warning,
+            new EventId(3, nameof(FooterBufferCapacityGrown)),
+            "Footer buffer capacity grew from {PreviousCapacity} to {NewCapacity} because {RequiredCapacity} bytes were required.");
+
     readonly ILogger _logger;
 
     public LoggerParquetLog(ILogger logger)
@@ -31,4 +37,7 @@ public sealed class LoggerParquetLog : IParquetLog
         else
             RowGroupMetadataUnspecified(_logger, previousCapacity, newCapacity, null);
     }
+
+    public void FooterBufferCapacityGrown(int previousCapacity, int newCapacity, int requiredCapacity)
+        => FooterBufferGrown(_logger, previousCapacity, newCapacity, requiredCapacity, null);
 }
