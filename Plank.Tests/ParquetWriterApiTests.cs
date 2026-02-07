@@ -102,7 +102,6 @@ internal sealed class ParquetWriterApiTests
         {
             RowGroupOptions = new RowGroupOptions
             {
-                MaxEncodedBytes = 1024,
                 MaxCompressedBytes = 1024
             }
         };
@@ -111,7 +110,6 @@ internal sealed class ParquetWriterApiTests
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await Task.Run(() => writer.StartRowGroup(new RowGroupOptions
             {
-                MaxEncodedBytes = 1024,
                 MaxCompressedBytes = 1024
             })));
     }

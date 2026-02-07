@@ -25,7 +25,6 @@ public sealed class NycParquetWriteBenchmarks
             ExpectedRowGroupCount = checked((uint)_context.SourceFiles.Length),
             RowGroupOptions = new RowGroupOptions
             {
-                MaxEncodedBytes = 16 * 1024 * 1024,
                 MaxCompressedBytes = 16 * 1024 * 1024
             }
         });

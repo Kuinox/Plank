@@ -338,7 +338,6 @@ internal sealed class ParquetSmokeTests
             {
                 RowGroupOptions = new RowGroupOptions
                 {
-                    MaxEncodedBytes = 4 * 1024 * 1024,
                     MaxCompressedBytes = 4 * 1024 * 1024,
                     MaxPageValueCount = 64
                 }
@@ -389,7 +388,6 @@ internal sealed class ParquetSmokeTests
             {
                 RowGroupOptions = new RowGroupOptions
                 {
-                    MaxEncodedBytes = 4 * 1024 * 1024,
                     MaxCompressedBytes = 4 * 1024 * 1024,
                     MaxPageValueCount = 16,
                     MaxPageBytes = 128

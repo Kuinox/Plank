@@ -46,7 +46,6 @@ internal sealed class ParquetInteroperabilityTests
     static RowGroupOptions SplitOptions()
         => new()
         {
-            MaxEncodedBytes = 4 * 1024 * 1024,
             MaxCompressedBytes = 4 * 1024 * 1024,
             MaxPageValueCount = 16,
             MaxPageBytes = 128

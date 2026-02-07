@@ -2,17 +2,11 @@ namespace Plank.Schema;
 
 static class ParquetTypeMap
 {
-    public static bool IsNullable(Type type)
+    public static ParquetPhysicalType GetPhysicalType<T>()
+        => TypeCache<T>.PhysicalType;
+
+    static ParquetPhysicalType MapPhysicalType(Type type)
     {
-        ArgumentNullException.ThrowIfNull(type);
-
-        return Nullable.GetUnderlyingType(type) is not null;
-    }
-
-    public static ParquetPhysicalType GetPhysicalType(Type type)
-    {
-        ArgumentNullException.ThrowIfNull(type);
-
         var unwrapped = Nullable.GetUnderlyingType(type) ?? type;
         return unwrapped switch
         {
@@ -29,5 +23,10 @@ static class ParquetTypeMap
             var t when t == typeof(string) => ParquetPhysicalType.ByteArray,
             _ => throw new NotSupportedException($"Unsupported CLR type: {type}.")
         };
+    }
+
+    static class TypeCache<T>
+    {
+        public static readonly ParquetPhysicalType PhysicalType = MapPhysicalType(typeof(T));
     }
 }

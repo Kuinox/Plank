@@ -14,18 +14,19 @@ static class ColumnCodec
     static readonly int UnixEpochDayNumber = DateOnly.FromDateTime(DateTime.UnixEpoch).DayNumber;
     static readonly Encoding Utf8 = new UTF8Encoding(false, true);
     
-    internal static void Encode<T>(Column column, ReadOnlySpan<T> values, ParquetPhysicalType physicalType, RowGroupOptions options, DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state)
+    internal static void Encode<T>(Column column, ReadOnlySpan<T> values, ParquetPhysicalType physicalType, DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state)
     {
         var encoding = ResolveDefaultEncoding(column.Options.Encodings);
         if (encoding != EncodingKind.Plain)
             throw new NotSupportedException($"Encoding '{encoding}' is not supported for column '{column.Name}'.");
 
+        var encodedBufferCapacity = state.EncodedBuffer?.Length ?? 0;
         state.Encoding = encoding;
         var valueKind = ColumnDispatch.GetValueKind<T>();
         var dispatchKey = ColumnDispatch.GetDispatchKey(physicalType, valueKind);
         if (column.Options.Repetition is ParquetRepetition.Optional)
         {
-            if (TryEncodeOptional(column, values, dispatchKey, options, dateTimeKindHandling, ref state))
+            if (TryEncodeOptional(column, values, dispatchKey, encodedBufferCapacity, dateTimeKindHandling, ref state))
                 return;
 
             throw new NotSupportedException($"Optional column '{column.Name}' is not supported for value type '{typeof(T)}' yet.");
@@ -34,37 +35,37 @@ static class ColumnCodec
         switch (dispatchKey)
         {
             case ColumnDispatch.DispatchKey.BooleanBool:
-                EncodePlainBoolean(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodePlainBoolean(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int32Int32:
-                EncodePlainInt32(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodePlainInt32(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int32DateOnly:
-                EncodePlainDateOnly(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateOnly>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodePlainDateOnly(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateOnly>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int64Int64:
-                EncodePlainInt64(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodePlainInt64(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int64DateTime:
-                EncodePlainDateTime(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values), dateTimeKindHandling, ref state, column.Name, options.MaxEncodedBytes);
+                EncodePlainDateTime(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values), dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int64DateTimeOffset:
-                EncodePlainDateTimeOffset(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTimeOffset>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodePlainDateTimeOffset(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTimeOffset>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int64TimeOnly:
-                EncodePlainTimeOnly(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<TimeOnly>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodePlainTimeOnly(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<TimeOnly>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.ByteArrayString:
-                EncodePlainString(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodePlainString(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.ByteArrayByteArray:
-                EncodePlainByteArray(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodePlainByteArray(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.FloatFloat:
-                EncodePlainFloat(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodePlainFloat(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.DoubleDouble:
-                EncodePlainDouble(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodePlainDouble(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 break;
             default:
                 throw new InvalidOperationException(GetUnsupportedTypeMessage(column.Name, physicalType));
@@ -75,7 +76,7 @@ static class ColumnCodec
         state.RepetitionLevelsByteLength = 0;
     }
 
-    internal static void EncodeRepeated<T>(Column column, ReadOnlySpan<T[]> rows, ParquetPhysicalType physicalType, RowGroupOptions options, DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state)
+    internal static void EncodeRepeated<T>(Column column, ReadOnlySpan<T[]> rows, ParquetPhysicalType physicalType, DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state)
     {
         if (column.Options.Repetition is not ParquetRepetition.Repeated)
             throw new InvalidOperationException($"Column '{column.Name}' is not configured as Repeated.");
@@ -84,46 +85,47 @@ static class ColumnCodec
         if (encoding != EncodingKind.Plain)
             throw new NotSupportedException($"Encoding '{encoding}' is not supported for column '{column.Name}'.");
 
+        var encodedBufferCapacity = state.EncodedBuffer?.Length ?? 0;
         state.Encoding = encoding;
         var valueKind = ColumnDispatch.GetValueKind<T>();
         var dispatchKey = ColumnDispatch.GetDispatchKey(physicalType, valueKind);
         switch (dispatchKey)
         {
             case ColumnDispatch.DispatchKey.BooleanBool:
-                EncodeRepeatedBoolean(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<bool[]>>(ref rows), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeRepeatedBoolean(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<bool[]>>(ref rows), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int32Int32:
-                EncodeRepeatedInt32(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<int[]>>(ref rows), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeRepeatedInt32(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<int[]>>(ref rows), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int32NullableInt32:
-                EncodeRepeatedNullableInt32(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<int?[]>>(ref rows), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeRepeatedNullableInt32(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<int?[]>>(ref rows), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int32DateOnly:
-                EncodeRepeatedDateOnly(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateOnly[]>>(ref rows), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeRepeatedDateOnly(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateOnly[]>>(ref rows), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int64Int64:
-                EncodeRepeatedInt64(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<long[]>>(ref rows), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeRepeatedInt64(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<long[]>>(ref rows), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int64DateTime:
-                EncodeRepeatedDateTime(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateTime[]>>(ref rows), dateTimeKindHandling, ref state, column.Name, options.MaxEncodedBytes);
+                EncodeRepeatedDateTime(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateTime[]>>(ref rows), dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int64DateTimeOffset:
-                EncodeRepeatedDateTimeOffset(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateTimeOffset[]>>(ref rows), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeRepeatedDateTimeOffset(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateTimeOffset[]>>(ref rows), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.Int64TimeOnly:
-                EncodeRepeatedTimeOnly(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<TimeOnly[]>>(ref rows), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeRepeatedTimeOnly(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<TimeOnly[]>>(ref rows), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.ByteArrayString:
-                EncodeRepeatedString(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<string[]>>(ref rows), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeRepeatedString(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<string[]>>(ref rows), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.ByteArrayByteArray:
-                EncodeRepeatedByteArray(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<byte[][]>>(ref rows), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeRepeatedByteArray(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<byte[][]>>(ref rows), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.FloatFloat:
-                EncodeRepeatedFloat(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<float[]>>(ref rows), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeRepeatedFloat(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<float[]>>(ref rows), ref state, column.Name, encodedBufferCapacity);
                 break;
             case ColumnDispatch.DispatchKey.DoubleDouble:
-                EncodeRepeatedDouble(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<double[]>>(ref rows), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeRepeatedDouble(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<double[]>>(ref rows), ref state, column.Name, encodedBufferCapacity);
                 break;
             default:
                 throw new InvalidOperationException(GetUnsupportedTypeMessage(column.Name, physicalType));
@@ -166,7 +168,7 @@ static class ColumnCodec
         var byteCount = checked(values.Length * sizeof(int));
         var destination = GetDestination(ref state, byteCount);
         if (destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         if (BitConverter.IsLittleEndian)
             MemoryMarshal.AsBytes(values).CopyTo(destination);
@@ -185,7 +187,7 @@ static class ColumnCodec
         var byteCount = (values.Length + 7) >> 3;
         var destination = GetDestination(ref state, byteCount);
         if (byteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         destination.Clear();
         for (var i = 0; i < values.Length; i++)
@@ -207,7 +209,7 @@ static class ColumnCodec
         var byteCount = checked(values.Length * sizeof(int));
         var destination = GetDestination(ref state, byteCount);
         if (destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         for (var i = 0; i < values.Length; i++)
         {
@@ -224,7 +226,7 @@ static class ColumnCodec
         var byteCount = checked(values.Length * sizeof(long));
         var destination = GetDestination(ref state, byteCount);
         if (destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         if (BitConverter.IsLittleEndian)
             MemoryMarshal.AsBytes(values).CopyTo(destination);
@@ -243,7 +245,7 @@ static class ColumnCodec
         var byteCount = checked(values.Length * sizeof(long));
         var destination = GetDestination(ref state, byteCount);
         if (destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         ValidateDateTimeHandling(dateTimeKindHandling, columnName);
         for (var i = 0; i < values.Length; i++)
@@ -261,7 +263,7 @@ static class ColumnCodec
         var byteCount = checked(values.Length * sizeof(long));
         var destination = GetDestination(ref state, byteCount);
         if (destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         for (var i = 0; i < values.Length; i++)
         {
@@ -279,7 +281,7 @@ static class ColumnCodec
         var byteCount = checked(values.Length * sizeof(long));
         var destination = GetDestination(ref state, byteCount);
         if (destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         for (var i = 0; i < values.Length; i++)
         {
@@ -303,7 +305,7 @@ static class ColumnCodec
 
         var destination = GetDestination(ref state, byteCount);
         if (byteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var offset = 0;
         for (var i = 0; i < values.Length; i++)
@@ -337,7 +339,7 @@ static class ColumnCodec
 
         var destination = GetDestination(ref state, byteCount);
         if (byteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var offset = 0;
         for (var i = 0; i < values.Length; i++)
@@ -361,7 +363,7 @@ static class ColumnCodec
         var byteCount = checked(values.Length * sizeof(float));
         var destination = GetDestination(ref state, byteCount);
         if (destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         if (BitConverter.IsLittleEndian)
             MemoryMarshal.AsBytes(values).CopyTo(destination);
@@ -380,7 +382,7 @@ static class ColumnCodec
         var byteCount = checked(values.Length * sizeof(double));
         var destination = GetDestination(ref state, byteCount);
         if (destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         if (BitConverter.IsLittleEndian)
             MemoryMarshal.AsBytes(values).CopyTo(destination);
@@ -465,21 +467,21 @@ static class ColumnCodec
         throw new InvalidOperationException($"Column '{columnName}' has conflicting DateTime handling flags. PreserveClockTime cannot be combined with ConvertLocalToUtc or AssumeUnspecifiedAsUtc.");
     }
 
-    static bool TryEncodeOptional<T>(Column column, ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey, RowGroupOptions options, DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state)
+    static bool TryEncodeOptional<T>(Column column, ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey, int encodedBufferCapacity, DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state)
     {
         switch (dispatchKey)
         {
             case ColumnDispatch.DispatchKey.Int32Int32:
-                EncodeOptionalInt32AllDefined(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeOptionalInt32AllDefined(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 return true;
             case ColumnDispatch.DispatchKey.Int32NullableInt32:
-                EncodeOptionalInt32(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int?>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeOptionalInt32(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int?>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 return true;
             case ColumnDispatch.DispatchKey.ByteArrayString:
-                EncodeOptionalString(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeOptionalString(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 return true;
             case ColumnDispatch.DispatchKey.ByteArrayByteArray:
-                EncodeOptionalByteArray(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref state, column.Name, options.MaxEncodedBytes);
+                EncodeOptionalByteArray(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref state, column.Name, encodedBufferCapacity);
                 return true;
         }
 
@@ -513,7 +515,7 @@ static class ColumnCodec
         var totalByteCount = checked(definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var nullCount = values.Length - nonNullCount;
         var writtenDefinitionBytes = WriteDefinitionLevels(values, destination);
@@ -541,7 +543,7 @@ static class ColumnCodec
         var totalByteCount = checked(definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         WriteAllDefinedLevels(values.Length, destination);
         var valueDestination = destination[definitionByteCount..];
@@ -575,7 +577,7 @@ static class ColumnCodec
         var totalByteCount = checked(definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var writtenDefinitionBytes = WriteDefinitionLevels(values, destination);
         if (writtenDefinitionBytes != definitionByteCount)
@@ -622,7 +624,7 @@ static class ColumnCodec
         var totalByteCount = checked(definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var writtenDefinitionBytes = WriteDefinitionLevels(values, destination);
         if (writtenDefinitionBytes != definitionByteCount)
@@ -1066,7 +1068,7 @@ static class ColumnCodec
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
@@ -1099,7 +1101,7 @@ static class ColumnCodec
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
@@ -1148,7 +1150,7 @@ static class ColumnCodec
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
@@ -1186,7 +1188,7 @@ static class ColumnCodec
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
@@ -1219,7 +1221,7 @@ static class ColumnCodec
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         ValidateDateTimeHandling(dateTimeKindHandling, columnName);
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
@@ -1254,7 +1256,7 @@ static class ColumnCodec
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
@@ -1289,7 +1291,7 @@ static class ColumnCodec
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
@@ -1323,7 +1325,7 @@ static class ColumnCodec
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
@@ -1356,7 +1358,7 @@ static class ColumnCodec
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
@@ -1389,7 +1391,7 @@ static class ColumnCodec
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
@@ -1450,7 +1452,7 @@ static class ColumnCodec
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
@@ -1516,7 +1518,7 @@ static class ColumnCodec
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
         if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but MaxEncodedBytes is {maxEncodedBytes}.");
+            throw new InvalidOperationException($"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)

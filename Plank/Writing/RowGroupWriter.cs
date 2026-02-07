@@ -20,7 +20,7 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
             return ValueTask.FromCanceled(cancellationToken);
 
         _writer.RegisterValueType(column, typeof(T));
-        var physicalType = ParquetTypeMap.GetPhysicalType(typeof(T));
+        var physicalType = ParquetTypeMap.GetPhysicalType<T>();
         var ordinal = _state.EncodeColumn(column, values, physicalType);
         _state.TryDrain(_writer);
         return _state.GetWriteTask(ordinal, cancellationToken);
@@ -33,7 +33,7 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
             return ValueTask.FromCanceled(cancellationToken);
 
         _writer.RegisterValueType(column, typeof(T));
-        var physicalType = ParquetTypeMap.GetPhysicalType(typeof(T));
+        var physicalType = ParquetTypeMap.GetPhysicalType<T>();
         var ordinal = _state.EncodeRepeatedColumn(column, values.Rows, physicalType);
         _state.TryDrain(_writer);
         return _state.GetWriteTask(ordinal, cancellationToken);

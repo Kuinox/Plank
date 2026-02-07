@@ -6,6 +6,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Tests", "Plank.Tests\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.IO.ZeroAlloc", "Plank.IO.ZeroAlloc\Plank.IO.ZeroAlloc.csproj", "{6C35D447-6C31-4619-AE10-909132A8609A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.SourceGen", "Plank.SourceGen\Plank.SourceGen.csproj", "{1F6808C8-595A-4C7C-9D83-758AEADF94EA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Benchmarks", "Plank.Benchmarks\Plank.Benchmarks.csproj", "{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -52,6 +56,30 @@ Global
 		{6C35D447-6C31-4619-AE10-909132A8609A}.Release|x64.Build.0 = Release|Any CPU
 		{6C35D447-6C31-4619-AE10-909132A8609A}.Release|x86.ActiveCfg = Release|Any CPU
 		{6C35D447-6C31-4619-AE10-909132A8609A}.Release|x86.Build.0 = Release|Any CPU
+		{1F6808C8-595A-4C7C-9D83-758AEADF94EA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1F6808C8-595A-4C7C-9D83-758AEADF94EA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1F6808C8-595A-4C7C-9D83-758AEADF94EA}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{1F6808C8-595A-4C7C-9D83-758AEADF94EA}.Debug|x64.Build.0 = Debug|Any CPU
+		{1F6808C8-595A-4C7C-9D83-758AEADF94EA}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{1F6808C8-595A-4C7C-9D83-758AEADF94EA}.Debug|x86.Build.0 = Debug|Any CPU
+		{1F6808C8-595A-4C7C-9D83-758AEADF94EA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1F6808C8-595A-4C7C-9D83-758AEADF94EA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1F6808C8-595A-4C7C-9D83-758AEADF94EA}.Release|x64.ActiveCfg = Release|Any CPU
+		{1F6808C8-595A-4C7C-9D83-758AEADF94EA}.Release|x64.Build.0 = Release|Any CPU
+		{1F6808C8-595A-4C7C-9D83-758AEADF94EA}.Release|x86.ActiveCfg = Release|Any CPU
+		{1F6808C8-595A-4C7C-9D83-758AEADF94EA}.Release|x86.Build.0 = Release|Any CPU
+		{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}.Debug|x64.Build.0 = Debug|Any CPU
+		{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}.Debug|x86.Build.0 = Debug|Any CPU
+		{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}.Release|x64.ActiveCfg = Release|Any CPU
+		{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}.Release|x64.Build.0 = Release|Any CPU
+		{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}.Release|x86.ActiveCfg = Release|Any CPU
+		{8A3D9461-BB38-4933-A3A8-3D3EDD0A4781}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

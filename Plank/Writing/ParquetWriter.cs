@@ -134,7 +134,7 @@ public sealed class ParquetWriter : IDisposable
     {
         ArgumentNullException.ThrowIfNull(column);
         ArgumentNullException.ThrowIfNull(destination);
-        var physicalType = ParquetTypeMap.GetPhysicalType(typeof(T));
+        var physicalType = ParquetTypeMap.GetPhysicalType<T>();
         if (column.PhysicalType != physicalType)
             throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {physicalType}.");
 
@@ -144,7 +144,7 @@ public sealed class ParquetWriter : IDisposable
         };
         state.RowCount = values.Length;
         state.ValueCount = values.Length;
-        ColumnCodec.Encode(column, values, physicalType, _options.RowGroupOptions, _dateTimeKindHandling, ref state);
+        ColumnCodec.Encode(column, values, physicalType, _dateTimeKindHandling, ref state);
         ColumnCodec.Compress(ref state, _options.Compression);
         var logicalType = ResolveSerializedLogicalType(typeof(T), column);
         return new SerializedColumn(
@@ -166,7 +166,7 @@ public sealed class ParquetWriter : IDisposable
     {
         ArgumentNullException.ThrowIfNull(column);
         ArgumentNullException.ThrowIfNull(destination);
-        var physicalType = ParquetTypeMap.GetPhysicalType(typeof(T));
+        var physicalType = ParquetTypeMap.GetPhysicalType<T>();
         if (column.Options.Repetition is not ParquetRepetition.Repeated)
             throw new InvalidOperationException($"Column '{column.Name}' is not configured as Repeated.");
         if (column.PhysicalType != physicalType)
@@ -177,7 +177,7 @@ public sealed class ParquetWriter : IDisposable
             EncodedBuffer = destination,
             RowCount = rows.Length
         };
-        ColumnCodec.EncodeRepeated(column, rows, physicalType, _options.RowGroupOptions, _dateTimeKindHandling, ref state);
+        ColumnCodec.EncodeRepeated(column, rows, physicalType, _dateTimeKindHandling, ref state);
         ColumnCodec.Compress(ref state, _options.Compression);
         var logicalType = ResolveSerializedLogicalType(typeof(T), column);
         return new SerializedColumn(
@@ -513,6 +513,7 @@ public sealed class ParquetWriter : IDisposable
         internal const int WriteStateEncoded = 1;
         internal const int WriteStateWritten = 2;
         const int MaxPageHeaderBytes = 64;
+        const int DefaultEncodedBufferBytes = 4 * 1024 * 1024;
 
         readonly Dictionary<Column, int> _columnOrdinals;
         readonly Column[] _columns;
@@ -602,7 +603,7 @@ public sealed class ParquetWriter : IDisposable
                 state.EncodedBufferOwner = _bufferPool.Rent(_bufferNames[ordinal], _bufferLengths[ordinal]);
             state.ValueCount = values.Length;
             state.RowCount = values.Length;
-            ColumnCodec.Encode(column, values, physicalType, Options, _dateTimeKindHandling, ref state);
+            ColumnCodec.Encode(column, values, physicalType, _dateTimeKindHandling, ref state);
             ColumnCodec.Compress(ref state, _compressionKind);
             state.WriteState = WriteStateEncoded;
             return ordinal;
@@ -624,7 +625,7 @@ public sealed class ParquetWriter : IDisposable
             if (state.EncodedBufferOwner is null)
                 state.EncodedBufferOwner = _bufferPool.Rent(_bufferNames[ordinal], _bufferLengths[ordinal]);
             state.RowCount = rows.Length;
-            ColumnCodec.EncodeRepeated(column, rows, physicalType, Options, _dateTimeKindHandling, ref state);
+            ColumnCodec.EncodeRepeated(column, rows, physicalType, _dateTimeKindHandling, ref state);
             ColumnCodec.Compress(ref state, _compressionKind);
             state.WriteState = WriteStateEncoded;
             return ordinal;
@@ -1371,7 +1372,7 @@ public sealed class ParquetWriter : IDisposable
                 return;
 
             var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-            var targetLength = options.MaxEncodedBytes;
+            var targetLength = DefaultEncodedBufferBytes;
             for (var i = 0; i < _columns.Length; i++)
             {
                 var column = _columns[i];
