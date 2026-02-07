@@ -185,7 +185,7 @@ internal sealed class ParquetWriterApiTests
         var rowGroup = writer.StartRowGroup();
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await rowGroup.WriteAsync(schema.Columns[0], new RepeatedValues<int>([[1, 2]])));
+            await rowGroup.WriteAsync(schema.Columns[0], [[1, 2]]));
     }
 
     [Test]
@@ -219,7 +219,7 @@ internal sealed class ParquetWriterApiTests
     }
 
     [Test]
-    public async Task SerializeRepeatedColumnRejectsNonRepeatedColumn()
+    public async Task SerializeColumnJaggedRejectsUnsupportedScalarType()
     {
         using var stream = new MemoryStream();
         var schema = new ParquetSchema([
@@ -228,12 +228,12 @@ internal sealed class ParquetWriterApiTests
         using var writer = ParquetWriter.Create(stream, schema);
         var destination = new byte[1024];
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await Task.Run(() => writer.SerializeRepeatedColumn(schema.Columns[0], new int[][] { [1, 2] }, destination)));
+        await Assert.ThrowsAsync<NotSupportedException>(async () =>
+            await Task.Run(() => writer.SerializeColumn(schema.Columns[0], new int[][] { [1, 2] }, destination)));
     }
 
     [Test]
-    public async Task SerializeRepeatedColumnRejectsWrongPhysicalType()
+    public async Task SerializeColumnRepeatedRejectsWrongPhysicalType()
     {
         using var stream = new MemoryStream();
         var schema = new ParquetSchema([
@@ -243,7 +243,27 @@ internal sealed class ParquetWriterApiTests
         var destination = new byte[1024];
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await Task.Run(() => writer.SerializeRepeatedColumn(schema.Columns[0], new int[][] { [1, 2] }, destination)));
+            await Task.Run(() => writer.SerializeColumn(schema.Columns[0], new int[][] { [1, 2] }, destination)));
+    }
+
+    [Test]
+    public async Task SerializeColumnRejectsNullArguments()
+    {
+        using var stream = new MemoryStream();
+        var schema = new ParquetSchema([
+            new PlankColumn("A", ParquetPhysicalType.Int32, ColumnOptions.Default)
+        ]);
+        using var writer = ParquetWriter.Create(stream, schema);
+        var destination = new byte[128];
+
+        await Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await Task.Run(() => writer.SerializeColumn<int>(null!, [1, 2], destination)));
+        await Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await Task.Run(() => writer.SerializeColumn(schema.Columns[0], [1, 2], destination: null!)));
+        await Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await Task.Run(() => writer.SerializeColumn<int>(null!, new[] { new[] { 1, 2 } }, destination)));
+        await Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await Task.Run(() => writer.SerializeColumn(schema.Columns[0], new[] { new[] { 1, 2 } }, destination: null!)));
     }
 
     [Test]
@@ -284,6 +304,40 @@ internal sealed class ParquetWriterApiTests
     }
 
     [Test]
+    public async Task ResetAllowsReusingWriterForAnotherFile()
+    {
+        var schema = new ParquetSchema([
+            new PlankColumn("A", ParquetPhysicalType.Int32, ColumnOptions.Default)
+        ]);
+        using var streamA = new MemoryStream();
+        using var writer = ParquetWriter.Create(streamA, schema);
+
+        var rgA = writer.StartRowGroup();
+        await rgA.WriteAsync(schema.Columns[0], [1, 2, 3]);
+        writer.CloseFile();
+        var payloadA = streamA.ToArray();
+
+        using var streamB = new MemoryStream();
+        writer.Reset(streamB);
+        var rgB = writer.StartRowGroup();
+        await rgB.WriteAsync(schema.Columns[0], [4, 5]);
+        writer.CloseFile();
+        var payloadB = streamB.ToArray();
+
+        using var readerA = new ParquetFileReader(new MemoryStream(payloadA));
+        using var rowGroupA = readerA.RowGroup(0);
+        using var valuesAReader = rowGroupA.Column(0).LogicalReader<int>();
+        var valuesA = valuesAReader.ReadAll(3);
+        await Assert.That(valuesA.SequenceEqual([1, 2, 3])).IsTrue();
+
+        using var readerB = new ParquetFileReader(new MemoryStream(payloadB));
+        using var rowGroupB = readerB.RowGroup(0);
+        using var valuesBReader = rowGroupB.Column(0).LogicalReader<int>();
+        var valuesB = valuesBReader.ReadAll(2);
+        await Assert.That(valuesB.SequenceEqual([4, 5])).IsTrue();
+    }
+
+    [Test]
     public async Task ConflictingDateTimeFlagsThrow()
     {
         using var stream = new MemoryStream();
@@ -316,6 +370,25 @@ internal sealed class ParquetWriterApiTests
             await rowGroup.WriteAsync(schema.Columns[0], SampleInt32Values, canceledToken));
 
         await rowGroup.WriteAsync(schema.Columns[0], SampleInt32Values);
+        writer.CloseFile();
+    }
+
+    [Test]
+    public async Task PreCanceledSerializedWriteDoesNotPoisonRowGroup()
+    {
+        using var stream = new MemoryStream();
+        var schema = new ParquetSchema([
+            new PlankColumn("A", ParquetPhysicalType.Int32, ColumnOptions.Default)
+        ]);
+        using var writer = ParquetWriter.Create(stream, schema);
+        var serialized = writer.SerializeColumn(schema.Columns[0], new[] { 1, 2, 3 }, new byte[128]);
+        var rowGroup = writer.StartRowGroup();
+        var canceledToken = new CancellationToken(canceled: true);
+
+        await Assert.ThrowsAsync<TaskCanceledException>(async () =>
+            await rowGroup.WriteAsync(serialized, canceledToken));
+
+        await rowGroup.WriteAsync(serialized);
         writer.CloseFile();
     }
 }

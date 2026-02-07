@@ -20,21 +20,43 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
             return ValueTask.FromCanceled(cancellationToken);
 
         _writer.RegisterValueType(column, typeof(T));
-        var physicalType = ParquetTypeMap.GetPhysicalType<T>();
+        var physicalType = GetPhysicalType<T>();
         var ordinal = _state.EncodeColumn(column, values, physicalType);
         _state.TryDrain(_writer);
         return _state.GetWriteTask(ordinal, cancellationToken);
     }
 
-    public ValueTask WriteAsync<T>(Column column, RepeatedValues<T> values, CancellationToken cancellationToken = default)
+    public ValueTask WriteAsync<T>(Column column, ReadOnlySpan<T[]> rows, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(column);
         if (cancellationToken.IsCancellationRequested)
             return ValueTask.FromCanceled(cancellationToken);
 
-        _writer.RegisterValueType(column, typeof(T));
-        var physicalType = ParquetTypeMap.GetPhysicalType<T>();
-        var ordinal = _state.EncodeRepeatedColumn(column, values.Rows, physicalType);
+        int ordinal;
+        if (column.Options.Repetition is ParquetRepetition.Repeated)
+        {
+            _writer.RegisterValueType(column, typeof(T));
+            var physicalType = GetPhysicalType<T>();
+            ordinal = _state.EncodeRepeatedColumn(column, rows, physicalType);
+        }
+        else
+        {
+            _writer.RegisterValueType(column, typeof(T[]));
+            ParquetPhysicalType physicalType;
+            try
+            {
+                physicalType = GetPhysicalType<T[]>();
+            }
+            catch (NotSupportedException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Column '{column.Name}' is not Repeated and does not accept values of type '{typeof(T[])}'.",
+                    ex);
+            }
+
+            ordinal = _state.EncodeColumn(column, rows, physicalType);
+        }
+
         _state.TryDrain(_writer);
         return _state.GetWriteTask(ordinal, cancellationToken);
     }
@@ -65,4 +87,16 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
 
     public static bool operator !=(RowGroupWriter left, RowGroupWriter right)
         => !left.Equals(right);
+
+    static ParquetPhysicalType GetPhysicalType<T>()
+    {
+        try
+        {
+            return ParquetTypeMap.GetPhysicalType<T>();
+        }
+        catch (TypeInitializationException ex) when (ex.InnerException is NotSupportedException inner)
+        {
+            throw inner;
+        }
+    }
 }

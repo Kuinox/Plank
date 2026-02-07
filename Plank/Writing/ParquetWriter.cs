@@ -132,7 +132,7 @@ public sealed class ParquetWriter : IDisposable
     {
         ArgumentNullException.ThrowIfNull(column);
         ArgumentNullException.ThrowIfNull(destination);
-        var physicalType = ParquetTypeMap.GetPhysicalType<T>();
+        var physicalType = GetPhysicalType<T>();
         if (column.PhysicalType != physicalType)
             throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {physicalType}.");
 
@@ -160,24 +160,40 @@ public sealed class ParquetWriter : IDisposable
             repeatedElementOptional: false);
     }
 
-    public SerializedColumn SerializeRepeatedColumn<T>(Column column, ReadOnlySpan<T[]> rows, byte[] destination)
+    public SerializedColumn SerializeColumn<T>(Column column, ReadOnlySpan<T[]> rows, byte[] destination)
     {
         ArgumentNullException.ThrowIfNull(column);
         ArgumentNullException.ThrowIfNull(destination);
-        var physicalType = ParquetTypeMap.GetPhysicalType<T>();
-        if (column.Options.Repetition is not ParquetRepetition.Repeated)
-            throw new InvalidOperationException($"Column '{column.Name}' is not configured as Repeated.");
-        if (column.PhysicalType != physicalType)
-            throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {physicalType}.");
-
         var state = new RowGroupState.ColumnState
         {
             EncodedBuffer = destination,
             RowCount = rows.Length
         };
-        ColumnCodec.EncodeRepeated(column, rows, physicalType, _dateTimeKindHandling, ref state);
+        bool repeatedElementOptional;
+        ColumnLogicalType logicalType;
+        if (column.Options.Repetition is ParquetRepetition.Repeated)
+        {
+            var repeatedPhysicalType = GetPhysicalType<T>();
+            if (column.PhysicalType != repeatedPhysicalType)
+                throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {repeatedPhysicalType}.");
+
+            ColumnCodec.EncodeRepeated(column, rows, repeatedPhysicalType, _dateTimeKindHandling, ref state);
+            logicalType = ResolveSerializedLogicalType(typeof(T), column);
+            repeatedElementOptional = GetRepeatedElementState(typeof(T)) == 2;
+        }
+        else
+        {
+            var scalarPhysicalType = GetPhysicalType<T[]>();
+            if (column.PhysicalType != scalarPhysicalType)
+                throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {scalarPhysicalType}.");
+
+            state.ValueCount = rows.Length;
+            ColumnCodec.Encode(column, rows, scalarPhysicalType, _dateTimeKindHandling, ref state);
+            logicalType = ResolveSerializedLogicalType(typeof(T[]), column);
+            repeatedElementOptional = false;
+        }
+
         ColumnCodec.Compress(ref state, _options.Compression);
-        var logicalType = ResolveSerializedLogicalType(typeof(T), column);
         return new SerializedColumn(
             column,
             state.EncodedBuffer.AsMemory(0, state.EncodedLength),
@@ -190,7 +206,7 @@ public sealed class ParquetWriter : IDisposable
             state.Encoding,
             state.Compression,
             logicalType,
-            repeatedElementOptional: GetRepeatedElementState(typeof(T)) == 2);
+            repeatedElementOptional);
     }
 
     public void CloseFile(CancellationToken cancellationToken = default)
@@ -319,6 +335,18 @@ public sealed class ParquetWriter : IDisposable
         if (column.PhysicalType == ParquetPhysicalType.ByteArray)
             return valueType == typeof(string) ? ColumnLogicalType.Utf8 : ColumnLogicalType.None;
         return ColumnLogicalType.None;
+    }
+
+    static ParquetPhysicalType GetPhysicalType<T>()
+    {
+        try
+        {
+            return ParquetTypeMap.GetPhysicalType<T>();
+        }
+        catch (TypeInitializationException ex) when (ex.InnerException is NotSupportedException inner)
+        {
+            throw inner;
+        }
     }
 
     static byte GetInt32SemanticState(Type valueType)
@@ -527,6 +555,8 @@ public sealed class ParquetWriter : IDisposable
         readonly Compressor? _zstdCompressor;
         readonly byte[] _pageHeaderBuffer;
         readonly byte[] _levelDecodeScratch;
+        int _drainInProgress;
+        int _rowGroupCompletionSignaled;
         internal readonly ColumnChunkMetadata[] ColumnMetadata;
         internal int RowCount;
         internal int NextOrdinal;
@@ -557,6 +587,8 @@ public sealed class ParquetWriter : IDisposable
             RegisterBuffers(options, rowGroupRowCountHint);
             RowCount = -1;
             NextOrdinal = 0;
+            _drainInProgress = 0;
+            _rowGroupCompletionSignaled = 0;
             Options = options;
         }
 
@@ -565,6 +597,8 @@ public sealed class ParquetWriter : IDisposable
             Options = options;
             RowCount = -1;
             NextOrdinal = 0;
+            _drainInProgress = 0;
+            _rowGroupCompletionSignaled = 0;
             for (var i = 0; i < _columnStates.Length; i++)
             {
                 ref var state = ref _columnStates[i];
@@ -575,7 +609,7 @@ public sealed class ParquetWriter : IDisposable
                 state.NullCount = 0;
                 state.DefinitionLevelsByteLength = 0;
                 state.RepetitionLevelsByteLength = 0;
-                state.WriteState = WriteStateEmpty;
+                Volatile.Write(ref state.WriteState, WriteStateEmpty);
                 state.Encoding = default;
                 state.Compression = default;
                 state.ExternalData = default;
@@ -589,7 +623,7 @@ public sealed class ParquetWriter : IDisposable
             if (!_columnOrdinals.TryGetValue(column, out var ordinal))
                 throw new ArgumentException("Column does not belong to this schema.", nameof(column));
             if (column.Options.Repetition is ParquetRepetition.Repeated)
-                throw new InvalidOperationException($"Column '{column.Name}' is Repeated. Use WriteAsync(column, new RepeatedValues<T>(rows)) instead.");
+                throw new InvalidOperationException($"Column '{column.Name}' is Repeated. Use WriteAsync(column, rows) instead.");
             if (column.PhysicalType != physicalType)
                 throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {physicalType}.");
 
@@ -603,7 +637,7 @@ public sealed class ParquetWriter : IDisposable
             state.RowCount = values.Length;
             ColumnCodec.Encode(column, values, physicalType, _dateTimeKindHandling, ref state);
             ColumnCodec.Compress(ref state, _compressionKind);
-            state.WriteState = WriteStateEncoded;
+            Volatile.Write(ref state.WriteState, WriteStateEncoded);
             return ordinal;
         }
 
@@ -625,7 +659,7 @@ public sealed class ParquetWriter : IDisposable
             state.RowCount = rows.Length;
             ColumnCodec.EncodeRepeated(column, rows, physicalType, _dateTimeKindHandling, ref state);
             ColumnCodec.Compress(ref state, _compressionKind);
-            state.WriteState = WriteStateEncoded;
+            Volatile.Write(ref state.WriteState, WriteStateEncoded);
             return ordinal;
         }
 
@@ -649,7 +683,7 @@ public sealed class ParquetWriter : IDisposable
             state.Encoding = serialized.Encoding;
             state.Compression = serialized.Compression;
             state.ExternalData = serialized.Payload;
-            state.WriteState = WriteStateEncoded;
+            Volatile.Write(ref state.WriteState, WriteStateEncoded);
             return ordinal;
         }
 
@@ -657,7 +691,7 @@ public sealed class ParquetWriter : IDisposable
         {
             if (ordinal < 0 || ordinal >= _columnStates.Length)
                 throw new ArgumentOutOfRangeException(nameof(ordinal));
-            if (_columnStates[ordinal].WriteState == WriteStateWritten)
+            if (Volatile.Read(ref _columnStates[ordinal].WriteState) == WriteStateWritten)
                 return ValueTask.CompletedTask;
             if (cancellationToken.IsCancellationRequested)
                 return ValueTask.FromCanceled(cancellationToken);
@@ -677,17 +711,37 @@ public sealed class ParquetWriter : IDisposable
 
         internal void TryDrain(ParquetWriter writer)
         {
-            while (NextOrdinal < _columnStates.Length && _columnStates[NextOrdinal].WriteState == WriteStateEncoded)
+            while (true)
             {
-                WriteColumn(writer, NextOrdinal);
-                var signal = _writeSignals[NextOrdinal];
-                if (signal is not null)
-                    signal.TrySetResult(true);
-                NextOrdinal++;
-            }
+                if (Interlocked.CompareExchange(ref _drainInProgress, 1, 0) != 0)
+                    return;
 
-            if (NextOrdinal == _columnStates.Length)
-                writer.CompleteRowGroup();
+                try
+                {
+                    while (NextOrdinal < _columnStates.Length && Volatile.Read(ref _columnStates[NextOrdinal].WriteState) == WriteStateEncoded)
+                    {
+                        WriteColumn(writer, NextOrdinal);
+                        var signal = _writeSignals[NextOrdinal];
+                        if (signal is not null)
+                            signal.TrySetResult(true);
+                        NextOrdinal++;
+                    }
+
+                    if (NextOrdinal == _columnStates.Length && Interlocked.Exchange(ref _rowGroupCompletionSignaled, 1) == 0)
+                        writer.CompleteRowGroup();
+                }
+                finally
+                {
+                    Volatile.Write(ref _drainInProgress, 0);
+                }
+
+                if (Volatile.Read(ref _rowGroupCompletionSignaled) != 0)
+                    return;
+                if ((uint)NextOrdinal >= (uint)_columnStates.Length)
+                    return;
+                if (Volatile.Read(ref _columnStates[NextOrdinal].WriteState) != WriteStateEncoded)
+                    return;
+            }
         }
 
         void WriteColumn(ParquetWriter writer, int ordinal)
@@ -721,7 +775,7 @@ public sealed class ParquetWriter : IDisposable
             state.DefinitionLevelsByteLength = 0;
             state.RepetitionLevelsByteLength = 0;
             state.ValueCount = 0;
-            state.WriteState = WriteStateWritten;
+            Volatile.Write(ref state.WriteState, WriteStateWritten);
         }
 
         bool TryGetFixedWidthPageSplitPlan(int ordinal, ref ColumnState state, out int splitValueCount, out int bytesPerValue)

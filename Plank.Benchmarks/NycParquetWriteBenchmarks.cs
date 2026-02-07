@@ -16,27 +16,27 @@ namespace Plank.Benchmarks;
 [MemoryDiagnoser]
 public class NycParquetWriteBenchmarks
 {
-    static readonly ParquetSharp.Column[] SharpColumns =
+    static readonly Column[] SharpColumns =
     [
-        new ParquetSharp.Column<int?>("VendorID"),
-        new ParquetSharp.Column<DateTime?>("tpep_pickup_datetime"),
-        new ParquetSharp.Column<DateTime?>("tpep_dropoff_datetime"),
-        new ParquetSharp.Column<long?>("passenger_count"),
-        new ParquetSharp.Column<double?>("trip_distance"),
-        new ParquetSharp.Column<long?>("RatecodeID"),
-        new ParquetSharp.Column<string?>("store_and_fwd_flag"),
-        new ParquetSharp.Column<int?>("PULocationID"),
-        new ParquetSharp.Column<int?>("DOLocationID"),
-        new ParquetSharp.Column<long?>("payment_type"),
-        new ParquetSharp.Column<double?>("fare_amount"),
-        new ParquetSharp.Column<double?>("extra"),
-        new ParquetSharp.Column<double?>("mta_tax"),
-        new ParquetSharp.Column<double?>("tip_amount"),
-        new ParquetSharp.Column<double?>("tolls_amount"),
-        new ParquetSharp.Column<double?>("improvement_surcharge"),
-        new ParquetSharp.Column<double?>("total_amount"),
-        new ParquetSharp.Column<double?>("congestion_surcharge"),
-        new ParquetSharp.Column<double?>("Airport_fee")
+        new Column<int?>("VendorID"),
+        new Column<DateTime?>("tpep_pickup_datetime"),
+        new Column<DateTime?>("tpep_dropoff_datetime"),
+        new Column<long?>("passenger_count"),
+        new Column<double?>("trip_distance"),
+        new Column<long?>("RatecodeID"),
+        new Column<string?>("store_and_fwd_flag"),
+        new Column<int?>("PULocationID"),
+        new Column<int?>("DOLocationID"),
+        new Column<long?>("payment_type"),
+        new Column<double?>("fare_amount"),
+        new Column<double?>("extra"),
+        new Column<double?>("mta_tax"),
+        new Column<double?>("tip_amount"),
+        new Column<double?>("tolls_amount"),
+        new Column<double?>("improvement_surcharge"),
+        new Column<double?>("total_amount"),
+        new Column<double?>("congestion_surcharge"),
+        new Column<double?>("Airport_fee")
     ];
 
     static readonly ParquetOptions ParquetNetOptions = new()
@@ -74,8 +74,17 @@ public class NycParquetWriteBenchmarks
     MemoryStream _sharpStream = null!;
     MemoryStream _parquetNetStream = null!;
 
-    Plank.Writing.ParquetWriter _plankWriter = null!;
+    Writing.ParquetWriter _plankWriter = null!;
     WriterProperties _sharpWriterProperties = null!;
+    readonly ValueTask[] _parallelWrites = new ValueTask[19];
+    readonly ValueTask[] _dedicatedWrites = new ValueTask[19];
+    readonly ColumnWorker[] _workers = new ColumnWorker[19];
+    readonly ParallelOptions _parallelOptions = new()
+    {
+        MaxDegreeOfParallelism = Math.Min(19, Environment.ProcessorCount)
+    };
+    NycTripData _workerTrip = null!;
+    Writing.RowGroupWriter _workerRowGroup;
 
     [GlobalSetup]
     public void Setup()
@@ -141,11 +150,11 @@ public class NycParquetWriteBenchmarks
         _sharpWriterProperties = new WriterPropertiesBuilder()
             .Compression(Compression.Uncompressed)
             .DisableDictionary()
-            .Encoding(ParquetSharp.Encoding.Plain)
+            .Encoding(Encoding.Plain)
             .Build();
 
         var rowGroupRowCountHint = (uint)_context.TripsByFile.Max(static values => values.RowCount);
-        _plankWriter = Plank.Writing.ParquetWriter.Create(_plankStream, _plankSchema, new ParquetWriterOptions
+        _plankWriter = Writing.ParquetWriter.Create(_plankStream, _plankSchema, new ParquetWriterOptions
         {
             ExpectedRowGroupCount = checked((uint)_context.SourceFiles.Length),
             RowGroupRowCountHint = rowGroupRowCountHint,
@@ -156,11 +165,15 @@ public class NycParquetWriteBenchmarks
                 MaxCompressedBytes = 32 * 1024 * 1024
             }
         });
+        for (var i = 0; i < _workers.Length; i++)
+            _workers[i] = new ColumnWorker(this, i);
     }
 
     [GlobalCleanup]
     public void Cleanup()
     {
+        for (var i = 0; i < _workers.Length; i++)
+            _workers[i]?.Dispose();
         _plankWriter.Dispose();
         _sharpWriterProperties.Dispose();
         _plankStream.Dispose();
@@ -193,6 +206,42 @@ public class NycParquetWriteBenchmarks
             EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[16], trip.TotalAmount));
             EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[17], trip.CongestionSurcharge));
             EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[18], trip.AirportFee));
+        }
+
+        _plankWriter.CloseFile();
+        _plankStream.Position = 0;
+        _plankStream.SetLength(0);
+        _plankWriter.Reset(_plankStream);
+    }
+
+    [Benchmark]
+    public async Task Plank_WriteNycSchema_ParallelColumns()
+    {
+        foreach (var trip in _context.TripsByFile)
+        {
+            var rowGroup = _plankWriter.StartRowGroup();
+            Parallel.For(0, _parallelWrites.Length, _parallelOptions, i => _parallelWrites[i] = WriteColumn(rowGroup, trip, i));
+            await AwaitWrites(_parallelWrites).ConfigureAwait(false);
+        }
+
+        _plankWriter.CloseFile();
+        _plankStream.Position = 0;
+        _plankStream.SetLength(0);
+        _plankWriter.Reset(_plankStream);
+    }
+
+    [Benchmark]
+    public async Task Plank_WriteNycSchema_DedicatedThreads()
+    {
+        foreach (var trip in _context.TripsByFile)
+        {
+            _workerRowGroup = _plankWriter.StartRowGroup();
+            _workerTrip = trip;
+            for (var i = 0; i < _workers.Length; i++)
+                _workers[i].Schedule();
+            for (var i = 0; i < _workers.Length; i++)
+                _dedicatedWrites[i] = _workers[i].WaitAndGetWrite();
+            await AwaitWrites(_dedicatedWrites).ConfigureAwait(false);
         }
 
         _plankWriter.CloseFile();
@@ -260,7 +309,7 @@ public class NycParquetWriteBenchmarks
         _parquetNetStream.Position = 0;
         _parquetNetStream.SetLength(0);
 
-        var schema = new Parquet.Schema.ParquetSchema(
+        var schema = new ParquetSchema(
             _vendorId, _pickupDateTime, _dropoffDateTime, _passengerCount, _tripDistance, _ratecodeId, _storeAndFwdFlag,
             _puLocationId, _doLocationId, _paymentType, _fareAmount, _extra, _mtaTax, _tipAmount, _tollsAmount,
             _improvementSurcharge, _totalAmount, _congestionSurcharge, _airportFee);
@@ -296,5 +345,110 @@ public class NycParquetWriteBenchmarks
     {
         if (!write.IsCompletedSuccessfully)
             throw new InvalidOperationException("WriteAsync must complete synchronously in this benchmark.");
+    }
+
+    ValueTask WriteColumn(Writing.RowGroupWriter rowGroup, NycTripData trip, int index)
+        => index switch
+        {
+            0 => rowGroup.WriteAsync(_plankSchema.Columns[0], trip.VendorId),
+            1 => rowGroup.WriteAsync(_plankSchema.Columns[1], trip.PickupDateTime),
+            2 => rowGroup.WriteAsync(_plankSchema.Columns[2], trip.DropoffDateTime),
+            3 => rowGroup.WriteAsync(_plankSchema.Columns[3], trip.PassengerCount),
+            4 => rowGroup.WriteAsync(_plankSchema.Columns[4], trip.TripDistance),
+            5 => rowGroup.WriteAsync(_plankSchema.Columns[5], trip.RatecodeId),
+            6 => rowGroup.WriteAsync(_plankSchema.Columns[6], trip.StoreAndFwdFlag),
+            7 => rowGroup.WriteAsync(_plankSchema.Columns[7], trip.PuLocationId),
+            8 => rowGroup.WriteAsync(_plankSchema.Columns[8], trip.DoLocationId),
+            9 => rowGroup.WriteAsync(_plankSchema.Columns[9], trip.PaymentType),
+            10 => rowGroup.WriteAsync(_plankSchema.Columns[10], trip.FareAmount),
+            11 => rowGroup.WriteAsync(_plankSchema.Columns[11], trip.Extra),
+            12 => rowGroup.WriteAsync(_plankSchema.Columns[12], trip.MtaTax),
+            13 => rowGroup.WriteAsync(_plankSchema.Columns[13], trip.TipAmount),
+            14 => rowGroup.WriteAsync(_plankSchema.Columns[14], trip.TollsAmount),
+            15 => rowGroup.WriteAsync(_plankSchema.Columns[15], trip.ImprovementSurcharge),
+            16 => rowGroup.WriteAsync(_plankSchema.Columns[16], trip.TotalAmount),
+            17 => rowGroup.WriteAsync(_plankSchema.Columns[17], trip.CongestionSurcharge),
+            18 => rowGroup.WriteAsync(_plankSchema.Columns[18], trip.AirportFee),
+            _ => throw new ArgumentOutOfRangeException(nameof(index), index, "Column index is out of range.")
+        };
+
+    static async Task AwaitWrites(ValueTask[] writes)
+    {
+        foreach (var write in writes)
+            await write.ConfigureAwait(false);
+    }
+
+    sealed class ColumnWorker : IDisposable
+    {
+        readonly NycParquetWriteBenchmarks _owner;
+        readonly int _index;
+        readonly Thread _thread;
+        readonly ManualResetEventSlim _start = new(false);
+        readonly ManualResetEventSlim _done = new(false);
+        volatile bool _stop;
+        ValueTask _write;
+        Exception? _error;
+
+        public ColumnWorker(NycParquetWriteBenchmarks owner, int index)
+        {
+            _owner = owner;
+            _index = index;
+            _thread = new Thread(Run)
+            {
+                IsBackground = true,
+                Name = $"PlankBenchColumnWorker-{index}"
+            };
+            _thread.Start();
+        }
+
+        public void Schedule()
+        {
+            _done.Reset();
+            _start.Set();
+        }
+
+        public ValueTask WaitAndGetWrite()
+        {
+            _done.Wait();
+            if (_error is not null)
+                throw new InvalidOperationException($"Worker {_index} failed.", _error);
+            return _write;
+        }
+
+        public void Dispose()
+        {
+            _stop = true;
+            _start.Set();
+            _thread.Join();
+            _start.Dispose();
+            _done.Dispose();
+        }
+
+        void Run()
+        {
+            while (true)
+            {
+                _start.Wait();
+                _start.Reset();
+                if (_stop)
+                {
+                    _done.Set();
+                    return;
+                }
+
+                try
+                {
+                    _write = _owner.WriteColumn(_owner._workerRowGroup, _owner._workerTrip, _index);
+                    _error = null;
+                }
+                catch (Exception ex)
+                {
+                    _write = default;
+                    _error = ex;
+                }
+
+                _done.Set();
+            }
+        }
     }
 }

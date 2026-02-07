@@ -437,7 +437,7 @@ internal sealed class ParquetSmokeTests
             using (var writer = ParquetWriter.Create(stream, schema))
             {
                 var rowGroup = writer.StartRowGroup();
-                await rowGroup.WriteAsync(schema.Columns[0], new RepeatedValues<int>(SampleRepeatedIntValues)).ConfigureAwait(false);
+                await rowGroup.WriteAsync(schema.Columns[0], SampleRepeatedIntValues).ConfigureAwait(false);
                 writer.CloseFile();
             }
 
@@ -471,7 +471,7 @@ internal sealed class ParquetSmokeTests
             using (var writer = ParquetWriter.Create(stream, schema))
             {
                 var rowGroup = writer.StartRowGroup();
-                await rowGroup.WriteAsync(schema.Columns[0], new RepeatedValues<int?>(SampleRepeatedNullableIntValues)).ConfigureAwait(false);
+                await rowGroup.WriteAsync(schema.Columns[0], SampleRepeatedNullableIntValues).ConfigureAwait(false);
                 writer.CloseFile();
             }
 

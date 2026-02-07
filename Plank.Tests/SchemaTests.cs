@@ -47,6 +47,22 @@ internal sealed class SchemaTests
     }
 
     [Test]
+    public async Task SchemaInitSetterForColumnsCanOverrideConstructorValue()
+    {
+        var schema = new ParquetSchema([])
+        {
+            Columns =
+            [
+                new Column("A", ParquetPhysicalType.Int32, ColumnOptions.Default)
+            ]
+        };
+
+        schema.Validate();
+        await Assert.That(schema.Columns.Length).IsEqualTo(1);
+        await Assert.That(schema.Columns[0].Name).IsEqualTo("A");
+    }
+
+    [Test]
     public async Task SchemaValidateThrowsWhenColumnNameIsNull()
     {
         var schema = new ParquetSchema([
@@ -160,6 +176,37 @@ internal sealed class SchemaTests
 
         options.Validate();
         await Assert.That(options.Encodings.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task ColumnOptionsEqualityHandlesReference()
+    {
+        var options = new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain]);
+
+        await Assert.That(options.Equals(options)).IsTrue();
+    }
+
+    [Test]
+    public async Task ColumnOptionsEqualityDetectsDifferentRepetitionAndLength()
+    {
+        var left = new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain]);
+        var differentRepetition = new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.Plain]);
+        var differentLength = new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain, EncodingKind.RleDictionary]);
+
+        await Assert.That(left.Equals(differentRepetition)).IsFalse();
+        await Assert.That(left.Equals(differentLength)).IsFalse();
+    }
+
+    [Test]
+    public async Task ColumnOptionsEqualityDetectsEncodingDifferenceAndHashMatchesEqualValues()
+    {
+        var first = new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain, EncodingKind.RleDictionary]);
+        var same = new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain, EncodingKind.RleDictionary]);
+        var differentEncodingOrder = new ColumnOptions(ParquetRepetition.Required, [EncodingKind.RleDictionary, EncodingKind.Plain]);
+
+        await Assert.That(first.Equals(same)).IsTrue();
+        await Assert.That(first.GetHashCode()).IsEqualTo(same.GetHashCode());
+        await Assert.That(first.Equals(differentEncodingOrder)).IsFalse();
     }
 }
 #pragma warning restore CA2007

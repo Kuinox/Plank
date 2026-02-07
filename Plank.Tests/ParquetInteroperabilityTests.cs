@@ -200,7 +200,7 @@ internal sealed class ParquetInteroperabilityTests
             }))
             {
                 var rowGroup = writer.StartRowGroup();
-                await rowGroup.WriteAsync(schema.Columns[0], new RepeatedValues<int>(rows)).ConfigureAwait(false);
+                await rowGroup.WriteAsync(schema.Columns[0], rows).ConfigureAwait(false);
                 writer.CloseFile();
             }
 
@@ -246,7 +246,7 @@ internal sealed class ParquetInteroperabilityTests
             }))
             {
                 var rowGroup = writer.StartRowGroup();
-                await rowGroup.WriteAsync(schema.Columns[0], new RepeatedValues<int?>(rows)).ConfigureAwait(false);
+                await rowGroup.WriteAsync(schema.Columns[0], rows).ConfigureAwait(false);
                 writer.CloseFile();
             }
 
@@ -286,8 +286,8 @@ internal sealed class ParquetInteroperabilityTests
                 RowGroupRowCountHint = (uint)rows1.Length
             }))
             {
-                var serialized1 = writer.SerializeRepeatedColumn(schema.Columns[0], rows1, buffer1);
-                var serialized2 = writer.SerializeRepeatedColumn(schema.Columns[0], rows2, buffer2);
+                var serialized1 = writer.SerializeColumn(schema.Columns[0], rows1, buffer1);
+                var serialized2 = writer.SerializeColumn(schema.Columns[0], rows2, buffer2);
 
                 var rg1 = writer.StartRowGroup();
                 await rg1.WriteAsync(serialized1).ConfigureAwait(false);
@@ -377,7 +377,7 @@ internal sealed class ParquetInteroperabilityTests
             using (var writer = ParquetWriter.Create(stream, schema))
             {
                 var rowGroup = writer.StartRowGroup();
-                await rowGroup.WriteAsync(schema.Columns[0], new RepeatedValues<string?>(rows)).ConfigureAwait(false);
+                await rowGroup.WriteAsync(schema.Columns[0], rows).ConfigureAwait(false);
                 writer.CloseFile();
             }
 
@@ -467,6 +467,44 @@ internal sealed class ParquetInteroperabilityTests
             using var columnReader = rowGroupReader.Column(0).LogicalReader<TimeOnly>();
             var read = columnReader.ReadAll(values.Length);
 
+            await Assert.That(read.SequenceEqual(values)).IsTrue();
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Test]
+    [Arguments(CompressionKind.Brotli)]
+    [Arguments(CompressionKind.Gzip)]
+    [Arguments(CompressionKind.Snappy)]
+    [Arguments(CompressionKind.Lz4)]
+    [Arguments(CompressionKind.Zstd)]
+    public async Task Int32RoundTripsAcrossCompressionKinds(CompressionKind compression)
+    {
+        var path = NewTempPath($"compression-{compression}");
+        try
+        {
+            var values = Enumerable.Range(0, 256).ToArray();
+            var schema = new ParquetSchema([
+                new PlankColumn("A", ParquetPhysicalType.Int32, ColumnOptions.Default)
+            ]);
+            await using (var stream = File.Create(path))
+            using (var writer = ParquetWriter.Create(stream, schema, new ParquetWriterOptions
+            {
+                Compression = compression
+            }))
+            {
+                var rowGroup = writer.StartRowGroup();
+                await rowGroup.WriteAsync(schema.Columns[0], values).ConfigureAwait(false);
+                writer.CloseFile();
+            }
+
+            using var fileReader = new ParquetFileReader(path);
+            using var rowGroupReader = fileReader.RowGroup(0);
+            using var columnReader = rowGroupReader.Column(0).LogicalReader<int>();
+            var read = columnReader.ReadAll(values.Length);
             await Assert.That(read.SequenceEqual(values)).IsTrue();
         }
         finally
