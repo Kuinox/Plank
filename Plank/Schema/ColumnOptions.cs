@@ -2,11 +2,19 @@ using System.Collections.Immutable;
 
 namespace Plank.Schema;
 
-public sealed record ColumnOptions(
-    ParquetRepetition Repetition = ParquetRepetition.Unspecified,
-    ImmutableArray<EncodingKind> Encodings = default)
+public sealed record ColumnOptions
 {
+    public ColumnOptions(ParquetRepetition repetition = ParquetRepetition.Unspecified, ImmutableArray<EncodingKind> encodings = default)
+    {
+        Repetition = repetition;
+        Encodings = encodings.IsDefault ? [] : encodings;
+    }
+
     public static readonly ColumnOptions Default = new();
+
+    public ParquetRepetition Repetition { get; }
+
+    public ImmutableArray<EncodingKind> Encodings { get; }
 
     public bool Equals(ColumnOptions? other)
     {
@@ -19,15 +27,19 @@ public sealed record ColumnOptions(
         if (Encodings.Length != other.Encodings.Length)
             return false;
 
-        return !Encodings.Where((t, i) => t != other.Encodings[i]).Any();
+        for (var i = 0; i < Encodings.Length; i++)
+            if (Encodings[i] != other.Encodings[i])
+                return false;
+
+        return true;
     }
 
     public override int GetHashCode()
     {
         var hash = new HashCode();
         hash.Add(Repetition);
-        foreach (var t in Encodings)
-            hash.Add(t);
+        foreach (var encoding in Encodings)
+            hash.Add(encoding);
 
         return hash.ToHashCode();
     }

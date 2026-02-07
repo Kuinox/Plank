@@ -321,16 +321,18 @@ internal static class ParquetThriftWriter
     static long GetRowGroupTotalUncompressedSize(ParquetWriter.ColumnChunkMetadata[] columns)
     {
         long total = 0;
-        for (var i = 0; i < columns.Length; i++)
-            total = checked(total + columns[i].TotalUncompressedSize);
+        foreach (var t in columns)
+            total = checked(total + t.TotalUncompressedSize);
+
         return total;
     }
 
     static long GetRowGroupTotalCompressedSize(ParquetWriter.ColumnChunkMetadata[] columns)
     {
         long total = 0;
-        for (var i = 0; i < columns.Length; i++)
-            total = checked(total + columns[i].TotalCompressedSize);
+        foreach (var t in columns)
+            total = checked(total + t.TotalCompressedSize);
+
         return total;
     }
 

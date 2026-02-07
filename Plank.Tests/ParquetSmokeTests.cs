@@ -443,7 +443,7 @@ internal sealed class ParquetSmokeTests
 
             using var fileReader = new ParquetFileReader(path);
             await Assert.That(fileReader.FileMetaData.NumRowGroups).IsEqualTo(1);
-            await Assert.That(fileReader.FileMetaData.NumRows).IsEqualTo((long)SampleRepeatedIntValues.Length);
+            await Assert.That(fileReader.FileMetaData.NumRows).IsEqualTo(SampleRepeatedIntValues.Length);
 
             using var rowGroupReader = fileReader.RowGroup(0);
             using var columnReader = rowGroupReader.Column(0).LogicalReader<int[]>();

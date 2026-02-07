@@ -67,10 +67,8 @@ public sealed class ParquetWriter : IDisposable
                     _rowGroupColumns[i] = empty;
             }
             else
-            {
                 for (var i = 0; i < _rowGroupColumns.Length; i++)
                     _rowGroupColumns[i] = new ColumnChunkMetadata[columns.Length];
-            }
         }
 
         _bufferPool = options.BufferPool ?? new NamedMemoryPool();
@@ -1377,11 +1375,25 @@ public sealed class ParquetWriter : IDisposable
             {
                 var column = _columns[i];
                 var length = targetLength;
-                if (rowGroupRowCountHint.HasValue && ColumnCodec.TryGetFixedWidthBytes(column.PhysicalType, out var width))
+                if (rowGroupRowCountHint.HasValue)
                 {
-                    var hintLength = checked((int)rowGroupRowCountHint.Value * width);
-                    if (hintLength > length)
-                        length = hintLength;
+                    var rowCount = checked((int)rowGroupRowCountHint.Value);
+                    if (ColumnCodec.TryGetFixedWidthBytes(column.PhysicalType, out var width))
+                    {
+                        var hintLength = checked(rowCount * width);
+                        if (column.Options.Repetition is ParquetRepetition.Optional)
+                            hintLength = checked(hintLength + ColumnCodec.GetDefinitionLevelsByteCount(rowCount));
+                        if (hintLength > length)
+                            length = hintLength;
+                    }
+                    else if (column.PhysicalType is ParquetPhysicalType.ByteArray)
+                    {
+                        var variableWidthHint = checked(rowCount * 8);
+                        if (column.Options.Repetition is ParquetRepetition.Optional)
+                            variableWidthHint = checked(variableWidthHint + ColumnCodec.GetDefinitionLevelsByteCount(rowCount));
+                        if (variableWidthHint > length)
+                            length = variableWidthHint;
+                    }
                 }
 
                 var bucketName = BuildColumnBucketName(column, length);
@@ -1414,16 +1426,12 @@ public sealed class ParquetWriter : IDisposable
         static int GetBucketLength(string bucketName, string[] names, int[] lengths, string[] compressedNames, int[] compressedLengths)
         {
             for (var i = 0; i < names.Length; i++)
-            {
                 if (StringComparer.Ordinal.Equals(names[i], bucketName))
                     return lengths[i];
-            }
 
             for (var i = 0; i < compressedNames.Length; i++)
-            {
                 if (StringComparer.Ordinal.Equals(compressedNames[i], bucketName))
                     return compressedLengths[i];
-            }
 
             throw new InvalidOperationException($"Bucket '{bucketName}' length was not found.");
         }

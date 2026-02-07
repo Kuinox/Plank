@@ -7,7 +7,7 @@ namespace Plank;
 public sealed class NamedMemoryPool : IBufferPool
 {
     readonly Dictionary<string, Bucket> _buckets = new(StringComparer.Ordinal);
-    
+
     public void Register(string name, int bufferLength, int initialCount)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);

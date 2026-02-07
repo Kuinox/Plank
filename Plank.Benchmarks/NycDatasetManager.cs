@@ -29,21 +29,39 @@ public sealed class NycDatasetManager
     public BenchmarkDataContext LoadContext(string[] files)
     {
         ArgumentNullException.ThrowIfNull(files);
-        var valuesByFile = new int[files.Length][];
+        var tripsByFile = new NycTripData[files.Length];
         var totalRows = 0;
         for (var i = 0; i < files.Length; i++)
         {
-            var values = LoadVendorIds(files[i]);
-            valuesByFile[i] = values;
-            totalRows = checked(totalRows + values.Length);
+            var trip = LoadTripData(files[i]);
+            tripsByFile[i] = trip;
+            totalRows = checked(totalRows + trip.RowCount);
         }
 
         return new BenchmarkDataContext
         {
             SourceFiles = files,
-            VendorIdsByFile = valuesByFile,
+            TripsByFile = tripsByFile,
             TotalRows = totalRows
         };
+    }
+
+    public string[] ResolveExistingFiles(string dataDirectory, int fileCount)
+    {
+        if (fileCount <= 0 || fileCount > NycDatasetCatalog.YellowTaxiParquetUrls.Length)
+            throw new ArgumentOutOfRangeException(nameof(fileCount), $"fileCount must be between 1 and {NycDatasetCatalog.YellowTaxiParquetUrls.Length}.");
+
+        var files = new string[fileCount];
+        for (var i = 0; i < fileCount; i++)
+        {
+            var fileName = Path.GetFileName(NycDatasetCatalog.YellowTaxiParquetUrls[i]);
+            var filePath = Path.Combine(dataDirectory, fileName);
+            if (!File.Exists(filePath))
+                throw new FileNotFoundException($"Benchmark data file was not found: '{filePath}'. Run Plank.Benchmarks program entry once to download files.");
+            files[i] = filePath;
+        }
+
+        return files;
     }
 
     static async Task DownloadFileAsync(string url, string destinationPath, CancellationToken cancellationToken)
@@ -53,43 +71,111 @@ public sealed class NycDatasetManager
         await response.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
     }
 
-    static int[] LoadVendorIds(string filePath)
+    static NycTripData LoadTripData(string filePath)
     {
         using var fileReader = new ParquetFileReader(filePath);
         var rowCount = checked((int)fileReader.FileMetaData.NumRows);
-        var values = new int[rowCount];
+        var vendorId = new int?[rowCount];
+        var pickupDateTime = new DateTime?[rowCount];
+        var dropoffDateTime = new DateTime?[rowCount];
+        var passengerCount = new long?[rowCount];
+        var tripDistance = new double?[rowCount];
+        var ratecodeId = new long?[rowCount];
+        var storeAndFwdFlag = new string?[rowCount];
+        var puLocationId = new int?[rowCount];
+        var doLocationId = new int?[rowCount];
+        var paymentType = new long?[rowCount];
+        var fareAmount = new double?[rowCount];
+        var extra = new double?[rowCount];
+        var mtaTax = new double?[rowCount];
+        var tipAmount = new double?[rowCount];
+        var tollsAmount = new double?[rowCount];
+        var improvementSurcharge = new double?[rowCount];
+        var totalAmount = new double?[rowCount];
+        var congestionSurcharge = new double?[rowCount];
+        var airportFee = new double?[rowCount];
+
         var offset = 0;
         for (var i = 0; i < fileReader.FileMetaData.NumRowGroups; i++)
         {
             using var rowGroupReader = fileReader.RowGroup(i);
             var groupRowCount = checked((int)rowGroupReader.MetaData.NumRows);
-            var groupValues = ReadVendorIds(rowGroupReader, groupRowCount);
-            groupValues.CopyTo(values, offset);
-            offset += groupValues.Length;
+            Copy(ReadInt32(rowGroupReader, 0, groupRowCount), vendorId, offset);
+            Copy(ReadDateTime(rowGroupReader, 1, groupRowCount), pickupDateTime, offset);
+            Copy(ReadDateTime(rowGroupReader, 2, groupRowCount), dropoffDateTime, offset);
+            Copy(ReadInt64(rowGroupReader, 3, groupRowCount), passengerCount, offset);
+            Copy(ReadDouble(rowGroupReader, 4, groupRowCount), tripDistance, offset);
+            Copy(ReadInt64(rowGroupReader, 5, groupRowCount), ratecodeId, offset);
+            Copy(ReadString(rowGroupReader, 6, groupRowCount), storeAndFwdFlag, offset);
+            Copy(ReadInt32(rowGroupReader, 7, groupRowCount), puLocationId, offset);
+            Copy(ReadInt32(rowGroupReader, 8, groupRowCount), doLocationId, offset);
+            Copy(ReadInt64(rowGroupReader, 9, groupRowCount), paymentType, offset);
+            Copy(ReadDouble(rowGroupReader, 10, groupRowCount), fareAmount, offset);
+            Copy(ReadDouble(rowGroupReader, 11, groupRowCount), extra, offset);
+            Copy(ReadDouble(rowGroupReader, 12, groupRowCount), mtaTax, offset);
+            Copy(ReadDouble(rowGroupReader, 13, groupRowCount), tipAmount, offset);
+            Copy(ReadDouble(rowGroupReader, 14, groupRowCount), tollsAmount, offset);
+            Copy(ReadDouble(rowGroupReader, 15, groupRowCount), improvementSurcharge, offset);
+            Copy(ReadDouble(rowGroupReader, 16, groupRowCount), totalAmount, offset);
+            Copy(ReadDouble(rowGroupReader, 17, groupRowCount), congestionSurcharge, offset);
+            Copy(ReadDouble(rowGroupReader, 18, groupRowCount), airportFee, offset);
+            offset += groupRowCount;
         }
 
-        return values;
+        return new NycTripData
+        {
+            VendorId = vendorId,
+            PickupDateTime = pickupDateTime,
+            DropoffDateTime = dropoffDateTime,
+            PassengerCount = passengerCount,
+            TripDistance = tripDistance,
+            RatecodeId = ratecodeId,
+            StoreAndFwdFlag = storeAndFwdFlag,
+            PuLocationId = puLocationId,
+            DoLocationId = doLocationId,
+            PaymentType = paymentType,
+            FareAmount = fareAmount,
+            Extra = extra,
+            MtaTax = mtaTax,
+            TipAmount = tipAmount,
+            TollsAmount = tollsAmount,
+            ImprovementSurcharge = improvementSurcharge,
+            TotalAmount = totalAmount,
+            CongestionSurcharge = congestionSurcharge,
+            AirportFee = airportFee
+        };
     }
 
-    static int[] ReadVendorIds(RowGroupReader rowGroupReader, int rowCount)
+    static int?[] ReadInt32(RowGroupReader rowGroupReader, int columnIndex, int rowCount)
     {
-        try
-        {
-            using var longReader = rowGroupReader.Column(0).LogicalReader<long?>();
-            var source = longReader.ReadAll(rowCount);
-            var destination = new int[source.Length];
-            for (var i = 0; i < source.Length; i++)
-                destination[i] = source[i].HasValue ? checked((int)source[i]!.Value) : 0;
-            return destination;
-        }
-        catch (Exception)
-        {
-            using var intReader = rowGroupReader.Column(0).LogicalReader<int?>();
-            var source = intReader.ReadAll(rowCount);
-            var destination = new int[source.Length];
-            for (var i = 0; i < source.Length; i++)
-                destination[i] = source[i] ?? 0;
-            return destination;
-        }
+        using var reader = rowGroupReader.Column(columnIndex).LogicalReader<int?>();
+        return reader.ReadAll(rowCount);
     }
+
+    static long?[] ReadInt64(RowGroupReader rowGroupReader, int columnIndex, int rowCount)
+    {
+        using var reader = rowGroupReader.Column(columnIndex).LogicalReader<long?>();
+        return reader.ReadAll(rowCount);
+    }
+
+    static double?[] ReadDouble(RowGroupReader rowGroupReader, int columnIndex, int rowCount)
+    {
+        using var reader = rowGroupReader.Column(columnIndex).LogicalReader<double?>();
+        return reader.ReadAll(rowCount);
+    }
+
+    static DateTime?[] ReadDateTime(RowGroupReader rowGroupReader, int columnIndex, int rowCount)
+    {
+        using var reader = rowGroupReader.Column(columnIndex).LogicalReader<DateTime?>();
+        return reader.ReadAll(rowCount);
+    }
+
+    static string?[] ReadString(RowGroupReader rowGroupReader, int columnIndex, int rowCount)
+    {
+        using var reader = rowGroupReader.Column(columnIndex).LogicalReader<string?>();
+        return reader.ReadAll(rowCount);
+    }
+
+    static void Copy<T>(T[] source, T[] destination, int offset)
+        => Array.Copy(source, 0, destination, offset, source.Length);
 }

@@ -6,6 +6,7 @@ var fileCount = ParseFileCount(GetArgument(args, "--file-count"), defaultValue: 
 
 var manager = new NycDatasetManager();
 var files = await manager.EnsureFilesAsync(dataDirectory, fileCount, CancellationToken.None).ConfigureAwait(false);
+NycBenchmarkContext.SetConfiguration(dataDirectory, fileCount);
 NycBenchmarkContext.Current = manager.LoadContext(files);
 
 Console.WriteLine($"Loaded {NycBenchmarkContext.Current.TotalRows} rows from {NycBenchmarkContext.Current.SourceFiles.Length} NYC parquet files.");
