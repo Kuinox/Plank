@@ -15,4 +15,12 @@ public sealed class ParquetLog : IParquetLog
     public void FooterBufferCapacityGrown(int previousCapacity, int newCapacity, int requiredCapacity)
     {
     }
+
+    public void StreamWriteObserved(int byteCount, long writeDurationTicks, long writeGapTicks)
+    {
+    }
+
+    public void ColumnWriteMetricsObserved(string columnName, int rowCount, int valueCount, int bytesWritten, long encodeTicks, long compressTicks, long waitForWriteTicks, long writeTicks)
+    {
+    }
 }

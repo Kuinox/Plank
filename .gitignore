@@ -4,3 +4,9 @@ obj/
 riderModule.iml
 /_ReSharper.Caches/
 /.vs
+/.idea/
+*.DotSettings.user
+/BenchmarkDotNet.Artifacts/
+/Plank.Benchmarks/BenchmarkDotNet.Artifacts/
+/Plank.Benchmarks/nyc-data/
+/Plank.Benchmarks/throughput-output/

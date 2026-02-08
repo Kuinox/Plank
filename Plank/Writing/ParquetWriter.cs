@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.IO.Compression;
 using K4os.Compression.LZ4;
 using Plank;
@@ -27,8 +28,14 @@ public sealed class ParquetWriter : IDisposable
     readonly ColumnLogicalType[] _columnLogicalTypes;
     readonly ColumnChunkMetadata[][] _rowGroupColumns;
     readonly RowGroupInfo[] _rowGroups;
+    readonly IParquetLog _log;
+    readonly bool _streamWriteMetricsEnabled;
     byte[] _footerBuffer;
     long _position;
+    long _lastWriteEndTimestamp;
+    bool _hasLastWriteEndTimestamp;
+    int _activeColumnOrdinal;
+    long _activeColumnWriteTicks;
     bool _rowGroupActive;
     bool _finalized;
     int _rowGroupCount;
@@ -39,6 +46,8 @@ public sealed class ParquetWriter : IDisposable
         _stream = stream;
         _schema = schema;
         _options = options;
+        _log = options.Log;
+        _streamWriteMetricsEnabled = !ReferenceEquals(_log, ParquetLog.None);
         _dateTimeKindHandling = options.DateTimeKindHandling;
         if (options.ExpectedRowGroupCount is > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(options), options.ExpectedRowGroupCount.Value, "Expected row group count must fit in Int32.");
@@ -77,6 +86,10 @@ public sealed class ParquetWriter : IDisposable
             ? new byte[options.FooterBufferBytes]
             : throw new ArgumentOutOfRangeException(nameof(options), options.FooterBufferBytes, "FooterBufferBytes must be positive.");
         _position = 0;
+        _lastWriteEndTimestamp = 0;
+        _hasLastWriteEndTimestamp = false;
+        _activeColumnOrdinal = -1;
+        _activeColumnWriteTicks = 0;
         _rowGroupCount = 0;
         _rowGroupActive = false;
         _finalized = false;
@@ -98,6 +111,10 @@ public sealed class ParquetWriter : IDisposable
 
         _stream = stream;
         _position = 0;
+        _lastWriteEndTimestamp = 0;
+        _hasLastWriteEndTimestamp = false;
+        _activeColumnOrdinal = -1;
+        _activeColumnWriteTicks = 0;
         _rowGroupCount = 0;
         if (_int32SemanticStates.Length > 0)
             Array.Clear(_int32SemanticStates);
@@ -251,7 +268,7 @@ public sealed class ParquetWriter : IDisposable
 
     void WriteFileHeader()
     {
-        _stream.Write(FileMagic);
+        WriteToStream(FileMagic);
         AdvancePosition(FileMagic.Length);
     }
 
@@ -265,8 +282,43 @@ public sealed class ParquetWriter : IDisposable
         ParquetThriftWriter.WriteFileMetaData(_footerBuffer.AsSpan(0, metadataSize), _schema, _columnLogicalTypes, _repeatedElementStates, _rowGroups, _rowGroupCount);
         BinaryPrimitives.WriteInt32LittleEndian(_footerBuffer.AsSpan(metadataSize, sizeof(int)), metadataSize);
         FileMagic.CopyTo(_footerBuffer.AsSpan(metadataSize + sizeof(int), FileMagic.Length));
-        _stream.Write(_footerBuffer, 0, footerSize);
+        WriteToStream(_footerBuffer.AsSpan(0, footerSize));
         AdvancePosition(footerSize);
+    }
+
+    void WriteToStream(ReadOnlySpan<byte> payload)
+    {
+        if (!_streamWriteMetricsEnabled)
+        {
+            _stream.Write(payload);
+            return;
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var gapTicks = _hasLastWriteEndTimestamp ? started - _lastWriteEndTimestamp : 0;
+        _stream.Write(payload);
+        var completed = Stopwatch.GetTimestamp();
+        if (_activeColumnOrdinal >= 0)
+            _activeColumnWriteTicks = checked(_activeColumnWriteTicks + (completed - started));
+        _lastWriteEndTimestamp = completed;
+        _hasLastWriteEndTimestamp = true;
+        _log.StreamWriteObserved(payload.Length, completed - started, gapTicks);
+    }
+
+    internal void BeginColumnWriteTiming(int ordinal)
+    {
+        _activeColumnOrdinal = ordinal;
+        _activeColumnWriteTicks = 0;
+    }
+
+    internal long EndColumnWriteTiming(int ordinal)
+    {
+        if (_activeColumnOrdinal != ordinal)
+            return 0;
+        var ticks = _activeColumnWriteTicks;
+        _activeColumnOrdinal = -1;
+        _activeColumnWriteTicks = 0;
+        return ticks;
     }
 
     internal void RegisterValueType(Column column, Type valueType)
@@ -609,6 +661,9 @@ public sealed class ParquetWriter : IDisposable
                 state.NullCount = 0;
                 state.DefinitionLevelsByteLength = 0;
                 state.RepetitionLevelsByteLength = 0;
+                state.EncodeDurationTicks = 0;
+                state.CompressionDurationTicks = 0;
+                state.EncodedTimestampTicks = 0;
                 Volatile.Write(ref state.WriteState, WriteStateEmpty);
                 state.Encoding = default;
                 state.Compression = default;
@@ -635,8 +690,15 @@ public sealed class ParquetWriter : IDisposable
                 state.EncodedBufferOwner = _bufferPool.Rent(_bufferNames[ordinal], _bufferLengths[ordinal]);
             state.ValueCount = values.Length;
             state.RowCount = values.Length;
+            var encodeStarted = Stopwatch.GetTimestamp();
             ColumnCodec.Encode(column, values, physicalType, _dateTimeKindHandling, ref state);
+            var encodeCompleted = Stopwatch.GetTimestamp();
+            var compressStarted = encodeCompleted;
             ColumnCodec.Compress(ref state, _compressionKind);
+            var compressCompleted = Stopwatch.GetTimestamp();
+            state.EncodeDurationTicks = encodeCompleted - encodeStarted;
+            state.CompressionDurationTicks = compressCompleted - compressStarted;
+            state.EncodedTimestampTicks = compressCompleted;
             Volatile.Write(ref state.WriteState, WriteStateEncoded);
             return ordinal;
         }
@@ -657,8 +719,15 @@ public sealed class ParquetWriter : IDisposable
             if (state.EncodedBufferOwner is null)
                 state.EncodedBufferOwner = _bufferPool.Rent(_bufferNames[ordinal], _bufferLengths[ordinal]);
             state.RowCount = rows.Length;
+            var encodeStarted = Stopwatch.GetTimestamp();
             ColumnCodec.EncodeRepeated(column, rows, physicalType, _dateTimeKindHandling, ref state);
+            var encodeCompleted = Stopwatch.GetTimestamp();
+            var compressStarted = encodeCompleted;
             ColumnCodec.Compress(ref state, _compressionKind);
+            var compressCompleted = Stopwatch.GetTimestamp();
+            state.EncodeDurationTicks = encodeCompleted - encodeStarted;
+            state.CompressionDurationTicks = compressCompleted - compressStarted;
+            state.EncodedTimestampTicks = compressCompleted;
             Volatile.Write(ref state.WriteState, WriteStateEncoded);
             return ordinal;
         }
@@ -683,6 +752,9 @@ public sealed class ParquetWriter : IDisposable
             state.Encoding = serialized.Encoding;
             state.Compression = serialized.Compression;
             state.ExternalData = serialized.Payload;
+            state.EncodeDurationTicks = 0;
+            state.CompressionDurationTicks = 0;
+            state.EncodedTimestampTicks = Stopwatch.GetTimestamp();
             Volatile.Write(ref state.WriteState, WriteStateEncoded);
             return ordinal;
         }
@@ -754,6 +826,9 @@ public sealed class ParquetWriter : IDisposable
             if (RowCount != rowCount)
                 throw new InvalidOperationException($"Column ordinal {ordinal} has {rowCount} rows but row group expects {RowCount}.");
 
+            var writeStarted = Stopwatch.GetTimestamp();
+            var waitForWriteTicks = state.EncodedTimestampTicks > 0 ? Math.Max(0, writeStarted - state.EncodedTimestampTicks) : 0;
+            writer.BeginColumnWriteTiming(ordinal);
             var offset = writer._position;
             long totalUncompressedSize;
             long totalCompressedSize;
@@ -765,6 +840,17 @@ public sealed class ParquetWriter : IDisposable
                 WriteSplitVariableWidthPages(writer, ordinal, ref state, out totalUncompressedSize, out totalCompressedSize);
             else
                 WriteSinglePage(writer, ordinal, ref state, out totalUncompressedSize, out totalCompressedSize);
+            var writeTicks = writer.EndColumnWriteTiming(ordinal);
+            var bytesWritten = checked((int)(writer._position - offset));
+            writer._log.ColumnWriteMetricsObserved(
+                _columns[ordinal].Name,
+                rowCount,
+                valueCount,
+                bytesWritten,
+                state.EncodeDurationTicks,
+                state.CompressionDurationTicks,
+                waitForWriteTicks,
+                writeTicks);
 
             ColumnMetadata[ordinal] = new ColumnChunkMetadata(offset, state.ValueCount, totalUncompressedSize, totalCompressedSize, state.Encoding, state.Compression);
             state.ExternalData = default;
@@ -775,6 +861,9 @@ public sealed class ParquetWriter : IDisposable
             state.DefinitionLevelsByteLength = 0;
             state.RepetitionLevelsByteLength = 0;
             state.ValueCount = 0;
+            state.EncodeDurationTicks = 0;
+            state.CompressionDurationTicks = 0;
+            state.EncodedTimestampTicks = 0;
             Volatile.Write(ref state.WriteState, WriteStateWritten);
         }
 
@@ -1108,16 +1197,16 @@ public sealed class ParquetWriter : IDisposable
                 uncompressedSize: uncompressedPayloadLength,
                 compressedSize: compressedPayloadLength,
                 isCompressed);
-            writer._stream.Write(_pageHeaderBuffer, 0, headerLength);
+            writer.WriteToStream(_pageHeaderBuffer.AsSpan(0, headerLength));
             writer.AdvancePosition(headerLength);
             totalUncompressedSize = checked(totalUncompressedSize + headerLength + uncompressedPayloadLength);
             totalCompressedSize = checked(totalCompressedSize + headerLength + compressedPayloadLength);
             if (compressedPayloadLength == 0)
                 return;
             if (levelsPayload.Length > 0)
-                writer._stream.Write(levelsPayload);
+                writer.WriteToStream(levelsPayload);
             if (compressedDataLength > 0)
-                writer._stream.Write(compressedDataPayload);
+                writer.WriteToStream(compressedDataPayload);
             writer.AdvancePosition(compressedPayloadLength);
         }
 
@@ -1154,7 +1243,7 @@ public sealed class ParquetWriter : IDisposable
                 uncompressedSize: uncompressedPayloadLength,
                 compressedSize: compressedPayloadLength,
                 isCompressed);
-            writer._stream.Write(_pageHeaderBuffer, 0, headerLength);
+            writer.WriteToStream(_pageHeaderBuffer.AsSpan(0, headerLength));
             writer.AdvancePosition(headerLength);
             totalUncompressedSize = checked(totalUncompressedSize + headerLength + uncompressedPayloadLength);
             totalCompressedSize = checked(totalCompressedSize + headerLength + compressedPayloadLength);
@@ -1163,9 +1252,9 @@ public sealed class ParquetWriter : IDisposable
                 return;
 
             if (levelsPayload.Length > 0)
-                writer._stream.Write(levelsPayload);
+                writer.WriteToStream(levelsPayload);
             if (compressedDataLength > 0)
-                writer._stream.Write(compressedDataPayload);
+                writer.WriteToStream(compressedDataPayload);
             writer.AdvancePosition(compressedPayloadLength);
         }
 
@@ -1506,6 +1595,9 @@ public sealed class ParquetWriter : IDisposable
             internal ReadOnlyMemory<byte> ExternalData;
             internal EncodingKind Encoding;
             internal CompressionKind Compression;
+            internal long EncodeDurationTicks;
+            internal long CompressionDurationTicks;
+            internal long EncodedTimestampTicks;
         }
     }
 }

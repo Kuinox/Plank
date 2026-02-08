@@ -21,6 +21,11 @@ public sealed class LoggerParquetLog : IParquetLog
             LogLevel.Warning,
             new EventId(3, nameof(FooterBufferCapacityGrown)),
             "Footer buffer capacity grew from {PreviousCapacity} to {NewCapacity} because {RequiredCapacity} bytes were required.");
+    static readonly Action<ILogger, int, long, long, Exception?> StreamWriteObservedEvent =
+        LoggerMessage.Define<int, long, long>(
+            LogLevel.Trace,
+            new EventId(4, nameof(StreamWriteObserved)),
+            "Stream write observed: {ByteCount} bytes, duration ticks {WriteDurationTicks}, gap ticks {WriteGapTicks}.");
 
     readonly ILogger _logger;
 
@@ -40,4 +45,20 @@ public sealed class LoggerParquetLog : IParquetLog
 
     public void FooterBufferCapacityGrown(int previousCapacity, int newCapacity, int requiredCapacity)
         => FooterBufferGrown(_logger, previousCapacity, newCapacity, requiredCapacity, null);
+
+    public void StreamWriteObserved(int byteCount, long writeDurationTicks, long writeGapTicks)
+        => StreamWriteObservedEvent(_logger, byteCount, writeDurationTicks, writeGapTicks, null);
+
+    public void ColumnWriteMetricsObserved(string columnName, int rowCount, int valueCount, int bytesWritten, long encodeTicks, long compressTicks, long waitForWriteTicks, long writeTicks)
+        => _logger.LogTrace(
+            new EventId(5, nameof(ColumnWriteMetricsObserved)),
+            "Column metrics: {ColumnName}, rows {RowCount}, values {ValueCount}, bytes {BytesWritten}, encode {EncodeTicks}, compress {CompressTicks}, wait {WaitForWriteTicks}, write {WriteTicks}.",
+            columnName,
+            rowCount,
+            valueCount,
+            bytesWritten,
+            encodeTicks,
+            compressTicks,
+            waitForWriteTicks,
+            writeTicks);
 }
