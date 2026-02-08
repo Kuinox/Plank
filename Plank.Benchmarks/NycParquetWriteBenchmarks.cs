@@ -85,6 +85,10 @@ public class NycParquetWriteBenchmarks
     };
     NycTripData _workerTrip = null!;
     Writing.RowGroupWriter _workerRowGroup;
+    int _initialCapacity;
+    int?[] _expectedVendorId = null!;
+    string?[] _expectedStoreAndFwdFlag = null!;
+    double?[] _expectedTotalAmount = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -142,10 +146,13 @@ public class NycParquetWriteBenchmarks
         _congestionSurcharge = new DataField<double?>("congestion_surcharge");
         _airportFee = new DataField<double?>("Airport_fee");
 
-        var initialCapacity = Math.Max(32 * 1024 * 1024, _context.TotalRows * 96);
-        _plankStream = new MemoryStream(capacity: initialCapacity);
-        _sharpStream = new MemoryStream(capacity: initialCapacity);
-        _parquetNetStream = new MemoryStream(capacity: initialCapacity);
+        _initialCapacity = Math.Max(32 * 1024 * 1024, _context.TotalRows * 96);
+        _plankStream = new MemoryStream(capacity: _initialCapacity);
+        _sharpStream = new MemoryStream(capacity: _initialCapacity);
+        _parquetNetStream = new MemoryStream(capacity: _initialCapacity);
+        _expectedVendorId = [.. _context.TripsByFile.SelectMany(static x => x.VendorId)];
+        _expectedStoreAndFwdFlag = [.. _context.TripsByFile.SelectMany(static x => x.StoreAndFwdFlag)];
+        _expectedTotalAmount = [.. _context.TripsByFile.SelectMany(static x => x.TotalAmount)];
 
         _sharpWriterProperties = new WriterPropertiesBuilder()
             .Compression(Compression.Uncompressed)
@@ -153,20 +160,10 @@ public class NycParquetWriteBenchmarks
             .Encoding(Encoding.Plain)
             .Build();
 
-        var rowGroupRowCountHint = (uint)_context.TripsByFile.Max(static values => values.RowCount);
-        _plankWriter = Writing.ParquetWriter.Create(_plankStream, _plankSchema, new ParquetWriterOptions
-        {
-            ExpectedRowGroupCount = checked((uint)_context.SourceFiles.Length),
-            RowGroupRowCountHint = rowGroupRowCountHint,
-            Compression = CompressionKind.None,
-            DateTimeKindHandling = DateTimeKindHandling.PreserveClockTime,
-            RowGroupOptions = new RowGroupOptions
-            {
-                MaxCompressedBytes = 32 * 1024 * 1024
-            }
-        });
+        _plankWriter = Writing.ParquetWriter.Create(_plankStream, _plankSchema, CreatePlankOptions());
         for (var i = 0; i < _workers.Length; i++)
             _workers[i] = new ColumnWorker(this, i);
+
     }
 
     [GlobalCleanup]
@@ -182,32 +179,18 @@ public class NycParquetWriteBenchmarks
     }
 
     [Benchmark(Baseline = true)]
-    public void Plank_WriteNycSchema()
+    public void Plank_WriteNycSchema_NewWriterPerInvocation()
     {
-        foreach (var trip in _context.TripsByFile)
-        {
-            var rowGroup = _plankWriter.StartRowGroup();
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[0], trip.VendorId));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[1], trip.PickupDateTime));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[2], trip.DropoffDateTime));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[3], trip.PassengerCount));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[4], trip.TripDistance));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[5], trip.RatecodeId));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[6], trip.StoreAndFwdFlag));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[7], trip.PuLocationId));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[8], trip.DoLocationId));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[9], trip.PaymentType));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[10], trip.FareAmount));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[11], trip.Extra));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[12], trip.MtaTax));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[13], trip.TipAmount));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[14], trip.TollsAmount));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[15], trip.ImprovementSurcharge));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[16], trip.TotalAmount));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[17], trip.CongestionSurcharge));
-            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[18], trip.AirportFee));
-        }
+        using var stream = new MemoryStream(capacity: _initialCapacity);
+        using var writer = Writing.ParquetWriter.Create(stream, _plankSchema, CreatePlankOptions());
+        WritePlankSchema(writer);
+        writer.CloseFile();
+    }
 
+    [Benchmark]
+    public void Plank_WriteNycSchema_ReusedWriter()
+    {
+        WritePlankSchema(_plankWriter);
         _plankWriter.CloseFile();
         _plankStream.Position = 0;
         _plankStream.SetLength(0);
@@ -338,6 +321,259 @@ public class NycParquetWriteBenchmarks
             await rowGroupWriter.WriteColumnAsync(new DataColumn(_totalAmount, trip.TotalAmount)).ConfigureAwait(false);
             await rowGroupWriter.WriteColumnAsync(new DataColumn(_congestionSurcharge, trip.CongestionSurcharge)).ConfigureAwait(false);
             await rowGroupWriter.WriteColumnAsync(new DataColumn(_airportFee, trip.AirportFee)).ConfigureAwait(false);
+        }
+    }
+
+    ParquetWriterOptions CreatePlankOptions()
+        => new()
+        {
+            ExpectedRowGroupCount = checked((uint)_context.SourceFiles.Length),
+            RowGroupRowCountHint = checked((uint)_context.TripsByFile.Max(static values => values.RowCount)),
+            Compression = CompressionKind.None,
+            DateTimeKindHandling = DateTimeKindHandling.PreserveClockTime,
+            RowGroupOptions = new RowGroupOptions
+            {
+                MaxCompressedBytes = 32 * 1024 * 1024
+            }
+        };
+
+    void WritePlankSchema(Writing.ParquetWriter writer)
+    {
+        foreach (var trip in _context.TripsByFile)
+        {
+            var rowGroup = writer.StartRowGroup();
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[0], trip.VendorId));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[1], trip.PickupDateTime));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[2], trip.DropoffDateTime));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[3], trip.PassengerCount));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[4], trip.TripDistance));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[5], trip.RatecodeId));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[6], trip.StoreAndFwdFlag));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[7], trip.PuLocationId));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[8], trip.DoLocationId));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[9], trip.PaymentType));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[10], trip.FareAmount));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[11], trip.Extra));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[12], trip.MtaTax));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[13], trip.TipAmount));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[14], trip.TollsAmount));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[15], trip.ImprovementSurcharge));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[16], trip.TotalAmount));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[17], trip.CongestionSurcharge));
+            EnsureSync(rowGroup.WriteAsync(_plankSchema.Columns[18], trip.AirportFee));
+        }
+    }
+
+    async Task ValidateBenchmarkParity()
+    {
+        var plankBytes = BuildPlankOutput();
+        var sharpBytes = BuildParquetSharpOutput();
+        var parquetNetBytes = await BuildParquetNetOutput().ConfigureAwait(false);
+
+        ValidateBasicMetadata("Plank", plankBytes);
+        ValidateBasicMetadata("ParquetSharp", sharpBytes);
+        ValidateBasicMetadata("Parquet.Net", parquetNetBytes);
+
+        ValidateRepresentativeColumns("Plank", plankBytes);
+        ValidateRepresentativeColumns("ParquetSharp", sharpBytes);
+        ValidateRepresentativeColumns("Parquet.Net", parquetNetBytes);
+    }
+
+    byte[] BuildPlankOutput()
+    {
+        using var stream = new MemoryStream(_initialCapacity);
+        using var writer = Writing.ParquetWriter.Create(stream, _plankSchema, CreatePlankOptions());
+        WritePlankSchema(writer);
+        writer.CloseFile();
+        return stream.ToArray();
+    }
+
+    byte[] BuildParquetSharpOutput()
+    {
+        using var stream = new MemoryStream(_initialCapacity);
+        using var writer = new ParquetFileWriter(stream, SharpColumns, null, _sharpWriterProperties, null, true);
+        foreach (var trip in _context.TripsByFile)
+        {
+            using var rowGroupWriter = writer.AppendRowGroup();
+            using var c0 = rowGroupWriter.NextColumn().LogicalWriter<int?>();
+            c0.WriteBatch(trip.VendorId);
+            using var c1 = rowGroupWriter.NextColumn().LogicalWriter<DateTime?>();
+            c1.WriteBatch(trip.PickupDateTime);
+            using var c2 = rowGroupWriter.NextColumn().LogicalWriter<DateTime?>();
+            c2.WriteBatch(trip.DropoffDateTime);
+            using var c3 = rowGroupWriter.NextColumn().LogicalWriter<long?>();
+            c3.WriteBatch(trip.PassengerCount);
+            using var c4 = rowGroupWriter.NextColumn().LogicalWriter<double?>();
+            c4.WriteBatch(trip.TripDistance);
+            using var c5 = rowGroupWriter.NextColumn().LogicalWriter<long?>();
+            c5.WriteBatch(trip.RatecodeId);
+            using var c6 = rowGroupWriter.NextColumn().LogicalWriter<string?>();
+            c6.WriteBatch(trip.StoreAndFwdFlag);
+            using var c7 = rowGroupWriter.NextColumn().LogicalWriter<int?>();
+            c7.WriteBatch(trip.PuLocationId);
+            using var c8 = rowGroupWriter.NextColumn().LogicalWriter<int?>();
+            c8.WriteBatch(trip.DoLocationId);
+            using var c9 = rowGroupWriter.NextColumn().LogicalWriter<long?>();
+            c9.WriteBatch(trip.PaymentType);
+            using var c10 = rowGroupWriter.NextColumn().LogicalWriter<double?>();
+            c10.WriteBatch(trip.FareAmount);
+            using var c11 = rowGroupWriter.NextColumn().LogicalWriter<double?>();
+            c11.WriteBatch(trip.Extra);
+            using var c12 = rowGroupWriter.NextColumn().LogicalWriter<double?>();
+            c12.WriteBatch(trip.MtaTax);
+            using var c13 = rowGroupWriter.NextColumn().LogicalWriter<double?>();
+            c13.WriteBatch(trip.TipAmount);
+            using var c14 = rowGroupWriter.NextColumn().LogicalWriter<double?>();
+            c14.WriteBatch(trip.TollsAmount);
+            using var c15 = rowGroupWriter.NextColumn().LogicalWriter<double?>();
+            c15.WriteBatch(trip.ImprovementSurcharge);
+            using var c16 = rowGroupWriter.NextColumn().LogicalWriter<double?>();
+            c16.WriteBatch(trip.TotalAmount);
+            using var c17 = rowGroupWriter.NextColumn().LogicalWriter<double?>();
+            c17.WriteBatch(trip.CongestionSurcharge);
+            using var c18 = rowGroupWriter.NextColumn().LogicalWriter<double?>();
+            c18.WriteBatch(trip.AirportFee);
+        }
+
+        writer.Close();
+        return stream.ToArray();
+    }
+
+    async Task<byte[]> BuildParquetNetOutput()
+    {
+        using var stream = new MemoryStream(_initialCapacity);
+        var schema = new ParquetSchema(
+            _vendorId, _pickupDateTime, _dropoffDateTime, _passengerCount, _tripDistance, _ratecodeId, _storeAndFwdFlag,
+            _puLocationId, _doLocationId, _paymentType, _fareAmount, _extra, _mtaTax, _tipAmount, _tollsAmount,
+            _improvementSurcharge, _totalAmount, _congestionSurcharge, _airportFee);
+        await using var writer = await Parquet.ParquetWriter.CreateAsync(schema, stream, ParquetNetOptions).ConfigureAwait(false);
+        writer.CompressionMethod = CompressionMethod.None;
+        foreach (var trip in _context.TripsByFile)
+        {
+            using var rowGroupWriter = writer.CreateRowGroup();
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_vendorId, trip.VendorId)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_pickupDateTime, trip.PickupDateTime)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_dropoffDateTime, trip.DropoffDateTime)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_passengerCount, trip.PassengerCount)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_tripDistance, trip.TripDistance)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_ratecodeId, trip.RatecodeId)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_storeAndFwdFlag, trip.StoreAndFwdFlag)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_puLocationId, trip.PuLocationId)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_doLocationId, trip.DoLocationId)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_paymentType, trip.PaymentType)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_fareAmount, trip.FareAmount)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_extra, trip.Extra)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_mtaTax, trip.MtaTax)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_tipAmount, trip.TipAmount)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_tollsAmount, trip.TollsAmount)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_improvementSurcharge, trip.ImprovementSurcharge)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_totalAmount, trip.TotalAmount)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_congestionSurcharge, trip.CongestionSurcharge)).ConfigureAwait(false);
+            await rowGroupWriter.WriteColumnAsync(new DataColumn(_airportFee, trip.AirportFee)).ConfigureAwait(false);
+        }
+
+        return stream.ToArray();
+    }
+
+    void ValidateBasicMetadata(string name, byte[] payload)
+    {
+        var rowGroupCount = WithReaderFromPayload(payload, static reader => checked((int)reader.FileMetaData.NumRowGroups));
+        var rowCount = WithReaderFromPayload(payload, static reader => reader.FileMetaData.NumRows);
+        if (rowGroupCount != _context.TripsByFile.Length)
+            throw new InvalidOperationException($"{name} wrote {rowGroupCount} row groups, expected {_context.TripsByFile.Length}.");
+
+        if (rowCount != _context.TotalRows)
+            throw new InvalidOperationException($"{name} wrote {rowCount} rows, expected {_context.TotalRows}.");
+    }
+
+    void ValidateRepresentativeColumns(string name, byte[] payload)
+    {
+        var vendor = ReadAllNullableInt32(payload, columnIndex: 0);
+        var storeAndFwd = ReadAllNullableString(payload, columnIndex: 6);
+        var totalAmount = ReadAllNullableDouble(payload, columnIndex: 16);
+        if (!vendor.SequenceEqual(_expectedVendorId))
+            throw new InvalidOperationException($"{name} output mismatch on VendorID.");
+        if (!storeAndFwd.SequenceEqual(_expectedStoreAndFwdFlag))
+            throw new InvalidOperationException($"{name} output mismatch on store_and_fwd_flag.");
+        if (!totalAmount.SequenceEqual(_expectedTotalAmount))
+            throw new InvalidOperationException($"{name} output mismatch on total_amount.");
+    }
+
+    static int?[] ReadAllNullableInt32(byte[] payload, int columnIndex)
+    {
+        return WithReaderFromPayload<int?[]>(payload, reader =>
+        {
+            var values = new List<int?>();
+            var rowGroups = checked((int)reader.FileMetaData.NumRowGroups);
+            for (var i = 0; i < rowGroups; i++)
+            {
+                using var rowGroup = reader.RowGroup(i);
+                var rowCount = checked((int)rowGroup.MetaData.NumRows);
+                using var column = rowGroup.Column(columnIndex).LogicalReader<int?>();
+                values.AddRange(column.ReadAll(rowCount));
+            }
+
+            return [.. values];
+        });
+    }
+
+    static string?[] ReadAllNullableString(byte[] payload, int columnIndex)
+    {
+        return WithReaderFromPayload<string?[]>(payload, reader =>
+        {
+            var values = new List<string?>();
+            var rowGroups = checked((int)reader.FileMetaData.NumRowGroups);
+            for (var i = 0; i < rowGroups; i++)
+            {
+                using var rowGroup = reader.RowGroup(i);
+                var rowCount = checked((int)rowGroup.MetaData.NumRows);
+                using var column = rowGroup.Column(columnIndex).LogicalReader<string?>();
+                values.AddRange(column.ReadAll(rowCount));
+            }
+
+            return [.. values];
+        });
+    }
+
+    static double?[] ReadAllNullableDouble(byte[] payload, int columnIndex)
+    {
+        return WithReaderFromPayload<double?[]>(payload, reader =>
+        {
+            var values = new List<double?>();
+            var rowGroups = checked((int)reader.FileMetaData.NumRowGroups);
+            for (var i = 0; i < rowGroups; i++)
+            {
+                using var rowGroup = reader.RowGroup(i);
+                var rowCount = checked((int)rowGroup.MetaData.NumRows);
+                using var column = rowGroup.Column(columnIndex).LogicalReader<double?>();
+                values.AddRange(column.ReadAll(rowCount));
+            }
+
+            return [.. values];
+        });
+    }
+
+    static T WithReaderFromPayload<T>(byte[] payload, Func<ParquetFileReader, T> func)
+    {
+        if (payload.Length < 8)
+            throw new InvalidOperationException($"Payload is too small to be parquet: {payload.Length} bytes.");
+        if (!(payload[0] == (byte)'P' && payload[1] == (byte)'A' && payload[2] == (byte)'R' && payload[3] == (byte)'1'))
+            throw new InvalidOperationException("Payload is missing PAR1 header magic.");
+        var tail = payload.AsSpan(payload.Length - 4, 4);
+        if (!(tail[0] == (byte)'P' && tail[1] == (byte)'A' && tail[2] == (byte)'R' && tail[3] == (byte)'1'))
+            throw new InvalidOperationException("Payload is missing PAR1 footer magic.");
+
+        var path = Path.Combine(Path.GetTempPath(), $"plank-bench-validate-{Guid.NewGuid():N}.parquet");
+        try
+        {
+            File.WriteAllBytes(path, payload);
+            using var reader = new ParquetFileReader(path);
+            return func(reader);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
         }
     }
 
