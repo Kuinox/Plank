@@ -2,6 +2,23 @@ namespace Plank.Writing;
 
 static partial class ColumnCodec
 {
+    interface IOptionalLevelTraits<T>
+    {
+        static abstract bool IsDefined(T value);
+    }
+
+    readonly struct NullableStructLevelTraits<T> : IOptionalLevelTraits<T?> where T : struct
+    {
+        public static bool IsDefined(T? value)
+            => value.HasValue;
+    }
+
+    readonly struct NullableReferenceLevelTraits<T> : IOptionalLevelTraits<T?> where T : class
+    {
+        public static bool IsDefined(T? value)
+            => value is not null;
+    }
+
     internal static int GetDefinitionLevelsByteCount(int valueCount)
     {
         if (valueCount == 0)
@@ -22,7 +39,8 @@ static partial class ColumnCodec
         return checked(GetVarUInt32Length(header) + (groupCount * bitWidth));
     }
 
-    static int WriteDefinitionLevels<T>(ReadOnlySpan<T?> values, Span<byte> destination) where T : struct
+    static int WriteDefinitionLevelsCore<T, TTraits>(ReadOnlySpan<T> values, Span<byte> destination)
+        where TTraits : struct, IOptionalLevelTraits<T>
     {
         if (values.Length == 0)
             return 0;
@@ -39,7 +57,7 @@ static partial class ColumnCodec
                 var index = groupStart + bit;
                 if (index >= values.Length)
                     break;
-                if (values[index].HasValue)
+                if (TTraits.IsDefined(values[index]))
                     packed |= (byte)(1 << bit);
             }
 
@@ -48,33 +66,12 @@ static partial class ColumnCodec
 
         return offset;
     }
+
+    static int WriteDefinitionLevels<T>(ReadOnlySpan<T?> values, Span<byte> destination) where T : struct
+        => WriteDefinitionLevelsCore<T?, NullableStructLevelTraits<T>>(values, destination);
 
     static int WriteDefinitionLevels<T>(ReadOnlySpan<T?> values, Span<byte> destination) where T : class
-    {
-        if (values.Length == 0)
-            return 0;
-
-        var groupCount = (values.Length + 7) >> 3;
-        var header = (uint)((groupCount << 1) | 1);
-        var offset = WriteVarUInt32(header, destination);
-        for (var group = 0; group < groupCount; group++)
-        {
-            byte packed = 0;
-            var groupStart = group << 3;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                var index = groupStart + bit;
-                if (index >= values.Length)
-                    break;
-                if (values[index] is not null)
-                    packed |= (byte)(1 << bit);
-            }
-
-            destination[offset++] = packed;
-        }
-
-        return offset;
-    }
+        => WriteDefinitionLevelsCore<T?, NullableReferenceLevelTraits<T>>(values, destination);
 
     static void WriteAllDefinedLevels(int valueCount, Span<byte> destination)
     {
@@ -217,8 +214,9 @@ static partial class ColumnCodec
         return offset;
     }
 
-    static int WriteRepeatedDefinitionLevelsOptional<T>(ReadOnlySpan<T?[]> rows, int levelValueCount,
-        Span<byte> destination) where T : struct
+    static int WriteRepeatedDefinitionLevelsOptionalCore<T, TTraits>(ReadOnlySpan<T[]> rows, int levelValueCount,
+        Span<byte> destination)
+        where TTraits : struct, IOptionalLevelTraits<T>
     {
         if (levelValueCount == 0)
             return 0;
@@ -246,7 +244,7 @@ static partial class ColumnCodec
 
             foreach (var t in row)
             {
-                var level = t.HasValue ? 2 : 1;
+                var level = TTraits.IsDefined(t) ? 2 : 1;
                 packed |= (ushort)(level << (indexInGroup * 2));
                 indexInGroup++;
                 if (indexInGroup != 8)
@@ -267,55 +265,14 @@ static partial class ColumnCodec
     }
 
     static int WriteRepeatedDefinitionLevelsOptional<T>(ReadOnlySpan<T?[]> rows, int levelValueCount,
+        Span<byte> destination) where T : struct
+        => WriteRepeatedDefinitionLevelsOptionalCore<T?, NullableStructLevelTraits<T>>(rows, levelValueCount,
+            destination);
+
+    static int WriteRepeatedDefinitionLevelsOptional<T>(ReadOnlySpan<T?[]> rows, int levelValueCount,
         Span<byte> destination) where T : class
-    {
-        if (levelValueCount == 0)
-            return 0;
-
-        var groupCount = (levelValueCount + 7) >> 3;
-        var header = (uint)((groupCount << 1) | 1);
-        var offset = WriteVarUInt32(header, destination);
-        ushort packed = 0;
-        var indexInGroup = 0;
-
-        foreach (var row in rows)
-        {
-            if (row.Length == 0)
-            {
-                indexInGroup++;
-                if (indexInGroup != 8)
-                    continue;
-
-                destination[offset++] = (byte)packed;
-                destination[offset++] = (byte)(packed >> 8);
-                packed = 0;
-                indexInGroup = 0;
-                continue;
-            }
-
-            foreach (var t in row)
-            {
-                var level = t is null ? 1 : 2;
-                packed |= (ushort)(level << (indexInGroup * 2));
-                indexInGroup++;
-                if (indexInGroup != 8)
-                    continue;
-
-                destination[offset++] = (byte)packed;
-                destination[offset++] = (byte)(packed >> 8);
-                packed = 0;
-                indexInGroup = 0;
-            }
-        }
-
-        if (indexInGroup > 0)
-        {
-            destination[offset++] = (byte)packed;
-            destination[offset++] = (byte)(packed >> 8);
-        }
-
-        return offset;
-    }
+        => WriteRepeatedDefinitionLevelsOptionalCore<T?, NullableReferenceLevelTraits<T>>(rows, levelValueCount,
+            destination);
 
     static int WriteDefinitionLevels<T>(ReadOnlySpan<T?> values, ColumnBufferWriter writer) where T : struct
     {
