@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Text;
 using Plank.Schema;
@@ -68,6 +69,101 @@ static partial class ColumnCodec
         return state.EncodedBufferOwner is not null ?
             state.EncodedBufferOwner.Memory.Length
             : 0;
+    }
+
+    static void EnsureDestinationCapacity(Span<byte> destination, int requiredByteCount, int maxEncodedBytes,
+        string columnName)
+    {
+        if (requiredByteCount <= 0 || !destination.IsEmpty)
+            return;
+
+        throw new InvalidOperationException(
+            $"Column '{columnName}' requires {requiredByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+    }
+
+    static ColumnBufferWriter CreateBufferWriter(ref ParquetWriter.RowGroupState.ColumnState state, int maxEncodedBytes,
+        string columnName)
+    {
+        if (maxEncodedBytes <= 0)
+            throw new InvalidOperationException(
+                $"Column '{columnName}' has no encoded buffer capacity.");
+
+        if (state.EncodedBuffer is not null)
+        {
+            if (state.EncodedBuffer.Length < maxEncodedBytes)
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' requires {maxEncodedBytes} bytes but encoded buffer capacity is {state.EncodedBuffer.Length}.");
+            return new ColumnBufferWriter(state.EncodedBuffer.AsMemory(0, maxEncodedBytes), columnName);
+        }
+
+        if (state.EncodedBufferOwner is null)
+            throw new InvalidOperationException($"Column '{columnName}' has no encoded buffer.");
+
+        if (state.EncodedBufferOwner.Memory.Length < maxEncodedBytes)
+            throw new InvalidOperationException(
+                $"Column '{columnName}' requires {maxEncodedBytes} bytes but encoded buffer capacity is {state.EncodedBufferOwner.Memory.Length}.");
+
+        return new ColumnBufferWriter(state.EncodedBufferOwner.Memory[..maxEncodedBytes], columnName);
+    }
+
+    sealed class ColumnBufferWriter : IBufferWriter<byte>
+    {
+        readonly Memory<byte> _buffer;
+        readonly string _columnName;
+        int _written;
+
+        internal ColumnBufferWriter(Memory<byte> buffer, string columnName)
+        {
+            _buffer = buffer;
+            _columnName = columnName;
+            _written = 0;
+        }
+
+        internal int WrittenCount
+            => _written;
+
+        public void Advance(int count)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(count);
+            var next = checked(_written + count);
+            if ((uint)next > (uint)_buffer.Length)
+                throw new InvalidOperationException(
+                    $"Column '{_columnName}' requires more than {_buffer.Length} bytes but encoded buffer capacity is {_buffer.Length}.");
+            _written = next;
+        }
+
+        public Memory<byte> GetMemory(int sizeHint = 0)
+        {
+            if (sizeHint < 0)
+                throw new ArgumentOutOfRangeException(nameof(sizeHint), sizeHint, "Size hint must be non-negative.");
+
+            if (sizeHint == 0)
+                sizeHint = 1;
+
+            var remaining = _buffer.Length - _written;
+            if (sizeHint > remaining)
+                throw new InvalidOperationException(
+                    $"Column '{_columnName}' requires more than {_buffer.Length} bytes but encoded buffer capacity is {_buffer.Length}.");
+
+            return _buffer.Slice(_written, remaining);
+        }
+
+        public Span<byte> GetSpan(int sizeHint = 0)
+            => GetMemory(sizeHint).Span;
+    }
+
+    static void WriteInt32(ColumnBufferWriter writer, int value)
+    {
+        var destination = writer.GetSpan(sizeof(int));
+        BinaryPrimitives.WriteInt32LittleEndian(destination, value);
+        writer.Advance(sizeof(int));
+    }
+
+    static void WriteInt64(ColumnBufferWriter writer, long value)
+    {
+        var destination = writer.GetSpan(sizeof(long));
+        BinaryPrimitives.WriteInt64LittleEndian(destination, value);
+        writer.Advance(sizeof(long));
     }
 
     internal static long ToUnixMicroseconds(DateTime value, DateTimeKindHandling handling, string columnName)

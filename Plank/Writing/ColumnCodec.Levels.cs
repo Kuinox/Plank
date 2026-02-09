@@ -22,33 +22,6 @@ static partial class ColumnCodec
         return checked(GetVarUInt32Length(header) + (groupCount * bitWidth));
     }
 
-    static int WriteDefinitionLevels(ReadOnlySpan<int?> values, Span<byte> destination)
-    {
-        if (values.Length == 0)
-            return 0;
-
-        var groupCount = (values.Length + 7) >> 3;
-        var header = (uint)((groupCount << 1) | 1);
-        var offset = WriteVarUInt32(header, destination);
-        for (var group = 0; group < groupCount; group++)
-        {
-            byte packed = 0;
-            var groupStart = group << 3;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                var index = groupStart + bit;
-                if (index >= values.Length)
-                    break;
-                if (values[index].HasValue)
-                    packed |= (byte)(1 << bit);
-            }
-
-            destination[offset++] = packed;
-        }
-
-        return offset;
-    }
-
     static int WriteDefinitionLevels<T>(ReadOnlySpan<T?> values, Span<byte> destination) where T : struct
     {
         if (values.Length == 0)
@@ -76,34 +49,7 @@ static partial class ColumnCodec
         return offset;
     }
 
-    static int WriteDefinitionLevels(ReadOnlySpan<string?> values, Span<byte> destination)
-    {
-        if (values.Length == 0)
-            return 0;
-
-        var groupCount = (values.Length + 7) >> 3;
-        var header = (uint)((groupCount << 1) | 1);
-        var offset = WriteVarUInt32(header, destination);
-        for (var group = 0; group < groupCount; group++)
-        {
-            byte packed = 0;
-            var groupStart = group << 3;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                var index = groupStart + bit;
-                if (index >= values.Length)
-                    break;
-                if (values[index] is not null)
-                    packed |= (byte)(1 << bit);
-            }
-
-            destination[offset++] = packed;
-        }
-
-        return offset;
-    }
-
-    static int WriteDefinitionLevels(ReadOnlySpan<byte[]?> values, Span<byte> destination)
+    static int WriteDefinitionLevels<T>(ReadOnlySpan<T?> values, Span<byte> destination) where T : class
     {
         if (values.Length == 0)
             return 0;
@@ -271,8 +217,8 @@ static partial class ColumnCodec
         return offset;
     }
 
-    static int WriteRepeatedDefinitionLevelsOptionalInt32(ReadOnlySpan<int?[]> rows, int levelValueCount,
-        Span<byte> destination)
+    static int WriteRepeatedDefinitionLevelsOptional<T>(ReadOnlySpan<T?[]> rows, int levelValueCount,
+        Span<byte> destination) where T : struct
     {
         if (levelValueCount == 0)
             return 0;
@@ -320,8 +266,8 @@ static partial class ColumnCodec
         return offset;
     }
 
-    static int WriteRepeatedDefinitionLevelsOptionalString(ReadOnlySpan<string?[]> rows, int levelValueCount,
-        Span<byte> destination)
+    static int WriteRepeatedDefinitionLevelsOptional<T>(ReadOnlySpan<T?[]> rows, int levelValueCount,
+        Span<byte> destination) where T : class
     {
         if (levelValueCount == 0)
             return 0;
@@ -371,53 +317,66 @@ static partial class ColumnCodec
         return offset;
     }
 
-    static int WriteRepeatedDefinitionLevelsOptionalByteArray(ReadOnlySpan<byte[]?[]> rows, int levelValueCount,
-        Span<byte> destination)
+    static int WriteDefinitionLevels<T>(ReadOnlySpan<T?> values, ColumnBufferWriter writer) where T : struct
     {
-        if (levelValueCount == 0)
+        var destination = writer.GetSpan(GetDefinitionLevelsByteCount(values.Length));
+        var written = WriteDefinitionLevels(values, destination);
+        writer.Advance(written);
+        return written;
+    }
+
+    static int WriteDefinitionLevels<T>(ReadOnlySpan<T?> values, ColumnBufferWriter writer) where T : class
+    {
+        var destination = writer.GetSpan(GetDefinitionLevelsByteCount(values.Length));
+        var written = WriteDefinitionLevels(values, destination);
+        writer.Advance(written);
+        return written;
+    }
+
+    static int WriteAllDefinedLevels(int valueCount, ColumnBufferWriter writer)
+    {
+        if (valueCount == 0)
             return 0;
 
-        var groupCount = (levelValueCount + 7) >> 3;
-        var header = (uint)((groupCount << 1) | 1);
-        var offset = WriteVarUInt32(header, destination);
-        ushort packed = 0;
-        var indexInGroup = 0;
+        var byteCount = GetDefinitionLevelsByteCount(valueCount);
+        var destination = writer.GetSpan(byteCount);
+        WriteAllDefinedLevels(valueCount, destination);
+        writer.Advance(byteCount);
+        return byteCount;
+    }
 
-        foreach (var row in rows)
-        {
-            if (row.Length == 0)
-            {
-                indexInGroup++;
-                if (indexInGroup != 8)
-                    continue;
+    static int WriteRepetitionLevels<T>(ReadOnlySpan<T[]> rows, int levelValueCount, ColumnBufferWriter writer)
+    {
+        var destination = writer.GetSpan(GetDefinitionLevelsByteCount(levelValueCount));
+        var written = WriteRepetitionLevels(rows, levelValueCount, destination);
+        writer.Advance(written);
+        return written;
+    }
 
-                destination[offset++] = (byte)packed;
-                destination[offset++] = (byte)(packed >> 8);
-                packed = 0;
-                indexInGroup = 0;
-                continue;
-            }
+    static int WriteRepeatedDefinitionLevels<T>(ReadOnlySpan<T[]> rows, int levelValueCount, ColumnBufferWriter writer)
+    {
+        var destination = writer.GetSpan(GetDefinitionLevelsByteCount(levelValueCount));
+        var written = WriteRepeatedDefinitionLevels(rows, levelValueCount, destination);
+        writer.Advance(written);
+        return written;
+    }
 
-            foreach (var t in row)
-            {
-                var level = t is null ? 1 : 2;
-                packed |= (ushort)(level << (indexInGroup * 2));
-                indexInGroup++;
-                if (indexInGroup != 8)
-                    continue;
+    static int WriteRepeatedDefinitionLevelsOptional<T>(ReadOnlySpan<T?[]> rows, int levelValueCount,
+        ColumnBufferWriter writer) where T : struct
+    {
+        var destination = writer.GetSpan(GetLevelByteCount(levelValueCount, 2));
+        var written = WriteRepeatedDefinitionLevelsOptional(rows, levelValueCount, destination);
+        writer.Advance(written);
+        return written;
+    }
 
-                destination[offset++] = (byte)packed;
-                destination[offset++] = (byte)(packed >> 8);
-                packed = 0;
-                indexInGroup = 0;
-            }
-        }
-
-        if (indexInGroup <= 0) return offset;
-        destination[offset++] = (byte)packed;
-        destination[offset++] = (byte)(packed >> 8);
-
-        return offset;
+    static int WriteRepeatedDefinitionLevelsOptional<T>(ReadOnlySpan<T?[]> rows, int levelValueCount,
+        ColumnBufferWriter writer) where T : class
+    {
+        var destination = writer.GetSpan(GetLevelByteCount(levelValueCount, 2));
+        var written = WriteRepeatedDefinitionLevelsOptional(rows, levelValueCount, destination);
+        writer.Advance(written);
+        return written;
     }
 
 }

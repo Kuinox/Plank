@@ -1,8 +1,119 @@
 using System.Buffers.Binary;
+
 namespace Plank.Writing;
 
 static partial class ColumnCodec
 {
+    interface IRepeatedScalarWriter<T>
+    {
+        static abstract int ValueSize { get; }
+        static abstract void Write(T value, Span<byte> destination, ref int offset,
+            DateTimeKindHandling dateTimeKindHandling, string columnName);
+    }
+
+    readonly struct RepeatedInt32Writer : IRepeatedScalarWriter<int>
+    {
+        public static int ValueSize => sizeof(int);
+
+        public static void Write(int value, Span<byte> destination, ref int offset,
+            DateTimeKindHandling dateTimeKindHandling, string columnName)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(int)), value);
+            offset += sizeof(int);
+        }
+    }
+
+    readonly struct RepeatedDateOnlyWriter : IRepeatedScalarWriter<DateOnly>
+    {
+        public static int ValueSize => sizeof(int);
+
+        public static void Write(DateOnly value, Span<byte> destination, ref int offset,
+            DateTimeKindHandling dateTimeKindHandling, string columnName)
+        {
+            var daysSinceEpoch = checked(value.DayNumber - UnixEpochDayNumber);
+            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(int)), daysSinceEpoch);
+            offset += sizeof(int);
+        }
+    }
+
+    readonly struct RepeatedInt64Writer : IRepeatedScalarWriter<long>
+    {
+        public static int ValueSize => sizeof(long);
+
+        public static void Write(long value, Span<byte> destination, ref int offset,
+            DateTimeKindHandling dateTimeKindHandling, string columnName)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(long)), value);
+            offset += sizeof(long);
+        }
+    }
+
+    readonly struct RepeatedDateTimeWriter : IRepeatedScalarWriter<DateTime>
+    {
+        public static int ValueSize => sizeof(long);
+
+        public static void Write(DateTime value, Span<byte> destination, ref int offset,
+            DateTimeKindHandling dateTimeKindHandling, string columnName)
+        {
+            var unixMicros = ToUnixMicroseconds(value, dateTimeKindHandling, columnName);
+            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(long)), unixMicros);
+            offset += sizeof(long);
+        }
+    }
+
+    readonly struct RepeatedDateTimeOffsetWriter : IRepeatedScalarWriter<DateTimeOffset>
+    {
+        public static int ValueSize => sizeof(long);
+
+        public static void Write(DateTimeOffset value, Span<byte> destination, ref int offset,
+            DateTimeKindHandling dateTimeKindHandling, string columnName)
+        {
+            var deltaTicks = checked(value.UtcTicks - UnixEpochTicks);
+            var unixMicros = deltaTicks / TicksPerMicrosecond;
+            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(long)), unixMicros);
+            offset += sizeof(long);
+        }
+    }
+
+    readonly struct RepeatedTimeOnlyWriter : IRepeatedScalarWriter<TimeOnly>
+    {
+        public static int ValueSize => sizeof(long);
+
+        public static void Write(TimeOnly value, Span<byte> destination, ref int offset,
+            DateTimeKindHandling dateTimeKindHandling, string columnName)
+        {
+            var micros = value.Ticks / TicksPerMicrosecond;
+            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(long)), micros);
+            offset += sizeof(long);
+        }
+    }
+
+    readonly struct RepeatedFloatWriter : IRepeatedScalarWriter<float>
+    {
+        public static int ValueSize => sizeof(float);
+
+        public static void Write(float value, Span<byte> destination, ref int offset,
+            DateTimeKindHandling dateTimeKindHandling, string columnName)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(float)),
+                BitConverter.SingleToInt32Bits(value));
+            offset += sizeof(float);
+        }
+    }
+
+    readonly struct RepeatedDoubleWriter : IRepeatedScalarWriter<double>
+    {
+        public static int ValueSize => sizeof(double);
+
+        public static void Write(double value, Span<byte> destination, ref int offset,
+            DateTimeKindHandling dateTimeKindHandling, string columnName)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(double)),
+                BitConverter.DoubleToInt64Bits(value));
+            offset += sizeof(double);
+        }
+    }
+
     static void SetRepeatedLayout(ref ParquetWriter.RowGroupState.ColumnState state, int rowCount, int levelValueCount,
         int nullCount, int totalByteCount, int repetitionByteCount, int definitionByteCount)
     {
@@ -15,78 +126,50 @@ static partial class ColumnCodec
         state.DefinitionLevelsByteLength = definitionByteCount;
     }
 
-    static void EncodeRepeatedInt32(ReadOnlySpan<int[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
+    static void EncodeRepeatedRequired<T, TWriter>(ReadOnlySpan<T[]> rows,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes,
+        DateTimeKindHandling dateTimeKindHandling)
+        where TWriter : struct, IRepeatedScalarWriter<T>
     {
+        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
         var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
         var levelValueCount = checked(dataValueCount + emptyRowCount);
         var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
         var definitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var valuesByteCount = checked(dataValueCount * sizeof(int));
-        var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
-
-        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
+        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, writer);
         if (repetitionWritten != repetitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
-        var definitionWritten =
-            WriteRepeatedDefinitionLevels(rows, levelValueCount, destination[repetitionByteCount..]);
+        var definitionWritten = WriteRepeatedDefinitionLevels(rows, levelValueCount, writer);
         if (definitionWritten != definitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
 
-        var offset = repetitionByteCount + definitionByteCount;
         foreach (var row in rows)
-        foreach (var t in row)
+        foreach (var value in row)
         {
-            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(int)), t);
-            offset += sizeof(int);
+            var destination = writer.GetSpan(TWriter.ValueSize);
+            var offset = 0;
+            TWriter.Write(value, destination, ref offset, dateTimeKindHandling, columnName);
+            writer.Advance(offset);
         }
 
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, totalByteCount, repetitionByteCount,
+        SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, writer.WrittenCount, repetitionByteCount,
             definitionByteCount);
     }
+
+    static void EncodeRepeatedInt32(ReadOnlySpan<int[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
+        string columnName, int maxEncodedBytes)
+        => EncodeRepeatedRequired<int, RepeatedInt32Writer>(rows, ref state, columnName, maxEncodedBytes,
+            DateTimeKindHandling.None);
 
     static void EncodeRepeatedDateOnly(ReadOnlySpan<DateOnly[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
-    {
-        var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
-        var levelValueCount = checked(dataValueCount + emptyRowCount);
-        var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var definitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var valuesByteCount = checked(dataValueCount * sizeof(int));
-        var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
-
-        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
-        if (repetitionWritten != repetitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
-        var definitionWritten =
-            WriteRepeatedDefinitionLevels(rows, levelValueCount, destination[repetitionByteCount..]);
-        if (definitionWritten != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
-        var offset = repetitionByteCount + definitionByteCount;
-        foreach (var row in rows)
-        foreach (var t in row)
-        {
-            var daysSinceEpoch = checked(t.DayNumber - UnixEpochDayNumber);
-            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(int)), daysSinceEpoch);
-            offset += sizeof(int);
-        }
-
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, totalByteCount, repetitionByteCount,
-            definitionByteCount);
-    }
+        => EncodeRepeatedRequired<DateOnly, RepeatedDateOnlyWriter>(rows, ref state, columnName, maxEncodedBytes,
+            DateTimeKindHandling.None);
 
     static void EncodeRepeatedNullableInt32(ReadOnlySpan<int?[]> rows,
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
     {
+        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
         var elementCount = 0;
         var emptyRowCount = 0;
         var nonNullCount = 0;
@@ -105,247 +188,59 @@ static partial class ColumnCodec
         var levelValueCount = checked(elementCount + emptyRowCount);
         var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
         var definitionByteCount = GetLevelByteCount(levelValueCount, 2);
-        var valuesByteCount = checked(nonNullCount * sizeof(int));
-        var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
-
-        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
+        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, writer);
         if (repetitionWritten != repetitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
-        var definitionWritten =
-            WriteRepeatedDefinitionLevelsOptionalInt32(rows, levelValueCount, destination[repetitionByteCount..]);
+        var definitionWritten = WriteRepeatedDefinitionLevelsOptional(rows, levelValueCount, writer);
         if (definitionWritten != definitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
 
-        var offset = repetitionByteCount + definitionByteCount;
         foreach (var row in rows)
         foreach (var value in row)
         {
             if (!value.HasValue)
                 continue;
 
-            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(int)), value.Value);
-            offset += sizeof(int);
+            WriteInt32(writer, value.Value);
         }
 
         var nullCount = checked(levelValueCount - nonNullCount);
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, nullCount, totalByteCount, repetitionByteCount,
+        SetRepeatedLayout(ref state, rows.Length, levelValueCount, nullCount, writer.WrittenCount, repetitionByteCount,
             definitionByteCount);
     }
 
     static void EncodeRepeatedInt64(ReadOnlySpan<long[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
-    {
-        var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
-        var levelValueCount = checked(dataValueCount + emptyRowCount);
-        var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var definitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var valuesByteCount = checked(dataValueCount * sizeof(long));
-        var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
-
-        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
-        if (repetitionWritten != repetitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
-        var definitionWritten =
-            WriteRepeatedDefinitionLevels(rows, levelValueCount, destination[repetitionByteCount..]);
-        if (definitionWritten != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
-        var offset = repetitionByteCount + definitionByteCount;
-        foreach (var row in rows)
-        foreach (var t in row)
-        {
-            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(long)), t);
-            offset += sizeof(long);
-        }
-
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, totalByteCount, repetitionByteCount,
-            definitionByteCount);
-    }
+        => EncodeRepeatedRequired<long, RepeatedInt64Writer>(rows, ref state, columnName, maxEncodedBytes,
+            DateTimeKindHandling.None);
 
     static void EncodeRepeatedDateTime(ReadOnlySpan<DateTime[]> rows, DateTimeKindHandling dateTimeKindHandling,
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
     {
-        var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
-        var levelValueCount = checked(dataValueCount + emptyRowCount);
-        var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var definitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var valuesByteCount = checked(dataValueCount * sizeof(long));
-        var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
-
         ValidateDateTimeHandling(dateTimeKindHandling, columnName);
-        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
-        if (repetitionWritten != repetitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
-        var definitionWritten =
-            WriteRepeatedDefinitionLevels(rows, levelValueCount, destination[repetitionByteCount..]);
-        if (definitionWritten != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
-        var offset = repetitionByteCount + definitionByteCount;
-        foreach (var row in rows)
-        foreach (var t in row)
-        {
-            var unixMicros = ToUnixMicroseconds(t, dateTimeKindHandling, columnName);
-            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(long)), unixMicros);
-            offset += sizeof(long);
-        }
-
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, totalByteCount, repetitionByteCount,
-            definitionByteCount);
+        EncodeRepeatedRequired<DateTime, RepeatedDateTimeWriter>(rows, ref state, columnName, maxEncodedBytes,
+            dateTimeKindHandling);
     }
 
     static void EncodeRepeatedDateTimeOffset(ReadOnlySpan<DateTimeOffset[]> rows,
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
-    {
-        var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
-        var levelValueCount = checked(dataValueCount + emptyRowCount);
-        var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var definitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var valuesByteCount = checked(dataValueCount * sizeof(long));
-        var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
-
-        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
-        if (repetitionWritten != repetitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
-        var definitionWritten =
-            WriteRepeatedDefinitionLevels(rows, levelValueCount, destination[repetitionByteCount..]);
-        if (definitionWritten != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
-        var offset = repetitionByteCount + definitionByteCount;
-        foreach (var row in rows)
-        foreach (var t in row)
-        {
-            var deltaTicks = checked(t.UtcTicks - UnixEpochTicks);
-            var unixMicros = deltaTicks / TicksPerMicrosecond;
-            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(long)), unixMicros);
-            offset += sizeof(long);
-        }
-
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, totalByteCount, repetitionByteCount,
-            definitionByteCount);
-    }
+        => EncodeRepeatedRequired<DateTimeOffset, RepeatedDateTimeOffsetWriter>(rows, ref state, columnName,
+            maxEncodedBytes, DateTimeKindHandling.None);
 
     static void EncodeRepeatedTimeOnly(ReadOnlySpan<TimeOnly[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
-    {
-        var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
-        var levelValueCount = checked(dataValueCount + emptyRowCount);
-        var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var definitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var valuesByteCount = checked(dataValueCount * sizeof(long));
-        var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
-
-        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
-        if (repetitionWritten != repetitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
-        var definitionWritten =
-            WriteRepeatedDefinitionLevels(rows, levelValueCount, destination[repetitionByteCount..]);
-        if (definitionWritten != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
-        var offset = repetitionByteCount + definitionByteCount;
-        foreach (var row in rows)
-        foreach (var t in row)
-        {
-            var micros = t.Ticks / TicksPerMicrosecond;
-            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(long)), micros);
-            offset += sizeof(long);
-        }
-
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, totalByteCount, repetitionByteCount,
-            definitionByteCount);
-    }
+        => EncodeRepeatedRequired<TimeOnly, RepeatedTimeOnlyWriter>(rows, ref state, columnName, maxEncodedBytes,
+            DateTimeKindHandling.None);
 
     static void EncodeRepeatedFloat(ReadOnlySpan<float[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
-    {
-        var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
-        var levelValueCount = checked(dataValueCount + emptyRowCount);
-        var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var definitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var valuesByteCount = checked(dataValueCount * sizeof(float));
-        var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
-
-        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
-        if (repetitionWritten != repetitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
-        var definitionWritten =
-            WriteRepeatedDefinitionLevels(rows, levelValueCount, destination[repetitionByteCount..]);
-        if (definitionWritten != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
-        var offset = repetitionByteCount + definitionByteCount;
-        foreach (var row in rows)
-        foreach (var t in row)
-        {
-            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(float)),
-                BitConverter.SingleToInt32Bits(t));
-            offset += sizeof(float);
-        }
-
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, totalByteCount, repetitionByteCount,
-            definitionByteCount);
-    }
+        => EncodeRepeatedRequired<float, RepeatedFloatWriter>(rows, ref state, columnName, maxEncodedBytes,
+            DateTimeKindHandling.None);
 
     static void EncodeRepeatedDouble(ReadOnlySpan<double[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
-    {
-        var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
-        var levelValueCount = checked(dataValueCount + emptyRowCount);
-        var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var definitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var valuesByteCount = checked(dataValueCount * sizeof(double));
-        var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
-
-        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
-        if (repetitionWritten != repetitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
-        var definitionWritten =
-            WriteRepeatedDefinitionLevels(rows, levelValueCount, destination[repetitionByteCount..]);
-        if (definitionWritten != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
-        var offset = repetitionByteCount + definitionByteCount;
-        foreach (var row in rows)
-        foreach (var t in row)
-        {
-            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(double)),
-                BitConverter.DoubleToInt64Bits(t));
-            offset += sizeof(double);
-        }
-
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, totalByteCount, repetitionByteCount,
-            definitionByteCount);
-    }
+        => EncodeRepeatedRequired<double, RepeatedDoubleWriter>(rows, ref state, columnName, maxEncodedBytes,
+            DateTimeKindHandling.None);
 
     static void EncodeRepeatedBoolean(ReadOnlySpan<bool[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
@@ -357,9 +252,7 @@ static partial class ColumnCodec
         var valuesByteCount = (dataValueCount + 7) >> 3;
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
-        if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+        EnsureDestinationCapacity(destination, totalByteCount, maxEncodedBytes, columnName);
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
@@ -419,15 +312,13 @@ static partial class ColumnCodec
         var definitionByteCount = GetLevelByteCount(levelValueCount, 2);
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
-        if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+        EnsureDestinationCapacity(destination, totalByteCount, maxEncodedBytes, columnName);
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
         var definitionWritten =
-            WriteRepeatedDefinitionLevelsOptionalString(rows, levelValueCount, destination[repetitionByteCount..]);
+            WriteRepeatedDefinitionLevelsOptional(rows, levelValueCount, destination[repetitionByteCount..]);
         if (definitionWritten != definitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
 
@@ -485,15 +376,13 @@ static partial class ColumnCodec
         var definitionByteCount = GetLevelByteCount(levelValueCount, 2);
         var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
         var destination = GetDestination(ref state, totalByteCount);
-        if (totalByteCount > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires {totalByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+        EnsureDestinationCapacity(destination, totalByteCount, maxEncodedBytes, columnName);
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
         if (repetitionWritten != repetitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
         var definitionWritten =
-            WriteRepeatedDefinitionLevelsOptionalByteArray(rows, levelValueCount, destination[repetitionByteCount..]);
+            WriteRepeatedDefinitionLevelsOptional(rows, levelValueCount, destination[repetitionByteCount..]);
         if (definitionWritten != definitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
 
