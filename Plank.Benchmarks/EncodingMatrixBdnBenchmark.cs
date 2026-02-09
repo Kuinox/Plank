@@ -19,7 +19,7 @@ namespace Plank.Benchmarks;
 [Config(typeof(EncodingMatrixBenchmarkConfig))]
 [MemoryDiagnoser]
 [SimpleJob(RunStrategy.Throughput)]
-[InvocationCount(10)]
+[InvocationCount(100)]
 public class EncodingMatrixBdnBenchmark
 {
     static readonly string[] Libraries = ["plank", "parquetsharp", "parquet.net"];
