@@ -50,12 +50,22 @@ public sealed class EncodingSizeMetricColumn : IColumn
 
     public string GetValue(Summary summary, BenchmarkCase benchmarkCase, SummaryStyle style)
     {
-        var caseObject = benchmarkCase.Parameters[nameof(EncodingMatrixBdnBenchmark.Case)];
-        if (caseObject is not EncodingBenchmarkCase benchmarkCaseKey)
+        var library = benchmarkCase.Descriptor.WorkloadMethod.Name switch
+        {
+            nameof(EncodingMatrixBdnBenchmark.WritePlankAsync) => "plank",
+            nameof(EncodingMatrixBdnBenchmark.WriteParquetSharp) => "parquetsharp",
+            nameof(EncodingMatrixBdnBenchmark.WriteParquetNetAsync) => "parquet.net",
+            _ => string.Empty
+        };
+        if (library.Length == 0)
+            return "?";
+        if (benchmarkCase.Parameters[nameof(EncodingMatrixBdnBenchmark.DataType)] is not string dataType)
+            return "?";
+        if (benchmarkCase.Parameters[nameof(EncodingMatrixBdnBenchmark.EncodingName)] is not string encoding)
             return "?";
         if (benchmarkCase.Parameters[nameof(EncodingMatrixBdnBenchmark.Rows)] is not int rows)
             return "?";
-        return EncodingBenchmarkMetrics.TryGet(benchmarkCaseKey, rows, out var snapshot)
+        return EncodingBenchmarkMetrics.TryGet(library, dataType, encoding, rows, out var snapshot)
             ? _selector(snapshot).ToString(System.Globalization.CultureInfo.InvariantCulture)
             : "?";
     }

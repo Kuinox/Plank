@@ -7,19 +7,19 @@ public static class EncodingBenchmarkMetrics
 {
     static readonly string RootDirectory = Path.Combine(Path.GetTempPath(), "plank-bdn-size-metrics");
 
-    public static void Record(EncodingBenchmarkCase benchmarkCase, int rows, EncodingBenchmarkSizeSnapshot snapshot)
+    public static void Record(string library, string dataType, string encoding, int rows, EncodingBenchmarkSizeSnapshot snapshot)
     {
         Directory.CreateDirectory(RootDirectory);
-        var path = GetPath(benchmarkCase, rows);
+        var path = GetPath(library, dataType, encoding, rows);
         var content = string.Create(
             CultureInfo.InvariantCulture,
             $"{snapshot.ColumnCompressedBytes}|{snapshot.ColumnUncompressedBytes}|{snapshot.FileBytes}");
         File.WriteAllText(path, content, Encoding.ASCII);
     }
 
-    public static bool TryGet(EncodingBenchmarkCase benchmarkCase, int rows, out EncodingBenchmarkSizeSnapshot snapshot)
+    public static bool TryGet(string library, string dataType, string encoding, int rows, out EncodingBenchmarkSizeSnapshot snapshot)
     {
-        var path = GetPath(benchmarkCase, rows);
+        var path = GetPath(library, dataType, encoding, rows);
         if (!File.Exists(path))
         {
             snapshot = default;
@@ -41,9 +41,9 @@ public static class EncodingBenchmarkMetrics
         return true;
     }
 
-    static string GetPath(EncodingBenchmarkCase benchmarkCase, int rows)
+    static string GetPath(string library, string dataType, string encoding, int rows)
     {
-        var raw = $"{benchmarkCase.Library}__{benchmarkCase.DataType}__{benchmarkCase.Encoding}__rows_{rows}";
+        var raw = $"{library}__{dataType}__{encoding}__rows_{rows}";
         var safe = raw.Replace('/', '_').Replace('\\', '_').Replace(':', '_');
         return Path.Combine(RootDirectory, $"{safe}.txt");
     }

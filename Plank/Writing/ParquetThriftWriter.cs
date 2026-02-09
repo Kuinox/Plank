@@ -6,7 +6,7 @@ namespace Plank.Writing;
 
 internal static class ParquetThriftWriter
 {
-    static readonly Encoding Utf8 = new UTF8Encoding(false, true);
+    static readonly System.Text.Encoding Utf8 = new UTF8Encoding(false, true);
 
     internal static int WriteDataPageHeader(Span<byte> destination, int valueCount, int nullCount, int rowCount, EncodingKind encoding, int definitionLevelsByteLength, int repetitionLevelsByteLength, int uncompressedSize, int compressedSize, bool isCompressed)
     {

@@ -7,10 +7,10 @@ namespace Plank.Writing;
 
 static partial class ColumnCodec
 {
-    const long TicksPerMicrosecond = 10;
-    static readonly long UnixEpochTicks = DateTime.UnixEpoch.Ticks;
-    static readonly int UnixEpochDayNumber = DateOnly.FromDateTime(DateTime.UnixEpoch).DayNumber;
-    static readonly Encoding Utf8 = new UTF8Encoding(false, true);
+    internal const long TicksPerMicrosecond = 10;
+    internal static readonly long UnixEpochTicks = DateTime.UnixEpoch.Ticks;
+    internal static readonly int UnixEpochDayNumber = DateOnly.FromDateTime(DateTime.UnixEpoch).DayNumber;
+    internal static readonly System.Text.Encoding Utf8 = new UTF8Encoding(false, true);
 
     internal static void Compress(ref ParquetWriter.RowGroupState.ColumnState state, CompressionKind compression)
         => state.Compression = compression;
@@ -43,7 +43,7 @@ static partial class ColumnCodec
     static EncodingKind ResolveDefaultEncoding(ImmutableArray<EncodingKind> encodings)
         => encodings.IsDefaultOrEmpty ? EncodingKind.Plain : encodings[0];
 
-    static Span<byte> GetDestination(ref ParquetWriter.RowGroupState.ColumnState state, int byteCount)
+    internal static Span<byte> GetDestination(ref ParquetWriter.RowGroupState.ColumnState state, int byteCount)
     {
         if (state.EncodedBuffer is not null)
         {
@@ -61,7 +61,7 @@ static partial class ColumnCodec
             : memory.Span[..byteCount];
     }
 
-    static int GetDestinationCapacity(ref ParquetWriter.RowGroupState.ColumnState state)
+    internal static int GetDestinationCapacity(ref ParquetWriter.RowGroupState.ColumnState state)
     {
         if (state.EncodedBuffer is not null)
             return state.EncodedBuffer.Length;
@@ -70,7 +70,7 @@ static partial class ColumnCodec
             : 0;
     }
 
-    static long ToUnixMicroseconds(DateTime value, DateTimeKindHandling handling, string columnName)
+    internal static long ToUnixMicroseconds(DateTime value, DateTimeKindHandling handling, string columnName)
     {
         var normalized = NormalizeDateTime(value, handling, columnName);
         var deltaTicks = checked(normalized.Ticks - UnixEpochTicks);
@@ -116,7 +116,7 @@ static partial class ColumnCodec
             $"Column '{columnName}' received Unspecified DateTime and no policy was configured.");
     }
 
-    static void ValidateDateTimeHandling(DateTimeKindHandling handling, string columnName)
+    internal static void ValidateDateTimeHandling(DateTimeKindHandling handling, string columnName)
     {
         if ((handling & DateTimeKindHandling.PreserveClockTime) == 0)
             return;

@@ -22,18 +22,11 @@ namespace Plank.Benchmarks;
 [InvocationCount(100)]
 public class EncodingMatrixBdnBenchmark
 {
-    static readonly string[] Libraries = ["plank", "parquetsharp", "parquet.net"];
-    static readonly string[] DataTypes = ["bool", "int32", "int64", "float", "double", "string"];
+    [Params("bool", "int32", "int64", "float", "double", "string")]
+    public string DataType { get; set; } = "int32";
 
-    static readonly string[] Encodings =
-    [
-        "plain",
-        // "dictionary",
-        // "delta_binary_packed",
-        // "delta_length_byte_array",
-        // "delta_byte_array",
-        // "byte_stream_split"
-    ];
+    [Params("plain")]
+    public string EncodingName { get; set; } = "plain";
 
     bool[] _boolValues = [];
     int[] _int32Values = [];
@@ -42,19 +35,9 @@ public class EncodingMatrixBdnBenchmark
     double[] _doubleValues = [];
     string[] _stringValues = [];
     byte[] _lastParquetBuffer = [];
+    string _currentLibrary = string.Empty;
 
     [Params(1_000_000)] public int Rows { get; set; }
-
-    [ParamsSource(nameof(AllCases))] public EncodingBenchmarkCase Case { get; set; }
-
-    public static IEnumerable<EncodingBenchmarkCase> AllCases()
-    {
-        foreach (var library in Libraries)
-        foreach (var dataType in DataTypes)
-        foreach (var encoding in Encodings)
-            if (IsSupported(library, dataType, encoding))
-                yield return new EncodingBenchmarkCase(library, dataType, encoding);
-    }
 
     [GlobalSetup]
     public void GlobalSetup()
@@ -76,30 +59,34 @@ public class EncodingMatrixBdnBenchmark
         }
     }
 
-    [Benchmark]
-    public async Task WriteSingleColumnAsync()
+    [Benchmark(Baseline = true)]
+    public Task WritePlankAsync()
     {
-        switch (Case.Library)
-        {
-            case "plank":
-                await WriteWithPlankAsync().ConfigureAwait(false);
-                return;
-            case "parquetsharp":
-                await WriteWithParquetSharpAsync().ConfigureAwait(false);
-                return;
-            case "parquet.net":
-                await WriteWithParquetNetAsync().ConfigureAwait(false);
-                return;
-            default:
-                throw new InvalidOperationException($"Unknown library '{Case.Library}'.");
-        }
+        _currentLibrary = "plank";
+        return WriteWithPlankAsync();
+    }
+
+    [Benchmark]
+    public void WriteParquetSharp()
+    {
+        _currentLibrary = "parquetsharp";
+        WriteWithParquetSharp();
+    }
+
+    [Benchmark]
+    public Task WriteParquetNetAsync()
+    {
+        _currentLibrary = "parquet.net";
+        return WriteWithParquetNetAsync();
     }
 
     [IterationCleanup]
     public void IterationCleanup()
     {
+        if (string.IsNullOrEmpty(_currentLibrary))
+            throw new InvalidOperationException("Benchmark library key was not set before iteration cleanup.");
         var snapshot = ReadColumnBytes(_lastParquetBuffer);
-        EncodingBenchmarkMetrics.Record(Case, Rows, snapshot);
+        EncodingBenchmarkMetrics.Record(_currentLibrary, DataType, EncodingName, Rows, snapshot);
         _lastParquetBuffer = [];
     }
 
@@ -107,7 +94,7 @@ public class EncodingMatrixBdnBenchmark
     {
         var column = new PlankColumn(
             "value",
-            Case.DataType switch
+            DataType switch
             {
                 "bool" => ParquetPhysicalType.Boolean,
                 "int32" => ParquetPhysicalType.Int32,
@@ -115,9 +102,9 @@ public class EncodingMatrixBdnBenchmark
                 "float" => ParquetPhysicalType.Float,
                 "double" => ParquetPhysicalType.Double,
                 "string" => ParquetPhysicalType.ByteArray,
-                _ => throw new InvalidOperationException($"Unknown type '{Case.DataType}'.")
+                _ => throw new InvalidOperationException($"Unknown type '{DataType}'.")
             },
-            new ColumnOptions(ParquetRepetition.Required, [MapPlankEncoding(Case.Encoding)]));
+            new ColumnOptions(ParquetRepetition.Required, [MapPlankEncoding(EncodingName)]));
         var schema = new PlankSchema([column]);
         await using var stream = new MemoryStream(capacity: Rows * 16);
         using var writer = Plank.Writing.ParquetWriter.Create(stream, schema, new ParquetWriterOptions
@@ -128,7 +115,7 @@ public class EncodingMatrixBdnBenchmark
             DateTimeKindHandling = DateTimeKindHandling.PreserveClockTime
         });
         var rowGroup = writer.StartRowGroup();
-        switch (Case.DataType)
+        switch (DataType)
         {
             case "bool":
                 await rowGroup.WriteAsync(column, _boolValues).ConfigureAwait(false);
@@ -149,7 +136,7 @@ public class EncodingMatrixBdnBenchmark
                 await rowGroup.WriteAsync(column, _stringValues).ConfigureAwait(false);
                 break;
             default:
-                throw new InvalidOperationException($"Unknown type '{Case.DataType}'.");
+                throw new InvalidOperationException($"Unknown type '{DataType}'.");
         }
 
         writer.CloseFile();
@@ -157,14 +144,14 @@ public class EncodingMatrixBdnBenchmark
         _lastParquetBuffer = stream.ToArray();
     }
 
-    Task WriteWithParquetSharpAsync()
+    void WriteWithParquetSharp()
     {
         using var stream = new MemoryStream(capacity: Rows * 16);
-        using var writerProperties = BuildParquetSharpWriterProperties(Case.Encoding);
-        using var writer = new ParquetFileWriter(stream, [BuildParquetSharpColumn(Case.DataType)], null,
+        using var writerProperties = BuildParquetSharpWriterProperties(EncodingName);
+        using var writer = new ParquetFileWriter(stream, [BuildParquetSharpColumn(DataType)], null,
             writerProperties, null, true);
         using var rowGroupWriter = writer.AppendRowGroup();
-        switch (Case.DataType)
+        switch (DataType)
         {
             case "bool":
                 using (var col = rowGroupWriter.NextColumn().LogicalWriter<bool>())
@@ -191,24 +178,23 @@ public class EncodingMatrixBdnBenchmark
                     col.WriteBatch(_stringValues);
                 break;
             default:
-                throw new InvalidOperationException($"Unknown type '{Case.DataType}'.");
+                throw new InvalidOperationException($"Unknown type '{DataType}'.");
         }
 
         writer.Close();
         stream.Flush();
         _lastParquetBuffer = stream.ToArray();
-        return Task.CompletedTask;
     }
 
     async Task WriteWithParquetNetAsync()
     {
         var options = new ParquetOptions
         {
-            UseDictionaryEncoding = Case.Encoding == "dictionary",
-            UseDeltaBinaryPackedEncoding = Case.Encoding == "delta_binary_packed"
+            UseDictionaryEncoding = EncodingName == "dictionary",
+            UseDeltaBinaryPackedEncoding = EncodingName == "delta_binary_packed"
         };
         await using var stream = new MemoryStream(capacity: Rows * 16);
-        switch (Case.DataType)
+        switch (DataType)
         {
             case "bool":
             {
@@ -277,7 +263,7 @@ public class EncodingMatrixBdnBenchmark
                 break;
             }
             default:
-                throw new InvalidOperationException($"Unknown type '{Case.DataType}'.");
+                throw new InvalidOperationException($"Unknown type '{DataType}'.");
         }
 
         await stream.FlushAsync().ConfigureAwait(false);
@@ -336,26 +322,4 @@ public class EncodingMatrixBdnBenchmark
             _ => throw new InvalidOperationException($"Unknown encoding '{encoding}'.")
         };
 
-    static bool IsSupported(string library, string dataType, string encoding)
-    {
-        if (library == "plank")
-            return encoding == "plain";
-
-        if (library == "parquetsharp")
-        {
-            if (encoding is "plain" or "dictionary")
-                return true;
-            if (encoding == "delta_binary_packed")
-                return dataType is "int32" or "int64";
-            if (encoding is "delta_length_byte_array" or "delta_byte_array")
-                return dataType == "string";
-            if (encoding == "byte_stream_split")
-                return dataType is "int32" or "int64" or "float" or "double";
-            return false;
-        }
-
-        if (library == "parquet.net")
-            return encoding is "plain" or "dictionary" or "delta_binary_packed";
-        return false;
-    }
 }
