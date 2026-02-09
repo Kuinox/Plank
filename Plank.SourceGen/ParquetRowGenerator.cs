@@ -19,7 +19,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static readonly DiagnosticDescriptor UnsupportedPropertyType = new(
         id: "PLANKGEN002",
         title: "Unsupported schema column mapping",
-        messageFormat: "Column '{0}' on schema property '{1}' has unsupported mapping: supported physical mappings are Boolean->bool, Int32->int/int?, Int64->long, Float->float, Double->double, ByteArray->byte[]; repeated is not supported",
+        messageFormat: "Column '{0}' on schema property '{1}' has unsupported row mapping for repetition '{2}' and physical type '{3}'. Use [RowApiTypeHint] for ambiguous columns.",
         category: "Plank.SourceGen",
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -28,6 +28,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         id: "PLANKGEN003",
         title: "Unsupported schema initializer",
         messageFormat: "Schema property '{0}' must use an inline analyzable initializer with explicit Column(...) entries",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor InvalidTypeHint = new(
+        id: "PLANKGEN004",
+        title: "Invalid [RowApiTypeHint] mapping",
+        messageFormat: "{0}",
         category: "Plank.SourceGen",
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -50,6 +58,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             return;
         }
 
+        if (!TryExtractTypeHints(schemaProperty, out var typeHints, out var typeHintError))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(InvalidTypeHint, schemaProperty.Locations.FirstOrDefault(), typeHintError));
+            return;
+        }
+
         var columns = TryExtractColumns(schemaProperty);
         if (columns is null)
         {
@@ -60,16 +74,31 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var mappedColumns = ImmutableArray.CreateBuilder<MappedColumn>(columns.Value.Length);
         foreach (var column in columns.Value)
         {
-            if (!TryMapColumn(column, out var mapped))
+            if (!TryMapColumn(column, typeHints, out var mapped))
             {
                 context.ReportDiagnostic(Diagnostic.Create(
                     UnsupportedPropertyType,
                     schemaProperty.Locations.FirstOrDefault(),
                     column.Name,
-                    schemaProperty.Name));
+                    schemaProperty.Name,
+                    column.Repetition,
+                    column.PhysicalType));
                 return;
             }
             mappedColumns.Add(mapped);
+        }
+
+        var columnNames = new HashSet<string>(columns.Value.Select(static c => c.Name), StringComparer.Ordinal);
+        foreach (var hintColumnName in typeHints.Keys)
+        {
+            if (columnNames.Contains(hintColumnName))
+                continue;
+
+            context.ReportDiagnostic(Diagnostic.Create(
+                InvalidTypeHint,
+                schemaProperty.Locations.FirstOrDefault(),
+                $"[RowApiTypeHint] references unknown column '{hintColumnName}' on schema property '{schemaProperty.Name}'."));
+            return;
         }
 
         var source = BuildSource(schemaProperty, mappedColumns.ToImmutable());
@@ -311,7 +340,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return builder.ToString();
     }
 
-    static bool TryMapColumn(SchemaColumn column, out MappedColumn mapped)
+    static bool TryMapColumn(SchemaColumn column, ImmutableDictionary<string, string> typeHints, out MappedColumn mapped)
     {
         if (column.Repetition == "Repeated")
         {
@@ -319,14 +348,29 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             return false;
         }
 
+        if (typeHints.TryGetValue(column.Name, out var hintedClrType))
+        {
+            if (!IsSupportedMapping(column, hintedClrType))
+            {
+                mapped = default;
+                return false;
+            }
+
+            mapped = new MappedColumn(column.Name, ToIdentifier(column.Name), hintedClrType);
+            return true;
+        }
+
         var clrType = column.PhysicalType switch
         {
             "Boolean" => "bool",
             "Int32" when column.Repetition == "Optional" => "int?",
             "Int32" => "int",
+            "Int64" when column.Repetition == "Optional" => "long?",
             "Int64" => "long",
             "Float" => "float",
+            "Double" when column.Repetition == "Optional" => "double?",
             "Double" => "double",
+            "ByteArray" when column.Repetition == "Optional" => "string?",
             "ByteArray" => "byte[]",
             _ => string.Empty
         };
@@ -338,6 +382,106 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         mapped = new MappedColumn(column.Name, ToIdentifier(column.Name), clrType);
         return true;
+    }
+
+    static bool IsSupportedMapping(SchemaColumn column, string clrType)
+    {
+        if (column.Repetition == "Optional")
+            return column.PhysicalType switch
+            {
+                "Int32" => clrType is "int" or "int?",
+                "Int64" => clrType is "long" or "long?" or "global::System.DateTime" or "global::System.DateTime?",
+                "Double" => clrType is "double" or "double?",
+                "ByteArray" => clrType is "string" or "string?" or "byte[]" or "byte[]?",
+                _ => false
+            };
+
+        return column.PhysicalType switch
+        {
+            "Boolean" => clrType == "bool",
+            "Int32" => clrType is "int" or "global::System.DateOnly",
+            "Int64" => clrType is "long" or "global::System.DateTime" or "global::System.DateTimeOffset" or "global::System.TimeOnly",
+            "Float" => clrType == "float",
+            "Double" => clrType == "double",
+            "ByteArray" => clrType is "string" or "byte[]",
+            _ => false
+        };
+    }
+
+    static bool TryExtractTypeHints(IPropertySymbol schemaProperty, out ImmutableDictionary<string, string> typeHints, out string error)
+    {
+        var builder = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        error = string.Empty;
+        foreach (var attribute in schemaProperty.GetAttributes())
+        {
+            if (attribute.AttributeClass?.ToDisplayString() != "Plank.Schema.RowApiTypeHintAttribute")
+                continue;
+            if (attribute.ConstructorArguments.Length != 2 ||
+                attribute.ConstructorArguments[0].Value is not string columnName ||
+                attribute.ConstructorArguments[1].Kind is not TypedConstantKind.Type ||
+                attribute.ConstructorArguments[1].Value is not ITypeSymbol clrTypeSymbol)
+            {
+                error = $"[RowApiTypeHint] on schema property '{schemaProperty.Name}' is malformed.";
+                typeHints = ImmutableDictionary<string, string>.Empty;
+                return false;
+            }
+
+            if (!TryFormatHintType(clrTypeSymbol, out var clrTypeName))
+            {
+                error = $"[RowApiTypeHint(\"{columnName}\", {clrTypeSymbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)})] uses an unsupported CLR type.";
+                typeHints = ImmutableDictionary<string, string>.Empty;
+                return false;
+            }
+
+            if (builder.ContainsKey(columnName))
+            {
+                error = $"Duplicate [RowApiTypeHint] for column '{columnName}' on schema property '{schemaProperty.Name}'.";
+                typeHints = ImmutableDictionary<string, string>.Empty;
+                return false;
+            }
+
+            builder[columnName] = clrTypeName;
+        }
+
+        typeHints = builder.ToImmutable();
+        return true;
+    }
+
+    static bool TryFormatHintType(ITypeSymbol clrTypeSymbol, out string clrTypeName)
+    {
+        clrTypeName = clrTypeSymbol switch
+        {
+            IArrayTypeSymbol { ElementType.SpecialType: SpecialType.System_Byte } => "byte[]",
+            _ when clrTypeSymbol.SpecialType == SpecialType.System_Boolean => "bool",
+            _ when clrTypeSymbol.SpecialType == SpecialType.System_Int32 => "int",
+            _ when clrTypeSymbol.SpecialType == SpecialType.System_Int64 => "long",
+            _ when clrTypeSymbol.SpecialType == SpecialType.System_Single => "float",
+            _ when clrTypeSymbol.SpecialType == SpecialType.System_Double => "double",
+            _ when clrTypeSymbol.SpecialType == SpecialType.System_String => "string",
+            _ => clrTypeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+        };
+
+        if (clrTypeSymbol is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullableNamed &&
+            nullableNamed.TypeArguments.Length == 1)
+        {
+            if (!TryFormatHintType(nullableNamed.TypeArguments[0], out var underlyingClrTypeName))
+                return false;
+
+            clrTypeName = $"{underlyingClrTypeName}?";
+        }
+
+        return clrTypeName is
+            "bool" or "bool?" or
+            "int" or "int?" or
+            "long" or "long?" or
+            "float" or "float?" or
+            "double" or "double?" or
+            "string" or "string?" or
+            "byte[]" or "byte[]?" or
+            "global::System.DateOnly" or "global::System.DateOnly?" or
+            "global::System.DateTime" or "global::System.DateTime?" or
+            "global::System.DateTimeOffset" or "global::System.DateTimeOffset?" or
+            "global::System.TimeOnly" or "global::System.TimeOnly?";
     }
 
     static string Escape(string value)

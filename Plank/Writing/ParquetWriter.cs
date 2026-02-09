@@ -177,6 +177,46 @@ public sealed class ParquetWriter : IDisposable
             repeatedElementOptional: false);
     }
 
+    public SerializedColumn SerializeColumn<T>(Column column, ReadOnlySpan<T> values)
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        var physicalType = GetPhysicalType<T>();
+        if (column.PhysicalType != physicalType)
+            throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {physicalType}.");
+        var owner = _rowGroupState.RentSerializedBuffer(column);
+        try
+        {
+            var state = new RowGroupState.ColumnState
+            {
+                EncodedBufferOwner = owner
+            };
+            state.RowCount = values.Length;
+            state.ValueCount = values.Length;
+            ColumnCodec.Encode(column, values, physicalType, _dateTimeKindHandling, ref state);
+            ColumnCodec.Compress(ref state, _options.Compression);
+            var logicalType = ResolveSerializedLogicalType(typeof(T), column);
+            return new SerializedColumn(
+                column,
+                owner.Memory[..state.EncodedLength],
+                state.RowCount,
+                values.Length,
+                state.UncompressedLength,
+                state.NullCount,
+                state.DefinitionLevelsByteLength,
+                state.RepetitionLevelsByteLength,
+                state.Encoding,
+                state.Compression,
+                logicalType,
+                repeatedElementOptional: false,
+                payloadOwner: owner);
+        }
+        catch
+        {
+            owner.Dispose();
+            throw;
+        }
+    }
+
     public SerializedColumn SerializeColumn<T>(Column column, ReadOnlySpan<T[]> rows, byte[] destination)
     {
         ArgumentNullException.ThrowIfNull(column);
@@ -224,6 +264,64 @@ public sealed class ParquetWriter : IDisposable
             state.Compression,
             logicalType,
             repeatedElementOptional);
+    }
+
+    public SerializedColumn SerializeColumn<T>(Column column, ReadOnlySpan<T[]> rows)
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        var owner = _rowGroupState.RentSerializedBuffer(column);
+        try
+        {
+            var state = new RowGroupState.ColumnState
+            {
+                EncodedBufferOwner = owner,
+                RowCount = rows.Length
+            };
+            bool repeatedElementOptional;
+            ColumnLogicalType logicalType;
+            if (column.Options.Repetition is ParquetRepetition.Repeated)
+            {
+                var repeatedPhysicalType = GetPhysicalType<T>();
+                if (column.PhysicalType != repeatedPhysicalType)
+                    throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {repeatedPhysicalType}.");
+
+                ColumnCodec.EncodeRepeated(column, rows, repeatedPhysicalType, _dateTimeKindHandling, ref state);
+                logicalType = ResolveSerializedLogicalType(typeof(T), column);
+                repeatedElementOptional = GetRepeatedElementState(typeof(T)) == 2;
+            }
+            else
+            {
+                var scalarPhysicalType = GetPhysicalType<T[]>();
+                if (column.PhysicalType != scalarPhysicalType)
+                    throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {scalarPhysicalType}.");
+
+                state.ValueCount = rows.Length;
+                ColumnCodec.Encode(column, rows, scalarPhysicalType, _dateTimeKindHandling, ref state);
+                logicalType = ResolveSerializedLogicalType(typeof(T[]), column);
+                repeatedElementOptional = false;
+            }
+
+            ColumnCodec.Compress(ref state, _options.Compression);
+            return new SerializedColumn(
+                column,
+                owner.Memory[..state.EncodedLength],
+                state.RowCount,
+                state.ValueCount,
+                state.UncompressedLength,
+                state.NullCount,
+                state.DefinitionLevelsByteLength,
+                state.RepetitionLevelsByteLength,
+                state.Encoding,
+                state.Compression,
+                logicalType,
+                repeatedElementOptional,
+                payloadOwner: owner);
+        }
+        catch
+        {
+            owner.Dispose();
+            throw;
+        }
     }
 
     public void CloseFile(CancellationToken cancellationToken = default)
@@ -465,7 +563,7 @@ public sealed class ParquetWriter : IDisposable
 
     public readonly struct SerializedColumn : IEquatable<SerializedColumn>
     {
-        internal SerializedColumn(Column column, ReadOnlyMemory<byte> payload, int rowCount, int valueCount, int uncompressedLength, int nullCount, int definitionLevelsByteLength, int repetitionLevelsByteLength, EncodingKind encoding, CompressionKind compression, ColumnLogicalType logicalType, bool repeatedElementOptional)
+        internal SerializedColumn(Column column, ReadOnlyMemory<byte> payload, int rowCount, int valueCount, int uncompressedLength, int nullCount, int definitionLevelsByteLength, int repetitionLevelsByteLength, EncodingKind encoding, CompressionKind compression, ColumnLogicalType logicalType, bool repeatedElementOptional, IMemoryOwner<byte>? payloadOwner = null)
         {
             Column = column;
             Payload = payload;
@@ -479,6 +577,7 @@ public sealed class ParquetWriter : IDisposable
             Compression = compression;
             LogicalType = logicalType;
             RepeatedElementOptional = repeatedElementOptional;
+            PayloadOwner = payloadOwner;
         }
 
         public Column Column { get; }
@@ -505,6 +604,8 @@ public sealed class ParquetWriter : IDisposable
 
         internal bool RepeatedElementOptional { get; }
 
+        internal IMemoryOwner<byte>? PayloadOwner { get; }
+
         public bool Equals(SerializedColumn other)
             => ReferenceEquals(Column, other.Column)
                && Payload.Equals(other.Payload)
@@ -517,7 +618,8 @@ public sealed class ParquetWriter : IDisposable
                && Encoding == other.Encoding
                && Compression == other.Compression
                && LogicalType == other.LogicalType
-               && RepeatedElementOptional == other.RepeatedElementOptional;
+               && RepeatedElementOptional == other.RepeatedElementOptional
+               && ReferenceEquals(PayloadOwner, other.PayloadOwner);
 
         public override bool Equals(object? obj)
             => obj is SerializedColumn other && Equals(other);
@@ -537,6 +639,7 @@ public sealed class ParquetWriter : IDisposable
             hash.Add(Compression);
             hash.Add(LogicalType);
             hash.Add(RepeatedElementOptional);
+            hash.Add(PayloadOwner);
             return hash.ToHashCode();
         }
 
@@ -664,10 +767,21 @@ public sealed class ParquetWriter : IDisposable
                 state.EncodeDurationTicks = 0;
                 state.CompressionDurationTicks = 0;
                 state.EncodedTimestampTicks = 0;
+                state.StringRowCount = 0;
+                state.StringNonNullCount = 0;
+                state.StringSizePassTicks = 0;
+                state.StringDefinitionLevelsTicks = 0;
+                state.StringByteCountPassTicks = 0;
+                state.StringUtf8WritePassTicks = 0;
                 Volatile.Write(ref state.WriteState, WriteStateEmpty);
                 state.Encoding = default;
                 state.Compression = default;
                 state.ExternalData = default;
+                if (state.ExternalDataOwner is not null)
+                {
+                    state.ExternalDataOwner.Dispose();
+                    state.ExternalDataOwner = null;
+                }
                 ColumnMetadata[i] = default;
                 _writeSignals[i] = null;
             }
@@ -701,6 +815,15 @@ public sealed class ParquetWriter : IDisposable
             state.EncodedTimestampTicks = compressCompleted;
             Volatile.Write(ref state.WriteState, WriteStateEncoded);
             return ordinal;
+        }
+
+        internal IMemoryOwner<byte> RentSerializedBuffer(Column column)
+        {
+            ArgumentNullException.ThrowIfNull(column);
+            if (!_columnOrdinals.TryGetValue(column, out var ordinal))
+                throw new ArgumentException("Column does not belong to this schema.", nameof(column));
+
+            return _bufferPool.Rent(_bufferNames[ordinal], _bufferLengths[ordinal]);
         }
 
         internal int EncodeRepeatedColumn<T>(Column column, ReadOnlySpan<T[]> rows, ParquetPhysicalType physicalType)
@@ -752,6 +875,7 @@ public sealed class ParquetWriter : IDisposable
             state.Encoding = serialized.Encoding;
             state.Compression = serialized.Compression;
             state.ExternalData = serialized.Payload;
+            state.ExternalDataOwner = serialized.PayloadOwner;
             state.EncodeDurationTicks = 0;
             state.CompressionDurationTicks = 0;
             state.EncodedTimestampTicks = Stopwatch.GetTimestamp();
@@ -851,9 +975,23 @@ public sealed class ParquetWriter : IDisposable
                 state.CompressionDurationTicks,
                 waitForWriteTicks,
                 writeTicks);
+            if (state.StringRowCount > 0)
+                writer._log.StringEncodingMetricsObserved(
+                    _columns[ordinal].Name,
+                    state.StringRowCount,
+                    state.StringNonNullCount,
+                    state.StringSizePassTicks,
+                    state.StringDefinitionLevelsTicks,
+                    state.StringByteCountPassTicks,
+                    state.StringUtf8WritePassTicks);
 
             ColumnMetadata[ordinal] = new ColumnChunkMetadata(offset, state.ValueCount, totalUncompressedSize, totalCompressedSize, state.Encoding, state.Compression);
             state.ExternalData = default;
+            if (state.ExternalDataOwner is not null)
+            {
+                state.ExternalDataOwner.Dispose();
+                state.ExternalDataOwner = null;
+            }
             state.RowCount = 0;
             state.EncodedLength = 0;
             state.UncompressedLength = 0;
@@ -864,6 +1002,12 @@ public sealed class ParquetWriter : IDisposable
             state.EncodeDurationTicks = 0;
             state.CompressionDurationTicks = 0;
             state.EncodedTimestampTicks = 0;
+            state.StringRowCount = 0;
+            state.StringNonNullCount = 0;
+            state.StringSizePassTicks = 0;
+            state.StringDefinitionLevelsTicks = 0;
+            state.StringByteCountPassTicks = 0;
+            state.StringUtf8WritePassTicks = 0;
             Volatile.Write(ref state.WriteState, WriteStateWritten);
         }
 
@@ -1499,9 +1643,20 @@ public sealed class ParquetWriter : IDisposable
                 }
 
                 if (state.CompressedBufferOwner is null)
+                {
+                    if (state.ExternalDataOwner is null)
+                        continue;
+                }
+                else
+                {
+                    state.CompressedBufferOwner.Dispose();
+                    state.CompressedBufferOwner = null;
+                }
+
+                if (state.ExternalDataOwner is null)
                     continue;
-                state.CompressedBufferOwner.Dispose();
-                state.CompressedBufferOwner = null;
+                state.ExternalDataOwner.Dispose();
+                state.ExternalDataOwner = null;
             }
 
             _zstdCompressor?.Dispose();
@@ -1542,7 +1697,7 @@ public sealed class ParquetWriter : IDisposable
                 var bucketName = BuildColumnBucketName(column, length);
                 _bufferNames[i] = bucketName;
                 _bufferLengths[i] = length;
-                var compressedLength = options.MaxCompressedBytes > 0 ? options.MaxCompressedBytes : length;
+                var compressedLength = GetCompressedBufferLength(length, options.MaxCompressedBytes, _compressionKind);
                 var compressedBucketName = BuildCompressedBucketName(column, compressedLength);
                 _compressedBufferNames[i] = compressedBucketName;
                 _compressedBufferLengths[i] = compressedLength;
@@ -1565,6 +1720,26 @@ public sealed class ParquetWriter : IDisposable
 
         static string BuildCompressedBucketName(Column column, int length)
             => $"column-compressed:{column.PhysicalType}:{length}";
+
+        static int GetCompressedBufferLength(int uncompressedLength, int maxCompressedBytes, CompressionKind compression)
+        {
+            if (maxCompressedBytes > 0)
+                return maxCompressedBytes;
+            if (compression == CompressionKind.None)
+                return uncompressedLength;
+
+            var required = compression switch
+            {
+                CompressionKind.Snappy => Snappy.GetMaxCompressedLength(uncompressedLength),
+                CompressionKind.Lz4 => LZ4Codec.MaximumOutputSize(uncompressedLength),
+                CompressionKind.Gzip => checked(uncompressedLength + Math.Max(256, uncompressedLength >> 3)),
+                CompressionKind.Brotli => checked(uncompressedLength + Math.Max(256, uncompressedLength >> 3)),
+                CompressionKind.Zstd => checked(uncompressedLength + Math.Max(256, uncompressedLength >> 3)),
+                _ => uncompressedLength
+            };
+
+            return required < uncompressedLength ? uncompressedLength : required;
+        }
 
         static int GetBucketLength(string bucketName, string[] names, int[] lengths, string[] compressedNames, int[] compressedLengths)
         {
@@ -1593,11 +1768,18 @@ public sealed class ParquetWriter : IDisposable
             internal IMemoryOwner<byte>? EncodedBufferOwner;
             internal IMemoryOwner<byte>? CompressedBufferOwner;
             internal ReadOnlyMemory<byte> ExternalData;
+            internal IMemoryOwner<byte>? ExternalDataOwner;
             internal EncodingKind Encoding;
             internal CompressionKind Compression;
             internal long EncodeDurationTicks;
             internal long CompressionDurationTicks;
             internal long EncodedTimestampTicks;
+            internal int StringRowCount;
+            internal int StringNonNullCount;
+            internal long StringSizePassTicks;
+            internal long StringDefinitionLevelsTicks;
+            internal long StringByteCountPassTicks;
+            internal long StringUtf8WritePassTicks;
         }
     }
 }

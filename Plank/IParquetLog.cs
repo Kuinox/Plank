@@ -9,4 +9,6 @@ public interface IParquetLog
     void StreamWriteObserved(int byteCount, long writeDurationTicks, long writeGapTicks);
 
     void ColumnWriteMetricsObserved(string columnName, int rowCount, int valueCount, int bytesWritten, long encodeTicks, long compressTicks, long waitForWriteTicks, long writeTicks);
+
+    void StringEncodingMetricsObserved(string columnName, int rowCount, int nonNullCount, long sizePassTicks, long definitionLevelsTicks, long byteCountPassTicks, long utf8WritePassTicks);
 }

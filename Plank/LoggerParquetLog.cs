@@ -61,4 +61,16 @@ public sealed class LoggerParquetLog : IParquetLog
             compressTicks,
             waitForWriteTicks,
             writeTicks);
+
+    public void StringEncodingMetricsObserved(string columnName, int rowCount, int nonNullCount, long sizePassTicks, long definitionLevelsTicks, long byteCountPassTicks, long utf8WritePassTicks)
+        => _logger.LogTrace(
+            new EventId(6, nameof(StringEncodingMetricsObserved)),
+            "String encoding metrics: {ColumnName}, rows {RowCount}, nonNull {NonNullCount}, size {SizePassTicks}, def {DefinitionLevelsTicks}, byteCount {ByteCountPassTicks}, utf8 {Utf8WritePassTicks}.",
+            columnName,
+            rowCount,
+            nonNullCount,
+            sizePassTicks,
+            definitionLevelsTicks,
+            byteCountPassTicks,
+            utf8WritePassTicks);
 }
