@@ -242,164 +242,83 @@ static partial class ColumnCodec
     static void EncodeOptionalString(ReadOnlySpan<string?> values, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
     {
-        var definitionByteCount = GetDefinitionLevelsByteCount(values.Length);
-        var destination = GetDestination(ref state, maxEncodedBytes);
-        if (maxEncodedBytes > 0 && destination.IsEmpty)
-            throw new InvalidOperationException(
-                $"Column '{columnName}' requires more than {maxEncodedBytes} bytes but encoded buffer capacity is {maxEncodedBytes}.");
-
-        var definitionStarted = Stopwatch.GetTimestamp();
-        var writtenDefinitionBytes = WriteDefinitionLevels(values, destination);
-        var definitionCompleted = Stopwatch.GetTimestamp();
-        if (writtenDefinitionBytes != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
-        var nonNullCount = 0;
-        long utf8WritePassTicks = 0;
-        var valueOffset = definitionByteCount;
-        foreach (var value in values)
-        {
-            if (value is null)
-                continue;
-
-            nonNullCount++;
-            if (valueOffset + sizeof(int) > destination.Length)
-            {
-                EncodeOptionalStringWithSizing(values, ref state, columnName, maxEncodedBytes);
-                return;
-            }
-
-            var lengthOffset = valueOffset;
-            valueOffset += sizeof(int);
-
-            var writeStarted = Stopwatch.GetTimestamp();
-            var status = System.Text.Unicode.Utf8.FromUtf16(
-                value.AsSpan(),
-                destination[valueOffset..],
-                out var charsConsumed,
-                out var bytesWritten);
-            var writeCompleted = Stopwatch.GetTimestamp();
-            utf8WritePassTicks += writeCompleted - writeStarted;
-
-            if (status == System.Buffers.OperationStatus.DestinationTooSmall)
-            {
-                EncodeOptionalStringWithSizing(values, ref state, columnName, maxEncodedBytes);
-                return;
-            }
-            if (status == System.Buffers.OperationStatus.InvalidData)
-                throw new EncoderFallbackException($"Column '{columnName}' contains invalid UTF-16 data.");
-            if (status != System.Buffers.OperationStatus.Done || charsConsumed != value.Length)
-                throw new InvalidOperationException($"Column '{columnName}' could not encode UTF-8 payload.");
-
-            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(lengthOffset, sizeof(int)), bytesWritten);
-            valueOffset += bytesWritten;
-        }
-
-        SetOptionalLayout(ref state, valueOffset, values.Length - nonNullCount, definitionByteCount);
-        state.StringRowCount = values.Length;
-        state.StringNonNullCount = nonNullCount;
-        state.StringSizePassTicks = 0;
-        state.StringDefinitionLevelsTicks = definitionCompleted - definitionStarted;
-        state.StringByteCountPassTicks = 0;
-        state.StringUtf8WritePassTicks = utf8WritePassTicks;
-    }
-
-    static void EncodeOptionalStringWithSizing(ReadOnlySpan<string?> values,
-        ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-    {
+        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
         var sizePassStarted = Stopwatch.GetTimestamp();
         var nonNullCount = 0;
-        var valuesByteCount = 0;
         foreach (var value in values)
         {
             if (value is null)
                 continue;
 
             nonNullCount++;
-            valuesByteCount = checked(valuesByteCount + sizeof(int));
-            valuesByteCount = checked(valuesByteCount + Utf8.GetByteCount(value));
+            _ = Utf8.GetByteCount(value);
         }
         var sizePassCompleted = Stopwatch.GetTimestamp();
 
-        var definitionByteCount = GetDefinitionLevelsByteCount(values.Length);
-        var totalByteCount = checked(definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        EnsureDestinationCapacity(destination, totalByteCount, maxEncodedBytes, columnName);
-
         var definitionStarted = Stopwatch.GetTimestamp();
-        var writtenDefinitionBytes = WriteDefinitionLevels(values, destination);
+        var definitionByteCount = WriteDefinitionLevels(values, writer);
         var definitionCompleted = Stopwatch.GetTimestamp();
-        if (writtenDefinitionBytes != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
 
         long utf8WritePassTicks = 0;
-        var valueOffset = definitionByteCount;
         foreach (var value in values)
         {
             if (value is null)
                 continue;
 
-            var lengthOffset = valueOffset;
-            valueOffset += sizeof(int);
+            var payloadLength = Utf8.GetByteCount(value);
+            WriteInt32(writer, payloadLength);
+            if (payloadLength == 0)
+                continue;
 
             var writeStarted = Stopwatch.GetTimestamp();
-            var written = Utf8.GetBytes(value.AsSpan(), destination[valueOffset..]);
+            var destination = writer.GetSpan(payloadLength);
+            var written = Utf8.GetBytes(value.AsSpan(), destination);
             var writeCompleted = Stopwatch.GetTimestamp();
             utf8WritePassTicks += writeCompleted - writeStarted;
-            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(lengthOffset, sizeof(int)), written);
-            valueOffset += written;
+            if (written != payloadLength)
+                throw new InvalidOperationException($"Column '{columnName}' could not encode UTF-8 payload.");
+            writer.Advance(written);
         }
 
-        SetOptionalLayout(ref state, valueOffset, values.Length - nonNullCount, definitionByteCount);
+        SetOptionalLayout(ref state, writer.WrittenCount, values.Length - nonNullCount, definitionByteCount);
         state.StringRowCount = values.Length;
         state.StringNonNullCount = nonNullCount;
         state.StringSizePassTicks = sizePassCompleted - sizePassStarted;
         state.StringDefinitionLevelsTicks = definitionCompleted - definitionStarted;
-        state.StringByteCountPassTicks = 0;
+        state.StringByteCountPassTicks = 0; // Currently merged into size pass.
         state.StringUtf8WritePassTicks = utf8WritePassTicks;
     }
 
     static void EncodeOptionalByteArray(ReadOnlySpan<byte[]?> values, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
     {
+        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
         var nonNullCount = 0;
-        var valuesByteCount = 0;
         foreach (var value in values)
         {
             if (value is null)
                 continue;
 
             nonNullCount++;
-            valuesByteCount = checked(valuesByteCount + sizeof(int));
-            valuesByteCount = checked(valuesByteCount + value.Length);
         }
 
-        var definitionByteCount = GetDefinitionLevelsByteCount(values.Length);
-        var totalByteCount = checked(definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        EnsureDestinationCapacity(destination, totalByteCount, maxEncodedBytes, columnName);
+        var definitionByteCount = WriteDefinitionLevels(values, writer);
 
-        var writtenDefinitionBytes = WriteDefinitionLevels(values, destination);
-        if (writtenDefinitionBytes != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
-        var valueOffset = definitionByteCount;
         foreach (var value in values)
         {
             if (value is null)
                 continue;
 
-            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(valueOffset, sizeof(int)), value.Length);
-            valueOffset += sizeof(int);
+            WriteInt32(writer, value.Length);
             if (value.Length == 0)
                 continue;
 
-            value.AsSpan().CopyTo(destination.Slice(valueOffset, value.Length));
-            valueOffset += value.Length;
+            var destination = writer.GetSpan(value.Length);
+            value.AsSpan().CopyTo(destination);
+            writer.Advance(value.Length);
         }
 
-        SetOptionalLayout(ref state, totalByteCount, values.Length - nonNullCount, definitionByteCount);
+        SetOptionalLayout(ref state, writer.WrittenCount, values.Length - nonNullCount, definitionByteCount);
     }
 
     static void SetOptionalLayout(ref ParquetWriter.RowGroupState.ColumnState state, int totalByteCount, int nullCount,

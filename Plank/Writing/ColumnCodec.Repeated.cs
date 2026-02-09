@@ -4,6 +4,12 @@ namespace Plank.Writing;
 
 static partial class ColumnCodec
 {
+    interface IRepeatedOptionalReferenceWriter<T> where T : class
+    {
+        static abstract int GetPayloadLength(T value);
+        static abstract void WritePayload(T value, ColumnBufferWriter writer, int payloadLength, string columnName);
+    }
+
     interface IRepeatedScalarWriter<T>
     {
         static abstract int ValueSize { get; }
@@ -111,6 +117,42 @@ static partial class ColumnCodec
             BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(double)),
                 BitConverter.DoubleToInt64Bits(value));
             offset += sizeof(double);
+        }
+    }
+
+    readonly struct RepeatedStringReferenceWriter : IRepeatedOptionalReferenceWriter<string>
+    {
+        public static int GetPayloadLength(string value)
+            => Utf8.GetByteCount(value);
+
+        public static void WritePayload(string value, ColumnBufferWriter writer, int payloadLength, string columnName)
+        {
+            WriteInt32(writer, payloadLength);
+            if (payloadLength == 0)
+                return;
+
+            var destination = writer.GetSpan(payloadLength);
+            var written = Utf8.GetBytes(value.AsSpan(), destination);
+            if (written != payloadLength)
+                throw new InvalidOperationException($"Column '{columnName}' could not encode UTF-8 payload.");
+            writer.Advance(written);
+        }
+    }
+
+    readonly struct RepeatedByteArrayReferenceWriter : IRepeatedOptionalReferenceWriter<byte[]>
+    {
+        public static int GetPayloadLength(byte[] value)
+            => value.Length;
+
+        public static void WritePayload(byte[] value, ColumnBufferWriter writer, int payloadLength, string columnName)
+        {
+            WriteInt32(writer, payloadLength);
+            if (payloadLength == 0)
+                return;
+
+            var destination = writer.GetSpan(payloadLength);
+            value.AsSpan().CopyTo(destination);
+            writer.Advance(payloadLength);
         }
     }
 
@@ -284,75 +326,24 @@ static partial class ColumnCodec
 
     static void EncodeRepeatedString(ReadOnlySpan<string?[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
-    {
-        var elementCount = 0;
-        var emptyRowCount = 0;
-        var nonNullCount = 0;
-        var valuesByteCount = 0;
-        foreach (var t in rows)
-        {
-            var row = t ??
-                      throw new InvalidOperationException($"Column '{columnName}' does not support null row arrays.");
-            if (row.Length == 0)
-                emptyRowCount++;
-            elementCount = checked(elementCount + row.Length);
-            foreach (var value in row)
-            {
-                if (value is null)
-                    continue;
-
-                nonNullCount++;
-                valuesByteCount = checked(valuesByteCount + sizeof(int));
-                valuesByteCount = checked(valuesByteCount + Utf8.GetByteCount(value));
-            }
-        }
-
-        var levelValueCount = checked(elementCount + emptyRowCount);
-        var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var definitionByteCount = GetLevelByteCount(levelValueCount, 2);
-        var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        EnsureDestinationCapacity(destination, totalByteCount, maxEncodedBytes, columnName);
-
-        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
-        if (repetitionWritten != repetitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
-        var definitionWritten =
-            WriteRepeatedDefinitionLevelsOptional(rows, levelValueCount, destination[repetitionByteCount..]);
-        if (definitionWritten != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
-        var offset = repetitionByteCount + definitionByteCount;
-        foreach (var row in rows)
-        foreach (var value in row)
-        {
-            if (value is null)
-                continue;
-
-            var utf8Length = Utf8.GetByteCount(value);
-            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(int)), utf8Length);
-            offset += sizeof(int);
-            if (utf8Length == 0)
-                continue;
-
-            var written = Utf8.GetBytes(value.AsSpan(), destination.Slice(offset, utf8Length));
-            if (written != utf8Length)
-                throw new InvalidOperationException($"Column '{columnName}' could not encode UTF-8 payload.");
-            offset += utf8Length;
-        }
-
-        var nullCount = checked(levelValueCount - nonNullCount);
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, nullCount, totalByteCount, repetitionByteCount,
-            definitionByteCount);
-    }
+        => EncodeRepeatedOptionalReference<string, RepeatedStringReferenceWriter>(rows, ref state, columnName,
+            maxEncodedBytes);
 
     static void EncodeRepeatedByteArray(ReadOnlySpan<byte[]?[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
+        => EncodeRepeatedOptionalReference<byte[], RepeatedByteArrayReferenceWriter>(rows, ref state, columnName,
+            maxEncodedBytes);
+
+    static void EncodeRepeatedOptionalReference<T, TWriter>(ReadOnlySpan<T?[]> rows,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
+        where T : class
+        where TWriter : struct, IRepeatedOptionalReferenceWriter<T>
     {
+        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
         var elementCount = 0;
         var emptyRowCount = 0;
         var nonNullCount = 0;
-        var valuesByteCount = 0;
+        var valuePayloadBytes = 0;
         foreach (var t in rows)
         {
             var row = t ??
@@ -366,44 +357,35 @@ static partial class ColumnCodec
                     continue;
 
                 nonNullCount++;
-                valuesByteCount = checked(valuesByteCount + sizeof(int));
-                valuesByteCount = checked(valuesByteCount + value.Length);
+                valuePayloadBytes = checked(valuePayloadBytes + sizeof(int));
+                valuePayloadBytes = checked(valuePayloadBytes + TWriter.GetPayloadLength(value));
             }
         }
 
         var levelValueCount = checked(elementCount + emptyRowCount);
         var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
         var definitionByteCount = GetLevelByteCount(levelValueCount, 2);
-        var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        EnsureDestinationCapacity(destination, totalByteCount, maxEncodedBytes, columnName);
+        _ = checked(repetitionByteCount + definitionByteCount + valuePayloadBytes);
 
-        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
+        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, writer);
         if (repetitionWritten != repetitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
-        var definitionWritten =
-            WriteRepeatedDefinitionLevelsOptional(rows, levelValueCount, destination[repetitionByteCount..]);
+        var definitionWritten = WriteRepeatedDefinitionLevelsOptional(rows, levelValueCount, writer);
         if (definitionWritten != definitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
 
-        var offset = repetitionByteCount + definitionByteCount;
         foreach (var row in rows)
         foreach (var value in row)
         {
             if (value is null)
                 continue;
 
-            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(int)), value.Length);
-            offset += sizeof(int);
-            if (value.Length == 0)
-                continue;
-
-            value.AsSpan().CopyTo(destination[offset..]);
-            offset += value.Length;
+            var payloadLength = TWriter.GetPayloadLength(value);
+            TWriter.WritePayload(value, writer, payloadLength, columnName);
         }
 
         var nullCount = checked(levelValueCount - nonNullCount);
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, nullCount, totalByteCount, repetitionByteCount,
+        SetRepeatedLayout(ref state, rows.Length, levelValueCount, nullCount, writer.WrittenCount, repetitionByteCount,
             definitionByteCount);
     }
 }
