@@ -6,8 +6,6 @@ public sealed class ThroughputBenchmarkOptions
 
     public required string[] Libraries { get; init; }
 
-    public required int WarmupIterations { get; init; }
-
     public required int MeasureIterations { get; init; }
 
     public required bool KeepFiles { get; init; }

@@ -34,6 +34,7 @@ public sealed class ThroughputPlankMetricsLog : IParquetLog
     readonly List<StreamWriteMetricSample> _writeSamples = [];
     readonly List<FlushMetricSample> _flushSamples = [];
     readonly List<ColumnWriteMetricSample> _columnSamples = [];
+    readonly List<StringEncodingMetricSample> _stringEncodingSamples = [];
     long _cumulativeTicks;
     long _originTimestamp;
     bool _hasOriginTimestamp;
@@ -43,6 +44,8 @@ public sealed class ThroughputPlankMetricsLog : IParquetLog
     public IReadOnlyList<FlushMetricSample> FlushSamples => _flushSamples;
 
     public IReadOnlyList<ColumnWriteMetricSample> ColumnSamples => _columnSamples;
+
+    public IReadOnlyList<StringEncodingMetricSample> StringEncodingSamples => _stringEncodingSamples;
 
     public void RowGroupMetadataCapacityGrown(int previousCapacity, int newCapacity, int? expectedRowGroupCount)
     {
@@ -87,6 +90,19 @@ public sealed class ThroughputPlankMetricsLog : IParquetLog
             WriteTicks: writeTicks,
             StartMs: startMs,
             EndMs: endMs));
+    }
+
+    public void StringEncodingMetricsObserved(string columnName, int rowCount, int nonNullCount, long sizePassTicks, long definitionLevelsTicks, long byteCountPassTicks, long utf8WritePassTicks)
+    {
+        _stringEncodingSamples.Add(new StringEncodingMetricSample(
+            Index: _stringEncodingSamples.Count,
+            ColumnName: columnName,
+            RowCount: rowCount,
+            NonNullCount: nonNullCount,
+            SizePassTicks: sizePassTicks,
+            DefinitionLevelsTicks: definitionLevelsTicks,
+            ByteCountPassTicks: byteCountPassTicks,
+            Utf8WritePassTicks: utf8WritePassTicks));
     }
 
     public void FlushObserved(long flushDurationTicks, long flushGapTicks = 0)
@@ -278,6 +294,28 @@ public sealed class ThroughputPlankMetricsLog : IParquetLog
                 ColumnWriteTicks: column.WriteTicks,
                 ColumnStartMs: column.StartMs,
                 ColumnEndMs: column.EndMs));
+
+        foreach (var stringEncoding in _stringEncodingSamples)
+            rows.Add(new MetricRow(
+                rows.Count,
+                "string_encoding",
+                null,
+                0,
+                null,
+                null,
+                TimeTicks: 0,
+                TimeMs: 0,
+                CumulativeBytes: 0,
+                WriteMiBPerSecond: null,
+                ColumnName: stringEncoding.ColumnName,
+                ColumnRowCount: stringEncoding.RowCount,
+                ColumnValueCount: stringEncoding.NonNullCount,
+                ColumnEncodeTicks: stringEncoding.SizePassTicks,
+                ColumnCompressTicks: stringEncoding.DefinitionLevelsTicks,
+                ColumnWaitForWriteTicks: stringEncoding.ByteCountPassTicks,
+                ColumnWriteTicks: stringEncoding.Utf8WritePassTicks,
+                ColumnStartMs: null,
+                ColumnEndMs: null));
 
         return rows;
     }

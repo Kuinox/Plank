@@ -127,16 +127,17 @@ public static class ThroughputBenchmarkRunner
         var allScenarios = new[]
         {
             new Scenario("Plank", WritePlankAsync),
+            new Scenario("encode_ahead", WritePlankEncodeAheadAsync),
             new Scenario("ParquetSharp", WriteParquetSharpAsync),
             new Scenario("Parquet.Net", WriteParquetNetAsync)
         };
         var libraries = new HashSet<string>(options.Libraries, StringComparer.OrdinalIgnoreCase);
         var scenarios = allScenarios
-            .Where(static scenario => scenario.Name is "Plank" or "ParquetSharp" or "Parquet.Net")
+            .Where(static scenario => scenario.Name is "Plank" or "encode_ahead" or "ParquetSharp" or "Parquet.Net")
             .Where(scenario => IsSelected(scenario.Name, libraries))
             .ToArray();
         if (scenarios.Length == 0)
-            throw new InvalidOperationException("No benchmark libraries selected. Use --library with one or more of: plank, parquetsharp, parquet.net.");
+            throw new InvalidOperationException("No benchmark libraries selected. Use --library with one or more of: plank, encode_ahead, parquetsharp, parquet.net.");
 
         var results = new List<ThroughputScenarioResult>(scenarios.Length);
         foreach (var scenario in scenarios)
@@ -157,22 +158,13 @@ public static class ThroughputBenchmarkRunner
         Console.WriteLine();
         Console.WriteLine($"{scenario.Name}:");
 
-        for (var i = 0; i < options.WarmupIterations; i++)
-        {
-            var warmupPath = Path.Combine(options.OutputDirectory, $"{NormalizeName(scenario.Name)}-warmup-{i + 1}.parquet");
-            var warmupMetricsPath = GetMetricsPath(options, scenario.Name, i + 1, isWarmup: true);
-            var warmupRun = await RunSingleAsync(context, scenario, warmupPath, warmupMetricsPath, cancellationToken).ConfigureAwait(false);
-            Console.WriteLine($"  warmup {i + 1}/{options.WarmupIterations}: {FormatRun(warmupRun, context.TotalRows)}");
-            DeleteIfNeeded(warmupPath, options.KeepFiles);
-        }
-
         var totalElapsed = TimeSpan.Zero;
         long totalBytes = 0;
 
         for (var i = 0; i < options.MeasureIterations; i++)
         {
             var filePath = Path.Combine(options.OutputDirectory, $"{NormalizeName(scenario.Name)}-run-{i + 1}.parquet");
-            var metricsPath = GetMetricsPath(options, scenario.Name, i + 1, isWarmup: false);
+            var metricsPath = GetMetricsPath(options, scenario.Name, i + 1);
             var run = await RunSingleAsync(context, scenario, filePath, metricsPath, cancellationToken).ConfigureAwait(false);
             totalElapsed += run.Elapsed;
             totalBytes = checked(totalBytes + run.BytesWritten);
@@ -356,6 +348,73 @@ public static class ThroughputBenchmarkRunner
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    static async Task WritePlankEncodeAheadAsync(BenchmarkDataContext context, string outputPath, CancellationToken cancellationToken, string? metricsPath)
+    {
+        var metricsLog = metricsPath is null ? null : new ThroughputPlankMetricsLog();
+        await using var stream = CreateOutputStream(outputPath);
+        using var writer = Plank.Writing.ParquetWriter.Create(stream, PlankWriteSchema, CreatePlankOptions(context, metricsLog));
+        var pendingWrites = new ValueTask[PlankWriteSchema.Columns.Length];
+        var serializedColumns = new Plank.Writing.ParquetWriter.SerializedColumn[PlankWriteSchema.Columns.Length];
+        var serializeTicks = new long[PlankWriteSchema.Columns.Length];
+
+        foreach (var trip in context.TripsByFile)
+        {
+            Parallel.For(0, serializedColumns.Length, PlankParallelOptions, i =>
+            {
+                var started = Stopwatch.GetTimestamp();
+                serializedColumns[i] = SerializePlankColumnAhead(writer, trip, i);
+                serializeTicks[i] = Stopwatch.GetTimestamp() - started;
+            });
+            if (metricsLog is not null)
+                for (var i = 0; i < serializedColumns.Length; i++)
+                    metricsLog.ColumnWriteMetricsObserved(
+                        PlankWriteSchema.Columns[i].Name,
+                        trip.RowCount,
+                        trip.RowCount,
+                        serializedColumns[i].Payload.Length,
+                        serializeTicks[i],
+                        0,
+                        0,
+                        0);
+            var rowGroup = writer.StartRowGroup();
+            Parallel.For(0, pendingWrites.Length, PlankParallelOptions, i => pendingWrites[i] = rowGroup.WriteAsync(serializedColumns[i]));
+            await AwaitWrites(pendingWrites).ConfigureAwait(false);
+        }
+
+        writer.CloseFile();
+        var flushStart = Stopwatch.GetTimestamp();
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        var flushEnd = Stopwatch.GetTimestamp();
+        metricsLog?.FlushObserved(flushEnd - flushStart);
+        if (metricsLog is not null && metricsPath is not null)
+            await metricsLog.WriteParquetAsync(metricsPath, cancellationToken).ConfigureAwait(false);
+    }
+
+    static Plank.Writing.ParquetWriter.SerializedColumn SerializePlankColumnAhead(Plank.Writing.ParquetWriter writer, NycTripData trip, int index)
+        => index switch
+        {
+            0 => writer.SerializeColumn(PlankWriteSchema.Columns[0], trip.VendorId),
+            1 => writer.SerializeColumn(PlankWriteSchema.Columns[1], trip.PickupDateTime),
+            2 => writer.SerializeColumn(PlankWriteSchema.Columns[2], trip.DropoffDateTime),
+            3 => writer.SerializeColumn(PlankWriteSchema.Columns[3], trip.PassengerCount),
+            4 => writer.SerializeColumn(PlankWriteSchema.Columns[4], trip.TripDistance),
+            5 => writer.SerializeColumn(PlankWriteSchema.Columns[5], trip.RatecodeId),
+            6 => writer.SerializeColumn(PlankWriteSchema.Columns[6], trip.StoreAndFwdFlag),
+            7 => writer.SerializeColumn(PlankWriteSchema.Columns[7], trip.PuLocationId),
+            8 => writer.SerializeColumn(PlankWriteSchema.Columns[8], trip.DoLocationId),
+            9 => writer.SerializeColumn(PlankWriteSchema.Columns[9], trip.PaymentType),
+            10 => writer.SerializeColumn(PlankWriteSchema.Columns[10], trip.FareAmount),
+            11 => writer.SerializeColumn(PlankWriteSchema.Columns[11], trip.Extra),
+            12 => writer.SerializeColumn(PlankWriteSchema.Columns[12], trip.MtaTax),
+            13 => writer.SerializeColumn(PlankWriteSchema.Columns[13], trip.TipAmount),
+            14 => writer.SerializeColumn(PlankWriteSchema.Columns[14], trip.TollsAmount),
+            15 => writer.SerializeColumn(PlankWriteSchema.Columns[15], trip.ImprovementSurcharge),
+            16 => writer.SerializeColumn(PlankWriteSchema.Columns[16], trip.TotalAmount),
+            17 => writer.SerializeColumn(PlankWriteSchema.Columns[17], trip.CongestionSurcharge),
+            18 => writer.SerializeColumn(PlankWriteSchema.Columns[18], trip.AirportFee),
+            _ => throw new ArgumentOutOfRangeException(nameof(index), index, "Column index is out of range.")
+        };
+
     static ParquetWriterOptions CreatePlankOptions(BenchmarkDataContext context, ThroughputPlankMetricsLog? metricsLog)
         => new()
         {
@@ -421,19 +480,20 @@ public static class ThroughputBenchmarkRunner
         => scenarioName switch
         {
             "Plank" => libraries.Contains("plank"),
+            "encode_ahead" => libraries.Contains("encode_ahead") || libraries.Contains("encodeahead"),
             "ParquetSharp" => libraries.Contains("parquetsharp"),
             "Parquet.Net" => libraries.Contains("parquet.net") || libraries.Contains("parquetnet"),
             _ => false
         };
 
-    static string? GetMetricsPath(ThroughputBenchmarkOptions options, string scenarioName, int runNumber, bool isWarmup)
+    static string? GetMetricsPath(ThroughputBenchmarkOptions options, string scenarioName, int runNumber)
     {
-        if (scenarioName != "Plank")
+        if (scenarioName is not ("Plank" or "encode_ahead"))
             return null;
         if (string.IsNullOrWhiteSpace(options.MetricsDirectory))
             return null;
-        var phase = isWarmup ? "warmup" : "run";
-        return Path.Combine(options.MetricsDirectory, $"plank-{phase}-{runNumber}-metrics.parquet");
+        var prefix = scenarioName == "Plank" ? "plank" : "plank-encode-ahead";
+        return Path.Combine(options.MetricsDirectory, $"{prefix}-run-{runNumber}-metrics.parquet");
     }
 
     readonly record struct Scenario(string Name, Func<BenchmarkDataContext, string, CancellationToken, string?, Task> WriteAsync);
