@@ -1,69 +1,93 @@
 using Plank.Schema;
-using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Text;
 
 namespace Plank.Writing;
 
 static partial class ColumnCodec
 {
-    interface IOptionalNullableWriter<T>
-        where T : struct
+    interface IOptionalScalarWriter<T>
     {
         static abstract int ValueSize { get; }
-        static abstract void Write(T value, Span<byte> destination, ref int offset,
-            DateTimeKindHandling dateTimeKindHandling, string columnName);
+        static abstract void Write(T value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+            string columnName);
     }
 
-    readonly struct OptionalInt32NullableWriter : IOptionalNullableWriter<int>
+    interface IOptionalReferenceWriter<T> where T : class
+    {
+        static abstract int GetPayloadLength(T value);
+        static abstract void WritePayload(T value, ColumnBufferWriter writer, int payloadLength, string columnName);
+    }
+
+    readonly struct OptionalInt32Writer : IOptionalScalarWriter<int>
     {
         public static int ValueSize => sizeof(int);
 
-        public static void Write(int value, Span<byte> destination, ref int offset,
-            DateTimeKindHandling dateTimeKindHandling, string columnName)
-        {
-            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(int)), value);
-            offset += sizeof(int);
-        }
+        public static void Write(int value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+            string columnName)
+            => WriteInt32(writer, value);
     }
 
-    readonly struct OptionalInt64NullableWriter : IOptionalNullableWriter<long>
+    readonly struct OptionalInt64Writer : IOptionalScalarWriter<long>
     {
         public static int ValueSize => sizeof(long);
 
-        public static void Write(long value, Span<byte> destination, ref int offset,
-            DateTimeKindHandling dateTimeKindHandling, string columnName)
-        {
-            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(long)), value);
-            offset += sizeof(long);
-        }
+        public static void Write(long value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+            string columnName)
+            => WriteInt64(writer, value);
     }
 
-    readonly struct OptionalDoubleNullableWriter : IOptionalNullableWriter<double>
+    readonly struct OptionalDoubleWriter : IOptionalScalarWriter<double>
     {
         public static int ValueSize => sizeof(double);
 
-        public static void Write(double value, Span<byte> destination, ref int offset,
-            DateTimeKindHandling dateTimeKindHandling, string columnName)
-        {
-            var bits = BitConverter.DoubleToInt64Bits(value);
-            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(long)), bits);
-            offset += sizeof(double);
-        }
+        public static void Write(double value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+            string columnName)
+            => WriteInt64(writer, BitConverter.DoubleToInt64Bits(value));
     }
 
-    readonly struct OptionalDateTimeNullableWriter : IOptionalNullableWriter<DateTime>
+    readonly struct OptionalDateTimeWriter : IOptionalScalarWriter<DateTime>
     {
         public static int ValueSize => sizeof(long);
 
-        public static void Write(DateTime value, Span<byte> destination, ref int offset,
-            DateTimeKindHandling dateTimeKindHandling, string columnName)
+        public static void Write(DateTime value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+            string columnName)
+            => WriteInt64(writer, ToUnixMicroseconds(value, dateTimeKindHandling, columnName));
+    }
+
+    readonly struct OptionalStringWriter : IOptionalReferenceWriter<string>
+    {
+        public static int GetPayloadLength(string value)
+            => Utf8.GetByteCount(value);
+
+        public static void WritePayload(string value, ColumnBufferWriter writer, int payloadLength, string columnName)
         {
-            var unixMicros = ToUnixMicroseconds(value, dateTimeKindHandling, columnName);
-            BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset, sizeof(long)), unixMicros);
-            offset += sizeof(long);
+            WriteInt32(writer, payloadLength);
+            if (payloadLength == 0)
+                return;
+
+            var destination = writer.GetSpan(payloadLength);
+            var written = Utf8.GetBytes(value.AsSpan(), destination);
+            if (written != payloadLength)
+                throw new InvalidOperationException($"Column '{columnName}' could not encode UTF-8 payload.");
+            writer.Advance(written);
+        }
+    }
+
+    readonly struct OptionalByteArrayWriter : IOptionalReferenceWriter<byte[]>
+    {
+        public static int GetPayloadLength(byte[] value)
+            => value.Length;
+
+        public static void WritePayload(byte[] value, ColumnBufferWriter writer, int payloadLength, string columnName)
+        {
+            WriteInt32(writer, payloadLength);
+            if (payloadLength == 0)
+                return;
+
+            var destination = writer.GetSpan(payloadLength);
+            value.AsSpan().CopyTo(destination);
+            writer.Advance(payloadLength);
         }
     }
 
@@ -74,44 +98,44 @@ static partial class ColumnCodec
         switch (dispatchKey)
         {
             case ColumnDispatch.DispatchKey.Int32Int32:
-                EncodeOptionalInt32AllDefined(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), ref state,
-                    column.Name, encodedBufferCapacity);
+                EncodeOptionalAllDefined<int, OptionalInt32Writer>(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values),
+                    ref state, column.Name, encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             case ColumnDispatch.DispatchKey.Int32NullableInt32:
-                EncodeOptionalInt32(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int?>>(ref values), ref state, column.Name,
-                    encodedBufferCapacity);
+                EncodeOptionalNullable<int, OptionalInt32Writer>(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int?>>(ref values),
+                    ref state, column.Name, encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             case ColumnDispatch.DispatchKey.Int64Int64:
-                EncodeOptionalInt64AllDefined(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), ref state,
-                    column.Name, encodedBufferCapacity);
+                EncodeOptionalAllDefined<long, OptionalInt64Writer>(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values),
+                    ref state, column.Name, encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             case ColumnDispatch.DispatchKey.Int64NullableInt64:
-                EncodeOptionalInt64(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long?>>(ref values), ref state, column.Name,
-                    encodedBufferCapacity);
+                EncodeOptionalNullable<long, OptionalInt64Writer>(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long?>>(ref values),
+                    ref state, column.Name, encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             case ColumnDispatch.DispatchKey.Int64DateTime:
-                EncodeOptionalDateTimeAllDefined(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values),
-                    dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity);
+                EncodeOptionalAllDefined<DateTime, OptionalDateTimeWriter>(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values),
+                    ref state, column.Name, encodedBufferCapacity, dateTimeKindHandling);
                 return true;
             case ColumnDispatch.DispatchKey.Int64NullableDateTime:
-                EncodeOptionalDateTime(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime?>>(ref values),
-                    dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity);
+                EncodeOptionalNullable<DateTime, OptionalDateTimeWriter>(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime?>>(ref values),
+                    ref state, column.Name, encodedBufferCapacity, dateTimeKindHandling);
                 return true;
             case ColumnDispatch.DispatchKey.ByteArrayString:
-                EncodeOptionalString(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string?>>(ref values), ref state,
-                    column.Name, encodedBufferCapacity);
+                EncodeOptionalReference<string, OptionalStringWriter>(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string?>>(ref values),
+                    ref state, column.Name, encodedBufferCapacity);
                 return true;
             case ColumnDispatch.DispatchKey.ByteArrayByteArray:
-                EncodeOptionalByteArray(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]?>>(ref values), ref state,
-                    column.Name, encodedBufferCapacity);
+                EncodeOptionalReference<byte[], OptionalByteArrayWriter>(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]?>>(ref values),
+                    ref state, column.Name, encodedBufferCapacity);
                 return true;
             case ColumnDispatch.DispatchKey.DoubleDouble:
-                EncodeOptionalDoubleAllDefined(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values), ref state,
-                    column.Name, encodedBufferCapacity);
+                EncodeOptionalAllDefined<double, OptionalDoubleWriter>(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values),
+                    ref state, column.Name, encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             case ColumnDispatch.DispatchKey.DoubleNullableDouble:
-                EncodeOptionalDouble(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double?>>(ref values), ref state,
-                    column.Name, encodedBufferCapacity);
+                EncodeOptionalNullable<double, OptionalDoubleWriter>(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double?>>(ref values),
+                    ref state, column.Name, encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
         }
         return false;
@@ -121,128 +145,52 @@ static partial class ColumnCodec
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes,
         DateTimeKindHandling dateTimeKindHandling)
         where T : struct
-        where TWriter : struct, IOptionalNullableWriter<T>
+        where TWriter : struct, IOptionalScalarWriter<T>
     {
+        if (typeof(T) == typeof(DateTime))
+            ValidateDateTimeHandling(dateTimeKindHandling, columnName);
+
         var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
         var nonNullCount = 0;
         foreach (var t in values)
             if (t.HasValue)
                 nonNullCount++;
 
-        var definitionByteCount = GetDefinitionLevelsByteCount(values.Length);
-        var nullCount = values.Length - nonNullCount;
-        var writtenDefinitionBytes = WriteDefinitionLevels(values, writer);
-        if (writtenDefinitionBytes != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
+        var definitionByteCount = WriteDefinitionLevels(values, writer);
         foreach (var value in values)
         {
             if (!value.HasValue)
                 continue;
 
-            var destination = writer.GetSpan(TWriter.ValueSize);
-            var valueOffset = 0;
-            TWriter.Write(value.Value, destination, ref valueOffset, dateTimeKindHandling, columnName);
-            writer.Advance(valueOffset);
+            TWriter.Write(value.Value, writer, dateTimeKindHandling, columnName);
         }
 
-        SetOptionalLayout(ref state, writer.WrittenCount, nullCount, definitionByteCount);
+        SetOptionalLayout(ref state, writer.WrittenCount, values.Length - nonNullCount, definitionByteCount);
     }
 
-    static void EncodeOptionalInt32(ReadOnlySpan<int?> values, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-        => EncodeOptionalNullable<int, OptionalInt32NullableWriter>(values, ref state, columnName, maxEncodedBytes,
-            DateTimeKindHandling.None);
-
-    static void EncodeOptionalInt32AllDefined(ReadOnlySpan<int> values,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
+    static void EncodeOptionalAllDefined<T, TWriter>(ReadOnlySpan<T> values,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes,
+        DateTimeKindHandling dateTimeKindHandling)
+        where TWriter : struct, IOptionalScalarWriter<T>
     {
-        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
-        var definitionByteCount = WriteAllDefinedLevels(values.Length, writer);
-        var valueDestination = writer.GetSpan(checked(values.Length * sizeof(int)));
-        if (BitConverter.IsLittleEndian)
-            MemoryMarshal.AsBytes(values).CopyTo(valueDestination);
-        else
-            for (var i = 0; i < values.Length; i++)
-                BinaryPrimitives.WriteInt32LittleEndian(valueDestination.Slice(i * 4, 4), values[i]);
-        writer.Advance(checked(values.Length * sizeof(int)));
-
-        SetOptionalLayout(ref state, writer.WrittenCount, 0, definitionByteCount);
-    }
-
-    static void EncodeOptionalInt64(ReadOnlySpan<long?> values, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-        => EncodeOptionalNullable<long, OptionalInt64NullableWriter>(values, ref state, columnName, maxEncodedBytes,
-            DateTimeKindHandling.None);
-
-    static void EncodeOptionalInt64AllDefined(ReadOnlySpan<long> values,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
-    {
-        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
-        var definitionByteCount = WriteAllDefinedLevels(values.Length, writer);
-        var valueDestination = writer.GetSpan(checked(values.Length * sizeof(long)));
-        if (BitConverter.IsLittleEndian)
-            MemoryMarshal.AsBytes(values).CopyTo(valueDestination);
-        else
-            for (var i = 0; i < values.Length; i++)
-                BinaryPrimitives.WriteInt64LittleEndian(valueDestination.Slice(i * 8, 8), values[i]);
-        writer.Advance(checked(values.Length * sizeof(long)));
-
-        SetOptionalLayout(ref state, writer.WrittenCount, 0, definitionByteCount);
-    }
-
-    static void EncodeOptionalDouble(ReadOnlySpan<double?> values, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-        => EncodeOptionalNullable<double, OptionalDoubleNullableWriter>(values, ref state, columnName, maxEncodedBytes,
-            DateTimeKindHandling.None);
-
-    static void EncodeOptionalDoubleAllDefined(ReadOnlySpan<double> values,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
-    {
-        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
-        var definitionByteCount = WriteAllDefinedLevels(values.Length, writer);
-        var valueDestination = writer.GetSpan(checked(values.Length * sizeof(double)));
-        if (BitConverter.IsLittleEndian)
-            MemoryMarshal.AsBytes(values).CopyTo(valueDestination);
-        else
-            for (var i = 0; i < values.Length; i++)
-            {
-                var bits = BitConverter.DoubleToInt64Bits(values[i]);
-                BinaryPrimitives.WriteInt64LittleEndian(valueDestination.Slice(i * 8, 8), bits);
-            }
-        writer.Advance(checked(values.Length * sizeof(double)));
-
-        SetOptionalLayout(ref state, writer.WrittenCount, 0, definitionByteCount);
-    }
-
-    static void EncodeOptionalDateTime(ReadOnlySpan<DateTime?> values, DateTimeKindHandling dateTimeKindHandling,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
-    {
-        ValidateDateTimeHandling(dateTimeKindHandling, columnName);
-        EncodeOptionalNullable<DateTime, OptionalDateTimeNullableWriter>(values, ref state, columnName, maxEncodedBytes,
-            dateTimeKindHandling);
-    }
-
-    static void EncodeOptionalDateTimeAllDefined(ReadOnlySpan<DateTime> values, DateTimeKindHandling dateTimeKindHandling,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
-    {
-        ValidateDateTimeHandling(dateTimeKindHandling, columnName);
+        if (typeof(T) == typeof(DateTime))
+            ValidateDateTimeHandling(dateTimeKindHandling, columnName);
 
         var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
         var definitionByteCount = WriteAllDefinedLevels(values.Length, writer);
         foreach (var value in values)
-        {
-            var unixMicros = ToUnixMicroseconds(value, dateTimeKindHandling, columnName);
-            WriteInt64(writer, unixMicros);
-        }
+            TWriter.Write(value, writer, dateTimeKindHandling, columnName);
 
         SetOptionalLayout(ref state, writer.WrittenCount, 0, definitionByteCount);
     }
 
-    static void EncodeOptionalString(ReadOnlySpan<string?> values, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
+    static void EncodeOptionalReference<T, TWriter>(ReadOnlySpan<T?> values,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
+        where T : class
+        where TWriter : struct, IOptionalReferenceWriter<T>
     {
         var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
+
         var sizePassStarted = Stopwatch.GetTimestamp();
         var nonNullCount = 0;
         foreach (var value in values)
@@ -251,7 +199,7 @@ static partial class ColumnCodec
                 continue;
 
             nonNullCount++;
-            _ = Utf8.GetByteCount(value);
+            _ = TWriter.GetPayloadLength(value);
         }
         var sizePassCompleted = Stopwatch.GetTimestamp();
 
@@ -259,25 +207,17 @@ static partial class ColumnCodec
         var definitionByteCount = WriteDefinitionLevels(values, writer);
         var definitionCompleted = Stopwatch.GetTimestamp();
 
-        long utf8WritePassTicks = 0;
+        long writePassTicks = 0;
         foreach (var value in values)
         {
             if (value is null)
                 continue;
 
-            var payloadLength = Utf8.GetByteCount(value);
-            WriteInt32(writer, payloadLength);
-            if (payloadLength == 0)
-                continue;
-
+            var payloadLength = TWriter.GetPayloadLength(value);
             var writeStarted = Stopwatch.GetTimestamp();
-            var destination = writer.GetSpan(payloadLength);
-            var written = Utf8.GetBytes(value.AsSpan(), destination);
+            TWriter.WritePayload(value, writer, payloadLength, columnName);
             var writeCompleted = Stopwatch.GetTimestamp();
-            utf8WritePassTicks += writeCompleted - writeStarted;
-            if (written != payloadLength)
-                throw new InvalidOperationException($"Column '{columnName}' could not encode UTF-8 payload.");
-            writer.Advance(written);
+            writePassTicks += writeCompleted - writeStarted;
         }
 
         SetOptionalLayout(ref state, writer.WrittenCount, values.Length - nonNullCount, definitionByteCount);
@@ -285,40 +225,7 @@ static partial class ColumnCodec
         state.StringNonNullCount = nonNullCount;
         state.StringSizePassTicks = sizePassCompleted - sizePassStarted;
         state.StringDefinitionLevelsTicks = definitionCompleted - definitionStarted;
-        state.StringByteCountPassTicks = 0; // Currently merged into size pass.
-        state.StringUtf8WritePassTicks = utf8WritePassTicks;
-    }
-
-    static void EncodeOptionalByteArray(ReadOnlySpan<byte[]?> values, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-    {
-        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
-        var nonNullCount = 0;
-        foreach (var value in values)
-        {
-            if (value is null)
-                continue;
-
-            nonNullCount++;
-        }
-
-        var definitionByteCount = WriteDefinitionLevels(values, writer);
-
-        foreach (var value in values)
-        {
-            if (value is null)
-                continue;
-
-            WriteInt32(writer, value.Length);
-            if (value.Length == 0)
-                continue;
-
-            var destination = writer.GetSpan(value.Length);
-            value.AsSpan().CopyTo(destination);
-            writer.Advance(value.Length);
-        }
-
-        SetOptionalLayout(ref state, writer.WrittenCount, values.Length - nonNullCount, definitionByteCount);
+        state.StringUtf8WritePassTicks = writePassTicks;
     }
 
     static void SetOptionalLayout(ref ParquetWriter.RowGroupState.ColumnState state, int totalByteCount, int nullCount,

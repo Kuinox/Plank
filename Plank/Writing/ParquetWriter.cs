@@ -771,7 +771,6 @@ public sealed class ParquetWriter : IDisposable
                 state.StringNonNullCount = 0;
                 state.StringSizePassTicks = 0;
                 state.StringDefinitionLevelsTicks = 0;
-                state.StringByteCountPassTicks = 0;
                 state.StringUtf8WritePassTicks = 0;
                 Volatile.Write(ref state.WriteState, WriteStateEmpty);
                 state.Encoding = default;
@@ -982,7 +981,7 @@ public sealed class ParquetWriter : IDisposable
                     state.StringNonNullCount,
                     state.StringSizePassTicks,
                     state.StringDefinitionLevelsTicks,
-                    state.StringByteCountPassTicks,
+                    0,
                     state.StringUtf8WritePassTicks);
 
             ColumnMetadata[ordinal] = new ColumnChunkMetadata(offset, state.ValueCount, totalUncompressedSize, totalCompressedSize, state.Encoding, state.Compression);
@@ -1006,7 +1005,6 @@ public sealed class ParquetWriter : IDisposable
             state.StringNonNullCount = 0;
             state.StringSizePassTicks = 0;
             state.StringDefinitionLevelsTicks = 0;
-            state.StringByteCountPassTicks = 0;
             state.StringUtf8WritePassTicks = 0;
             Volatile.Write(ref state.WriteState, WriteStateWritten);
         }
@@ -1778,7 +1776,6 @@ public sealed class ParquetWriter : IDisposable
             internal int StringNonNullCount;
             internal long StringSizePassTicks;
             internal long StringDefinitionLevelsTicks;
-            internal long StringByteCountPassTicks;
             internal long StringUtf8WritePassTicks;
         }
     }

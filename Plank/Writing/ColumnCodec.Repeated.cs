@@ -10,6 +10,12 @@ static partial class ColumnCodec
         static abstract void WritePayload(T value, ColumnBufferWriter writer, int payloadLength, string columnName);
     }
 
+    interface IRepeatedOptionalScalarWriter<T> where T : struct
+    {
+        static abstract void WritePayload(T value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+            string columnName);
+    }
+
     interface IRepeatedScalarWriter<T>
     {
         static abstract int ValueSize { get; }
@@ -156,6 +162,13 @@ static partial class ColumnCodec
         }
     }
 
+    readonly struct RepeatedOptionalInt32Writer : IRepeatedOptionalScalarWriter<int>
+    {
+        public static void WritePayload(int value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+            string columnName)
+            => WriteInt32(writer, value);
+    }
+
     static void SetRepeatedLayout(ref ParquetWriter.RowGroupState.ColumnState state, int rowCount, int levelValueCount,
         int nullCount, int totalByteCount, int repetitionByteCount, int definitionByteCount)
     {
@@ -210,6 +223,14 @@ static partial class ColumnCodec
 
     static void EncodeRepeatedNullableInt32(ReadOnlySpan<int?[]> rows,
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
+        => EncodeRepeatedOptionalNullableStruct<int, RepeatedOptionalInt32Writer>(rows, ref state, columnName,
+            maxEncodedBytes, DateTimeKindHandling.None);
+
+    static void EncodeRepeatedOptionalNullableStruct<T, TWriter>(ReadOnlySpan<T?[]> rows,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes,
+        DateTimeKindHandling dateTimeKindHandling)
+        where T : struct
+        where TWriter : struct, IRepeatedOptionalScalarWriter<T>
     {
         var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
         var elementCount = 0;
@@ -243,7 +264,7 @@ static partial class ColumnCodec
             if (!value.HasValue)
                 continue;
 
-            WriteInt32(writer, value.Value);
+            TWriter.WritePayload(value.Value, writer, dateTimeKindHandling, columnName);
         }
 
         var nullCount = checked(levelValueCount - nonNullCount);

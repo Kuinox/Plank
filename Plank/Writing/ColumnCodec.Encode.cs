@@ -28,19 +28,19 @@ static partial class ColumnCodec
         switch (encoding)
         {
             case EncodingKind.Plain:
-                EncodePlainRequired(values, dispatchKey, dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity, physicalType);
+                EncodePlainNonRepeated(values, dispatchKey, dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity, physicalType);
                 break;
             case EncodingKind.DeltaBinaryPacked:
-                EncodeDeltaBinaryPackedRequired(values, dispatchKey, dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity, physicalType);
+                EncodeDeltaBinaryPackedNonRepeated(values, dispatchKey, dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity, physicalType);
                 break;
             case EncodingKind.DeltaLengthByteArray:
-                EncodeDeltaLengthByteArrayRequired(values, dispatchKey, ref state, column.Name, encodedBufferCapacity, physicalType);
+                EncodeDeltaLengthByteArrayNonRepeated(values, dispatchKey, ref state, column.Name, encodedBufferCapacity, physicalType);
                 break;
             case EncodingKind.DeltaByteArray:
-                EncodeDeltaByteArrayRequired(values, dispatchKey, ref state, column.Name, encodedBufferCapacity, physicalType);
+                EncodeDeltaByteArrayNonRepeated(values, dispatchKey, ref state, column.Name, encodedBufferCapacity, physicalType);
                 break;
             case EncodingKind.ByteStreamSplit:
-                EncodeByteStreamSplitRequired(values, dispatchKey, dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity, physicalType);
+                EncodeByteStreamSplitNonRepeated(values, dispatchKey, dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity, physicalType);
                 break;
             default:
                 throw new NotSupportedException($"Encoding '{encoding}' is not supported for column '{column.Name}'.");
@@ -120,7 +120,7 @@ static partial class ColumnCodec
         }
     }
 
-    static void EncodePlainRequired<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
+    static void EncodePlainNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
         int encodedBufferCapacity, ParquetPhysicalType physicalType)
     {
@@ -175,7 +175,7 @@ static partial class ColumnCodec
         }
     }
 
-    static void EncodeDeltaBinaryPackedRequired<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
+    static void EncodeDeltaBinaryPackedNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
         int encodedBufferCapacity, ParquetPhysicalType physicalType)
     {
@@ -263,7 +263,7 @@ static partial class ColumnCodec
         }
     }
 
-    static void EncodeDeltaLengthByteArrayRequired<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
+    static void EncodeDeltaLengthByteArrayNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity, ParquetPhysicalType physicalType)
     {
         switch (dispatchKey)
@@ -279,7 +279,7 @@ static partial class ColumnCodec
         }
     }
 
-    static void EncodeDeltaByteArrayRequired<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
+    static void EncodeDeltaByteArrayNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity, ParquetPhysicalType physicalType)
     {
         switch (dispatchKey)
@@ -295,7 +295,7 @@ static partial class ColumnCodec
         }
     }
 
-    static void EncodeByteStreamSplitRequired<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
+    static void EncodeByteStreamSplitNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
         int encodedBufferCapacity, ParquetPhysicalType physicalType)
     {
