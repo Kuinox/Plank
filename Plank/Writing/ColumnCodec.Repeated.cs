@@ -4,6 +4,9 @@ namespace Plank.Writing;
 
 static partial class ColumnCodec
 {
+    delegate void RepeatedValueWrite<T>(ReadOnlySpan<T[]> rows, ColumnBufferWriter writer,
+        DateTimeKindHandling dateTimeKindHandling, string columnName);
+
     interface IRepeatedOptionalReferenceWriter<T> where T : class
     {
         static abstract int GetPayloadLength(T value);
@@ -186,26 +189,43 @@ static partial class ColumnCodec
         DateTimeKindHandling dateTimeKindHandling)
         where TWriter : struct, IRepeatedScalarWriter<T>
     {
+        static int GetValueByteCount(int dataValueCount)
+            => checked(dataValueCount * TWriter.ValueSize);
+
+        static void WriteValues(ReadOnlySpan<T[]> rows, ColumnBufferWriter writer,
+            DateTimeKindHandling dateTimeKindHandling, string columnName)
+        {
+            foreach (var row in rows)
+            foreach (var value in row)
+            {
+                var destination = writer.GetSpan(TWriter.ValueSize);
+                var offset = 0;
+                TWriter.Write(value, destination, ref offset, dateTimeKindHandling, columnName);
+                writer.Advance(offset);
+            }
+        }
+
+        EncodeRepeatedRequiredCore(rows, ref state, columnName, maxEncodedBytes, dateTimeKindHandling,
+            GetValueByteCount, WriteValues);
+    }
+
+    static void EncodeRepeatedRequiredCore<T>(ReadOnlySpan<T[]> rows,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes,
+        DateTimeKindHandling dateTimeKindHandling, Func<int, int> getValueByteCount, RepeatedValueWrite<T> writeValues)
+    {
         var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
         var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
         var levelValueCount = checked(dataValueCount + emptyRowCount);
         var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
         var definitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
+        _ = getValueByteCount(dataValueCount);
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, writer);
         if (repetitionWritten != repetitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
         var definitionWritten = WriteRepeatedDefinitionLevels(rows, levelValueCount, writer);
         if (definitionWritten != definitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
-        foreach (var row in rows)
-        foreach (var value in row)
-        {
-            var destination = writer.GetSpan(TWriter.ValueSize);
-            var offset = 0;
-            TWriter.Write(value, destination, ref offset, dateTimeKindHandling, columnName);
-            writer.Advance(offset);
-        }
+        writeValues(rows, writer, dateTimeKindHandling, columnName);
 
         SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, writer.WrittenCount, repetitionByteCount,
             definitionByteCount);
@@ -308,41 +328,36 @@ static partial class ColumnCodec
     static void EncodeRepeatedBoolean(ReadOnlySpan<bool[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
     {
-        var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
-        var levelValueCount = checked(dataValueCount + emptyRowCount);
-        var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var definitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        var valuesByteCount = (dataValueCount + 7) >> 3;
-        var totalByteCount = checked(repetitionByteCount + definitionByteCount + valuesByteCount);
-        var destination = GetDestination(ref state, totalByteCount);
-        EnsureDestinationCapacity(destination, totalByteCount, maxEncodedBytes, columnName);
+        static int GetValueByteCount(int dataValueCount)
+            => (dataValueCount + 7) >> 3;
 
-        var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, destination);
-        if (repetitionWritten != repetitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
-        var definitionWritten =
-            WriteRepeatedDefinitionLevels(rows, levelValueCount, destination[repetitionByteCount..]);
-        if (definitionWritten != definitionByteCount)
-            throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
-
-        var valueDestination = destination[(repetitionByteCount + definitionByteCount)..];
-        valueDestination.Clear();
-        var flattenedIndex = 0;
-        foreach (var row in rows)
-        foreach (var t in row)
+        static void WriteValues(ReadOnlySpan<bool[]> rows, ColumnBufferWriter writer,
+            DateTimeKindHandling dateTimeKindHandling, string columnName)
         {
-            if (t)
-            {
-                var byteIndex = flattenedIndex >> 3;
-                var bitIndex = flattenedIndex & 7;
-                valueDestination[byteIndex] |= (byte)(1 << bitIndex);
-            }
+            var dataValueCount = 0;
+            foreach (var row in rows)
+                dataValueCount = checked(dataValueCount + row.Length);
 
-            flattenedIndex++;
+            var valueDestination = writer.GetSpan((dataValueCount + 7) >> 3);
+            valueDestination.Clear();
+            var flattenedIndex = 0;
+            foreach (var row in rows)
+            foreach (var t in row)
+            {
+                if (t)
+                {
+                    var byteIndex = flattenedIndex >> 3;
+                    var bitIndex = flattenedIndex & 7;
+                    valueDestination[byteIndex] |= (byte)(1 << bitIndex);
+                }
+
+                flattenedIndex++;
+            }
+            writer.Advance((dataValueCount + 7) >> 3);
         }
 
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, totalByteCount, repetitionByteCount,
-            definitionByteCount);
+        EncodeRepeatedRequiredCore(rows, ref state, columnName, maxEncodedBytes, DateTimeKindHandling.None,
+            GetValueByteCount, WriteValues);
     }
 
     static void EncodeRepeatedString(ReadOnlySpan<string?[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
