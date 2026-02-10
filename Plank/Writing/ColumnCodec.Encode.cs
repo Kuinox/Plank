@@ -25,30 +25,46 @@ static partial class ColumnCodec
                 $"Optional column '{column.Name}' is not supported for value type '{typeof(T)}' yet.");
         }
 
-        switch (encoding)
+        if (!TryEncodeNonRepeated(values, encoding, dispatchKey, dateTimeKindHandling, ref state, column.Name,
+                encodedBufferCapacity))
         {
-            case EncodingKind.Plain:
-                EncodePlainNonRepeated(values, dispatchKey, dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity, physicalType);
-                break;
-            case EncodingKind.DeltaBinaryPacked:
-                EncodeDeltaBinaryPackedNonRepeated(values, dispatchKey, dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity, physicalType);
-                break;
-            case EncodingKind.DeltaLengthByteArray:
-                EncodeDeltaLengthByteArrayNonRepeated(values, dispatchKey, ref state, column.Name, encodedBufferCapacity, physicalType);
-                break;
-            case EncodingKind.DeltaByteArray:
-                EncodeDeltaByteArrayNonRepeated(values, dispatchKey, ref state, column.Name, encodedBufferCapacity, physicalType);
-                break;
-            case EncodingKind.ByteStreamSplit:
-                EncodeByteStreamSplitNonRepeated(values, dispatchKey, dateTimeKindHandling, ref state, column.Name, encodedBufferCapacity, physicalType);
-                break;
-            default:
-                throw new NotSupportedException($"Encoding '{encoding}' is not supported for column '{column.Name}'.");
+            if (encoding is EncodingKind.Plain or EncodingKind.DeltaBinaryPacked or EncodingKind.DeltaLengthByteArray
+                or EncodingKind.DeltaByteArray or EncodingKind.ByteStreamSplit)
+                throw new InvalidOperationException(GetUnsupportedTypeMessage(column.Name, physicalType));
+
+            throw new NotSupportedException(
+                $"Encoding '{encoding}' with value type '{typeof(T)}' is not supported for column '{column.Name}'.");
         }
 
         state.NullCount = 0;
         state.DefinitionLevelsByteLength = 0;
         state.RepetitionLevelsByteLength = 0;
+    }
+
+    static bool TryEncodeNonRepeated<T>(ReadOnlySpan<T> values, EncodingKind encoding,
+        ColumnDispatch.DispatchKey dispatchKey, DateTimeKindHandling dateTimeKindHandling,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity)
+    {
+        switch (encoding)
+        {
+            case EncodingKind.Plain:
+                return TryEncodePlainNonRepeated(values, dispatchKey, dateTimeKindHandling, ref state, columnName,
+                    encodedBufferCapacity);
+            case EncodingKind.DeltaBinaryPacked:
+                return TryEncodeDeltaBinaryPackedNonRepeated(values, dispatchKey, dateTimeKindHandling, ref state,
+                    columnName, encodedBufferCapacity);
+            case EncodingKind.DeltaLengthByteArray:
+                return TryEncodeDeltaLengthByteArrayNonRepeated(values, dispatchKey, ref state, columnName,
+                    encodedBufferCapacity);
+            case EncodingKind.DeltaByteArray:
+                return TryEncodeDeltaByteArrayNonRepeated(values, dispatchKey, ref state, columnName,
+                    encodedBufferCapacity);
+            case EncodingKind.ByteStreamSplit:
+                return TryEncodeByteStreamSplitNonRepeated(values, dispatchKey, dateTimeKindHandling, ref state,
+                    columnName, encodedBufferCapacity);
+            default:
+                return false;
+        }
     }
 
     internal static void EncodeRepeated<T>(Column column, ReadOnlySpan<T[]> rows, ParquetPhysicalType physicalType,
@@ -130,70 +146,70 @@ static partial class ColumnCodec
         }
     }
 
-    static void EncodePlainNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
+    static bool TryEncodePlainNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
-        int encodedBufferCapacity, ParquetPhysicalType physicalType)
+        int encodedBufferCapacity)
     {
         switch (dispatchKey)
         {
             case ColumnDispatch.DispatchKey.BooleanBool:
                 Encoding.Plain.EncodeBoolean(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool>>(ref values), ref state, columnName,
                     encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.Int32Int32:
                 Encoding.Plain.EncodeInt32(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), ref state, columnName,
                     encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.Int32DateOnly:
                 Encoding.Plain.EncodeDateOnly(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateOnly>>(ref values), ref state,
                     columnName, encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.Int64Int64:
                 Encoding.Plain.EncodeInt64(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), ref state, columnName,
                     encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.Int64DateTime:
                 Encoding.Plain.EncodeDateTime(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values),
                     dateTimeKindHandling, ref state, columnName, encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.Int64DateTimeOffset:
                 Encoding.Plain.EncodeDateTimeOffset(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTimeOffset>>(ref values),
                     ref state, columnName, encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.Int64TimeOnly:
                 Encoding.Plain.EncodeTimeOnly(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<TimeOnly>>(ref values), ref state,
                     columnName, encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.ByteArrayString:
                 Encoding.Plain.EncodeString(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values), ref state, columnName,
                     encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.ByteArrayByteArray:
                 Encoding.Plain.EncodeByteArray(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref state,
                     columnName, encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.FloatFloat:
                 Encoding.Plain.EncodeFloat(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float>>(ref values), ref state, columnName,
                     encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.DoubleDouble:
                 Encoding.Plain.EncodeDouble(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values), ref state, columnName,
                     encodedBufferCapacity);
-                return;
+                return true;
             default:
-                throw new InvalidOperationException(GetUnsupportedTypeMessage(columnName, physicalType));
+                return false;
         }
     }
 
-    static void EncodeDeltaBinaryPackedNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
+    static bool TryEncodeDeltaBinaryPackedNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
-        int encodedBufferCapacity, ParquetPhysicalType physicalType)
+        int encodedBufferCapacity)
     {
         switch (dispatchKey)
         {
             case ColumnDispatch.DispatchKey.Int32Int32:
                 Encoding.DeltaBinaryPacked.EncodeInt32(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.Int32DateOnly:
             {
                 var source = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateOnly>>(ref values);
@@ -209,11 +225,11 @@ static partial class ColumnCodec
                 {
                     ArrayPool<int>.Shared.Return(buffer);
                 }
-                return;
+                return true;
             }
             case ColumnDispatch.DispatchKey.Int64Int64:
                 Encoding.DeltaBinaryPacked.EncodeInt64(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.Int64DateTime:
             {
                 var source = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values);
@@ -229,7 +245,7 @@ static partial class ColumnCodec
                 {
                     ArrayPool<long>.Shared.Return(buffer);
                 }
-                return;
+                return true;
             }
             case ColumnDispatch.DispatchKey.Int64DateTimeOffset:
             {
@@ -249,7 +265,7 @@ static partial class ColumnCodec
                 {
                     ArrayPool<long>.Shared.Return(buffer);
                 }
-                return;
+                return true;
             }
             case ColumnDispatch.DispatchKey.Int64TimeOnly:
             {
@@ -266,54 +282,54 @@ static partial class ColumnCodec
                 {
                     ArrayPool<long>.Shared.Return(buffer);
                 }
-                return;
+                return true;
             }
             default:
-                throw new InvalidOperationException(GetUnsupportedTypeMessage(columnName, physicalType));
+                return false;
         }
     }
 
-    static void EncodeDeltaLengthByteArrayNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity, ParquetPhysicalType physicalType)
+    static bool TryEncodeDeltaLengthByteArrayNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity)
     {
         switch (dispatchKey)
         {
             case ColumnDispatch.DispatchKey.ByteArrayString:
                 Encoding.DeltaLengthByteArray.EncodeString(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.ByteArrayByteArray:
                 Encoding.DeltaLengthByteArray.EncodeByteArray(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return;
+                return true;
             default:
-                throw new InvalidOperationException(GetUnsupportedTypeMessage(columnName, physicalType));
+                return false;
         }
     }
 
-    static void EncodeDeltaByteArrayNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity, ParquetPhysicalType physicalType)
+    static bool TryEncodeDeltaByteArrayNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity)
     {
         switch (dispatchKey)
         {
             case ColumnDispatch.DispatchKey.ByteArrayString:
                 Encoding.DeltaByteArray.EncodeString(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.ByteArrayByteArray:
                 Encoding.DeltaByteArray.EncodeByteArray(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return;
+                return true;
             default:
-                throw new InvalidOperationException(GetUnsupportedTypeMessage(columnName, physicalType));
+                return false;
         }
     }
 
-    static void EncodeByteStreamSplitNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
+    static bool TryEncodeByteStreamSplitNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
-        int encodedBufferCapacity, ParquetPhysicalType physicalType)
+        int encodedBufferCapacity)
     {
         switch (dispatchKey)
         {
             case ColumnDispatch.DispatchKey.Int32Int32:
                 Encoding.ByteStreamSplit.EncodeInt32(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.Int32DateOnly:
             {
                 var source = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateOnly>>(ref values);
@@ -329,11 +345,11 @@ static partial class ColumnCodec
                 {
                     ArrayPool<int>.Shared.Return(buffer);
                 }
-                return;
+                return true;
             }
             case ColumnDispatch.DispatchKey.Int64Int64:
                 Encoding.ByteStreamSplit.EncodeInt64(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.Int64DateTime:
             {
                 var source = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values);
@@ -349,7 +365,7 @@ static partial class ColumnCodec
                 {
                     ArrayPool<long>.Shared.Return(buffer);
                 }
-                return;
+                return true;
             }
             case ColumnDispatch.DispatchKey.Int64DateTimeOffset:
             {
@@ -369,7 +385,7 @@ static partial class ColumnCodec
                 {
                     ArrayPool<long>.Shared.Return(buffer);
                 }
-                return;
+                return true;
             }
             case ColumnDispatch.DispatchKey.Int64TimeOnly:
             {
@@ -386,16 +402,16 @@ static partial class ColumnCodec
                 {
                     ArrayPool<long>.Shared.Return(buffer);
                 }
-                return;
+                return true;
             }
             case ColumnDispatch.DispatchKey.FloatFloat:
                 Encoding.ByteStreamSplit.EncodeFloat(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return;
+                return true;
             case ColumnDispatch.DispatchKey.DoubleDouble:
                 Encoding.ByteStreamSplit.EncodeDouble(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return;
+                return true;
             default:
-                throw new InvalidOperationException(GetUnsupportedTypeMessage(columnName, physicalType));
+                return false;
         }
     }
 }
