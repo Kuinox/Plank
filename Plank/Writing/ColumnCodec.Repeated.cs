@@ -208,21 +208,6 @@ static partial class ColumnCodec
             definitionByteCount);
     }
 
-    static void EncodeRepeatedInt32(ReadOnlySpan<int[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-        => EncodeRepeatedRequired<int, RepeatedInt32Writer>(rows, ref state, columnName, maxEncodedBytes,
-            DateTimeKindHandling.None);
-
-    static void EncodeRepeatedDateOnly(ReadOnlySpan<DateOnly[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-        => EncodeRepeatedRequired<DateOnly, RepeatedDateOnlyWriter>(rows, ref state, columnName, maxEncodedBytes,
-            DateTimeKindHandling.None);
-
-    static void EncodeRepeatedNullableInt32(ReadOnlySpan<int?[]> rows,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
-        => EncodeRepeatedOptionalNullableStruct<int, RepeatedOptionalInt32Writer>(rows, ref state, columnName,
-            maxEncodedBytes, DateTimeKindHandling.None);
-
     static void EncodeRepeatedOptionalNullableStruct<T, TWriter>(ReadOnlySpan<T?[]> rows,
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes,
         DateTimeKindHandling dateTimeKindHandling)
@@ -261,39 +246,6 @@ static partial class ColumnCodec
             definitionByteCount);
     }
 
-    static void EncodeRepeatedInt64(ReadOnlySpan<long[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-        => EncodeRepeatedRequired<long, RepeatedInt64Writer>(rows, ref state, columnName, maxEncodedBytes,
-            DateTimeKindHandling.None);
-
-    static void EncodeRepeatedDateTime(ReadOnlySpan<DateTime[]> rows, DateTimeKindHandling dateTimeKindHandling,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
-    {
-        ValidateDateTimeHandling(dateTimeKindHandling, columnName);
-        EncodeRepeatedRequired<DateTime, RepeatedDateTimeWriter>(rows, ref state, columnName, maxEncodedBytes,
-            dateTimeKindHandling);
-    }
-
-    static void EncodeRepeatedDateTimeOffset(ReadOnlySpan<DateTimeOffset[]> rows,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
-        => EncodeRepeatedRequired<DateTimeOffset, RepeatedDateTimeOffsetWriter>(rows, ref state, columnName,
-            maxEncodedBytes, DateTimeKindHandling.None);
-
-    static void EncodeRepeatedTimeOnly(ReadOnlySpan<TimeOnly[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-        => EncodeRepeatedRequired<TimeOnly, RepeatedTimeOnlyWriter>(rows, ref state, columnName, maxEncodedBytes,
-            DateTimeKindHandling.None);
-
-    static void EncodeRepeatedFloat(ReadOnlySpan<float[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-        => EncodeRepeatedRequired<float, RepeatedFloatWriter>(rows, ref state, columnName, maxEncodedBytes,
-            DateTimeKindHandling.None);
-
-    static void EncodeRepeatedDouble(ReadOnlySpan<double[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-        => EncodeRepeatedRequired<double, RepeatedDoubleWriter>(rows, ref state, columnName, maxEncodedBytes,
-            DateTimeKindHandling.None);
-
     static void EncodeRepeatedBoolean(ReadOnlySpan<bool[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
     {
@@ -324,16 +276,6 @@ static partial class ColumnCodec
 
         EncodeRepeatedRequiredCore(rows, ref state, columnName, maxEncodedBytes, DateTimeKindHandling.None, WriteValues);
     }
-
-    static void EncodeRepeatedString(ReadOnlySpan<string?[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-        => EncodeRepeatedOptionalReference<string, RepeatedStringReferenceWriter>(rows, ref state, columnName,
-            maxEncodedBytes);
-
-    static void EncodeRepeatedByteArray(ReadOnlySpan<byte[]?[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
-        => EncodeRepeatedOptionalReference<byte[], RepeatedByteArrayReferenceWriter>(rows, ref state, columnName,
-            maxEncodedBytes);
 
     static void EncodeRepeatedOptionalReference<T, TWriter>(ReadOnlySpan<T?[]> rows,
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)

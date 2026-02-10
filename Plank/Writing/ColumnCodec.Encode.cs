@@ -98,48 +98,60 @@ static partial class ColumnCodec
                     columnName, encodedBufferCapacity);
                 return true;
             case ColumnDispatch.DispatchKey.Int32Int32:
-                EncodeRepeatedInt32(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<int[]>>(ref rows), ref state, columnName,
-                    encodedBufferCapacity);
+                EncodeRepeatedRequired<int, RepeatedInt32Writer>(
+                    Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<int[]>>(ref rows), ref state, columnName,
+                    encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             case ColumnDispatch.DispatchKey.Int32NullableInt32:
-                EncodeRepeatedNullableInt32(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<int?[]>>(ref rows), ref state,
-                    columnName, encodedBufferCapacity);
+                EncodeRepeatedOptionalNullableStruct<int, RepeatedOptionalInt32Writer>(
+                    Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<int?[]>>(ref rows), ref state, columnName,
+                    encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             case ColumnDispatch.DispatchKey.Int32DateOnly:
-                EncodeRepeatedDateOnly(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateOnly[]>>(ref rows), ref state,
-                    columnName, encodedBufferCapacity);
+                EncodeRepeatedRequired<DateOnly, RepeatedDateOnlyWriter>(
+                    Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateOnly[]>>(ref rows), ref state, columnName,
+                    encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             case ColumnDispatch.DispatchKey.Int64Int64:
-                EncodeRepeatedInt64(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<long[]>>(ref rows), ref state,
-                    columnName, encodedBufferCapacity);
+                EncodeRepeatedRequired<long, RepeatedInt64Writer>(
+                    Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<long[]>>(ref rows), ref state, columnName,
+                    encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             case ColumnDispatch.DispatchKey.Int64DateTime:
-                EncodeRepeatedDateTime(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateTime[]>>(ref rows),
-                    dateTimeKindHandling, ref state, columnName, encodedBufferCapacity);
+                ValidateDateTimeHandling(dateTimeKindHandling, columnName);
+                EncodeRepeatedRequired<DateTime, RepeatedDateTimeWriter>(
+                    Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateTime[]>>(ref rows), ref state, columnName,
+                    encodedBufferCapacity, dateTimeKindHandling);
                 return true;
             case ColumnDispatch.DispatchKey.Int64DateTimeOffset:
-                EncodeRepeatedDateTimeOffset(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateTimeOffset[]>>(ref rows),
-                    ref state, columnName, encodedBufferCapacity);
+                EncodeRepeatedRequired<DateTimeOffset, RepeatedDateTimeOffsetWriter>(
+                    Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateTimeOffset[]>>(ref rows), ref state, columnName,
+                    encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             case ColumnDispatch.DispatchKey.Int64TimeOnly:
-                EncodeRepeatedTimeOnly(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<TimeOnly[]>>(ref rows), ref state,
-                    columnName, encodedBufferCapacity);
+                EncodeRepeatedRequired<TimeOnly, RepeatedTimeOnlyWriter>(
+                    Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<TimeOnly[]>>(ref rows), ref state, columnName,
+                    encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             case ColumnDispatch.DispatchKey.ByteArrayString:
-                EncodeRepeatedString(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<string?[]>>(ref rows), ref state,
-                    columnName, encodedBufferCapacity);
+                EncodeRepeatedOptionalReference<string, RepeatedStringReferenceWriter>(
+                    Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<string?[]>>(ref rows), ref state, columnName,
+                    encodedBufferCapacity);
                 return true;
             case ColumnDispatch.DispatchKey.ByteArrayByteArray:
-                EncodeRepeatedByteArray(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<byte[]?[]>>(ref rows), ref state,
-                    columnName, encodedBufferCapacity);
+                EncodeRepeatedOptionalReference<byte[], RepeatedByteArrayReferenceWriter>(
+                    Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<byte[]?[]>>(ref rows), ref state, columnName,
+                    encodedBufferCapacity);
                 return true;
             case ColumnDispatch.DispatchKey.FloatFloat:
-                EncodeRepeatedFloat(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<float[]>>(ref rows), ref state,
-                    columnName, encodedBufferCapacity);
+                EncodeRepeatedRequired<float, RepeatedFloatWriter>(
+                    Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<float[]>>(ref rows), ref state, columnName,
+                    encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             case ColumnDispatch.DispatchKey.DoubleDouble:
-                EncodeRepeatedDouble(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<double[]>>(ref rows), ref state,
-                    columnName, encodedBufferCapacity);
+                EncodeRepeatedRequired<double, RepeatedDoubleWriter>(
+                    Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<double[]>>(ref rows), ref state, columnName,
+                    encodedBufferCapacity, DateTimeKindHandling.None);
                 return true;
             default:
                 return false;
