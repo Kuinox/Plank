@@ -167,50 +167,52 @@ static partial class ColumnCodec
             case ColumnDispatch.DispatchKey.BooleanBool:
                 Encoding.Plain.EncodeBoolean(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool>>(ref values), ref state, columnName,
                     encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int32Int32:
                 Encoding.Plain.EncodeInt32(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), ref state, columnName,
                     encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int32DateOnly:
                 Encoding.Plain.EncodeDateOnly(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateOnly>>(ref values), ref state,
                     columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int64Int64:
                 Encoding.Plain.EncodeInt64(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), ref state, columnName,
                     encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int64DateTime:
                 Encoding.Plain.EncodeDateTime(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values),
                     dateTimeKindHandling, ref state, columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int64DateTimeOffset:
                 Encoding.Plain.EncodeDateTimeOffset(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTimeOffset>>(ref values),
                     ref state, columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int64TimeOnly:
                 Encoding.Plain.EncodeTimeOnly(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<TimeOnly>>(ref values), ref state,
                     columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.ByteArrayString:
                 Encoding.Plain.EncodeString(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values), ref state, columnName,
                     encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.ByteArrayByteArray:
                 Encoding.Plain.EncodeByteArray(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref state,
                     columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.FloatFloat:
                 Encoding.Plain.EncodeFloat(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float>>(ref values), ref state, columnName,
                     encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.DoubleDouble:
                 Encoding.Plain.EncodeDouble(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values), ref state, columnName,
                     encodedBufferCapacity);
-                return true;
+                break;
             default:
                 return false;
         }
+
+        return true;
     }
 
     static bool TryEncodeDeltaBinaryPackedNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
