@@ -135,17 +135,7 @@ static partial class ColumnCodec
             => Utf8.GetByteCount(value);
 
         public static void WritePayload(string value, ColumnBufferWriter writer, int payloadLength, string columnName)
-        {
-            WriteInt32(writer, payloadLength);
-            if (payloadLength == 0)
-                return;
-
-            var destination = writer.GetSpan(payloadLength);
-            var written = Utf8.GetBytes(value.AsSpan(), destination);
-            if (written != payloadLength)
-                throw new InvalidOperationException($"Column '{columnName}' could not encode UTF-8 payload.");
-            writer.Advance(written);
-        }
+            => WriteStringPayload(writer, value, payloadLength, columnName);
     }
 
     readonly struct RepeatedByteArrayReferenceWriter : IRepeatedOptionalReferenceWriter<byte[]>
@@ -154,15 +144,7 @@ static partial class ColumnCodec
             => value.Length;
 
         public static void WritePayload(byte[] value, ColumnBufferWriter writer, int payloadLength, string columnName)
-        {
-            WriteInt32(writer, payloadLength);
-            if (payloadLength == 0)
-                return;
-
-            var destination = writer.GetSpan(payloadLength);
-            value.AsSpan().CopyTo(destination);
-            writer.Advance(payloadLength);
-        }
+            => WriteByteArrayPayload(writer, value, payloadLength);
     }
 
     readonly struct RepeatedOptionalInt32Writer : IRepeatedOptionalScalarWriter<int>

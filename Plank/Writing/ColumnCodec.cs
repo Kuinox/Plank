@@ -166,6 +166,30 @@ static partial class ColumnCodec
         writer.Advance(sizeof(long));
     }
 
+    static void WriteStringPayload(ColumnBufferWriter writer, string value, int payloadLength, string columnName)
+    {
+        WriteInt32(writer, payloadLength);
+        if (payloadLength == 0)
+            return;
+
+        var destination = writer.GetSpan(payloadLength);
+        var written = Utf8.GetBytes(value.AsSpan(), destination);
+        if (written != payloadLength)
+            throw new InvalidOperationException($"Column '{columnName}' could not encode UTF-8 payload.");
+        writer.Advance(written);
+    }
+
+    static void WriteByteArrayPayload(ColumnBufferWriter writer, byte[] value, int payloadLength)
+    {
+        WriteInt32(writer, payloadLength);
+        if (payloadLength == 0)
+            return;
+
+        var destination = writer.GetSpan(payloadLength);
+        value.AsSpan().CopyTo(destination);
+        writer.Advance(payloadLength);
+    }
+
     internal static long ToUnixMicroseconds(DateTime value, DateTimeKindHandling handling, string columnName)
     {
         var normalized = NormalizeDateTime(value, handling, columnName);

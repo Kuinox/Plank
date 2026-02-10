@@ -209,30 +209,38 @@ static partial class ColumnCodec
 
     static bool TryEncodeDeltaLengthByteArrayNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity)
-    {
-        switch (dispatchKey)
-        {
-            case ColumnDispatch.DispatchKey.ByteArrayString:
-                Encoding.DeltaLengthByteArray.EncodeString(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return true;
-            case ColumnDispatch.DispatchKey.ByteArrayByteArray:
-                Encoding.DeltaLengthByteArray.EncodeByteArray(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return true;
-            default:
-                return false;
-        }
-    }
+        => TryEncodeDeltaVariableByteArrayNonRepeated(values, dispatchKey, ref state, columnName,
+            encodedBufferCapacity, deltaByteArray: false);
 
     static bool TryEncodeDeltaByteArrayNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity)
+        => TryEncodeDeltaVariableByteArrayNonRepeated(values, dispatchKey, ref state, columnName,
+            encodedBufferCapacity, deltaByteArray: true);
+
+    static bool TryEncodeDeltaVariableByteArrayNonRepeated<T>(ReadOnlySpan<T> values,
+        ColumnDispatch.DispatchKey dispatchKey, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
+        int encodedBufferCapacity, bool deltaByteArray)
     {
         switch (dispatchKey)
         {
             case ColumnDispatch.DispatchKey.ByteArrayString:
-                Encoding.DeltaByteArray.EncodeString(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values), ref state, columnName, encodedBufferCapacity);
+                if (deltaByteArray)
+                    Encoding.DeltaByteArray.EncodeString(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values),
+                        ref state, columnName, encodedBufferCapacity);
+                else
+                    Encoding.DeltaLengthByteArray.EncodeString(
+                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values), ref state, columnName,
+                        encodedBufferCapacity);
                 return true;
             case ColumnDispatch.DispatchKey.ByteArrayByteArray:
-                Encoding.DeltaByteArray.EncodeByteArray(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref state, columnName, encodedBufferCapacity);
+                if (deltaByteArray)
+                    Encoding.DeltaByteArray.EncodeByteArray(
+                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref state, columnName,
+                        encodedBufferCapacity);
+                else
+                    Encoding.DeltaLengthByteArray.EncodeByteArray(
+                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref state, columnName,
+                        encodedBufferCapacity);
                 return true;
             default:
                 return false;

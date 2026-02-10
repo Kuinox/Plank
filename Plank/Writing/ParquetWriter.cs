@@ -757,21 +757,7 @@ public sealed class ParquetWriter : IDisposable
             for (var i = 0; i < _columnStates.Length; i++)
             {
                 ref var state = ref _columnStates[i];
-                state.ValueCount = 0;
-                state.RowCount = 0;
-                state.EncodedLength = 0;
-                state.UncompressedLength = 0;
-                state.NullCount = 0;
-                state.DefinitionLevelsByteLength = 0;
-                state.RepetitionLevelsByteLength = 0;
-                state.EncodeDurationTicks = 0;
-                state.CompressionDurationTicks = 0;
-                state.EncodedTimestampTicks = 0;
-                state.StringRowCount = 0;
-                state.StringNonNullCount = 0;
-                state.StringSizePassTicks = 0;
-                state.StringDefinitionLevelsTicks = 0;
-                state.StringUtf8WritePassTicks = 0;
+                ClearColumnDataMetrics(ref state);
                 Volatile.Write(ref state.WriteState, WriteStateEmpty);
                 state.Encoding = default;
                 state.Compression = default;
@@ -784,6 +770,30 @@ public sealed class ParquetWriter : IDisposable
                 ColumnMetadata[i] = default;
                 _writeSignals[i] = null;
             }
+        }
+
+        static void ClearColumnDataMetrics(ref ColumnState state)
+        {
+            state.ValueCount = 0;
+            state.RowCount = 0;
+            state.EncodedLength = 0;
+            state.UncompressedLength = 0;
+            state.NullCount = 0;
+            state.DefinitionLevelsByteLength = 0;
+            state.RepetitionLevelsByteLength = 0;
+            state.EncodeDurationTicks = 0;
+            state.CompressionDurationTicks = 0;
+            state.EncodedTimestampTicks = 0;
+            ClearStringMetrics(ref state);
+        }
+
+        static void ClearStringMetrics(ref ColumnState state)
+        {
+            state.StringRowCount = 0;
+            state.StringNonNullCount = 0;
+            state.StringSizePassTicks = 0;
+            state.StringDefinitionLevelsTicks = 0;
+            state.StringUtf8WritePassTicks = 0;
         }
 
         internal int EncodeColumn<T>(Column column, ReadOnlySpan<T> values, ParquetPhysicalType physicalType)
@@ -991,21 +1001,7 @@ public sealed class ParquetWriter : IDisposable
                 state.ExternalDataOwner.Dispose();
                 state.ExternalDataOwner = null;
             }
-            state.RowCount = 0;
-            state.EncodedLength = 0;
-            state.UncompressedLength = 0;
-            state.NullCount = 0;
-            state.DefinitionLevelsByteLength = 0;
-            state.RepetitionLevelsByteLength = 0;
-            state.ValueCount = 0;
-            state.EncodeDurationTicks = 0;
-            state.CompressionDurationTicks = 0;
-            state.EncodedTimestampTicks = 0;
-            state.StringRowCount = 0;
-            state.StringNonNullCount = 0;
-            state.StringSizePassTicks = 0;
-            state.StringDefinitionLevelsTicks = 0;
-            state.StringUtf8WritePassTicks = 0;
+            ClearColumnDataMetrics(ref state);
             Volatile.Write(ref state.WriteState, WriteStateWritten);
         }
 

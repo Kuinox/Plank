@@ -1,5 +1,4 @@
 using Plank.Schema;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Plank.Writing;
@@ -61,17 +60,7 @@ static partial class ColumnCodec
             => Utf8.GetByteCount(value);
 
         public static void WritePayload(string value, ColumnBufferWriter writer, int payloadLength, string columnName)
-        {
-            WriteInt32(writer, payloadLength);
-            if (payloadLength == 0)
-                return;
-
-            var destination = writer.GetSpan(payloadLength);
-            var written = Utf8.GetBytes(value.AsSpan(), destination);
-            if (written != payloadLength)
-                throw new InvalidOperationException($"Column '{columnName}' could not encode UTF-8 payload.");
-            writer.Advance(written);
-        }
+            => WriteStringPayload(writer, value, payloadLength, columnName);
     }
 
     readonly struct OptionalByteArrayWriter : IOptionalReferenceWriter<byte[]>
@@ -80,15 +69,7 @@ static partial class ColumnCodec
             => value.Length;
 
         public static void WritePayload(byte[] value, ColumnBufferWriter writer, int payloadLength, string columnName)
-        {
-            WriteInt32(writer, payloadLength);
-            if (payloadLength == 0)
-                return;
-
-            var destination = writer.GetSpan(payloadLength);
-            value.AsSpan().CopyTo(destination);
-            writer.Advance(payloadLength);
-        }
+            => WriteByteArrayPayload(writer, value, payloadLength);
     }
 
     static bool TryEncodeOptional<T>(Column column, ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
@@ -191,7 +172,6 @@ static partial class ColumnCodec
     {
         var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
 
-        var sizePassStarted = Stopwatch.GetTimestamp();
         var nonNullCount = 0;
         foreach (var value in values)
         {
@@ -199,33 +179,20 @@ static partial class ColumnCodec
                 continue;
 
             nonNullCount++;
-            _ = TWriter.GetPayloadLength(value);
         }
-        var sizePassCompleted = Stopwatch.GetTimestamp();
-
-        var definitionStarted = Stopwatch.GetTimestamp();
         var definitionByteCount = WriteDefinitionLevels(values, writer);
-        var definitionCompleted = Stopwatch.GetTimestamp();
-
-        long writePassTicks = 0;
         foreach (var value in values)
         {
             if (value is null)
                 continue;
 
             var payloadLength = TWriter.GetPayloadLength(value);
-            var writeStarted = Stopwatch.GetTimestamp();
             TWriter.WritePayload(value, writer, payloadLength, columnName);
-            var writeCompleted = Stopwatch.GetTimestamp();
-            writePassTicks += writeCompleted - writeStarted;
         }
 
         SetOptionalLayout(ref state, writer.WrittenCount, values.Length - nonNullCount, definitionByteCount);
         state.StringRowCount = values.Length;
         state.StringNonNullCount = nonNullCount;
-        state.StringSizePassTicks = sizePassCompleted - sizePassStarted;
-        state.StringDefinitionLevelsTicks = definitionCompleted - definitionStarted;
-        state.StringUtf8WritePassTicks = writePassTicks;
     }
 
     static void SetOptionalLayout(ref ParquetWriter.RowGroupState.ColumnState state, int totalByteCount, int nullCount,
