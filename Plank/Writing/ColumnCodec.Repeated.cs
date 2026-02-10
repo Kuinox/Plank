@@ -171,9 +171,6 @@ static partial class ColumnCodec
         DateTimeKindHandling dateTimeKindHandling)
         where TWriter : struct, IRepeatedScalarWriter<T>
     {
-        static int GetValueByteCount(int dataValueCount)
-            => checked(dataValueCount * TWriter.ValueSize);
-
         static void WriteValues(ReadOnlySpan<T[]> rows, ColumnBufferWriter writer,
             DateTimeKindHandling dateTimeKindHandling, string columnName)
         {
@@ -187,20 +184,18 @@ static partial class ColumnCodec
             }
         }
 
-        EncodeRepeatedRequiredCore(rows, ref state, columnName, maxEncodedBytes, dateTimeKindHandling,
-            GetValueByteCount, WriteValues);
+        EncodeRepeatedRequiredCore(rows, ref state, columnName, maxEncodedBytes, dateTimeKindHandling, WriteValues);
     }
 
     static void EncodeRepeatedRequiredCore<T>(ReadOnlySpan<T[]> rows,
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes,
-        DateTimeKindHandling dateTimeKindHandling, Func<int, int> getValueByteCount, RepeatedValueWrite<T> writeValues)
+        DateTimeKindHandling dateTimeKindHandling, RepeatedValueWrite<T> writeValues)
     {
         var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
         var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
         var levelValueCount = checked(dataValueCount + emptyRowCount);
         var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
         var definitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
-        _ = getValueByteCount(dataValueCount);
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, writer);
         if (repetitionWritten != repetitionByteCount)
             throw new InvalidOperationException($"Column '{columnName}' repetition levels size mismatch.");
@@ -235,20 +230,12 @@ static partial class ColumnCodec
         where TWriter : struct, IRepeatedOptionalScalarWriter<T>
     {
         var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
-        var elementCount = 0;
-        var emptyRowCount = 0;
+        var elementCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
         var nonNullCount = 0;
-        foreach (var t in rows)
-        {
-            var row = t ??
-                      throw new InvalidOperationException($"Column '{columnName}' does not support null row arrays.");
-            if (row.Length == 0)
-                emptyRowCount++;
-            elementCount = checked(elementCount + row.Length);
-            foreach (var t1 in row)
-                if (t1.HasValue)
-                    nonNullCount++;
-        }
+        foreach (var row in rows)
+        foreach (var value in row)
+            if (value.HasValue)
+                nonNullCount++;
 
         var levelValueCount = checked(elementCount + emptyRowCount);
         var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
@@ -310,9 +297,6 @@ static partial class ColumnCodec
     static void EncodeRepeatedBoolean(ReadOnlySpan<bool[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
     {
-        static int GetValueByteCount(int dataValueCount)
-            => (dataValueCount + 7) >> 3;
-
         static void WriteValues(ReadOnlySpan<bool[]> rows, ColumnBufferWriter writer,
             DateTimeKindHandling dateTimeKindHandling, string columnName)
         {
@@ -338,8 +322,7 @@ static partial class ColumnCodec
             writer.Advance((dataValueCount + 7) >> 3);
         }
 
-        EncodeRepeatedRequiredCore(rows, ref state, columnName, maxEncodedBytes, DateTimeKindHandling.None,
-            GetValueByteCount, WriteValues);
+        EncodeRepeatedRequiredCore(rows, ref state, columnName, maxEncodedBytes, DateTimeKindHandling.None, WriteValues);
     }
 
     static void EncodeRepeatedString(ReadOnlySpan<string?[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
@@ -358,32 +341,16 @@ static partial class ColumnCodec
         where TWriter : struct, IRepeatedOptionalReferenceWriter<T>
     {
         var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
-        var elementCount = 0;
-        var emptyRowCount = 0;
+        var elementCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
         var nonNullCount = 0;
-        var valuePayloadBytes = 0;
-        foreach (var t in rows)
-        {
-            var row = t ??
-                      throw new InvalidOperationException($"Column '{columnName}' does not support null row arrays.");
-            if (row.Length == 0)
-                emptyRowCount++;
-            elementCount = checked(elementCount + row.Length);
-            foreach (var value in row)
-            {
-                if (value is null)
-                    continue;
-
+        foreach (var row in rows)
+        foreach (var value in row)
+            if (value is not null)
                 nonNullCount++;
-                valuePayloadBytes = checked(valuePayloadBytes + sizeof(int));
-                valuePayloadBytes = checked(valuePayloadBytes + TWriter.GetPayloadLength(value));
-            }
-        }
 
         var levelValueCount = checked(elementCount + emptyRowCount);
         var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
         var definitionByteCount = GetLevelByteCount(levelValueCount, 2);
-        _ = checked(repetitionByteCount + definitionByteCount + valuePayloadBytes);
 
         var repetitionWritten = WriteRepetitionLevels(rows, levelValueCount, writer);
         if (repetitionWritten != repetitionByteCount)
