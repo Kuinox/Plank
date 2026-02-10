@@ -150,70 +150,63 @@ static partial class Encoding
         internal static void EncodeString(ReadOnlySpan<string> values, ref ParquetWriter.RowGroupState.ColumnState state,
             string columnName, int maxEncodedBytes)
         {
-            var byteCount = 0;
-            foreach (var t in values)
-            {
-                var value = t ??
-                            throw new InvalidOperationException($"Column '{columnName}' does not support null values.");
-                byteCount = checked(byteCount + sizeof(int));
-                byteCount = checked(byteCount + ColumnCodec.Utf8.GetByteCount(value));
-            }
-
-            var destination = ColumnCodec.GetDestination(ref state, byteCount);
-            if (byteCount > 0 && destination.IsEmpty)
+            var destination = ColumnCodec.GetDestination(ref state, maxEncodedBytes);
+            if (maxEncodedBytes > 0 && destination.IsEmpty)
                 throw new InvalidOperationException(
-                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+                    $"Column '{columnName}' requires more than {maxEncodedBytes} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
             var offset = 0;
             foreach (var value in values)
             {
-                var utf8Length = ColumnCodec.Utf8.GetByteCount(value);
-                BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(int)), utf8Length);
-                offset += sizeof(int);
-                if (utf8Length == 0)
-                    continue;
+                var nonNullValue = value ??
+                                   throw new InvalidOperationException($"Column '{columnName}' does not support null values.");
+                if (offset > destination.Length - sizeof(int))
+                    throw new InvalidOperationException($"Column '{columnName}' overflow while encoding UTF-8 payload.");
 
-                var written = ColumnCodec.Utf8.GetBytes(value.AsSpan(), destination.Slice(offset, utf8Length));
-                if (written != utf8Length)
-                    throw new InvalidOperationException($"Column '{columnName}' could not encode UTF-8 payload.");
-                offset += utf8Length;
+                var lengthOffset = offset;
+                offset += sizeof(int);
+                ColumnCodec.Utf8.GetEncoder().Convert(nonNullValue.AsSpan(), destination[offset..], flush: true,
+                    out var charsUsed, out var bytesWritten, out var completed);
+                if (!completed || charsUsed != nonNullValue.Length)
+                    throw new InvalidOperationException($"Column '{columnName}' overflow while encoding UTF-8 payload.");
+                offset = checked(offset + bytesWritten);
+                BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(lengthOffset, sizeof(int)), bytesWritten);
             }
 
-            state.EncodedLength = byteCount;
-            state.UncompressedLength = byteCount;
+            state.EncodedLength = offset;
+            state.UncompressedLength = offset;
         }
 
         internal static void EncodeByteArray(ReadOnlySpan<byte[]> values, ref ParquetWriter.RowGroupState.ColumnState state,
             string columnName, int maxEncodedBytes)
         {
-            var byteCount = 0;
-            foreach (var t in values)
-            {
-                var value = t ??
-                            throw new InvalidOperationException($"Column '{columnName}' does not support null values.");
-                byteCount = checked(byteCount + sizeof(int));
-                byteCount = checked(byteCount + value.Length);
-            }
-
-            var destination = ColumnCodec.GetDestination(ref state, byteCount);
-            if (byteCount > 0 && destination.IsEmpty)
+            var destination = ColumnCodec.GetDestination(ref state, maxEncodedBytes);
+            if (maxEncodedBytes > 0 && destination.IsEmpty)
                 throw new InvalidOperationException(
-                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+                    $"Column '{columnName}' requires more than {maxEncodedBytes} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
             var offset = 0;
             foreach (var value in values)
             {
-                BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(int)), value.Length);
+                var nonNullValue = value ??
+                                   throw new InvalidOperationException($"Column '{columnName}' does not support null values.");
+                if (offset > destination.Length - sizeof(int))
+                    throw new InvalidOperationException($"Column '{columnName}' overflow while encoding byte-array payload.");
+
+                BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(int)), nonNullValue.Length);
                 offset += sizeof(int);
-                if (value.Length == 0)
+                if (nonNullValue.Length == 0)
                     continue;
 
-                value.AsSpan().CopyTo(destination.Slice(offset, value.Length));
-                offset += value.Length;
+                if (offset > destination.Length - nonNullValue.Length)
+                    throw new InvalidOperationException($"Column '{columnName}' overflow while encoding byte-array payload.");
+
+                nonNullValue.AsSpan().CopyTo(destination[offset..]);
+                offset += nonNullValue.Length;
             }
 
-            state.EncodedLength = byteCount;
-            state.UncompressedLength = byteCount;
+            state.EncodedLength = offset;
+            state.UncompressedLength = offset;
         }
 
         internal static void EncodeFloat(ReadOnlySpan<float> values, ref ParquetWriter.RowGroupState.ColumnState state,

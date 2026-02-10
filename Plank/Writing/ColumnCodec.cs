@@ -122,6 +122,14 @@ static partial class ColumnCodec
         internal int WrittenCount
             => _written;
 
+        internal void OverwriteInt32(int offset, int value)
+        {
+            if ((uint)offset > (uint)(_written - sizeof(int)))
+                throw new ArgumentOutOfRangeException(nameof(offset), offset, "Offset is outside written content.");
+
+            BinaryPrimitives.WriteInt32LittleEndian(_buffer.Span.Slice(offset, sizeof(int)), value);
+        }
+
         public void Advance(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
@@ -166,21 +174,24 @@ static partial class ColumnCodec
         writer.Advance(sizeof(long));
     }
 
-    static void WriteStringPayload(ColumnBufferWriter writer, string value, int payloadLength, string columnName)
+    static void WriteStringPayload(ColumnBufferWriter writer, string value, string columnName)
     {
-        WriteInt32(writer, payloadLength);
-        if (payloadLength == 0)
-            return;
+        var lengthOffset = writer.WrittenCount;
+        WriteInt32(writer, 0);
 
-        var destination = writer.GetSpan(payloadLength);
-        var written = Utf8.GetBytes(value.AsSpan(), destination);
-        if (written != payloadLength)
-            throw new InvalidOperationException($"Column '{columnName}' could not encode UTF-8 payload.");
-        writer.Advance(written);
+        var destination = writer.GetSpan();
+        Utf8.GetEncoder().Convert(value.AsSpan(), destination, flush: true, out var charsUsed, out var bytesUsed,
+            out var completed);
+        if (!completed || charsUsed != value.Length)
+            throw new InvalidOperationException($"Column '{columnName}' overflow while encoding UTF-8 payload.");
+
+        writer.Advance(bytesUsed);
+        writer.OverwriteInt32(lengthOffset, bytesUsed);
     }
 
-    static void WriteByteArrayPayload(ColumnBufferWriter writer, byte[] value, int payloadLength)
+    static void WriteByteArrayPayload(ColumnBufferWriter writer, byte[] value)
     {
+        var payloadLength = value.Length;
         WriteInt32(writer, payloadLength);
         if (payloadLength == 0)
             return;

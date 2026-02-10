@@ -9,8 +9,7 @@ static partial class ColumnCodec
 
     interface IRepeatedOptionalReferenceWriter<T> where T : class
     {
-        static abstract int GetPayloadLength(T value);
-        static abstract void WritePayload(T value, ColumnBufferWriter writer, int payloadLength, string columnName);
+        static abstract void WritePayload(T value, ColumnBufferWriter writer, string columnName);
     }
 
     interface IRepeatedOptionalScalarWriter<T> where T : struct
@@ -131,20 +130,14 @@ static partial class ColumnCodec
 
     readonly struct RepeatedStringReferenceWriter : IRepeatedOptionalReferenceWriter<string>
     {
-        public static int GetPayloadLength(string value)
-            => Utf8.GetByteCount(value);
-
-        public static void WritePayload(string value, ColumnBufferWriter writer, int payloadLength, string columnName)
-            => WriteStringPayload(writer, value, payloadLength, columnName);
+        public static void WritePayload(string value, ColumnBufferWriter writer, string columnName)
+            => WriteStringPayload(writer, value, columnName);
     }
 
     readonly struct RepeatedByteArrayReferenceWriter : IRepeatedOptionalReferenceWriter<byte[]>
     {
-        public static int GetPayloadLength(byte[] value)
-            => value.Length;
-
-        public static void WritePayload(byte[] value, ColumnBufferWriter writer, int payloadLength, string columnName)
-            => WriteByteArrayPayload(writer, value, payloadLength);
+        public static void WritePayload(byte[] value, ColumnBufferWriter writer, string columnName)
+            => WriteByteArrayPayload(writer, value);
     }
 
     readonly struct RepeatedOptionalInt32Writer : IRepeatedOptionalScalarWriter<int>
@@ -307,8 +300,7 @@ static partial class ColumnCodec
             if (value is null)
                 continue;
 
-            var payloadLength = TWriter.GetPayloadLength(value);
-            TWriter.WritePayload(value, writer, payloadLength, columnName);
+            TWriter.WritePayload(value, writer, columnName);
         }
 
         var nullCount = checked(levelValueCount - nonNullCount);

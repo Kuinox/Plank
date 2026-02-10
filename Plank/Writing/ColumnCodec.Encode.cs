@@ -96,66 +96,68 @@ static partial class ColumnCodec
             case ColumnDispatch.DispatchKey.BooleanBool:
                 EncodeRepeatedBoolean(Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<bool[]>>(ref rows), ref state,
                     columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int32Int32:
                 EncodeRepeatedRequired<int, RepeatedInt32Writer>(
                     Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<int[]>>(ref rows), ref state, columnName,
                     encodedBufferCapacity, DateTimeKindHandling.None);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int32NullableInt32:
                 EncodeRepeatedOptionalNullableStruct<int, RepeatedOptionalInt32Writer>(
                     Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<int?[]>>(ref rows), ref state, columnName,
                     encodedBufferCapacity, DateTimeKindHandling.None);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int32DateOnly:
                 EncodeRepeatedRequired<DateOnly, RepeatedDateOnlyWriter>(
                     Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateOnly[]>>(ref rows), ref state, columnName,
                     encodedBufferCapacity, DateTimeKindHandling.None);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int64Int64:
                 EncodeRepeatedRequired<long, RepeatedInt64Writer>(
                     Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<long[]>>(ref rows), ref state, columnName,
                     encodedBufferCapacity, DateTimeKindHandling.None);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int64DateTime:
                 ValidateDateTimeHandling(dateTimeKindHandling, columnName);
                 EncodeRepeatedRequired<DateTime, RepeatedDateTimeWriter>(
                     Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateTime[]>>(ref rows), ref state, columnName,
                     encodedBufferCapacity, dateTimeKindHandling);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int64DateTimeOffset:
                 EncodeRepeatedRequired<DateTimeOffset, RepeatedDateTimeOffsetWriter>(
                     Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<DateTimeOffset[]>>(ref rows), ref state, columnName,
                     encodedBufferCapacity, DateTimeKindHandling.None);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int64TimeOnly:
                 EncodeRepeatedRequired<TimeOnly, RepeatedTimeOnlyWriter>(
                     Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<TimeOnly[]>>(ref rows), ref state, columnName,
                     encodedBufferCapacity, DateTimeKindHandling.None);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.ByteArrayString:
                 EncodeRepeatedOptionalReference<string, RepeatedStringReferenceWriter>(
                     Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<string?[]>>(ref rows), ref state, columnName,
                     encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.ByteArrayByteArray:
                 EncodeRepeatedOptionalReference<byte[], RepeatedByteArrayReferenceWriter>(
                     Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<byte[]?[]>>(ref rows), ref state, columnName,
                     encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.FloatFloat:
                 EncodeRepeatedRequired<float, RepeatedFloatWriter>(
                     Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<float[]>>(ref rows), ref state, columnName,
                     encodedBufferCapacity, DateTimeKindHandling.None);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.DoubleDouble:
                 EncodeRepeatedRequired<double, RepeatedDoubleWriter>(
                     Unsafe.As<ReadOnlySpan<T[]>, ReadOnlySpan<double[]>>(ref rows), ref state, columnName,
                     encodedBufferCapacity, DateTimeKindHandling.None);
-                return true;
+                break;
             default:
                 return false;
         }
+
+        return true;
     }
 
     static bool TryEncodePlainNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
@@ -277,41 +279,43 @@ static partial class ColumnCodec
             case ColumnDispatch.DispatchKey.Int32Int32:
                 EncodeInt32ForNumericEncodings(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), byteStreamSplit,
                     ref state, columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int32DateOnly:
                 EncodeDateOnlyForNumericEncodings(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateOnly>>(ref values),
                     byteStreamSplit, ref state, columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int64Int64:
                 EncodeInt64ForNumericEncodings(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), byteStreamSplit,
                     ref state, columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int64DateTime:
                 EncodeDateTimeForNumericEncodings(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values),
                     dateTimeKindHandling, byteStreamSplit, ref state, columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int64DateTimeOffset:
                 EncodeDateTimeOffsetForNumericEncodings(
                     Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTimeOffset>>(ref values), byteStreamSplit, ref state,
                     columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.Int64TimeOnly:
                 EncodeTimeOnlyForNumericEncodings(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<TimeOnly>>(ref values),
                     byteStreamSplit, ref state, columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.FloatFloat:
                 if (!byteStreamSplit)
                     return false;
                 Encoding.ByteStreamSplit.EncodeFloat(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return true;
+                break;
             case ColumnDispatch.DispatchKey.DoubleDouble:
                 if (!byteStreamSplit)
                     return false;
                 Encoding.ByteStreamSplit.EncodeDouble(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return true;
+                break;
             default:
                 return false;
         }
+
+        return true;
     }
 
     static void EncodeInt32ForNumericEncodings(ReadOnlySpan<int> values, bool byteStreamSplit,
