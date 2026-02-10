@@ -8,20 +8,20 @@ static partial class ColumnCodec
     interface IOptionalScalarWriter<T>
     {
         static abstract int ValueSize { get; }
-        static abstract void Write(T value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+        static abstract void Write(T value, VariableSizeBuffer writer, DateTimeKindHandling dateTimeKindHandling,
             string columnName);
     }
 
     interface IOptionalReferenceWriter<T> where T : class
     {
-        static abstract void WritePayload(T value, ColumnBufferWriter writer, string columnName);
+        static abstract void WritePayload(T value, VariableSizeBuffer writer, string columnName);
     }
 
     readonly struct OptionalInt32Writer : IOptionalScalarWriter<int>
     {
         public static int ValueSize => sizeof(int);
 
-        public static void Write(int value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+        public static void Write(int value, VariableSizeBuffer writer, DateTimeKindHandling dateTimeKindHandling,
             string columnName)
             => WriteInt32(writer, value);
     }
@@ -30,7 +30,7 @@ static partial class ColumnCodec
     {
         public static int ValueSize => sizeof(long);
 
-        public static void Write(long value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+        public static void Write(long value, VariableSizeBuffer writer, DateTimeKindHandling dateTimeKindHandling,
             string columnName)
             => WriteInt64(writer, value);
     }
@@ -39,7 +39,7 @@ static partial class ColumnCodec
     {
         public static int ValueSize => sizeof(double);
 
-        public static void Write(double value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+        public static void Write(double value, VariableSizeBuffer writer, DateTimeKindHandling dateTimeKindHandling,
             string columnName)
             => WriteInt64(writer, BitConverter.DoubleToInt64Bits(value));
     }
@@ -48,20 +48,20 @@ static partial class ColumnCodec
     {
         public static int ValueSize => sizeof(long);
 
-        public static void Write(DateTime value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+        public static void Write(DateTime value, VariableSizeBuffer writer, DateTimeKindHandling dateTimeKindHandling,
             string columnName)
             => WriteInt64(writer, ToUnixMicroseconds(value, dateTimeKindHandling, columnName));
     }
 
     readonly struct OptionalStringWriter : IOptionalReferenceWriter<string>
     {
-        public static void WritePayload(string value, ColumnBufferWriter writer, string columnName)
+        public static void WritePayload(string value, VariableSizeBuffer writer, string columnName)
             => WriteStringPayload(writer, value, columnName);
     }
 
     readonly struct OptionalByteArrayWriter : IOptionalReferenceWriter<byte[]>
     {
-        public static void WritePayload(byte[] value, ColumnBufferWriter writer, string columnName)
+        public static void WritePayload(byte[] value, VariableSizeBuffer writer, string columnName)
             => WriteByteArrayPayload(writer, value);
     }
 
@@ -124,7 +124,7 @@ static partial class ColumnCodec
         if (typeof(T) == typeof(DateTime))
             ValidateDateTimeHandling(dateTimeKindHandling, columnName);
 
-        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
+        var writer = CreateVariableSizeBuffer(ref state, maxEncodedBytes, columnName);
         var nonNullCount = 0;
         foreach (var t in values)
             if (t.HasValue)
@@ -150,7 +150,7 @@ static partial class ColumnCodec
         if (typeof(T) == typeof(DateTime))
             ValidateDateTimeHandling(dateTimeKindHandling, columnName);
 
-        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
+        var writer = CreateVariableSizeBuffer(ref state, maxEncodedBytes, columnName);
         var definitionByteCount = WriteAllDefinedLevels(values.Length, writer);
         foreach (var value in values)
             TWriter.Write(value, writer, dateTimeKindHandling, columnName);
@@ -163,7 +163,7 @@ static partial class ColumnCodec
         where T : class
         where TWriter : struct, IOptionalReferenceWriter<T>
     {
-        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
+        var writer = CreateVariableSizeBuffer(ref state, maxEncodedBytes, columnName);
 
         var nonNullCount = 0;
         foreach (var value in values)

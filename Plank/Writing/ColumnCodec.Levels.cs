@@ -274,7 +274,7 @@ static partial class ColumnCodec
         => WriteRepeatedDefinitionLevelsOptionalCore<T?, NullableReferenceLevelTraits<T>>(rows, levelValueCount,
             destination);
 
-    static int WriteDefinitionLevels<T>(ReadOnlySpan<T?> values, ColumnBufferWriter writer) where T : struct
+    static int WriteDefinitionLevels<T>(ReadOnlySpan<T?> values, VariableSizeBuffer writer) where T : struct
     {
         var destination = writer.GetSpan(GetDefinitionLevelsByteCount(values.Length));
         var written = WriteDefinitionLevels(values, destination);
@@ -282,7 +282,7 @@ static partial class ColumnCodec
         return written;
     }
 
-    static int WriteDefinitionLevels<T>(ReadOnlySpan<T?> values, ColumnBufferWriter writer) where T : class
+    static int WriteDefinitionLevels<T>(ReadOnlySpan<T?> values, VariableSizeBuffer writer) where T : class
     {
         var destination = writer.GetSpan(GetDefinitionLevelsByteCount(values.Length));
         var written = WriteDefinitionLevels(values, destination);
@@ -290,7 +290,7 @@ static partial class ColumnCodec
         return written;
     }
 
-    static int WriteAllDefinedLevels(int valueCount, ColumnBufferWriter writer)
+    static int WriteAllDefinedLevels(int valueCount, VariableSizeBuffer writer)
     {
         if (valueCount == 0)
             return 0;
@@ -302,7 +302,7 @@ static partial class ColumnCodec
         return byteCount;
     }
 
-    static int WriteRepetitionLevels<T>(ReadOnlySpan<T[]> rows, int levelValueCount, ColumnBufferWriter writer)
+    static int WriteRepetitionLevels<T>(ReadOnlySpan<T[]> rows, int levelValueCount, VariableSizeBuffer writer)
     {
         var destination = writer.GetSpan(GetDefinitionLevelsByteCount(levelValueCount));
         var written = WriteRepetitionLevels(rows, levelValueCount, destination);
@@ -310,7 +310,7 @@ static partial class ColumnCodec
         return written;
     }
 
-    static int WriteRepeatedDefinitionLevels<T>(ReadOnlySpan<T[]> rows, int levelValueCount, ColumnBufferWriter writer)
+    static int WriteRepeatedDefinitionLevels<T>(ReadOnlySpan<T[]> rows, int levelValueCount, VariableSizeBuffer writer)
     {
         var destination = writer.GetSpan(GetDefinitionLevelsByteCount(levelValueCount));
         var written = WriteRepeatedDefinitionLevels(rows, levelValueCount, destination);
@@ -319,7 +319,7 @@ static partial class ColumnCodec
     }
 
     static int WriteRepeatedDefinitionLevelsOptional<T>(ReadOnlySpan<T?[]> rows, int levelValueCount,
-        ColumnBufferWriter writer) where T : struct
+        VariableSizeBuffer writer) where T : struct
     {
         var destination = writer.GetSpan(GetLevelByteCount(levelValueCount, 2));
         var written = WriteRepeatedDefinitionLevelsOptional(rows, levelValueCount, destination);
@@ -328,7 +328,7 @@ static partial class ColumnCodec
     }
 
     static int WriteRepeatedDefinitionLevelsOptional<T>(ReadOnlySpan<T?[]> rows, int levelValueCount,
-        ColumnBufferWriter writer) where T : class
+        VariableSizeBuffer writer) where T : class
     {
         var destination = writer.GetSpan(GetLevelByteCount(levelValueCount, 2));
         var written = WriteRepeatedDefinitionLevelsOptional(rows, levelValueCount, destination);

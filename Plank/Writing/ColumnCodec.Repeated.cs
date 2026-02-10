@@ -4,17 +4,17 @@ namespace Plank.Writing;
 
 static partial class ColumnCodec
 {
-    delegate void RepeatedValueWrite<T>(ReadOnlySpan<T[]> rows, ColumnBufferWriter writer,
+    delegate void RepeatedValueWrite<T>(ReadOnlySpan<T[]> rows, VariableSizeBuffer writer,
         DateTimeKindHandling dateTimeKindHandling, string columnName);
 
     interface IRepeatedOptionalReferenceWriter<T> where T : class
     {
-        static abstract void WritePayload(T value, ColumnBufferWriter writer, string columnName);
+        static abstract void WritePayload(T value, VariableSizeBuffer writer, string columnName);
     }
 
     interface IRepeatedOptionalScalarWriter<T> where T : struct
     {
-        static abstract void WritePayload(T value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+        static abstract void WritePayload(T value, VariableSizeBuffer writer, DateTimeKindHandling dateTimeKindHandling,
             string columnName);
     }
 
@@ -130,19 +130,19 @@ static partial class ColumnCodec
 
     readonly struct RepeatedStringReferenceWriter : IRepeatedOptionalReferenceWriter<string>
     {
-        public static void WritePayload(string value, ColumnBufferWriter writer, string columnName)
+        public static void WritePayload(string value, VariableSizeBuffer writer, string columnName)
             => WriteStringPayload(writer, value, columnName);
     }
 
     readonly struct RepeatedByteArrayReferenceWriter : IRepeatedOptionalReferenceWriter<byte[]>
     {
-        public static void WritePayload(byte[] value, ColumnBufferWriter writer, string columnName)
+        public static void WritePayload(byte[] value, VariableSizeBuffer writer, string columnName)
             => WriteByteArrayPayload(writer, value);
     }
 
     readonly struct RepeatedOptionalInt32Writer : IRepeatedOptionalScalarWriter<int>
     {
-        public static void WritePayload(int value, ColumnBufferWriter writer, DateTimeKindHandling dateTimeKindHandling,
+        public static void WritePayload(int value, VariableSizeBuffer writer, DateTimeKindHandling dateTimeKindHandling,
             string columnName)
             => WriteInt32(writer, value);
     }
@@ -164,7 +164,7 @@ static partial class ColumnCodec
         DateTimeKindHandling dateTimeKindHandling)
         where TWriter : struct, IRepeatedScalarWriter<T>
     {
-        static void WriteValues(ReadOnlySpan<T[]> rows, ColumnBufferWriter writer,
+        static void WriteValues(ReadOnlySpan<T[]> rows, VariableSizeBuffer writer,
             DateTimeKindHandling dateTimeKindHandling, string columnName)
         {
             foreach (var row in rows)
@@ -184,7 +184,7 @@ static partial class ColumnCodec
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes,
         DateTimeKindHandling dateTimeKindHandling, RepeatedValueWrite<T> writeValues)
     {
-        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
+        var writer = CreateVariableSizeBuffer(ref state, maxEncodedBytes, columnName);
         var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
         var levelValueCount = checked(dataValueCount + emptyRowCount);
         var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
@@ -207,7 +207,7 @@ static partial class ColumnCodec
         where T : struct
         where TWriter : struct, IRepeatedOptionalScalarWriter<T>
     {
-        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
+        var writer = CreateVariableSizeBuffer(ref state, maxEncodedBytes, columnName);
         var elementCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
         var nonNullCount = 0;
         foreach (var row in rows)
@@ -242,7 +242,7 @@ static partial class ColumnCodec
     static void EncodeRepeatedBoolean(ReadOnlySpan<bool[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
         string columnName, int maxEncodedBytes)
     {
-        static void WriteValues(ReadOnlySpan<bool[]> rows, ColumnBufferWriter writer,
+        static void WriteValues(ReadOnlySpan<bool[]> rows, VariableSizeBuffer writer,
             DateTimeKindHandling dateTimeKindHandling, string columnName)
         {
             var dataValueCount = 0;
@@ -275,7 +275,7 @@ static partial class ColumnCodec
         where T : class
         where TWriter : struct, IRepeatedOptionalReferenceWriter<T>
     {
-        var writer = CreateBufferWriter(ref state, maxEncodedBytes, columnName);
+        var writer = CreateVariableSizeBuffer(ref state, maxEncodedBytes, columnName);
         var elementCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
         var nonNullCount = 0;
         foreach (var row in rows)

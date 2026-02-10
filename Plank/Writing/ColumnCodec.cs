@@ -71,17 +71,29 @@ static partial class ColumnCodec
             : 0;
     }
 
-    static void EnsureDestinationCapacity(Span<byte> destination, int requiredByteCount, int maxEncodedBytes,
-        string columnName)
+    internal readonly ref struct FixedSizeBuffer
     {
-        if (requiredByteCount <= 0 || !destination.IsEmpty)
-            return;
+        readonly Span<byte> _span;
 
-        throw new InvalidOperationException(
-            $"Column '{columnName}' requires {requiredByteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+        internal FixedSizeBuffer(Span<byte> span)
+            => _span = span;
+
+        internal Span<byte> Span
+            => _span;
     }
 
-    static ColumnBufferWriter CreateBufferWriter(ref ParquetWriter.RowGroupState.ColumnState state, int maxEncodedBytes,
+    internal static FixedSizeBuffer CreateFixedSizeBuffer(ref ParquetWriter.RowGroupState.ColumnState state, int byteCount,
+        int maxEncodedBytes, string columnName)
+    {
+        var destination = GetDestination(ref state, byteCount);
+        if (byteCount > 0 && destination.IsEmpty)
+            throw new InvalidOperationException(
+                $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+
+        return new FixedSizeBuffer(destination);
+    }
+
+    static VariableSizeBuffer CreateVariableSizeBuffer(ref ParquetWriter.RowGroupState.ColumnState state, int maxEncodedBytes,
         string columnName)
     {
         if (maxEncodedBytes <= 0)
@@ -93,7 +105,7 @@ static partial class ColumnCodec
             if (state.EncodedBuffer.Length < maxEncodedBytes)
                 throw new InvalidOperationException(
                     $"Column '{columnName}' requires {maxEncodedBytes} bytes but encoded buffer capacity is {state.EncodedBuffer.Length}.");
-            return new ColumnBufferWriter(state.EncodedBuffer.AsMemory(0, maxEncodedBytes), columnName);
+            return new VariableSizeBuffer(state.EncodedBuffer.AsMemory(0, maxEncodedBytes), columnName);
         }
 
         if (state.EncodedBufferOwner is null)
@@ -103,16 +115,16 @@ static partial class ColumnCodec
             throw new InvalidOperationException(
                 $"Column '{columnName}' requires {maxEncodedBytes} bytes but encoded buffer capacity is {state.EncodedBufferOwner.Memory.Length}.");
 
-        return new ColumnBufferWriter(state.EncodedBufferOwner.Memory[..maxEncodedBytes], columnName);
+        return new VariableSizeBuffer(state.EncodedBufferOwner.Memory[..maxEncodedBytes], columnName);
     }
 
-    sealed class ColumnBufferWriter : IBufferWriter<byte>
+    sealed class VariableSizeBuffer : IBufferWriter<byte>
     {
         readonly Memory<byte> _buffer;
         readonly string _columnName;
         int _written;
 
-        internal ColumnBufferWriter(Memory<byte> buffer, string columnName)
+        internal VariableSizeBuffer(Memory<byte> buffer, string columnName)
         {
             _buffer = buffer;
             _columnName = columnName;
@@ -160,21 +172,21 @@ static partial class ColumnCodec
             => GetMemory(sizeHint).Span;
     }
 
-    static void WriteInt32(ColumnBufferWriter writer, int value)
+    static void WriteInt32(VariableSizeBuffer writer, int value)
     {
         var destination = writer.GetSpan(sizeof(int));
         BinaryPrimitives.WriteInt32LittleEndian(destination, value);
         writer.Advance(sizeof(int));
     }
 
-    static void WriteInt64(ColumnBufferWriter writer, long value)
+    static void WriteInt64(VariableSizeBuffer writer, long value)
     {
         var destination = writer.GetSpan(sizeof(long));
         BinaryPrimitives.WriteInt64LittleEndian(destination, value);
         writer.Advance(sizeof(long));
     }
 
-    static void WriteStringPayload(ColumnBufferWriter writer, string value, string columnName)
+    static void WriteStringPayload(VariableSizeBuffer writer, string value, string columnName)
     {
         var lengthOffset = writer.WrittenCount;
         WriteInt32(writer, 0);
@@ -189,7 +201,7 @@ static partial class ColumnCodec
         writer.OverwriteInt32(lengthOffset, bytesUsed);
     }
 
-    static void WriteByteArrayPayload(ColumnBufferWriter writer, byte[] value)
+    static void WriteByteArrayPayload(VariableSizeBuffer writer, byte[] value)
     {
         var payloadLength = value.Length;
         WriteInt32(writer, payloadLength);

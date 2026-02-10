@@ -11,10 +11,7 @@ static partial class Encoding
             string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(int));
-            var destination = ColumnCodec.GetDestination(ref state, byteCount);
-            if (destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName).Span;
 
             if (BitConverter.IsLittleEndian)
                 MemoryMarshal.AsBytes(values).CopyTo(destination);
@@ -30,10 +27,7 @@ static partial class Encoding
             string columnName, int maxEncodedBytes)
         {
             var byteCount = (values.Length + 7) >> 3;
-            var destination = ColumnCodec.GetDestination(ref state, byteCount);
-            if (byteCount > 0 && destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName).Span;
 
             destination.Clear();
             for (var i = 0; i < values.Length; i++)
@@ -54,10 +48,7 @@ static partial class Encoding
             string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(int));
-            var destination = ColumnCodec.GetDestination(ref state, byteCount);
-            if (destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName).Span;
 
             for (var i = 0; i < values.Length; i++)
             {
@@ -73,10 +64,7 @@ static partial class Encoding
             string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(long));
-            var destination = ColumnCodec.GetDestination(ref state, byteCount);
-            if (destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName).Span;
 
             if (BitConverter.IsLittleEndian)
                 MemoryMarshal.AsBytes(values).CopyTo(destination);
@@ -92,10 +80,7 @@ static partial class Encoding
             ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(long));
-            var destination = ColumnCodec.GetDestination(ref state, byteCount);
-            if (destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName).Span;
 
             ColumnCodec.ValidateDateTimeHandling(dateTimeKindHandling, columnName);
             for (var i = 0; i < values.Length; i++)
@@ -112,10 +97,7 @@ static partial class Encoding
             ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(long));
-            var destination = ColumnCodec.GetDestination(ref state, byteCount);
-            if (destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName).Span;
 
             for (var i = 0; i < values.Length; i++)
             {
@@ -132,10 +114,7 @@ static partial class Encoding
             string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(long));
-            var destination = ColumnCodec.GetDestination(ref state, byteCount);
-            if (destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName).Span;
 
             for (var i = 0; i < values.Length; i++)
             {
@@ -213,10 +192,7 @@ static partial class Encoding
             string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(float));
-            var destination = ColumnCodec.GetDestination(ref state, byteCount);
-            if (destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName).Span;
 
             if (BitConverter.IsLittleEndian)
                 MemoryMarshal.AsBytes(values).CopyTo(destination);
@@ -233,10 +209,7 @@ static partial class Encoding
             string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(double));
-            var destination = ColumnCodec.GetDestination(ref state, byteCount);
-            if (destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName).Span;
 
             if (BitConverter.IsLittleEndian)
                 MemoryMarshal.AsBytes(values).CopyTo(destination);
