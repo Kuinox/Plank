@@ -204,90 +204,8 @@ static partial class ColumnCodec
     static bool TryEncodeDeltaBinaryPackedNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
         int encodedBufferCapacity)
-    {
-        switch (dispatchKey)
-        {
-            case ColumnDispatch.DispatchKey.Int32Int32:
-                Encoding.DeltaBinaryPacked.EncodeInt32(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return true;
-            case ColumnDispatch.DispatchKey.Int32DateOnly:
-            {
-                var source = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateOnly>>(ref values);
-                var buffer = ArrayPool<int>.Shared.Rent(source.Length);
-                try
-                {
-                    var span = buffer.AsSpan(0, source.Length);
-                    for (var i = 0; i < source.Length; i++)
-                        span[i] = checked(source[i].DayNumber - UnixEpochDayNumber);
-                    Encoding.DeltaBinaryPacked.EncodeInt32(span, ref state, columnName, encodedBufferCapacity);
-                }
-                finally
-                {
-                    ArrayPool<int>.Shared.Return(buffer);
-                }
-                return true;
-            }
-            case ColumnDispatch.DispatchKey.Int64Int64:
-                Encoding.DeltaBinaryPacked.EncodeInt64(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), ref state, columnName, encodedBufferCapacity);
-                return true;
-            case ColumnDispatch.DispatchKey.Int64DateTime:
-            {
-                var source = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values);
-                var buffer = ArrayPool<long>.Shared.Rent(source.Length);
-                try
-                {
-                    var span = buffer.AsSpan(0, source.Length);
-                    for (var i = 0; i < source.Length; i++)
-                        span[i] = ToUnixMicroseconds(source[i], dateTimeKindHandling, columnName);
-                    Encoding.DeltaBinaryPacked.EncodeInt64(span, ref state, columnName, encodedBufferCapacity);
-                }
-                finally
-                {
-                    ArrayPool<long>.Shared.Return(buffer);
-                }
-                return true;
-            }
-            case ColumnDispatch.DispatchKey.Int64DateTimeOffset:
-            {
-                var source = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTimeOffset>>(ref values);
-                var buffer = ArrayPool<long>.Shared.Rent(source.Length);
-                try
-                {
-                    var span = buffer.AsSpan(0, source.Length);
-                    for (var i = 0; i < source.Length; i++)
-                    {
-                        var deltaTicks = checked(source[i].UtcTicks - UnixEpochTicks);
-                        span[i] = deltaTicks / TicksPerMicrosecond;
-                    }
-                    Encoding.DeltaBinaryPacked.EncodeInt64(span, ref state, columnName, encodedBufferCapacity);
-                }
-                finally
-                {
-                    ArrayPool<long>.Shared.Return(buffer);
-                }
-                return true;
-            }
-            case ColumnDispatch.DispatchKey.Int64TimeOnly:
-            {
-                var source = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<TimeOnly>>(ref values);
-                var buffer = ArrayPool<long>.Shared.Rent(source.Length);
-                try
-                {
-                    var span = buffer.AsSpan(0, source.Length);
-                    for (var i = 0; i < source.Length; i++)
-                        span[i] = source[i].Ticks / TicksPerMicrosecond;
-                    Encoding.DeltaBinaryPacked.EncodeInt64(span, ref state, columnName, encodedBufferCapacity);
-                }
-                finally
-                {
-                    ArrayPool<long>.Shared.Return(buffer);
-                }
-                return true;
-            }
-            default:
-                return false;
-        }
-    }
+        => TryEncodeDeltaOrByteStreamSplitNonRepeated(values, dispatchKey, dateTimeKindHandling, ref state, columnName,
+            encodedBufferCapacity, byteStreamSplit: false);
 
     static bool TryEncodeDeltaLengthByteArrayNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity)
@@ -324,94 +242,142 @@ static partial class ColumnCodec
     static bool TryEncodeByteStreamSplitNonRepeated<T>(ReadOnlySpan<T> values, ColumnDispatch.DispatchKey dispatchKey,
         DateTimeKindHandling dateTimeKindHandling, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
         int encodedBufferCapacity)
+        => TryEncodeDeltaOrByteStreamSplitNonRepeated(values, dispatchKey, dateTimeKindHandling, ref state, columnName,
+            encodedBufferCapacity, byteStreamSplit: true);
+
+    static bool TryEncodeDeltaOrByteStreamSplitNonRepeated<T>(ReadOnlySpan<T> values,
+        ColumnDispatch.DispatchKey dispatchKey, DateTimeKindHandling dateTimeKindHandling,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity,
+        bool byteStreamSplit)
     {
         switch (dispatchKey)
         {
             case ColumnDispatch.DispatchKey.Int32Int32:
-                Encoding.ByteStreamSplit.EncodeInt32(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), ref state, columnName, encodedBufferCapacity);
+                EncodeInt32ForNumericEncodings(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), byteStreamSplit,
+                    ref state, columnName, encodedBufferCapacity);
                 return true;
             case ColumnDispatch.DispatchKey.Int32DateOnly:
-            {
-                var source = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateOnly>>(ref values);
-                var buffer = ArrayPool<int>.Shared.Rent(source.Length);
-                try
-                {
-                    var span = buffer.AsSpan(0, source.Length);
-                    for (var i = 0; i < source.Length; i++)
-                        span[i] = checked(source[i].DayNumber - UnixEpochDayNumber);
-                    Encoding.ByteStreamSplit.EncodeInt32(span, ref state, columnName, encodedBufferCapacity);
-                }
-                finally
-                {
-                    ArrayPool<int>.Shared.Return(buffer);
-                }
+                EncodeDateOnlyForNumericEncodings(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateOnly>>(ref values),
+                    byteStreamSplit, ref state, columnName, encodedBufferCapacity);
                 return true;
-            }
             case ColumnDispatch.DispatchKey.Int64Int64:
-                Encoding.ByteStreamSplit.EncodeInt64(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), ref state, columnName, encodedBufferCapacity);
+                EncodeInt64ForNumericEncodings(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), byteStreamSplit,
+                    ref state, columnName, encodedBufferCapacity);
                 return true;
             case ColumnDispatch.DispatchKey.Int64DateTime:
-            {
-                var source = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values);
-                var buffer = ArrayPool<long>.Shared.Rent(source.Length);
-                try
-                {
-                    var span = buffer.AsSpan(0, source.Length);
-                    for (var i = 0; i < source.Length; i++)
-                        span[i] = ToUnixMicroseconds(source[i], dateTimeKindHandling, columnName);
-                    Encoding.ByteStreamSplit.EncodeInt64(span, ref state, columnName, encodedBufferCapacity);
-                }
-                finally
-                {
-                    ArrayPool<long>.Shared.Return(buffer);
-                }
+                EncodeDateTimeForNumericEncodings(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values),
+                    dateTimeKindHandling, byteStreamSplit, ref state, columnName, encodedBufferCapacity);
                 return true;
-            }
             case ColumnDispatch.DispatchKey.Int64DateTimeOffset:
-            {
-                var source = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTimeOffset>>(ref values);
-                var buffer = ArrayPool<long>.Shared.Rent(source.Length);
-                try
-                {
-                    var span = buffer.AsSpan(0, source.Length);
-                    for (var i = 0; i < source.Length; i++)
-                    {
-                        var deltaTicks = checked(source[i].UtcTicks - UnixEpochTicks);
-                        span[i] = deltaTicks / TicksPerMicrosecond;
-                    }
-                    Encoding.ByteStreamSplit.EncodeInt64(span, ref state, columnName, encodedBufferCapacity);
-                }
-                finally
-                {
-                    ArrayPool<long>.Shared.Return(buffer);
-                }
+                EncodeDateTimeOffsetForNumericEncodings(
+                    Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTimeOffset>>(ref values), byteStreamSplit, ref state,
+                    columnName, encodedBufferCapacity);
                 return true;
-            }
             case ColumnDispatch.DispatchKey.Int64TimeOnly:
-            {
-                var source = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<TimeOnly>>(ref values);
-                var buffer = ArrayPool<long>.Shared.Rent(source.Length);
-                try
-                {
-                    var span = buffer.AsSpan(0, source.Length);
-                    for (var i = 0; i < source.Length; i++)
-                        span[i] = source[i].Ticks / TicksPerMicrosecond;
-                    Encoding.ByteStreamSplit.EncodeInt64(span, ref state, columnName, encodedBufferCapacity);
-                }
-                finally
-                {
-                    ArrayPool<long>.Shared.Return(buffer);
-                }
+                EncodeTimeOnlyForNumericEncodings(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<TimeOnly>>(ref values),
+                    byteStreamSplit, ref state, columnName, encodedBufferCapacity);
                 return true;
-            }
             case ColumnDispatch.DispatchKey.FloatFloat:
+                if (!byteStreamSplit)
+                    return false;
                 Encoding.ByteStreamSplit.EncodeFloat(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float>>(ref values), ref state, columnName, encodedBufferCapacity);
                 return true;
             case ColumnDispatch.DispatchKey.DoubleDouble:
+                if (!byteStreamSplit)
+                    return false;
                 Encoding.ByteStreamSplit.EncodeDouble(Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values), ref state, columnName, encodedBufferCapacity);
                 return true;
             default:
                 return false;
+        }
+    }
+
+    static void EncodeInt32ForNumericEncodings(ReadOnlySpan<int> values, bool byteStreamSplit,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity)
+    {
+        if (byteStreamSplit)
+            Encoding.ByteStreamSplit.EncodeInt32(values, ref state, columnName, encodedBufferCapacity);
+        else
+            Encoding.DeltaBinaryPacked.EncodeInt32(values, ref state, columnName, encodedBufferCapacity);
+    }
+
+    static void EncodeInt64ForNumericEncodings(ReadOnlySpan<long> values, bool byteStreamSplit,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity)
+    {
+        if (byteStreamSplit)
+            Encoding.ByteStreamSplit.EncodeInt64(values, ref state, columnName, encodedBufferCapacity);
+        else
+            Encoding.DeltaBinaryPacked.EncodeInt64(values, ref state, columnName, encodedBufferCapacity);
+    }
+
+    static void EncodeDateOnlyForNumericEncodings(ReadOnlySpan<DateOnly> source, bool byteStreamSplit,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity)
+    {
+        var buffer = ArrayPool<int>.Shared.Rent(source.Length);
+        try
+        {
+            var span = buffer.AsSpan(0, source.Length);
+            for (var i = 0; i < source.Length; i++)
+                span[i] = checked(source[i].DayNumber - UnixEpochDayNumber);
+            EncodeInt32ForNumericEncodings(span, byteStreamSplit, ref state, columnName, encodedBufferCapacity);
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(buffer);
+        }
+    }
+
+    static void EncodeDateTimeForNumericEncodings(ReadOnlySpan<DateTime> source, DateTimeKindHandling dateTimeKindHandling,
+        bool byteStreamSplit, ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity)
+    {
+        var buffer = ArrayPool<long>.Shared.Rent(source.Length);
+        try
+        {
+            var span = buffer.AsSpan(0, source.Length);
+            for (var i = 0; i < source.Length; i++)
+                span[i] = ToUnixMicroseconds(source[i], dateTimeKindHandling, columnName);
+            EncodeInt64ForNumericEncodings(span, byteStreamSplit, ref state, columnName, encodedBufferCapacity);
+        }
+        finally
+        {
+            ArrayPool<long>.Shared.Return(buffer);
+        }
+    }
+
+    static void EncodeDateTimeOffsetForNumericEncodings(ReadOnlySpan<DateTimeOffset> source, bool byteStreamSplit,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity)
+    {
+        var buffer = ArrayPool<long>.Shared.Rent(source.Length);
+        try
+        {
+            var span = buffer.AsSpan(0, source.Length);
+            for (var i = 0; i < source.Length; i++)
+            {
+                var deltaTicks = checked(source[i].UtcTicks - UnixEpochTicks);
+                span[i] = deltaTicks / TicksPerMicrosecond;
+            }
+            EncodeInt64ForNumericEncodings(span, byteStreamSplit, ref state, columnName, encodedBufferCapacity);
+        }
+        finally
+        {
+            ArrayPool<long>.Shared.Return(buffer);
+        }
+    }
+
+    static void EncodeTimeOnlyForNumericEncodings(ReadOnlySpan<TimeOnly> source, bool byteStreamSplit,
+        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int encodedBufferCapacity)
+    {
+        var buffer = ArrayPool<long>.Shared.Rent(source.Length);
+        try
+        {
+            var span = buffer.AsSpan(0, source.Length);
+            for (var i = 0; i < source.Length; i++)
+                span[i] = source[i].Ticks / TicksPerMicrosecond;
+            EncodeInt64ForNumericEncodings(span, byteStreamSplit, ref state, columnName, encodedBufferCapacity);
+        }
+        finally
+        {
+            ArrayPool<long>.Shared.Return(buffer);
         }
     }
 }
