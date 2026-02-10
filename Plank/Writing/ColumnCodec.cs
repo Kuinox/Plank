@@ -86,7 +86,7 @@ static partial class ColumnCodec
         int maxEncodedBytes, string columnName)
     {
         var destination = GetDestination(ref state, byteCount);
-        if (byteCount > 0 && destination.IsEmpty)
+        if (destination.IsEmpty)
             throw new InvalidOperationException(
                 $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
