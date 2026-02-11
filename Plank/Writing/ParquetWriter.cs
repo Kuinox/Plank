@@ -965,14 +965,8 @@ public sealed class ParquetWriter : IDisposable
             var offset = writer._position;
             long totalUncompressedSize;
             long totalCompressedSize;
-            if (TryGetFixedWidthPageSplitPlan(ordinal, ref state, out var splitValueCount, out var bytesPerValue))
-                WriteSplitPages(writer, ordinal, ref state, splitValueCount, bytesPerValue, out totalUncompressedSize, out totalCompressedSize);
-            else if (TryGetLevelFixedWidthSplitPlan(writer, ordinal, ref state, out bytesPerValue))
-                WriteSplitLevelFixedWidthPages(writer, ordinal, ref state, bytesPerValue, out totalUncompressedSize, out totalCompressedSize);
-            else if (CanSplitVariableWidthRequired(ordinal, ref state))
-                WriteSplitVariableWidthPages(writer, ordinal, ref state, out totalUncompressedSize, out totalCompressedSize);
-            else
-                WriteSinglePage(writer, ordinal, ref state, out totalUncompressedSize, out totalCompressedSize);
+            var plan = SelectPageWritePlan(writer, ordinal, ref state);
+            ExecutePageWritePlan(writer, ordinal, ref state, plan, out totalUncompressedSize, out totalCompressedSize);
             var writeTicks = writer.EndColumnWriteTiming(ordinal);
             var bytesWritten = checked((int)(writer._position - offset));
             writer._log.ColumnWriteMetricsObserved(
@@ -1005,7 +999,64 @@ public sealed class ParquetWriter : IDisposable
             Volatile.Write(ref state.WriteState, WriteStateWritten);
         }
 
-        bool TryGetFixedWidthPageSplitPlan(int ordinal, ref ColumnState state, out int splitValueCount, out int bytesPerValue)
+        readonly struct PageWritePlan
+        {
+            internal PageWritePlan(PageWriteMode mode, int bytesPerValue, int splitValueCount)
+            {
+                Mode = mode;
+                BytesPerValue = bytesPerValue;
+                SplitValueCount = splitValueCount;
+            }
+
+            internal PageWriteMode Mode { get; }
+            internal int BytesPerValue { get; }
+            internal int SplitValueCount { get; }
+        }
+
+        enum PageWriteMode
+        {
+            SinglePage,
+            SplitFixedWidthRequired,
+            SplitLevelFixedWidth,
+            SplitVariableWidthRequired
+        }
+
+        PageWritePlan SelectPageWritePlan(ParquetWriter writer, int ordinal, ref ColumnState state)
+        {
+            if (TryCreateFixedWidthRequiredSplitPlan(ordinal, ref state, out var splitValueCount, out var bytesPerValue))
+                return new PageWritePlan(PageWriteMode.SplitFixedWidthRequired, bytesPerValue, splitValueCount);
+            if (TryCreateLevelFixedWidthSplitPlan(writer, ordinal, ref state, out bytesPerValue))
+                return new PageWritePlan(PageWriteMode.SplitLevelFixedWidth, bytesPerValue, splitValueCount: 0);
+            if (CanUseVariableWidthRequiredSplit(ordinal, ref state))
+                return new PageWritePlan(PageWriteMode.SplitVariableWidthRequired, bytesPerValue: 0, splitValueCount: 0);
+
+            return new PageWritePlan(PageWriteMode.SinglePage, bytesPerValue: 0, splitValueCount: 0);
+        }
+
+        void ExecutePageWritePlan(ParquetWriter writer, int ordinal, ref ColumnState state, PageWritePlan plan,
+            out long totalUncompressedSize, out long totalCompressedSize)
+        {
+            switch (plan.Mode)
+            {
+                case PageWriteMode.SplitFixedWidthRequired:
+                    WriteSplitPages(writer, ordinal, ref state, plan.SplitValueCount, plan.BytesPerValue,
+                        out totalUncompressedSize, out totalCompressedSize);
+                    break;
+                case PageWriteMode.SplitLevelFixedWidth:
+                    WriteSplitLevelFixedWidthPages(writer, ordinal, ref state, plan.BytesPerValue,
+                        out totalUncompressedSize, out totalCompressedSize);
+                    break;
+                case PageWriteMode.SplitVariableWidthRequired:
+                    WriteSplitVariableWidthPages(writer, ordinal, ref state, out totalUncompressedSize,
+                        out totalCompressedSize);
+                    break;
+                default:
+                    WriteSinglePage(writer, ordinal, ref state, out totalUncompressedSize, out totalCompressedSize);
+                    break;
+            }
+        }
+
+        bool TryCreateFixedWidthRequiredSplitPlan(int ordinal, ref ColumnState state, out int splitValueCount, out int bytesPerValue)
         {
             splitValueCount = 0;
             bytesPerValue = 0;
@@ -1028,7 +1079,7 @@ public sealed class ParquetWriter : IDisposable
             return splitValueCount < state.ValueCount;
         }
 
-        bool CanSplitVariableWidthRequired(int ordinal, ref ColumnState state)
+        bool CanUseVariableWidthRequiredSplit(int ordinal, ref ColumnState state)
         {
             if (state.DefinitionLevelsByteLength != 0 || state.RepetitionLevelsByteLength != 0)
                 return false;
@@ -1044,7 +1095,8 @@ public sealed class ParquetWriter : IDisposable
             return hasByteLimit || hasCountLimit;
         }
 
-        bool TryGetLevelFixedWidthSplitPlan(ParquetWriter writer, int ordinal, ref ColumnState state, out int bytesPerValue)
+        bool TryCreateLevelFixedWidthSplitPlan(ParquetWriter writer, int ordinal, ref ColumnState state,
+            out int bytesPerValue)
         {
             bytesPerValue = 0;
             if (state.DefinitionLevelsByteLength == 0 && state.RepetitionLevelsByteLength == 0)
@@ -1282,7 +1334,7 @@ public sealed class ParquetWriter : IDisposable
                         definedIndex++;
                     }
 
-                    WritePreparedPage(
+                    WritePageFromPayload(
                         writer,
                         ordinal,
                         ref state,
@@ -1303,7 +1355,9 @@ public sealed class ParquetWriter : IDisposable
             }
         }
 
-        void WritePreparedPage(ParquetWriter writer, int ordinal, ref ColumnState state, ReadOnlySpan<byte> payload, int valueCount, int rowCount, int nullCount, int definitionLevelsByteLength, int repetitionLevelsByteLength, ref long totalUncompressedSize, ref long totalCompressedSize)
+        void WritePageFromPayload(ParquetWriter writer, int ordinal, ref ColumnState state, ReadOnlySpan<byte> payload,
+            int valueCount, int rowCount, int nullCount, int definitionLevelsByteLength, int repetitionLevelsByteLength,
+            ref long totalUncompressedSize, ref long totalCompressedSize)
         {
             var levelsByteLength = checked(definitionLevelsByteLength + repetitionLevelsByteLength);
             if (levelsByteLength > payload.Length)
@@ -1351,49 +1405,8 @@ public sealed class ParquetWriter : IDisposable
         void WritePage(ParquetWriter writer, int ordinal, ref ColumnState state, int valueCount, int rowCount, int nullCount, int definitionLevelsByteLength, int repetitionLevelsByteLength, int encodedOffset, int encodedLength, ref long totalUncompressedSize, ref long totalCompressedSize)
         {
             var payload = GetSourceSpan(ref state, encodedOffset, encodedLength);
-            var levelsByteLength = checked(definitionLevelsByteLength + repetitionLevelsByteLength);
-            if (levelsByteLength > payload.Length)
-                throw new InvalidOperationException("Data page level section exceeds payload length.");
-
-            var levelsPayload = payload[..levelsByteLength];
-            var dataPayload = payload[levelsByteLength..];
-            var compressedDataPayload = dataPayload;
-            var compressedDataLength = dataPayload.Length;
-            var isCompressed = false;
-            if (state.Compression != CompressionKind.None && dataPayload.Length > 0)
-            {
-                compressedDataLength = CompressPayload(dataPayload, ordinal, ref state, state.Compression, Options.MaxCompressedBytes);
-                compressedDataPayload = state.CompressedBufferOwner!.Memory.Span[..compressedDataLength];
-                isCompressed = true;
-            }
-
-            var uncompressedPayloadLength = checked(levelsByteLength + dataPayload.Length);
-            var compressedPayloadLength = checked(levelsByteLength + compressedDataLength);
-
-            var headerLength = ParquetThriftWriter.WriteDataPageHeader(
-                _pageHeaderBuffer,
-                valueCount,
-                nullCount,
-                rowCount,
-                state.Encoding,
-                definitionLevelsByteLength,
-                repetitionLevelsByteLength,
-                uncompressedSize: uncompressedPayloadLength,
-                compressedSize: compressedPayloadLength,
-                isCompressed);
-            writer.WriteToStream(_pageHeaderBuffer.AsSpan(0, headerLength));
-            writer.AdvancePosition(headerLength);
-            totalUncompressedSize = checked(totalUncompressedSize + headerLength + uncompressedPayloadLength);
-            totalCompressedSize = checked(totalCompressedSize + headerLength + compressedPayloadLength);
-
-            if (compressedPayloadLength == 0)
-                return;
-
-            if (levelsPayload.Length > 0)
-                writer.WriteToStream(levelsPayload);
-            if (compressedDataLength > 0)
-                writer.WriteToStream(compressedDataPayload);
-            writer.AdvancePosition(compressedPayloadLength);
+            WritePageFromPayload(writer, ordinal, ref state, payload, valueCount, rowCount, nullCount,
+                definitionLevelsByteLength, repetitionLevelsByteLength, ref totalUncompressedSize, ref totalCompressedSize);
         }
 
         static ReadOnlySpan<byte> GetSourceSpan(ref ColumnState state, int offset, int length)
