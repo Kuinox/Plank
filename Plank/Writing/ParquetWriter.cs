@@ -488,16 +488,7 @@ public sealed class ParquetWriter : IDisposable
     }
 
     static ParquetPhysicalType GetPhysicalType<T>()
-    {
-        try
-        {
-            return ParquetTypeMap.GetPhysicalType<T>();
-        }
-        catch (TypeInitializationException ex) when (ex.InnerException is NotSupportedException inner)
-        {
-            throw inner;
-        }
-    }
+        => ParquetTypeMap.GetPhysicalType<T>();
 
     static byte GetInt32SemanticState(Type valueType)
     {

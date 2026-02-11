@@ -42,18 +42,12 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         else
         {
             _writer.RegisterValueType(column, typeof(T[]));
-            ParquetPhysicalType physicalType;
-            try
-            {
-                physicalType = GetPhysicalType<T[]>();
-            }
-            catch (NotSupportedException ex)
-            {
+            var resolution = ParquetTypeMap.ResolvePhysicalType<T[]>();
+            if (!resolution.IsSuccess)
                 throw new InvalidOperationException(
-                    $"Column '{column.Name}' is not Repeated and does not accept values of type '{typeof(T[])}'.",
-                    ex);
-            }
+                    $"Column '{column.Name}' is not Repeated and does not accept values of type '{typeof(T[])}'.");
 
+            var physicalType = resolution.PhysicalType;
             ordinal = _state.EncodeColumn(column, rows, physicalType);
         }
 
@@ -89,14 +83,5 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         => !left.Equals(right);
 
     static ParquetPhysicalType GetPhysicalType<T>()
-    {
-        try
-        {
-            return ParquetTypeMap.GetPhysicalType<T>();
-        }
-        catch (TypeInitializationException ex) when (ex.InnerException is NotSupportedException inner)
-        {
-            throw inner;
-        }
-    }
+        => ParquetTypeMap.GetPhysicalType<T>();
 }
