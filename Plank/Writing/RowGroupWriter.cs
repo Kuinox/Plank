@@ -59,9 +59,12 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
     {
         if (cancellationToken.IsCancellationRequested)
             return ValueTask.FromCanceled(cancellationToken);
+        ArgumentNullException.ThrowIfNull(serialized.Column);
+        if (!_state.TryGetOrdinal(serialized.Column, out var ordinal))
+            throw new ArgumentException("Column does not belong to this schema.", nameof(serialized));
 
-        _writer.RegisterSerializedColumnType(serialized);
-        var ordinal = _state.AcceptSerialized(serialized);
+        _writer.RegisterSerializedColumnType(ordinal, serialized.Column, serialized.LogicalType, serialized.RepeatedElementOptional);
+        ordinal = _state.AcceptSerialized(ordinal, serialized);
         _state.TryDrain(_writer);
         return _state.GetWriteTask(ordinal, cancellationToken);
     }

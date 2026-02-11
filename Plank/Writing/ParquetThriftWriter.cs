@@ -32,13 +32,13 @@ internal static class ParquetThriftWriter
         return writer.WrittenCount;
     }
 
-    internal static int GetFileMetaDataSize(ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, byte[] repeatedElementStates, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
+    internal static int GetFileMetaDataSize(ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, ColumnSemanticRegistry.ColumnSemanticState[] semanticStates, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
     {
         var writer = new CompactSizeCounter();
         var previous = writer.BeginStruct();
 
         writer.WriteFieldI32(1, 1);
-        WriteSchema(ref writer, schema, columnLogicalTypes, repeatedElementStates);
+        WriteSchema(ref writer, schema, columnLogicalTypes, semanticStates);
         writer.WriteFieldI64(3, CountRows(rowGroups, rowGroupCount));
         WriteRowGroups(ref writer, schema, rowGroups, rowGroupCount);
 
@@ -46,13 +46,13 @@ internal static class ParquetThriftWriter
         return writer.WrittenCount;
     }
 
-    internal static int WriteFileMetaData(Span<byte> destination, ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, byte[] repeatedElementStates, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
+    internal static int WriteFileMetaData(Span<byte> destination, ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, ColumnSemanticRegistry.ColumnSemanticState[] semanticStates, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
     {
         var writer = new CompactSpanWriter(destination);
         var previous = writer.BeginStruct();
 
         writer.WriteFieldI32(1, 1);
-        WriteSchema(ref writer, schema, columnLogicalTypes, repeatedElementStates);
+        WriteSchema(ref writer, schema, columnLogicalTypes, semanticStates);
         writer.WriteFieldI64(3, CountRows(rowGroups, rowGroupCount));
         WriteRowGroups(ref writer, schema, rowGroups, rowGroupCount);
 
@@ -60,7 +60,7 @@ internal static class ParquetThriftWriter
         return writer.WrittenCount;
     }
 
-    static void WriteSchema(ref CompactSizeCounter writer, ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, byte[] repeatedElementStates)
+    static void WriteSchema(ref CompactSizeCounter writer, ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, ColumnSemanticRegistry.ColumnSemanticState[] semanticStates)
     {
         ImmutableArray<Column> columns = schema.Columns.IsDefault ? [] : schema.Columns;
         var count = GetSchemaNodeCount(columns);
@@ -75,7 +75,7 @@ internal static class ParquetThriftWriter
         for (var i = 0; i < columns.Length; i++)
         {
             var column = columns[i];
-            WriteColumnSchema(ref writer, column, columnLogicalTypes, repeatedElementStates, i);
+            WriteColumnSchema(ref writer, column, columnLogicalTypes, semanticStates, i);
         }
     }
 
@@ -162,7 +162,7 @@ internal static class ParquetThriftWriter
         writer.WriteBinary("element");
     }
 
-    static void WriteSchema(ref CompactSpanWriter writer, ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, byte[] repeatedElementStates)
+    static void WriteSchema(ref CompactSpanWriter writer, ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, ColumnSemanticRegistry.ColumnSemanticState[] semanticStates)
     {
         ImmutableArray<Column> columns = schema.Columns.IsDefault ? [] : schema.Columns;
         var count = GetSchemaNodeCount(columns);
@@ -177,7 +177,7 @@ internal static class ParquetThriftWriter
         for (var i = 0; i < columns.Length; i++)
         {
             var column = columns[i];
-            WriteColumnSchema(ref writer, column, columnLogicalTypes, repeatedElementStates, i);
+            WriteColumnSchema(ref writer, column, columnLogicalTypes, semanticStates, i);
         }
     }
 
@@ -358,7 +358,7 @@ internal static class ParquetThriftWriter
         return count;
     }
 
-    static void WriteColumnSchema(ref CompactSizeCounter writer, Column column, ColumnLogicalType[] columnLogicalTypes, byte[] repeatedElementStates, int columnIndex)
+    static void WriteColumnSchema(ref CompactSizeCounter writer, Column column, ColumnLogicalType[] columnLogicalTypes, ColumnSemanticRegistry.ColumnSemanticState[] semanticStates, int columnIndex)
     {
         if (column.Options.Repetition is not ParquetRepetition.Repeated)
         {
@@ -386,13 +386,13 @@ internal static class ParquetThriftWriter
 
         var element = writer.BeginStruct();
         writer.WriteFieldI32(1, GetType(column.PhysicalType));
-        writer.WriteFieldI32(3, GetRepeatedElementRepetition(repeatedElementStates, columnIndex));
+        writer.WriteFieldI32(3, GetRepeatedElementRepetition(semanticStates, columnIndex));
         writer.WriteFieldString(4, "element");
         WriteConvertedType(ref writer, columnLogicalTypes, columnIndex);
         writer.EndStruct(element);
     }
 
-    static void WriteColumnSchema(ref CompactSpanWriter writer, Column column, ColumnLogicalType[] columnLogicalTypes, byte[] repeatedElementStates, int columnIndex)
+    static void WriteColumnSchema(ref CompactSpanWriter writer, Column column, ColumnLogicalType[] columnLogicalTypes, ColumnSemanticRegistry.ColumnSemanticState[] semanticStates, int columnIndex)
     {
         if (column.Options.Repetition is not ParquetRepetition.Repeated)
         {
@@ -420,15 +420,15 @@ internal static class ParquetThriftWriter
 
         var element = writer.BeginStruct();
         writer.WriteFieldI32(1, GetType(column.PhysicalType));
-        writer.WriteFieldI32(3, GetRepeatedElementRepetition(repeatedElementStates, columnIndex));
+        writer.WriteFieldI32(3, GetRepeatedElementRepetition(semanticStates, columnIndex));
         writer.WriteFieldString(4, "element");
         WriteConvertedType(ref writer, columnLogicalTypes, columnIndex);
         writer.EndStruct(element);
     }
 
-    static int GetRepeatedElementRepetition(byte[] repeatedElementStates, int columnIndex)
+    static int GetRepeatedElementRepetition(ColumnSemanticRegistry.ColumnSemanticState[] semanticStates, int columnIndex)
     {
-        if ((uint)columnIndex < (uint)repeatedElementStates.Length && repeatedElementStates[columnIndex] == 2)
+        if ((uint)columnIndex < (uint)semanticStates.Length && semanticStates[columnIndex].Repeated == ColumnSemanticRegistry.RepeatedElementState.Optional)
             return (int)FieldRepetitionType.Optional;
         return (int)FieldRepetitionType.Required;
     }

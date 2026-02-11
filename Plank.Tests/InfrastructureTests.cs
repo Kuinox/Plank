@@ -63,11 +63,13 @@ internal sealed class InfrastructureTests
     {
         var pool = new NamedMemoryPool();
         await Assert.ThrowsAsync<ArgumentException>(async () =>
-            await Task.Run(() => pool.Rent("", 1)));
+            await Task.Run(() => pool.Rent("", 1, 0)));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () =>
-            await Task.Run(() => pool.Rent("x", 0)));
+            await Task.Run(() => pool.Rent("x", 0, 0)));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () =>
+            await Task.Run(() => pool.Rent("x", 1, -1)));
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await Task.Run(() => pool.Rent("x", 1)));
+            await Task.Run(() => pool.Rent("x", 1, 0)));
     }
 
     [Test]
@@ -85,7 +87,7 @@ internal sealed class InfrastructureTests
         var pool = new NamedMemoryPool();
         pool.Register("bucket", 64, 0);
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await Task.Run(() => pool.Rent("bucket", 65)));
+            await Task.Run(() => pool.Rent("bucket", 65, 0)));
     }
 
     [Test]
@@ -94,12 +96,12 @@ internal sealed class InfrastructureTests
         var pool = new NamedMemoryPool();
         pool.Register("bucket", 64, 1);
 
-        var a = pool.Rent("bucket", 32);
-        var b = pool.Rent("bucket", 32);
+        var a = pool.Rent("bucket", 32, 0);
+        var b = pool.Rent("bucket", 32, 1);
         a.Dispose();
         b.Dispose();
 
-        using var c = pool.Rent("bucket", 32);
+        using var c = pool.Rent("bucket", 32, 0);
         await Assert.That(c.Memory.Length).IsEqualTo(64);
     }
 
@@ -108,7 +110,7 @@ internal sealed class InfrastructureTests
     {
         var pool = new NamedMemoryPool();
         pool.Register("bucket", 32, 1);
-        var lease = pool.Rent("bucket", 8);
+        var lease = pool.Rent("bucket", 8, 0);
         lease.Dispose();
 
         await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
