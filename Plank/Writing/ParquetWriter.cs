@@ -17,14 +17,12 @@ public sealed partial class ParquetWriter : IDisposable
     Stream _stream;
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
-    readonly DateTimeKindHandling _dateTimeKindHandling;
     readonly RowGroupState _rowGroupState;
     readonly IBufferPool _bufferPool;
     readonly Dictionary<Column, int> _columnOrdinals;
     readonly ColumnSemanticRegistry _semanticRegistry;
     readonly ColumnChunkMetadata[][] _rowGroupColumns;
     readonly RowGroupInfo[] _rowGroups;
-    readonly IParquetLog _log;
     readonly bool _streamWriteMetricsEnabled;
     byte[] _footerBuffer;
     long _position;
@@ -43,9 +41,7 @@ public sealed partial class ParquetWriter : IDisposable
         _stream = stream;
         _schema = schema;
         _options = options;
-        _log = options.Log;
-        _streamWriteMetricsEnabled = !ReferenceEquals(_log, ParquetLog.None);
-        _dateTimeKindHandling = options.DateTimeKindHandling;
+        _streamWriteMetricsEnabled = !ReferenceEquals(_options.Log, ParquetLog.None);
         if (options.ExpectedRowGroupCount is > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(options), options.ExpectedRowGroupCount.Value, "Expected row group count must fit in Int32.");
 
@@ -74,7 +70,7 @@ public sealed partial class ParquetWriter : IDisposable
         }
 
         _bufferPool = options.BufferPool ?? new NamedMemoryPool();
-        _rowGroupState = new RowGroupState(columns, options.RowGroupOptions, options.RowGroupRowCountHint, _dateTimeKindHandling, options.Compression, _bufferPool);
+        _rowGroupState = new RowGroupState(columns, options.RowGroupOptions, options.RowGroupRowCountHint, options.DateTimeKindHandling, options.Compression, _bufferPool);
         _footerBuffer = options.FooterBufferBytes > 0
             ? new byte[options.FooterBufferBytes]
             : throw new ArgumentOutOfRangeException(nameof(options), options.FooterBufferBytes, "FooterBufferBytes must be positive.");
@@ -147,7 +143,7 @@ public sealed partial class ParquetWriter : IDisposable
         };
         state.RowCount = values.Length;
         state.ValueCount = values.Length;
-        ColumnCodec.Encode(column, values, physicalType, _dateTimeKindHandling, ref state);
+        ColumnCodec.Encode(column, values, physicalType, _options.DateTimeKindHandling, ref state);
         ColumnCodec.Compress(ref state, _options.Compression);
         var logicalType = ResolveSerializedLogicalType(typeof(T), column);
         return new SerializedColumn(
@@ -180,7 +176,7 @@ public sealed partial class ParquetWriter : IDisposable
             };
             state.RowCount = values.Length;
             state.ValueCount = values.Length;
-            ColumnCodec.Encode(column, values, physicalType, _dateTimeKindHandling, ref state);
+            ColumnCodec.Encode(column, values, physicalType, _options.DateTimeKindHandling, ref state);
             ColumnCodec.Compress(ref state, _options.Compression);
             var logicalType = ResolveSerializedLogicalType(typeof(T), column);
             return new SerializedColumn(
@@ -222,7 +218,7 @@ public sealed partial class ParquetWriter : IDisposable
             if (column.PhysicalType != repeatedPhysicalType)
                 throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {repeatedPhysicalType}.");
 
-            ColumnCodec.EncodeRepeated(column, rows, repeatedPhysicalType, _dateTimeKindHandling, ref state);
+            ColumnCodec.EncodeRepeated(column, rows, repeatedPhysicalType, _options.DateTimeKindHandling, ref state);
             logicalType = ResolveSerializedLogicalType(typeof(T), column);
             repeatedElementOptional = ColumnSemanticRegistry.IsRepeatedElementOptional(typeof(T));
         }
@@ -233,7 +229,7 @@ public sealed partial class ParquetWriter : IDisposable
                 throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {scalarPhysicalType}.");
 
             state.ValueCount = rows.Length;
-            ColumnCodec.Encode(column, rows, scalarPhysicalType, _dateTimeKindHandling, ref state);
+            ColumnCodec.Encode(column, rows, scalarPhysicalType, _options.DateTimeKindHandling, ref state);
             logicalType = ResolveSerializedLogicalType(typeof(T[]), column);
             repeatedElementOptional = false;
         }
@@ -273,7 +269,7 @@ public sealed partial class ParquetWriter : IDisposable
                 if (column.PhysicalType != repeatedPhysicalType)
                     throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {repeatedPhysicalType}.");
 
-                ColumnCodec.EncodeRepeated(column, rows, repeatedPhysicalType, _dateTimeKindHandling, ref state);
+                ColumnCodec.EncodeRepeated(column, rows, repeatedPhysicalType, _options.DateTimeKindHandling, ref state);
                 logicalType = ResolveSerializedLogicalType(typeof(T), column);
                 repeatedElementOptional = ColumnSemanticRegistry.IsRepeatedElementOptional(typeof(T));
             }
@@ -284,7 +280,7 @@ public sealed partial class ParquetWriter : IDisposable
                     throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {scalarPhysicalType}.");
 
                 state.ValueCount = rows.Length;
-                ColumnCodec.Encode(column, rows, scalarPhysicalType, _dateTimeKindHandling, ref state);
+                ColumnCodec.Encode(column, rows, scalarPhysicalType, _options.DateTimeKindHandling, ref state);
                 logicalType = ResolveSerializedLogicalType(typeof(T[]), column);
                 repeatedElementOptional = false;
             }
@@ -388,7 +384,7 @@ public sealed partial class ParquetWriter : IDisposable
             _activeColumnWriteTicks = checked(_activeColumnWriteTicks + (completed - started));
         _lastWriteEndTimestamp = completed;
         _hasLastWriteEndTimestamp = true;
-        _log.StreamWriteObserved(payload.Length, completed - started, gapTicks);
+        _options.Log.StreamWriteObserved(payload.Length, completed - started, gapTicks);
     }
 
     internal void BeginColumnWriteTiming(int ordinal)

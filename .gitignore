@@ -10,3 +10,4 @@ riderModule.iml
 /Plank.Benchmarks/BenchmarkDotNet.Artifacts/
 /Plank.Benchmarks/nyc-data/
 /Plank.Benchmarks/throughput-output/
+.dotnet

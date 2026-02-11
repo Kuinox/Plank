@@ -35,7 +35,7 @@ public sealed partial class ParquetWriter
             ExecutePageWritePlan(writer, ordinal, ref state, plan, out totalUncompressedSize, out totalCompressedSize);
             var writeTicks = writer.EndColumnWriteTiming(ordinal);
             var bytesWritten = checked((int)(writer._position - offset));
-            writer._log.ColumnWriteMetricsObserved(
+            writer._options.Log.ColumnWriteMetricsObserved(
                 _columns[ordinal].Name,
                 rowCount,
                 valueCount,
@@ -45,7 +45,7 @@ public sealed partial class ParquetWriter
                 waitForWriteTicks,
                 writeTicks);
             if (state.StringRowCount > 0)
-                writer._log.StringEncodingMetricsObserved(
+                writer._options.Log.StringEncodingMetricsObserved(
                     _columns[ordinal].Name,
                     state.StringRowCount,
                     state.StringNonNullCount,
