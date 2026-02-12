@@ -1,5 +1,4 @@
 using Parquet;
-using Parquet.Data;
 using Parquet.Schema;
 using ParquetSharp;
 using Plank.Schema;
@@ -8,7 +7,6 @@ using System.Diagnostics;
 using Column = ParquetSharp.Column;
 using CompressionMethod = Parquet.CompressionMethod;
 using DataColumn = Parquet.Data.DataColumn;
-using DataField = Parquet.Schema.DataField;
 using ParquetSchema = Parquet.Schema.ParquetSchema;
 using PlankColumn = Plank.Schema.Column;
 using PlankSchema = Plank.Schema.ParquetSchema;

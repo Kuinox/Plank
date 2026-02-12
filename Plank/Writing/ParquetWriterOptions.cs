@@ -1,5 +1,3 @@
-using Plank;
-
 namespace Plank.Writing;
 
 public sealed class ParquetWriterOptions

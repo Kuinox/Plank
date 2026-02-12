@@ -1,6 +1,4 @@
-using System.Collections.Generic;
 using System.Collections.Immutable;
-using Plank;
 using Plank.Schema;
 
 namespace Plank.Writing;
@@ -9,7 +7,7 @@ public sealed partial class ParquetWriter
 {
     internal sealed partial class RowGroupState
     {
-        sealed class RowGroupColumns
+        sealed class RowGroupColumnStore
         {
             internal readonly Dictionary<Column, int> ColumnOrdinals;
             internal readonly Column[] Columns;
@@ -19,7 +17,7 @@ public sealed partial class ParquetWriter
             internal int RowCount;
             internal int NextOrdinal;
 
-            internal RowGroupColumns(ImmutableArray<Column> columns)
+            internal RowGroupColumnStore(ImmutableArray<Column> columns)
             {
                 Columns = columns.IsDefault ? [] : columns.ToArray();
                 ColumnStates = Columns.Length > 0 ? new ColumnState[Columns.Length] : [];

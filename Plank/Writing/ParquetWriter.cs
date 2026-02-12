@@ -1,14 +1,8 @@
 using System.Buffers;
 using System.Buffers.Binary;
-using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
-using System.IO.Compression;
-using K4os.Compression.LZ4;
-using Plank;
 using Plank.Schema;
-using Snappier;
-using ZstdSharp;
 
 namespace Plank.Writing;
 
@@ -18,12 +12,10 @@ public sealed partial class ParquetWriter : IDisposable
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
     readonly RowGroupState _rowGroupState;
-    readonly IBufferPool _bufferPool;
     readonly Dictionary<Column, int> _columnOrdinals;
     readonly ColumnSemanticRegistry _semanticRegistry;
     readonly ColumnChunkMetadata[][] _rowGroupColumns;
     readonly RowGroupInfo[] _rowGroups;
-    readonly bool _streamWriteMetricsEnabled;
     byte[] _footerBuffer;
     long _position;
     long _lastWriteEndTimestamp;
@@ -41,7 +33,6 @@ public sealed partial class ParquetWriter : IDisposable
         _stream = stream;
         _schema = schema;
         _options = options;
-        _streamWriteMetricsEnabled = !ReferenceEquals(_options.Log, ParquetLog.None);
         if (options.ExpectedRowGroupCount is > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(options), options.ExpectedRowGroupCount.Value, "Expected row group count must fit in Int32.");
 
@@ -69,8 +60,7 @@ public sealed partial class ParquetWriter : IDisposable
                     _rowGroupColumns[i] = new ColumnChunkMetadata[columns.Length];
         }
 
-        _bufferPool = options.BufferPool ?? new NamedMemoryPool();
-        _rowGroupState = new RowGroupState(columns, options.RowGroupOptions, options.RowGroupRowCountHint, options.DateTimeKindHandling, options.Compression, _bufferPool);
+        _rowGroupState = new RowGroupState(columns, options, options.BufferPool ?? new NamedMemoryPool());
         _footerBuffer = options.FooterBufferBytes > 0
             ? new byte[options.FooterBufferBytes]
             : throw new ArgumentOutOfRangeException(nameof(options), options.FooterBufferBytes, "FooterBufferBytes must be positive.");
@@ -123,9 +113,9 @@ public sealed partial class ParquetWriter : IDisposable
             throw new InvalidOperationException("RowGroupOptions cannot be changed when reuse/no-allocation guarantees are required.");
 
         _rowGroupActive = true;
-        _rowGroupState.Reset(options ?? _options.RowGroupOptions);
-        _rowGroupState.ConfigureBufferRequestIds(_nextBufferRequestId);
-        _nextBufferRequestId = checked(_nextBufferRequestId + _rowGroupState.ColumnCount);
+        _rowGroupState.Reset();
+        var rowGroupColumnCount = _rowGroupState.ConfigureAndGetColumnCount(_nextBufferRequestId);
+        _nextBufferRequestId = checked(_nextBufferRequestId + rowGroupColumnCount);
         return new RowGroupWriter(this, _rowGroupState);
     }
 
@@ -334,8 +324,8 @@ public sealed partial class ParquetWriter : IDisposable
 
         var destination = _rowGroupColumns[index];
         if (destination.Length > 0)
-            Array.Copy(_rowGroupState.ColumnMetadata, destination, destination.Length);
-        _rowGroups[index] = new RowGroupInfo(_rowGroupState.RowCount, destination);
+            _rowGroupState.CopyColumnMetadataTo(destination);
+        _rowGroups[index] = new RowGroupInfo(_rowGroupState.GetRowCount(), destination);
         _rowGroupCount = index + 1;
         _rowGroupActive = false;
     }
@@ -356,12 +346,12 @@ public sealed partial class ParquetWriter : IDisposable
 
     void WriteFileFooter()
     {
-        var metadataSize = ParquetThriftWriter.GetFileMetaDataSize(_schema, _semanticRegistry.LogicalTypes, _semanticRegistry.States, _rowGroups, _rowGroupCount);
+        var metadataSize = ParquetThriftWriter.GetFileMetaDataSize(_schema, _semanticRegistry._logicalTypes, _semanticRegistry._states, _rowGroups, _rowGroupCount);
         var footerSize = checked(metadataSize + sizeof(int) + FileMagic.Length);
         if (footerSize > _footerBuffer.Length)
             throw new InvalidOperationException($"Footer requires {footerSize} bytes but FooterBufferBytes is {_footerBuffer.Length}.");
 
-        ParquetThriftWriter.WriteFileMetaData(_footerBuffer.AsSpan(0, metadataSize), _schema, _semanticRegistry.LogicalTypes, _semanticRegistry.States, _rowGroups, _rowGroupCount);
+        ParquetThriftWriter.WriteFileMetaData(_footerBuffer.AsSpan(0, metadataSize), _schema, _semanticRegistry._logicalTypes, _semanticRegistry._states, _rowGroups, _rowGroupCount);
         BinaryPrimitives.WriteInt32LittleEndian(_footerBuffer.AsSpan(metadataSize, sizeof(int)), metadataSize);
         FileMagic.CopyTo(_footerBuffer.AsSpan(metadataSize + sizeof(int), FileMagic.Length));
         WriteToStream(_footerBuffer.AsSpan(0, footerSize));
@@ -370,7 +360,7 @@ public sealed partial class ParquetWriter : IDisposable
 
     void WriteToStream(ReadOnlySpan<byte> payload)
     {
-        if (!_streamWriteMetricsEnabled)
+        if (ReferenceEquals(_options.Log, ParquetLog.None))
         {
             _stream.Write(payload);
             return;

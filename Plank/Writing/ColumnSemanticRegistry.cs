@@ -4,20 +4,14 @@ namespace Plank.Writing;
 
 internal sealed class ColumnSemanticRegistry
 {
-    readonly ColumnSemanticState[] _states;
-    readonly ColumnLogicalType[] _logicalTypes;
+    internal readonly ColumnSemanticState[] _states;
+    internal readonly ColumnLogicalType[] _logicalTypes;
 
     internal ColumnSemanticRegistry(int columnCount)
     {
         _states = columnCount > 0 ? new ColumnSemanticState[columnCount] : [];
         _logicalTypes = columnCount > 0 ? new ColumnLogicalType[columnCount] : [];
     }
-
-    internal ColumnSemanticState[] States
-        => _states;
-
-    internal ColumnLogicalType[] LogicalTypes
-        => _logicalTypes;
 
     internal void Clear()
     {

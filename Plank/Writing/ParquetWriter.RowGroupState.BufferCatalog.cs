@@ -1,6 +1,5 @@
 using System.Buffers;
 using K4os.Compression.LZ4;
-using Plank;
 using Plank.Schema;
 using Snappier;
 
@@ -15,7 +14,6 @@ public sealed partial class ParquetWriter
             const string EncodedBucketName = "column";
             const string CompressedBucketName = "column-compressed";
             readonly IBufferPool _pool;
-            readonly int _count;
             readonly int _encodedBucketLength;
             readonly int _compressedBucketLength;
             long _requestIdBase;
@@ -23,15 +21,11 @@ public sealed partial class ParquetWriter
             internal RowGroupBufferCatalog(Column[] columns, RowGroupOptions options, uint? rowGroupRowCountHint, CompressionKind compressionKind, IBufferPool pool)
             {
                 _pool = pool;
-                _count = columns.Length;
                 _encodedBucketLength = GetMaxEncodedLength(columns, rowGroupRowCountHint);
                 _compressedBucketLength = GetCompressedBufferLength(_encodedBucketLength, options.MaxCompressedBytes, compressionKind);
                 _requestIdBase = 0;
-                RegisterBuckets();
+                RegisterBuckets(columns.Length);
             }
-
-            internal int Count
-                => _count;
 
             internal void ConfigureRequestIds(long startId)
             {
@@ -46,13 +40,13 @@ public sealed partial class ParquetWriter
             internal IMemoryOwner<byte> RentCompressed(int ordinal)
                 => _pool.Rent(CompressedBucketName, _compressedBucketLength, checked(_requestIdBase + ordinal));
 
-            void RegisterBuckets()
+            void RegisterBuckets(int columnCount)
             {
-                if (_count == 0)
+                if (columnCount == 0)
                     return;
 
-                _pool.Register(EncodedBucketName, _encodedBucketLength, _count);
-                _pool.Register(CompressedBucketName, _compressedBucketLength, _count);
+                _pool.Register(EncodedBucketName, _encodedBucketLength, columnCount);
+                _pool.Register(CompressedBucketName, _compressedBucketLength, columnCount);
             }
 
             static int GetMaxEncodedLength(Column[] columns, uint? rowGroupRowCountHint)

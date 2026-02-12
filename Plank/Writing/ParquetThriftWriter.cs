@@ -29,7 +29,7 @@ internal static class ParquetThriftWriter
         writer.EndStruct(previousData);
 
         writer.EndStruct(previous);
-        return writer.WrittenCount;
+        return writer._index;
     }
 
     internal static int GetFileMetaDataSize(ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, ColumnSemanticRegistry.ColumnSemanticState[] semanticStates, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
@@ -43,7 +43,7 @@ internal static class ParquetThriftWriter
         WriteRowGroups(ref writer, schema, rowGroups, rowGroupCount);
 
         writer.EndStruct(previous);
-        return writer.WrittenCount;
+        return writer._count;
     }
 
     internal static int WriteFileMetaData(Span<byte> destination, ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, ColumnSemanticRegistry.ColumnSemanticState[] semanticStates, ParquetWriter.RowGroupInfo[] rowGroups, int rowGroupCount)
@@ -57,7 +57,7 @@ internal static class ParquetThriftWriter
         WriteRowGroups(ref writer, schema, rowGroups, rowGroupCount);
 
         writer.EndStruct(previous);
-        return writer.WrittenCount;
+        return writer._index;
     }
 
     static void WriteSchema(ref CompactSizeCounter writer, ParquetSchema schema, ColumnLogicalType[] columnLogicalTypes, ColumnSemanticRegistry.ColumnSemanticState[] semanticStates)
@@ -546,7 +546,7 @@ internal static class ParquetThriftWriter
     ref struct CompactSpanWriter
     {
         readonly Span<byte> _buffer;
-        int _index;
+        internal int _index;
         int _lastFieldId;
 
         internal CompactSpanWriter(Span<byte> buffer)
@@ -555,9 +555,6 @@ internal static class ParquetThriftWriter
             _index = 0;
             _lastFieldId = 0;
         }
-
-        internal readonly int WrittenCount
-            => _index;
 
         internal int BeginStruct()
         {
@@ -692,11 +689,8 @@ internal static class ParquetThriftWriter
 
     struct CompactSizeCounter
     {
-        int _count;
+        internal int _count;
         int _lastFieldId;
-
-        internal readonly int WrittenCount
-            => _count;
 
         internal int BeginStruct()
         {

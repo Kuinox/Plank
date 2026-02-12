@@ -1,14 +1,7 @@
 using System.Buffers;
-using System.Buffers.Binary;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Diagnostics;
 using System.IO.Compression;
 using K4os.Compression.LZ4;
-using Plank;
-using Plank.Schema;
 using Snappier;
-using ZstdSharp;
 
 namespace Plank.Writing;
 
@@ -44,8 +37,8 @@ public sealed partial class ParquetWriter
             var dataSourceOffset = state.RepetitionLevelsByteLength + state.DefinitionLevelsByteLength;
             var source = GetSourceSpan(ref state, dataSourceOffset, state.EncodedLength - dataSourceOffset);
 
-            var maxValues = Options.MaxPageValueCount > 0 ? Options.MaxPageValueCount : int.MaxValue;
-            var maxBytes = Options.MaxPageBytes > 0 ? Options.MaxPageBytes : int.MaxValue;
+            var maxValues = _options.RowGroupOptions.MaxPageValueCount > 0 ? _options.RowGroupOptions.MaxPageValueCount : int.MaxValue;
+            var maxBytes = _options.RowGroupOptions.MaxPageBytes > 0 ? _options.RowGroupOptions.MaxPageBytes : int.MaxValue;
             var levelIndex = 0;
             var definedBefore = 0;
             while (levelIndex < levelCount)
@@ -150,7 +143,7 @@ public sealed partial class ParquetWriter
             var isCompressed = false;
             if (state.Compression != CompressionKind.None && dataPayload.Length > 0)
             {
-                compressedDataLength = CompressPayload(dataPayload, ordinal, ref state, state.Compression, Options.MaxCompressedBytes);
+                compressedDataLength = CompressPayload(dataPayload, ordinal, ref state, state.Compression, _options.RowGroupOptions.MaxCompressedBytes);
                 compressedDataPayload = state.CompressedBufferOwner!.Memory.Span[..compressedDataLength];
                 isCompressed = true;
             }

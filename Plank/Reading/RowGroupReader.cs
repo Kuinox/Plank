@@ -1,4 +1,3 @@
-using ParquetSharp;
 using Plank.Schema;
 using SchemaColumn = Plank.Schema.Column;
 

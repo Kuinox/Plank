@@ -197,7 +197,7 @@ static partial class ColumnCodec
             throw new InvalidOperationException($"Column '{columnName}' definition levels size mismatch.");
         writeValues(rows, writer, dateTimeKindHandling, columnName);
 
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, writer.WrittenCount, repetitionByteCount,
+        SetRepeatedLayout(ref state, rows.Length, levelValueCount, emptyRowCount, writer._written, repetitionByteCount,
             definitionByteCount);
     }
 
@@ -235,7 +235,7 @@ static partial class ColumnCodec
         }
 
         var nullCount = checked(levelValueCount - nonNullCount);
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, nullCount, writer.WrittenCount, repetitionByteCount,
+        SetRepeatedLayout(ref state, rows.Length, levelValueCount, nullCount, writer._written, repetitionByteCount,
             definitionByteCount);
     }
 
@@ -304,7 +304,7 @@ static partial class ColumnCodec
         }
 
         var nullCount = checked(levelValueCount - nonNullCount);
-        SetRepeatedLayout(ref state, rows.Length, levelValueCount, nullCount, writer.WrittenCount, repetitionByteCount,
+        SetRepeatedLayout(ref state, rows.Length, levelValueCount, nullCount, writer._written, repetitionByteCount,
             definitionByteCount);
     }
 }

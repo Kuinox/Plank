@@ -71,18 +71,7 @@ static partial class ColumnCodec
             : 0;
     }
 
-    internal readonly ref struct FixedSizeBuffer
-    {
-        readonly Span<byte> _span;
-
-        internal FixedSizeBuffer(Span<byte> span)
-            => _span = span;
-
-        internal Span<byte> Span
-            => _span;
-    }
-
-    internal static FixedSizeBuffer CreateFixedSizeBuffer(ref ParquetWriter.RowGroupState.ColumnState state, int byteCount,
+    internal static Span<byte> CreateFixedSizeBuffer(ref ParquetWriter.RowGroupState.ColumnState state, int byteCount,
         int maxEncodedBytes, string columnName)
     {
         var destination = GetDestination(ref state, byteCount);
@@ -90,7 +79,7 @@ static partial class ColumnCodec
             throw new InvalidOperationException(
                 $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
 
-        return new FixedSizeBuffer(destination);
+        return destination;
     }
 
     static VariableSizeBuffer CreateVariableSizeBuffer(ref ParquetWriter.RowGroupState.ColumnState state, int maxEncodedBytes,
@@ -122,7 +111,7 @@ static partial class ColumnCodec
     {
         readonly Memory<byte> _buffer;
         readonly string _columnName;
-        int _written;
+        internal int _written;
 
         internal VariableSizeBuffer(Memory<byte> buffer, string columnName)
         {
@@ -130,9 +119,6 @@ static partial class ColumnCodec
             _columnName = columnName;
             _written = 0;
         }
-
-        internal int WrittenCount
-            => _written;
 
         internal void OverwriteInt32(int offset, int value)
         {
@@ -188,7 +174,7 @@ static partial class ColumnCodec
 
     static void WriteStringPayload(VariableSizeBuffer writer, string value, string columnName)
     {
-        var lengthOffset = writer.WrittenCount;
+        var lengthOffset = writer._written;
         WriteInt32(writer, 0);
 
         var destination = writer.GetSpan();

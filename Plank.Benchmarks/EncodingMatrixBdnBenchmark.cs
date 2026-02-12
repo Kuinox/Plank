@@ -1,14 +1,12 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Engines;
 using Parquet;
-using Parquet.Data;
 using Parquet.Schema;
 using ParquetSharp;
 using Plank.Schema;
 using Plank.Writing;
 using CompressionMethod = Parquet.CompressionMethod;
 using DataColumn = Parquet.Data.DataColumn;
-using DataField = Parquet.Schema.DataField;
 using Encoding = ParquetSharp.Encoding;
 using ParquetSchema = Parquet.Schema.ParquetSchema;
 using PlankColumn = Plank.Schema.Column;

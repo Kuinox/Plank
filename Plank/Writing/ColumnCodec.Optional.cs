@@ -139,7 +139,7 @@ static partial class ColumnCodec
             TWriter.Write(value.Value, writer, dateTimeKindHandling, columnName);
         }
 
-        SetOptionalLayout(ref state, writer.WrittenCount, values.Length - nonNullCount, definitionByteCount);
+        SetOptionalLayout(ref state, writer._written, values.Length - nonNullCount, definitionByteCount);
     }
 
     static void EncodeOptionalAllDefined<T, TWriter>(ReadOnlySpan<T> values,
@@ -155,7 +155,7 @@ static partial class ColumnCodec
         foreach (var value in values)
             TWriter.Write(value, writer, dateTimeKindHandling, columnName);
 
-        SetOptionalLayout(ref state, writer.WrittenCount, 0, definitionByteCount);
+        SetOptionalLayout(ref state, writer._written, 0, definitionByteCount);
     }
 
     static void EncodeOptionalReference<T, TWriter>(ReadOnlySpan<T?> values,
@@ -182,7 +182,7 @@ static partial class ColumnCodec
             TWriter.WritePayload(value, writer, columnName);
         }
 
-        SetOptionalLayout(ref state, writer.WrittenCount, values.Length - nonNullCount, definitionByteCount);
+        SetOptionalLayout(ref state, writer._written, values.Length - nonNullCount, definitionByteCount);
         state.StringRowCount = values.Length;
         state.StringNonNullCount = nonNullCount;
     }

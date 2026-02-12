@@ -1,5 +1,3 @@
-using Plank.IO.ZeroAlloc;
-
 #pragma warning disable CA2007
 namespace Plank.IO.ZeroAlloc.Tests;
 

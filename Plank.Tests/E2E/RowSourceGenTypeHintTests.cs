@@ -1,7 +1,5 @@
 using ParquetSharp;
 using Plank.Writing;
-using TUnit.Assertions.Extensions;
-using TUnit.Core;
 
 #pragma warning disable CA2007
 namespace Plank.Tests;

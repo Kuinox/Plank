@@ -1,29 +1,22 @@
-using System.Buffers;
 using System.Buffers.Binary;
-using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.Diagnostics;
-using System.IO.Compression;
-using K4os.Compression.LZ4;
-using Plank;
 using Plank.Schema;
-using Snappier;
-using ZstdSharp;
 
 namespace Plank.Writing;
 
 public sealed partial class ParquetWriter
 {
     internal sealed partial class RowGroupState
-    {        void WriteColumn(ParquetWriter writer, int ordinal)
+    {
+        void WriteColumn(ParquetWriter writer, int ordinal)
         {
-            ref var state = ref _columnStates[ordinal];
+            ref var state = ref _columnStore.ColumnStates[ordinal];
             var rowCount = state.RowCount;
             var valueCount = state.ValueCount;
-            if (RowCount < 0)
-                RowCount = rowCount;
-            if (RowCount != rowCount)
-                throw new InvalidOperationException($"Column ordinal {ordinal} has {rowCount} rows but row group expects {RowCount}.");
+            if (_columnStore.RowCount < 0)
+                _columnStore.RowCount = rowCount;
+            if (_columnStore.RowCount != rowCount)
+                throw new InvalidOperationException($"Column ordinal {ordinal} has {rowCount} rows but row group expects {_columnStore.RowCount}.");
 
             var writeStarted = Stopwatch.GetTimestamp();
             var waitForWriteTicks = state.EncodedTimestampTicks > 0 ? Math.Max(0, writeStarted - state.EncodedTimestampTicks) : 0;
@@ -36,7 +29,7 @@ public sealed partial class ParquetWriter
             var writeTicks = writer.EndColumnWriteTiming(ordinal);
             var bytesWritten = checked((int)(writer._position - offset));
             writer._options.Log.ColumnWriteMetricsObserved(
-                _columns[ordinal].Name,
+                _columnStore.Columns[ordinal].Name,
                 rowCount,
                 valueCount,
                 bytesWritten,
@@ -46,7 +39,7 @@ public sealed partial class ParquetWriter
                 writeTicks);
             if (state.StringRowCount > 0)
                 writer._options.Log.StringEncodingMetricsObserved(
-                    _columns[ordinal].Name,
+                    _columnStore.Columns[ordinal].Name,
                     state.StringRowCount,
                     state.StringNonNullCount,
                     state.StringSizePassTicks,
@@ -54,7 +47,7 @@ public sealed partial class ParquetWriter
                     0,
                     state.StringUtf8WritePassTicks);
 
-            ColumnMetadata[ordinal] = new ColumnChunkMetadata(offset, state.ValueCount, totalUncompressedSize, totalCompressedSize, state.Encoding, state.Compression);
+            _columnStore.ColumnMetadata[ordinal] = new ColumnChunkMetadata(offset, state.ValueCount, totalUncompressedSize, totalCompressedSize, state.Encoding, state.Compression);
             state.ExternalData = default;
             if (state.ExternalDataOwner is not null)
             {
@@ -128,17 +121,17 @@ public sealed partial class ParquetWriter
             bytesPerValue = 0;
             if (state.DefinitionLevelsByteLength != 0 || state.RepetitionLevelsByteLength != 0)
                 return false;
-            if (_columns[ordinal].Options.Repetition is not ParquetRepetition.Required and not ParquetRepetition.Unspecified)
+            if (_columnStore.Columns[ordinal].Options.Repetition is not ParquetRepetition.Required and not ParquetRepetition.Unspecified)
                 return false;
-            if (_columns[ordinal].PhysicalType == ParquetPhysicalType.Boolean)
+            if (_columnStore.Columns[ordinal].PhysicalType == ParquetPhysicalType.Boolean)
                 return false;
-            if (!ColumnCodec.TryGetFixedWidthBytes(_columns[ordinal].PhysicalType, out bytesPerValue))
+            if (!ColumnCodec.TryGetFixedWidthBytes(_columnStore.Columns[ordinal].PhysicalType, out bytesPerValue))
                 return false;
             if (state.ValueCount <= 1)
                 return false;
 
-            var byValues = Options.MaxPageValueCount > 0 ? Options.MaxPageValueCount : int.MaxValue;
-            var byBytes = Options.MaxPageBytes > 0 ? Math.Max(1, Options.MaxPageBytes / bytesPerValue) : int.MaxValue;
+            var byValues = _options.RowGroupOptions.MaxPageValueCount > 0 ? _options.RowGroupOptions.MaxPageValueCount : int.MaxValue;
+            var byBytes = _options.RowGroupOptions.MaxPageBytes > 0 ? Math.Max(1, _options.RowGroupOptions.MaxPageBytes / bytesPerValue) : int.MaxValue;
             splitValueCount = Math.Min(byValues, byBytes);
             if (splitValueCount <= 0)
                 splitValueCount = 1;
@@ -149,15 +142,15 @@ public sealed partial class ParquetWriter
         {
             if (state.DefinitionLevelsByteLength != 0 || state.RepetitionLevelsByteLength != 0)
                 return false;
-            if (_columns[ordinal].Options.Repetition is not ParquetRepetition.Required and not ParquetRepetition.Unspecified)
+            if (_columnStore.Columns[ordinal].Options.Repetition is not ParquetRepetition.Required and not ParquetRepetition.Unspecified)
                 return false;
-            if (_columns[ordinal].PhysicalType is not ParquetPhysicalType.ByteArray)
+            if (_columnStore.Columns[ordinal].PhysicalType is not ParquetPhysicalType.ByteArray)
                 return false;
             if (state.ValueCount <= 1)
                 return false;
 
-            var hasByteLimit = Options.MaxPageBytes > 0 && Options.MaxPageBytes < int.MaxValue;
-            var hasCountLimit = Options.MaxPageValueCount > 0 && Options.MaxPageValueCount < int.MaxValue;
+            var hasByteLimit = _options.RowGroupOptions.MaxPageBytes > 0 && _options.RowGroupOptions.MaxPageBytes < int.MaxValue;
+            var hasCountLimit = _options.RowGroupOptions.MaxPageValueCount > 0 && _options.RowGroupOptions.MaxPageValueCount < int.MaxValue;
             return hasByteLimit || hasCountLimit;
         }
 
@@ -167,14 +160,14 @@ public sealed partial class ParquetWriter
             bytesPerValue = 0;
             if (state.DefinitionLevelsByteLength == 0 && state.RepetitionLevelsByteLength == 0)
                 return false;
-            if (_columns[ordinal].PhysicalType == ParquetPhysicalType.Boolean)
+            if (_columnStore.Columns[ordinal].PhysicalType == ParquetPhysicalType.Boolean)
                 return false;
-            if (!ColumnCodec.TryGetFixedWidthBytes(_columns[ordinal].PhysicalType, out bytesPerValue))
+            if (!ColumnCodec.TryGetFixedWidthBytes(_columnStore.Columns[ordinal].PhysicalType, out bytesPerValue))
                 return false;
             if (state.ValueCount <= 1)
                 return false;
-            var hasValueLimit = Options.MaxPageValueCount > 0 && Options.MaxPageValueCount < int.MaxValue;
-            var hasByteLimit = Options.MaxPageBytes > 0 && Options.MaxPageBytes < int.MaxValue;
+            var hasValueLimit = _options.RowGroupOptions.MaxPageValueCount > 0 && _options.RowGroupOptions.MaxPageValueCount < int.MaxValue;
+            var hasByteLimit = _options.RowGroupOptions.MaxPageBytes > 0 && _options.RowGroupOptions.MaxPageBytes < int.MaxValue;
             return hasValueLimit || hasByteLimit;
         }
 
@@ -232,8 +225,8 @@ public sealed partial class ParquetWriter
             totalCompressedSize = 0;
 
             var source = GetSourceSpan(ref state, 0, state.EncodedLength);
-            var maxValues = Options.MaxPageValueCount > 0 ? Options.MaxPageValueCount : int.MaxValue;
-            var maxBytes = Options.MaxPageBytes > 0 ? Options.MaxPageBytes : int.MaxValue;
+            var maxValues = _options.RowGroupOptions.MaxPageValueCount > 0 ? _options.RowGroupOptions.MaxPageValueCount : int.MaxValue;
+            var maxBytes = _options.RowGroupOptions.MaxPageBytes > 0 ? _options.RowGroupOptions.MaxPageBytes : int.MaxValue;
 
             var valueIndex = 0;
             var payloadOffset = 0;
