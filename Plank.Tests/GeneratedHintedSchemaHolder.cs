@@ -17,10 +17,10 @@ static partial class GeneratedHintedSchemaHolder
     public static ParquetSchema Schema { get; } = new([
         new PlankColumn("trip_date", ParquetPhysicalType.Int32, ColumnOptions.Default),
         new PlankColumn("event_time", ParquetPhysicalType.Int64, ColumnOptions.Default),
-        new PlankColumn("event_time_opt", ParquetPhysicalType.Int64, new ColumnOptions(ParquetRepetition.Optional, ImmutableArray<EncodingKind>.Empty)),
+        new PlankColumn("event_time_opt", ParquetPhysicalType.Int64, new ColumnOptions(ParquetRepetition.Optional, [])),
         new PlankColumn("event_offset", ParquetPhysicalType.Int64, ColumnOptions.Default),
         new PlankColumn("event_clock", ParquetPhysicalType.Int64, ColumnOptions.Default),
         new PlankColumn("tag", ParquetPhysicalType.ByteArray, ColumnOptions.Default),
-        new PlankColumn("tag_opt", ParquetPhysicalType.ByteArray, new ColumnOptions(ParquetRepetition.Optional, ImmutableArray<EncodingKind>.Empty))
+        new PlankColumn("tag_opt", ParquetPhysicalType.ByteArray, new ColumnOptions(ParquetRepetition.Optional, []))
     ]);
 }

@@ -1,7 +1,4 @@
 using System.Buffers;
-using System.IO.Compression;
-using K4os.Compression.LZ4;
-using Snappier;
 
 namespace Plank.Writing;
 
@@ -19,14 +16,14 @@ public sealed partial class ParquetWriter
             if (levelCount <= 0)
                 return;
 
-            var repLevels = isRepeated ? new byte[levelCount] : Array.Empty<byte>();
+            var repLevels = isRepeated ? new byte[levelCount] : [];
             if (isRepeated)
             {
                 var repSource = GetSourceSpan(ref state, 0, state.RepetitionLevelsByteLength);
                 DecodeBitPackedLevels(repSource, levelCount, 1, repLevels);
             }
 
-            var defLevels = maxDefLevel > 0 ? new byte[levelCount] : Array.Empty<byte>();
+            var defLevels = maxDefLevel > 0 ? new byte[levelCount] : [];
             if (maxDefLevel > 0)
             {
                 var defSource = GetSourceSpan(ref state, state.RepetitionLevelsByteLength, state.DefinitionLevelsByteLength);
@@ -143,8 +140,11 @@ public sealed partial class ParquetWriter
             var isCompressed = false;
             if (state.Compression != CompressionKind.None && dataPayload.Length > 0)
             {
-                compressedDataLength = CompressPayload(dataPayload, ordinal, ref state, state.Compression, _options.RowGroupOptions.MaxCompressedBytes);
-                compressedDataPayload = state.CompressedBufferOwner!.Memory.Span[..compressedDataLength];
+                var compressor = writer._pageCompressors.Select(state.Compression);
+                compressedDataLength = CompressPayload(writer, compressor, dataPayload, ordinal, ref state, _options.RowGroupOptions.MaxCompressedBytes);
+                compressedDataPayload = compressor.UsesStreamingOutput
+                    ? writer._streamingCompressedBuffer.WrittenSpan
+                    : state.CompressedBufferOwner!.Memory.Span[..compressedDataLength];
                 isCompressed = true;
             }
 
@@ -193,8 +193,14 @@ public sealed partial class ParquetWriter
             throw new InvalidOperationException("Serialized payload is missing.");
         }
 
-        int CompressPayload(ReadOnlySpan<byte> source, int ordinal, ref ColumnState state, CompressionKind compression, int maxCompressedBytes)
+        int CompressPayload(ParquetWriter writer, IPageCompressor compressor, ReadOnlySpan<byte> source, int ordinal, ref ColumnState state, int maxCompressedBytes)
         {
+            if (compressor.UsesStreamingOutput)
+            {
+                writer._streamingCompressedBuffer.Reset(maxCompressedBytes);
+                return compressor.Compress(source, writer._streamingCompressedBuffer);
+            }
+
             if (state.CompressedBufferOwner is null)
                 state.CompressedBufferOwner = _buffers.RentCompressed(ordinal);
 
@@ -204,74 +210,7 @@ public sealed partial class ParquetWriter
             if (destination.Length == 0)
                 throw new InvalidOperationException("Compressed buffer is too small.");
 
-            return compression switch
-            {
-                CompressionKind.Brotli => CompressWithBrotli(source, destination),
-                CompressionKind.Gzip => CompressWithGzip(source, destination),
-                CompressionKind.Snappy => CompressWithSnappy(source, destination),
-                CompressionKind.Lz4 => CompressWithLz4(source, destination),
-                CompressionKind.Zstd => CompressWithZstd(source, destination),
-                CompressionKind.None => source.Length,
-                _ => throw new NotSupportedException($"Compression '{compression}' is not supported yet.")
-            };
-        }
-
-        static int CompressWithBrotli(ReadOnlySpan<byte> source, Span<byte> destination)
-        {
-            if (!BrotliEncoder.TryCompress(source, destination, out var written))
-                throw new InvalidOperationException("Brotli compressed payload exceeds MaxCompressedBytes.");
-            return written;
-        }
-
-        static int CompressWithGzip(ReadOnlySpan<byte> source, Span<byte> destination)
-        {
-            using var buffer = new MemoryStream(destination.Length);
-            using (var gzip = new GZipStream(buffer, CompressionLevel.Fastest, leaveOpen: true))
-                gzip.Write(source);
-
-            var written = checked((int)buffer.Length);
-            if (written > destination.Length)
-                throw new InvalidOperationException("Gzip compressed payload exceeds MaxCompressedBytes.");
-            buffer.Position = 0;
-            var read = buffer.Read(destination);
-            if (read != written)
-                throw new InvalidOperationException("Could not copy compressed payload.");
-            return written;
-        }
-
-        static int CompressWithSnappy(ReadOnlySpan<byte> source, Span<byte> destination)
-        {
-            var maxLength = Snappy.GetMaxCompressedLength(source.Length);
-            if (maxLength > destination.Length)
-                throw new InvalidOperationException("Snappy compressed payload exceeds MaxCompressedBytes.");
-
-            var written = Snappy.Compress(source, destination);
-            if (written > destination.Length)
-                throw new InvalidOperationException("Snappy compressed payload exceeds MaxCompressedBytes.");
-            return written;
-        }
-
-        static int CompressWithLz4(ReadOnlySpan<byte> source, Span<byte> destination)
-        {
-            var maxLength = LZ4Codec.MaximumOutputSize(source.Length);
-            if (maxLength > destination.Length)
-                throw new InvalidOperationException("Lz4 compressed payload exceeds MaxCompressedBytes.");
-
-            var written = LZ4Codec.Encode(source, destination);
-            if (written <= 0 || written > destination.Length)
-                throw new InvalidOperationException("Lz4 compression failed or exceeded MaxCompressedBytes.");
-            return written;
-        }
-
-        int CompressWithZstd(ReadOnlySpan<byte> source, Span<byte> destination)
-        {
-            if (_zstdCompressor is null)
-                throw new InvalidOperationException("Zstd compressor is not initialized.");
-
-            var written = _zstdCompressor.Wrap(source, destination);
-            if (written <= 0 || written > destination.Length)
-                throw new InvalidOperationException("Zstd compression failed or exceeded MaxCompressedBytes.");
-            return written;
+            return compressor.Compress(source, destination);
         }
 
         static int GetLevelEncodedSize(int valueCount, int bitWidth)
@@ -406,5 +345,6 @@ public sealed partial class ParquetWriter
                 return 1;
             return writer._semanticRegistry.IsRepeatedElementOptional(ordinal) ? 2 : 1;
         }
-    }
+
+    }
 }

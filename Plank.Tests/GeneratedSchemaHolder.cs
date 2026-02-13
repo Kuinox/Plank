@@ -14,6 +14,6 @@ static partial class GeneratedSchemaHolder
         new PlankColumn("ratio", ParquetPhysicalType.Float, ColumnOptions.Default),
         new PlankColumn("score", ParquetPhysicalType.Double, ColumnOptions.Default),
         new PlankColumn("blob", ParquetPhysicalType.ByteArray, ColumnOptions.Default),
-        new PlankColumn("opt_int", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional, ImmutableArray<EncodingKind>.Empty))
+        new PlankColumn("opt_int", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional, []))
     ]);
 }

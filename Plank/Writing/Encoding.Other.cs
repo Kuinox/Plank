@@ -379,7 +379,7 @@ static partial class Encoding
 
             var offset = DeltaBinaryPacked.WriteInt32(prefixLengths, destination, columnName);
             offset += DeltaBinaryPacked.WriteInt32(suffixLengths, destination[offset..], columnName);
-            previous = Array.Empty<byte>();
+            previous = [];
             for (var i = 0; i < values.Length; i++)
             {
                 var current = values[i];

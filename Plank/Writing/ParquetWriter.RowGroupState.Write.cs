@@ -10,13 +10,13 @@ public sealed partial class ParquetWriter
     {
         void WriteColumn(ParquetWriter writer, int ordinal)
         {
-            ref var state = ref _columnStore.ColumnStates[ordinal];
+            ref var state = ref _columnStore.Data.ColumnStates[ordinal];
             var rowCount = state.RowCount;
             var valueCount = state.ValueCount;
-            if (_columnStore.RowCount < 0)
-                _columnStore.RowCount = rowCount;
-            if (_columnStore.RowCount != rowCount)
-                throw new InvalidOperationException($"Column ordinal {ordinal} has {rowCount} rows but row group expects {_columnStore.RowCount}.");
+            if (_columnStore.Progress.RowCount < 0)
+                _columnStore.Progress.RowCount = rowCount;
+            if (_columnStore.Progress.RowCount != rowCount)
+                throw new InvalidOperationException($"Column ordinal {ordinal} has {rowCount} rows but row group expects {_columnStore.Progress.RowCount}.");
 
             var writeStarted = Stopwatch.GetTimestamp();
             var waitForWriteTicks = state.EncodedTimestampTicks > 0 ? Math.Max(0, writeStarted - state.EncodedTimestampTicks) : 0;
@@ -29,7 +29,7 @@ public sealed partial class ParquetWriter
             var writeTicks = writer.EndColumnWriteTiming(ordinal);
             var bytesWritten = checked((int)(writer._position - offset));
             writer._options.Log.ColumnWriteMetricsObserved(
-                _columnStore.Columns[ordinal].Name,
+                _columnStore.Schema.Columns[ordinal].Name,
                 rowCount,
                 valueCount,
                 bytesWritten,
@@ -39,7 +39,7 @@ public sealed partial class ParquetWriter
                 writeTicks);
             if (state.StringRowCount > 0)
                 writer._options.Log.StringEncodingMetricsObserved(
-                    _columnStore.Columns[ordinal].Name,
+                    _columnStore.Schema.Columns[ordinal].Name,
                     state.StringRowCount,
                     state.StringNonNullCount,
                     state.StringSizePassTicks,
@@ -47,7 +47,7 @@ public sealed partial class ParquetWriter
                     0,
                     state.StringUtf8WritePassTicks);
 
-            _columnStore.ColumnMetadata[ordinal] = new ColumnChunkMetadata(offset, state.ValueCount, totalUncompressedSize, totalCompressedSize, state.Encoding, state.Compression);
+            _columnStore.Data.ColumnMetadata[ordinal] = new ColumnChunkMetadata(offset, state.ValueCount, totalUncompressedSize, totalCompressedSize, state.Encoding, state.Compression);
             state.ExternalData = default;
             if (state.ExternalDataOwner is not null)
             {
@@ -121,11 +121,11 @@ public sealed partial class ParquetWriter
             bytesPerValue = 0;
             if (state.DefinitionLevelsByteLength != 0 || state.RepetitionLevelsByteLength != 0)
                 return false;
-            if (_columnStore.Columns[ordinal].Options.Repetition is not ParquetRepetition.Required and not ParquetRepetition.Unspecified)
+            if (_columnStore.Schema.Columns[ordinal].Options.Repetition is not ParquetRepetition.Required and not ParquetRepetition.Unspecified)
                 return false;
-            if (_columnStore.Columns[ordinal].PhysicalType == ParquetPhysicalType.Boolean)
+            if (_columnStore.Schema.Columns[ordinal].PhysicalType == ParquetPhysicalType.Boolean)
                 return false;
-            if (!ColumnCodec.TryGetFixedWidthBytes(_columnStore.Columns[ordinal].PhysicalType, out bytesPerValue))
+            if (!ColumnCodec.TryGetFixedWidthBytes(_columnStore.Schema.Columns[ordinal].PhysicalType, out bytesPerValue))
                 return false;
             if (state.ValueCount <= 1)
                 return false;
@@ -142,9 +142,9 @@ public sealed partial class ParquetWriter
         {
             if (state.DefinitionLevelsByteLength != 0 || state.RepetitionLevelsByteLength != 0)
                 return false;
-            if (_columnStore.Columns[ordinal].Options.Repetition is not ParquetRepetition.Required and not ParquetRepetition.Unspecified)
+            if (_columnStore.Schema.Columns[ordinal].Options.Repetition is not ParquetRepetition.Required and not ParquetRepetition.Unspecified)
                 return false;
-            if (_columnStore.Columns[ordinal].PhysicalType is not ParquetPhysicalType.ByteArray)
+            if (_columnStore.Schema.Columns[ordinal].PhysicalType is not ParquetPhysicalType.ByteArray)
                 return false;
             if (state.ValueCount <= 1)
                 return false;
@@ -160,9 +160,9 @@ public sealed partial class ParquetWriter
             bytesPerValue = 0;
             if (state.DefinitionLevelsByteLength == 0 && state.RepetitionLevelsByteLength == 0)
                 return false;
-            if (_columnStore.Columns[ordinal].PhysicalType == ParquetPhysicalType.Boolean)
+            if (_columnStore.Schema.Columns[ordinal].PhysicalType == ParquetPhysicalType.Boolean)
                 return false;
-            if (!ColumnCodec.TryGetFixedWidthBytes(_columnStore.Columns[ordinal].PhysicalType, out bytesPerValue))
+            if (!ColumnCodec.TryGetFixedWidthBytes(_columnStore.Schema.Columns[ordinal].PhysicalType, out bytesPerValue))
                 return false;
             if (state.ValueCount <= 1)
                 return false;

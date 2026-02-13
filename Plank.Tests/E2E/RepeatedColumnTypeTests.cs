@@ -26,7 +26,7 @@ internal sealed class RepeatedColumnTypeTests
             var rows = new[]
             {
                 new[] { true, false, true },
-                Array.Empty<bool>(),
+                [],
                 new[] { false }
             };
             var schema = new ParquetSchema([
@@ -62,7 +62,7 @@ internal sealed class RepeatedColumnTypeTests
             var rows = new[]
             {
                 new[] { 1.25f, -2.5f },
-                Array.Empty<float>(),
+                [],
                 new[] { 3.5f, 4.75f, 8.125f }
             };
             var schema = new ParquetSchema([
@@ -98,7 +98,7 @@ internal sealed class RepeatedColumnTypeTests
             var rows = new[]
             {
                 new[] { 1.25, -2.5 },
-                Array.Empty<double>(),
+                [],
                 new[] { 3.5, 4.75, 8.125 }
             };
             var schema = new ParquetSchema([
@@ -134,7 +134,7 @@ internal sealed class RepeatedColumnTypeTests
             var rows = new[]
             {
                 new[] { 1L, 2L, 3L },
-                Array.Empty<long>(),
+                [],
                 new[] { 9L }
             };
             var schema = new ParquetSchema([
@@ -174,7 +174,7 @@ internal sealed class RepeatedColumnTypeTests
                     [0x01, 0x02],
                     [0xAA]
                 },
-                Array.Empty<byte[]>(),
+                [],
                 new byte[][]
                 {
                     []
@@ -218,13 +218,13 @@ internal sealed class RepeatedColumnTypeTests
             var dateRows = new[]
             {
                 new[] { new DateOnly(2026, 2, 1), new DateOnly(2026, 2, 2) },
-                Array.Empty<DateOnly>(),
+                [],
                 new[] { new DateOnly(2026, 2, 3) }
             };
             var timeRows = new[]
             {
                 new[] { new TimeOnly(1, 2, 3), new TimeOnly(4, 5, 6) },
-                Array.Empty<TimeOnly>(),
+                [],
                 new[] { new TimeOnly(23, 59, 59, 999) }
             };
 
@@ -291,7 +291,7 @@ internal sealed class RepeatedColumnTypeTests
                     new DateTime(2026, 2, 1, 10, 0, 0, DateTimeKind.Utc),
                     new DateTime(2026, 2, 1, 10, 0, 1, DateTimeKind.Utc)
                 },
-                Array.Empty<DateTime>(),
+                [],
                 new[]
                 {
                     new DateTime(2026, 2, 1, 10, 0, 2, DateTimeKind.Utc)
@@ -304,7 +304,7 @@ internal sealed class RepeatedColumnTypeTests
                     new DateTimeOffset(2026, 2, 1, 10, 0, 0, TimeSpan.FromHours(2)),
                     new DateTimeOffset(2026, 2, 1, 8, 0, 1, TimeSpan.Zero)
                 },
-                Array.Empty<DateTimeOffset>(),
+                [],
                 new[]
                 {
                     new DateTimeOffset(2026, 2, 1, 5, 0, 2, TimeSpan.FromHours(-3))

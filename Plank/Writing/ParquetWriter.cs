@@ -12,6 +12,8 @@ public sealed partial class ParquetWriter : IDisposable
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
     readonly RowGroupState _rowGroupState;
+    readonly PageCompressorSelector _pageCompressors;
+    readonly GrowableBufferWriter _streamingCompressedBuffer;
     readonly Dictionary<Column, int> _columnOrdinals;
     readonly ColumnSemanticRegistry _semanticRegistry;
     readonly ColumnChunkMetadata[][] _rowGroupColumns;
@@ -25,6 +27,8 @@ public sealed partial class ParquetWriter : IDisposable
     bool _rowGroupActive;
     bool _finalized;
     int _rowGroupCount;
+    int _drainInProgress;
+    int _drainCompletionSignaled;
     long _nextBufferRequestId;
     static readonly byte[] FileMagic = "PAR1"u8.ToArray();
 
@@ -46,6 +50,8 @@ public sealed partial class ParquetWriter : IDisposable
         for (var i = 0; i < columns.Length; i++)
             _columnOrdinals[columns[i]] = i;
         _semanticRegistry = new ColumnSemanticRegistry(columns.Length);
+        _pageCompressors = new PageCompressorSelector();
+        _streamingCompressedBuffer = new GrowableBufferWriter();
         _rowGroupColumns = rowGroupCapacity > 0 ? new ColumnChunkMetadata[rowGroupCapacity][] : [];
         if (_rowGroupColumns.Length > 0)
         {
@@ -70,6 +76,8 @@ public sealed partial class ParquetWriter : IDisposable
         _activeColumnOrdinal = -1;
         _activeColumnWriteTicks = 0;
         _rowGroupCount = 0;
+        _drainInProgress = 0;
+        _drainCompletionSignaled = 0;
         _rowGroupActive = false;
         _finalized = false;
         _nextBufferRequestId = 0;
@@ -96,6 +104,8 @@ public sealed partial class ParquetWriter : IDisposable
         _activeColumnOrdinal = -1;
         _activeColumnWriteTicks = 0;
         _rowGroupCount = 0;
+        _drainInProgress = 0;
+        _drainCompletionSignaled = 0;
         _semanticRegistry.Clear();
         _rowGroupActive = false;
         _finalized = false;
@@ -113,6 +123,8 @@ public sealed partial class ParquetWriter : IDisposable
             throw new InvalidOperationException("RowGroupOptions cannot be changed when reuse/no-allocation guarantees are required.");
 
         _rowGroupActive = true;
+        _drainInProgress = 0;
+        _drainCompletionSignaled = 0;
         _rowGroupState.Reset();
         var rowGroupColumnCount = _rowGroupState.ConfigureAndGetColumnCount(_nextBufferRequestId);
         _nextBufferRequestId = checked(_nextBufferRequestId + rowGroupColumnCount);
@@ -313,6 +325,8 @@ public sealed partial class ParquetWriter : IDisposable
     public void Dispose()
     {
         _rowGroupState.ReleaseBuffers();
+        _streamingCompressedBuffer.Dispose();
+        _pageCompressors.Dispose();
         _stream.Dispose();
     }
 
@@ -451,5 +465,3 @@ public sealed partial class ParquetWriter : IDisposable
         public ColumnChunkMetadata[] Columns { get; }
     }
 }
-
-

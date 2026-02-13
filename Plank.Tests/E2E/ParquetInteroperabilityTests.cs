@@ -367,7 +367,7 @@ internal sealed class ParquetInteroperabilityTests
             var rows = new[]
             {
                 new[] { "x", "y" },
-                Array.Empty<string>(),
+                [],
                 new string?[] { null, "z" }
             };
             var schema = new ParquetSchema([
