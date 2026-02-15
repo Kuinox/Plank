@@ -1,5 +1,3 @@
-using Plank.Schema;
-
 namespace Plank2.Writing;
 
 public sealed class RowGroupWriter
@@ -22,18 +20,12 @@ public sealed class RowGroupWriter
         if (expectedOrdinal >= _writer.ColumnCount)
             throw new InvalidOperationException("The current row group already contains all schema columns.");
         if (ordinal != expectedOrdinal)
-        {
-            var column = serialized.GetPreparedColumn(_writer);
-            ThrowColumnOrderMismatch(_writer.GetColumnByOrdinal(expectedOrdinal), expectedOrdinal, column, ordinal);
-        }
+            throw new InvalidOperationException(
+                $"Column order mismatch. Expected ordinal {expectedOrdinal}, got {ordinal}.");
 
         _writer.WriteSerializedColumnToOpenRowGroup(serialized);
         _nextColumnOrdinal++;
         if (_nextColumnOrdinal == _writer.ColumnCount)
             _writer.CompleteOpenRowGroup();
     }
-
-    static void ThrowColumnOrderMismatch(Column expectedColumn, int expectedOrdinal, Column actualColumn, int actualOrdinal)
-        => throw new InvalidOperationException(
-            $"Column order mismatch. Expected '{expectedColumn.Name}' at ordinal {expectedOrdinal}, but received '{actualColumn.Name}' at ordinal {actualOrdinal}.");
 }

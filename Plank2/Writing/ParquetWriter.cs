@@ -91,18 +91,15 @@ public sealed class ParquetWriter
     internal int GetColumnOrdinal(Column column)
     {
         ArgumentNullException.ThrowIfNull(column);
-        for (var i = 0; i < _columnsByOrdinal.Length; i++)
-            if (ReferenceEquals(_columnsByOrdinal[i], column))
-                return i;
+        var ordinal = Array.IndexOf(_columnsByOrdinal, column);
+        if (ordinal >= 0)
+            return ordinal;
 
         throw new ArgumentException("SerializedColumn column does not belong to this schema.", nameof(column));
     }
 
     internal int ColumnCount
         => _columnsByOrdinal.Length;
-
-    internal Column GetColumnByOrdinal(int ordinal)
-        => _columnsByOrdinal[ordinal];
 
     internal void CompleteOpenRowGroup()
         => _rowGroupOpen = false;

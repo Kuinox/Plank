@@ -7,7 +7,6 @@ public sealed class SerializedColumn
 {
     readonly PageList _pages;
     readonly ParquetWriter _owner;
-    Column? _column;
     int _columnOrdinal;
     int _rowCount;
     bool _isPrepared;
@@ -18,7 +17,6 @@ public sealed class SerializedColumn
         ArgumentNullException.ThrowIfNull(owner);
         _pages = new PageList(initialPageCapacity, log);
         _owner = owner;
-        _column = null;
         _columnOrdinal = -1;
         _rowCount = 0;
         _isPrepared = false;
@@ -33,7 +31,6 @@ public sealed class SerializedColumn
 
         var columnOrdinal = _owner.GetColumnOrdinal(column);
         _pages.Clear();
-        _column = column;
         _columnOrdinal = columnOrdinal;
         _rowCount = values.Length;
         _isPrepared = true;
@@ -64,17 +61,9 @@ public sealed class SerializedColumn
         _isWritten = true;
     }
 
-    internal Column GetPreparedColumn(ParquetWriter owner)
-    {
-        EnsureOwnedBy(owner);
-        return _column ?? throw new InvalidOperationException("SerializedColumn has no prepared column.");
-    }
-
     internal int GetPreparedColumnOrdinal(ParquetWriter owner)
     {
         EnsureOwnedBy(owner);
-        if (_columnOrdinal < 0)
-            throw new InvalidOperationException("SerializedColumn has no prepared column ordinal.");
         return _columnOrdinal;
     }
 }
