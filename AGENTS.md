@@ -4,5 +4,6 @@ Project Style Guide
 - Omit implicit accessibility (e.g., no `private` on members where it is default).
 - Avoid braces for single-statement `if`.
 - Prefer expression-bodied members for trivial returns (especially builder no-ops).
+- Do not add internal forwarding properties for fields; expose an internal field directly when internal shared access is needed.
 - Never block on async (no `GetAwaiter().GetResult()`, `.Result`, or `.Wait()`); use async all the way.
 - Keep tests red for known defects; do not hide or weaken failing tests just to make the suite green.

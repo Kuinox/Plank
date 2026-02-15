@@ -1,21 +1,16 @@
-using Plank2;
-
 namespace Plank2.Writing;
 
 public sealed class PageList
 {
     Page[] _pages;
-    readonly IParquetLog _log;
     int _count;
 
-    public PageList(int initialCapacity, IParquetLog log)
+    public PageList(int initialCapacity)
     {
         if (initialCapacity < 0)
             throw new ArgumentOutOfRangeException(nameof(initialCapacity), initialCapacity,
                 "Initial capacity must be non-negative.");
-        ArgumentNullException.ThrowIfNull(log);
         _pages = new Page[initialCapacity];
-        _log = log;
         _count = 0;
     }
 
@@ -52,6 +47,6 @@ public sealed class PageList
             newCapacity = checked(newCapacity * 2);
 
         Array.Resize(ref _pages, newCapacity);
-        _log.PageListCapacityGrew(previousCapacity, newCapacity);
+        ParquetMetrics.PageListAllocations.Add(1);
     }
 }

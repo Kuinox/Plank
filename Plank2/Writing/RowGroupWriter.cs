@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace Plank2.Writing;
 
 public sealed class RowGroupWriter
@@ -18,24 +20,27 @@ public sealed class RowGroupWriter
     public void Write(SerializedColumn serialized)
     {
         ArgumentNullException.ThrowIfNull(serialized);
-        _writer.EnsureRowGroupOpen();
-        serialized.EnsureOwnedBy(_writer);
-
-        var ordinal = serialized.ColumnOrdinal;
-        var expectedOrdinal = _nextColumnOrdinal;
-        if (ordinal != expectedOrdinal)
+        if (serialized.ColumnOrdinal < 0)
             throw new InvalidOperationException(
-                $"Column order mismatch. Expected ordinal {expectedOrdinal}, got {ordinal}.");
+                "SerializedColumn has no serialized data. Call serialized.Serialize(column, values) before Write(...).");
+
+        if (serialized.ColumnOrdinal != _nextColumnOrdinal)
+        {
+            var expectedColumn = _writer.ColumnsByOrdinal[_nextColumnOrdinal];
+            var actualColumn = _writer.ColumnsByOrdinal[serialized.ColumnOrdinal];
+            throw new InvalidOperationException(
+                $"Invalid column order for this row group. Expected '{expectedColumn.Name}' (ordinal {_nextColumnOrdinal}) next, but got '{actualColumn.Name}' (ordinal {serialized.ColumnOrdinal}). Write columns in schema order.");
+        }
 
         if (!_metadataStarted)
         {
-            _rowCount = serialized._rowCount;
-            _writer.BeginOpenRowGroupMetadata(_rowCount);
+            _rowCount = serialized.RowCount;
+            WriteRowGroupHeaderMetadata(_rowCount);
             _metadataStarted = true;
         }
-        else if (serialized._rowCount != _rowCount)
+        else if (serialized.RowCount != _rowCount)
             throw new InvalidOperationException(
-                $"Row count mismatch for row group. Expected {_rowCount}, got {serialized._rowCount}.");
+                $"Row count mismatch for row group. Expected {_rowCount}, got {serialized.RowCount}.");
 
         var pages = serialized.Pages;
         long totalUncompressedSize = 0;
@@ -52,15 +57,33 @@ public sealed class RowGroupWriter
             totalCompressedSize += pageSize;
         }
 
-        _writer.AppendOpenRowGroupColumnMetadata(
-            serialized._rowCount,
-            serialized._rowCount,
-            totalUncompressedSize,
-            totalCompressedSize);
+        WriteColumnMetadata(serialized.RowCount, totalUncompressedSize, totalCompressedSize);
 
-        serialized.Consume(_writer);
+        serialized.Consume();
         _nextColumnOrdinal++;
         if (_nextColumnOrdinal == _writer.ColumnCount)
             _writer.CompleteOpenRowGroup();
+    }
+
+    void WriteRowGroupHeaderMetadata(int rowCount)
+    {
+        const int size = sizeof(int) + sizeof(int);
+        ref var metadata = ref _writer.SerializedRowGroupsMetadata;
+        var span = metadata.GetSpan(size);
+        BinaryPrimitives.WriteInt32LittleEndian(span[0..], rowCount);
+        BinaryPrimitives.WriteInt32LittleEndian(span[4..], _writer.ColumnCount);
+        metadata.Advance(size);
+    }
+
+    void WriteColumnMetadata(int rowCount, long totalUncompressedSize, long totalCompressedSize)
+    {
+        const int size = sizeof(int) + sizeof(int) + sizeof(long) + sizeof(long);
+        ref var metadata = ref _writer.SerializedRowGroupsMetadata;
+        var span = metadata.GetSpan(size);
+        BinaryPrimitives.WriteInt32LittleEndian(span[0..], rowCount);
+        BinaryPrimitives.WriteInt32LittleEndian(span[4..], rowCount);
+        BinaryPrimitives.WriteInt64LittleEndian(span[8..], totalUncompressedSize);
+        BinaryPrimitives.WriteInt64LittleEndian(span[16..], totalCompressedSize);
+        metadata.Advance(size);
     }
 }

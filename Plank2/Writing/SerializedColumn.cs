@@ -1,5 +1,4 @@
 using Plank.Schema;
-using Plank2;
 
 namespace Plank2.Writing;
 
@@ -9,16 +8,16 @@ public sealed class SerializedColumn
     
     internal readonly PageList Pages;
     internal int ColumnOrdinal;
-    internal int _rowCount;
-    public bool IsWritten;
+    internal int RowCount;
+    bool IsWritten;
 
-    internal SerializedColumn(ParquetWriter owner, int initialPageCapacity, IParquetLog log)
+    internal SerializedColumn(ParquetWriter owner, int initialPageCapacity)
     {
         ArgumentNullException.ThrowIfNull(owner);
-        Pages = new PageList(initialPageCapacity, log);
+        Pages = new PageList(initialPageCapacity);
         _owner = owner;
         ColumnOrdinal = -1;
-        _rowCount = 0;
+        RowCount = 0;
         IsWritten = false;
     }
 
@@ -26,29 +25,23 @@ public sealed class SerializedColumn
     {
         ArgumentNullException.ThrowIfNull(column);
         if (!IsWritten && ColumnOrdinal >= 0)
-            throw new InvalidOperationException("SerializedColumn is already prepared and not yet consumed.");
+            throw new InvalidOperationException(
+                "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
 
         var columnOrdinal = _owner.GetColumnOrdinal(column);
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
-        _rowCount = values.Length;
+        RowCount = values.Length;
         IsWritten = false;
 
         TODO;
     }
 
-    internal void EnsureOwnedBy(ParquetWriter owner)
+    /// <summary>
+    /// Invalidates the current prepared payload to avoid missuses.
+    /// </summary>
+    internal void Consume()
     {
-        ArgumentNullException.ThrowIfNull(owner);
-        if (IsWritten || ColumnOrdinal < 0)
-            throw new InvalidOperationException("SerializedColumn is not prepared.");
-        if (!ReferenceEquals(_owner, owner))
-            throw new InvalidOperationException("SerializedColumn is owned by a different ParquetWriter.");
-    }
-
-    internal void Consume(ParquetWriter owner)
-    {
-        EnsureOwnedBy(owner);
         ColumnOrdinal = -1;
         IsWritten = true;
     }
