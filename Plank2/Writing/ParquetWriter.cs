@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Plank.Schema;
 
 namespace Plank2.Writing;
@@ -8,6 +9,10 @@ public sealed class ParquetWriter
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
     readonly Column[] _columnsByOrdinal;
+    BufferWriter _serializedRowGroupsMetadata;
+    int _rowGroupCount;
+    int _openRowGroupMetadataColumnsWritten;
+    bool _openRowGroupMetadataStarted;
     bool _rowGroupOpen;
     bool _streamDisposed;
 
@@ -21,6 +26,10 @@ public sealed class ParquetWriter
         _schema = schema;
         _options = options;
         _columnsByOrdinal = _schema.Columns.IsDefault ? [] : _schema.Columns.ToArray();
+        _serializedRowGroupsMetadata = default;
+        _rowGroupCount = 0;
+        _openRowGroupMetadataColumnsWritten = 0;
+        _openRowGroupMetadataStarted = false;
         _rowGroupOpen = false;
         _streamDisposed = false;
         _schema.Validate();
@@ -43,6 +52,10 @@ public sealed class ParquetWriter
         DisposeCurrentStream();
         _stream = stream;
         _streamDisposed = false;
+        _serializedRowGroupsMetadata.Reset();
+        _rowGroupCount = 0;
+        _openRowGroupMetadataColumnsWritten = 0;
+        _openRowGroupMetadataStarted = false;
     }
 
     public RowGroupWriter StartRowGroup()
@@ -52,8 +65,14 @@ public sealed class ParquetWriter
             throw new InvalidOperationException("A row group is already open for this writer.");
 
         _rowGroupOpen = true;
+        _openRowGroupMetadataColumnsWritten = 0;
+        _openRowGroupMetadataStarted = false;
         if (_columnsByOrdinal.Length == 0)
+        {
+            BeginOpenRowGroupMetadata(0);
             CompleteOpenRowGroup();
+        }
+
         return new RowGroupWriter(this);
     }
 
@@ -80,14 +99,6 @@ public sealed class ParquetWriter
         _streamDisposed = true;
     }
 
-    internal void WriteSerializedColumnToOpenRowGroup(SerializedColumn serialized)
-    {
-        if (!_rowGroupOpen)
-            throw new InvalidOperationException("No row group is currently open.");
-        ArgumentNullException.ThrowIfNull(serialized);
-        serialized.Consume(this);
-    }
-
     internal int GetColumnOrdinal(Column column)
     {
         ArgumentNullException.ThrowIfNull(column);
@@ -101,6 +112,72 @@ public sealed class ParquetWriter
     internal int ColumnCount
         => _columnsByOrdinal.Length;
 
+    internal void WriteBuffer(BufferWriter buffer)
+    {
+        ThrowIfStreamClosed();
+        _stream.Write(buffer.WrittenSpan);
+    }
+
+    internal void EnsureRowGroupOpen()
+    {
+        if (!_rowGroupOpen)
+            throw new InvalidOperationException("No row group is currently open.");
+    }
+
+    internal void BeginOpenRowGroupMetadata(int rowCount)
+    {
+        EnsureRowGroupOpen();
+        if (rowCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(rowCount), rowCount, "Row count must be non-negative.");
+        if (_openRowGroupMetadataStarted)
+            throw new InvalidOperationException("Row group metadata was already started.");
+
+        WriteInt32(ref _serializedRowGroupsMetadata, rowCount);
+        WriteInt32(ref _serializedRowGroupsMetadata, _columnsByOrdinal.Length);
+        _openRowGroupMetadataStarted = true;
+        _openRowGroupMetadataColumnsWritten = 0;
+    }
+
+    internal void AppendOpenRowGroupColumnMetadata(int rowCount, int valueCount, long totalUncompressedSize,
+        long totalCompressedSize)
+    {
+        EnsureRowGroupOpen();
+        if (!_openRowGroupMetadataStarted)
+            throw new InvalidOperationException("Row group metadata is not started.");
+
+        WriteInt32(ref _serializedRowGroupsMetadata, rowCount);
+        WriteInt32(ref _serializedRowGroupsMetadata, valueCount);
+        WriteInt64(ref _serializedRowGroupsMetadata, totalUncompressedSize);
+        WriteInt64(ref _serializedRowGroupsMetadata, totalCompressedSize);
+        _openRowGroupMetadataColumnsWritten++;
+    }
+
     internal void CompleteOpenRowGroup()
-        => _rowGroupOpen = false;
+    {
+        EnsureRowGroupOpen();
+        if (!_openRowGroupMetadataStarted)
+            throw new InvalidOperationException("Row group metadata is not started.");
+        if (_openRowGroupMetadataColumnsWritten != _columnsByOrdinal.Length)
+            throw new InvalidOperationException(
+                $"Row group metadata is incomplete. Expected {_columnsByOrdinal.Length} columns, got {_openRowGroupMetadataColumnsWritten}.");
+
+        _rowGroupCount++;
+        _openRowGroupMetadataStarted = false;
+        _openRowGroupMetadataColumnsWritten = 0;
+        _rowGroupOpen = false;
+    }
+
+    static void WriteInt32(ref BufferWriter writer, int value)
+    {
+        var destination = writer.GetSpan(sizeof(int));
+        BinaryPrimitives.WriteInt32LittleEndian(destination, value);
+        writer.Advance(sizeof(int));
+    }
+
+    static void WriteInt64(ref BufferWriter writer, long value)
+    {
+        var destination = writer.GetSpan(sizeof(long));
+        BinaryPrimitives.WriteInt64LittleEndian(destination, value);
+        writer.Advance(sizeof(long));
+    }
 }
