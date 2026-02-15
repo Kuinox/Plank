@@ -6,24 +6,24 @@ static partial class Encoding
 {
     internal static class ByteStreamSplit
     {
-        internal static void EncodeInt32(ReadOnlySpan<int> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
-            => EncodeFixed(values.Length, sizeof(int), ref state, columnName, maxEncodedBytes,
+        internal static void EncodeInt32(ReadOnlySpan<int> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
+            => EncodeFixed(values.Length, sizeof(int), ref writer, ref state, columnName, maxEncodedBytes,
                 static (row, lane) => (byte)(row >> (lane * 8)), values);
 
-        internal static void EncodeInt64(ReadOnlySpan<long> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
-            => EncodeFixed(values.Length, sizeof(long), ref state, columnName, maxEncodedBytes,
+        internal static void EncodeInt64(ReadOnlySpan<long> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
+            => EncodeFixed(values.Length, sizeof(long), ref writer, ref state, columnName, maxEncodedBytes,
                 static (row, lane) => (byte)(row >> (lane * 8)), values);
 
-        internal static void EncodeFloat(ReadOnlySpan<float> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
-            => EncodeFixed(values.Length, sizeof(int), ref state, columnName, maxEncodedBytes,
+        internal static void EncodeFloat(ReadOnlySpan<float> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
+            => EncodeFixed(values.Length, sizeof(int), ref writer, ref state, columnName, maxEncodedBytes,
                 static (row, lane) => (byte)(row >> (lane * 8)), Reinterpret<float, int>(values));
 
-        internal static void EncodeDouble(ReadOnlySpan<double> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
-            => EncodeFixed(values.Length, sizeof(long), ref state, columnName, maxEncodedBytes,
+        internal static void EncodeDouble(ReadOnlySpan<double> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
+            => EncodeFixed(values.Length, sizeof(long), ref writer, ref state, columnName, maxEncodedBytes,
                 static (row, lane) => (byte)(row >> (lane * 8)), Reinterpret<double, long>(values));
 
         static ReadOnlySpan<TTo> Reinterpret<TFrom, TTo>(ReadOnlySpan<TFrom> values)
@@ -31,20 +31,19 @@ static partial class Encoding
             where TTo : struct
             => MemoryMarshal.Cast<TFrom, TTo>(values);
 
-        static void EncodeFixed<T>(int valueCount, int width, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes, Func<T, int, byte> laneReader, ReadOnlySpan<T> rows = default)
+        static void EncodeFixed<T>(int valueCount, int width, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes,
+            Func<T, int, byte> laneReader, ReadOnlySpan<T> rows = default)
             where T : struct
         {
             var byteCount = checked(valueCount * width);
-            var destination = ColumnCodec.GetDestination(ref state, byteCount);
-            if (byteCount > 0 && destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(byteCount);
 
             for (var lane = 0; lane < width; lane++)
             for (var i = 0; i < valueCount; i++)
                 destination[(lane * valueCount) + i] = laneReader(rows[i], lane);
 
+            writer.Advance(byteCount);
             state.EncodedLength = byteCount;
             state.UncompressedLength = byteCount;
         }
@@ -57,28 +56,24 @@ static partial class Encoding
         const int MiniBlockCount = 4;
         const int MiniBlockSize = BlockSize / MiniBlockCount;
 
-        internal static void EncodeInt32(ReadOnlySpan<int> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeInt32(ReadOnlySpan<int> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
-            var destination = ColumnCodec.GetDestination(ref state, maxEncodedBytes);
-            if (maxEncodedBytes > 0 && destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires more than {maxEncodedBytes} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(maxEncodedBytes);
 
             var written = WriteInt32(values, destination, columnName);
+            writer.Advance(written);
             state.EncodedLength = written;
             state.UncompressedLength = written;
         }
 
-        internal static void EncodeInt64(ReadOnlySpan<long> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeInt64(ReadOnlySpan<long> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
-            var destination = ColumnCodec.GetDestination(ref state, maxEncodedBytes);
-            if (maxEncodedBytes > 0 && destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires more than {maxEncodedBytes} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(maxEncodedBytes);
 
             var written = WriteInt64(values, destination, columnName);
+            writer.Advance(written);
             state.EncodedLength = written;
             state.UncompressedLength = written;
         }
@@ -272,39 +267,34 @@ static partial class Encoding
 
     internal static class DeltaLengthByteArray
     {
-        internal static void EncodeString(ReadOnlySpan<string> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeString(ReadOnlySpan<string> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
-            var destination = ColumnCodec.GetDestination(ref state, maxEncodedBytes);
-            if (maxEncodedBytes > 0 && destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires more than {maxEncodedBytes} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(maxEncodedBytes);
 
             var lengths = new int[values.Length];
             var totalPayload = 0;
             for (var i = 0; i < values.Length; i++)
             {
                 var value = values[i] ?? throw new InvalidOperationException($"Column '{columnName}' does not support null values.");
-                var len = ColumnCodec.Utf8.GetByteCount(value);
+                var len = Encoding.Utf8.GetByteCount(value);
                 lengths[i] = len;
                 totalPayload = checked(totalPayload + len);
             }
 
             var offset = DeltaBinaryPacked.WriteInt32(lengths, destination, columnName);
             for (var i = 0; i < values.Length; i++)
-                offset += ColumnCodec.Utf8.GetBytes(values[i].AsSpan(), destination[offset..]);
+                offset += Encoding.Utf8.GetBytes(values[i].AsSpan(), destination[offset..]);
 
+            writer.Advance(offset);
             state.EncodedLength = offset;
             state.UncompressedLength = offset;
         }
 
-        internal static void EncodeByteArray(ReadOnlySpan<byte[]> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeByteArray(ReadOnlySpan<byte[]> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
-            var destination = ColumnCodec.GetDestination(ref state, maxEncodedBytes);
-            if (maxEncodedBytes > 0 && destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires more than {maxEncodedBytes} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(maxEncodedBytes);
 
             var lengths = new int[values.Length];
             for (var i = 0; i < values.Length; i++)
@@ -321,6 +311,7 @@ static partial class Encoding
                 offset += value.Length;
             }
 
+            writer.Advance(offset);
             state.EncodedLength = offset;
             state.UncompressedLength = offset;
         }
@@ -328,21 +319,21 @@ static partial class Encoding
 
     internal static class DeltaByteArray
     {
-        internal static void EncodeString(ReadOnlySpan<string> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeString(ReadOnlySpan<string> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
             var encoded = new byte[values.Length][];
             for (var i = 0; i < values.Length; i++)
             {
                 var value = values[i] ?? throw new InvalidOperationException($"Column '{columnName}' does not support null values.");
-                encoded[i] = ColumnCodec.Utf8.GetBytes(value);
+                encoded[i] = Encoding.Utf8.GetBytes(value);
             }
 
-            EncodeByteArraysCore(encoded, ref state, columnName, maxEncodedBytes);
+            EncodeByteArraysCore(encoded, ref writer, ref state, columnName, maxEncodedBytes);
         }
 
-        internal static void EncodeByteArray(ReadOnlySpan<byte[]> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeByteArray(ReadOnlySpan<byte[]> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
             var encoded = new byte[values.Length][];
             for (var i = 0; i < values.Length; i++)
@@ -351,16 +342,13 @@ static partial class Encoding
                 encoded[i] = value;
             }
 
-            EncodeByteArraysCore(encoded, ref state, columnName, maxEncodedBytes);
+            EncodeByteArraysCore(encoded, ref writer, ref state, columnName, maxEncodedBytes);
         }
 
-        static void EncodeByteArraysCore(ReadOnlySpan<byte[]> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        static void EncodeByteArraysCore(ReadOnlySpan<byte[]> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
-            var destination = ColumnCodec.GetDestination(ref state, maxEncodedBytes);
-            if (maxEncodedBytes > 0 && destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires more than {maxEncodedBytes} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(maxEncodedBytes);
 
             var prefixLengths = new int[values.Length];
             var suffixLengths = new int[values.Length];
@@ -393,6 +381,7 @@ static partial class Encoding
                 previous = current;
             }
 
+            writer.Advance(offset);
             state.EncodedLength = offset;
             state.UncompressedLength = offset;
         }

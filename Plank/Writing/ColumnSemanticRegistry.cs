@@ -2,7 +2,7 @@ using Plank.Schema;
 
 namespace Plank.Writing;
 
-internal sealed class ColumnSemanticRegistry
+internal sealed partial class ColumnSemanticRegistry
 {
     internal readonly ColumnSemanticState[] _states;
     internal readonly ColumnLogicalType[] _logicalTypes;
@@ -168,25 +168,6 @@ internal sealed class ColumnSemanticRegistry
 
         if (existing != desiredState)
             throw new InvalidOperationException($"Column '{columnName}' mixes incompatible logical semantics for its physical type.");
-    }
-
-    internal enum LogicalSemanticState : byte
-    {
-        None = 0,
-        Int32Plain = 1,
-        Int32Date = 2,
-        Int64Plain = 3,
-        Int64TimestampMicrosUtc = 4,
-        Int64TimeMicros = 5,
-        ByteArrayPlain = 6,
-        ByteArrayUtf8 = 7
-    }
-
-    internal enum RepeatedElementState : byte
-    {
-        None = 0,
-        Required = 1,
-        Optional = 2
     }
 
     internal struct ColumnSemanticState

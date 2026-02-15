@@ -21,7 +21,7 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
 
         _writer.RegisterValueType(column, typeof(T));
         var physicalType = GetPhysicalType<T>();
-        var ordinal = _state.EncodeColumn(column, values, physicalType);
+        var ordinal = _state.EncodeColumn(_writer, column, values, physicalType);
         _state.TryDrain(_writer);
         return _state.GetWriteTask(ordinal, cancellationToken);
     }
@@ -37,7 +37,7 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
         {
             _writer.RegisterValueType(column, typeof(T));
             var physicalType = GetPhysicalType<T>();
-            ordinal = _state.EncodeRepeatedColumn(column, rows, physicalType);
+            ordinal = _state.EncodeRepeatedColumn(_writer, column, rows, physicalType);
         }
         else
         {
@@ -48,7 +48,7 @@ public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
                     $"Column '{column.Name}' is not Repeated and does not accept values of type '{typeof(T[])}'.");
 
             var physicalType = resolution.PhysicalType;
-            ordinal = _state.EncodeColumn(column, rows, physicalType);
+            ordinal = _state.EncodeColumn(_writer, column, rows, physicalType);
         }
 
         _state.TryDrain(_writer);

@@ -6,7 +6,7 @@ namespace Plank.Writing;
 public sealed partial class ParquetWriter
 {    public readonly struct SerializedColumn : IEquatable<SerializedColumn>
     {
-        internal SerializedColumn(Column column, ReadOnlyMemory<byte> payload, int rowCount, int valueCount, int uncompressedLength, int nullCount, int definitionLevelsByteLength, int repetitionLevelsByteLength, EncodingKind encoding, CompressionKind compression, ColumnLogicalType logicalType, bool repeatedElementOptional, IMemoryOwner<byte>? payloadOwner = null)
+        internal SerializedColumn(Column column, ReadOnlyMemory<byte> payload, int rowCount, int valueCount, int uncompressedLength, int nullCount, int definitionLevelsByteLength, int repetitionLevelsByteLength, EncodingKind encoding, CompressionKind compression, ColumnLogicalType logicalType, bool repeatedElementOptional, bool dataPayloadCompressed, IMemoryOwner<byte>? payloadOwner = null)
         {
             Column = column;
             Payload = payload;
@@ -20,6 +20,7 @@ public sealed partial class ParquetWriter
             Compression = compression;
             LogicalType = logicalType;
             RepeatedElementOptional = repeatedElementOptional;
+            DataPayloadCompressed = dataPayloadCompressed;
             PayloadOwner = payloadOwner;
         }
 
@@ -47,6 +48,8 @@ public sealed partial class ParquetWriter
 
         internal bool RepeatedElementOptional { get; }
 
+        internal bool DataPayloadCompressed { get; }
+
         internal IMemoryOwner<byte>? PayloadOwner { get; }
 
         public bool Equals(SerializedColumn other)
@@ -62,6 +65,7 @@ public sealed partial class ParquetWriter
                && Compression == other.Compression
                && LogicalType == other.LogicalType
                && RepeatedElementOptional == other.RepeatedElementOptional
+               && DataPayloadCompressed == other.DataPayloadCompressed
                && ReferenceEquals(PayloadOwner, other.PayloadOwner);
 
         public override bool Equals(object? obj)
@@ -82,6 +86,7 @@ public sealed partial class ParquetWriter
             hash.Add(Compression);
             hash.Add(LogicalType);
             hash.Add(RepeatedElementOptional);
+            hash.Add(DataPayloadCompressed);
             hash.Add(PayloadOwner);
             return hash.ToHashCode();
         }

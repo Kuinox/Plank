@@ -7,11 +7,14 @@ static partial class Encoding
 {
     internal static class Plain
     {
-        internal static void EncodeInt32(ReadOnlySpan<int> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeInt32(ReadOnlySpan<int> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(int));
-            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName);
+            if (byteCount == 0)
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(byteCount);
 
             if (BitConverter.IsLittleEndian)
                 MemoryMarshal.AsBytes(values).CopyTo(destination);
@@ -19,15 +22,19 @@ static partial class Encoding
                 for (var i = 0; i < values.Length; i++)
                     BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(i * 4, 4), values[i]);
 
+            writer.Advance(byteCount);
             state.EncodedLength = byteCount;
             state.UncompressedLength = byteCount;
         }
 
-        internal static void EncodeBoolean(ReadOnlySpan<bool> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeBoolean(ReadOnlySpan<bool> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
             var byteCount = (values.Length + 7) >> 3;
-            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName);
+            if (byteCount == 0)
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(byteCount);
 
             destination.Clear();
             for (var i = 0; i < values.Length; i++)
@@ -40,31 +47,39 @@ static partial class Encoding
                 destination[byteIndex] |= (byte)(1 << bitIndex);
             }
 
+            writer.Advance(byteCount);
             state.EncodedLength = byteCount;
             state.UncompressedLength = byteCount;
         }
 
-        internal static void EncodeDateOnly(ReadOnlySpan<DateOnly> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeDateOnly(ReadOnlySpan<DateOnly> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(int));
-            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName);
+            if (byteCount == 0)
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(byteCount);
 
             for (var i = 0; i < values.Length; i++)
             {
-                var daysSinceEpoch = checked(values[i].DayNumber - ColumnCodec.UnixEpochDayNumber);
+                var daysSinceEpoch = checked(values[i].DayNumber - Encoding.UnixEpochDayNumber);
                 BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(i * 4, 4), daysSinceEpoch);
             }
 
+            writer.Advance(byteCount);
             state.EncodedLength = byteCount;
             state.UncompressedLength = byteCount;
         }
 
-        internal static void EncodeInt64(ReadOnlySpan<long> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeInt64(ReadOnlySpan<long> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(long));
-            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName);
+            if (byteCount == 0)
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(byteCount);
 
             if (BitConverter.IsLittleEndian)
                 MemoryMarshal.AsBytes(values).CopyTo(destination);
@@ -72,127 +87,146 @@ static partial class Encoding
                 for (var i = 0; i < values.Length; i++)
                     BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(i * 8, 8), values[i]);
 
+            writer.Advance(byteCount);
             state.EncodedLength = byteCount;
             state.UncompressedLength = byteCount;
         }
 
         internal static void EncodeDateTime(ReadOnlySpan<DateTime> values, DateTimeKindHandling dateTimeKindHandling,
-            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
+            ref DestinationBufferWriter writer, ref ParquetWriter.RowGroupState.ColumnState state,
+            string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(long));
-            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName);
+            if (byteCount == 0)
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(byteCount);
 
-            ColumnCodec.ValidateDateTimeHandling(dateTimeKindHandling, columnName);
+            Encoding.ValidateDateTimeHandling(dateTimeKindHandling, columnName);
             for (var i = 0; i < values.Length; i++)
             {
-                var unixMicros = ColumnCodec.ToUnixMicroseconds(values[i], dateTimeKindHandling, columnName);
+                var unixMicros = Encoding.ToUnixMicroseconds(values[i], dateTimeKindHandling, columnName);
                 BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(i * 8, 8), unixMicros);
             }
 
+            writer.Advance(byteCount);
             state.EncodedLength = byteCount;
             state.UncompressedLength = byteCount;
         }
 
         internal static void EncodeDateTimeOffset(ReadOnlySpan<DateTimeOffset> values,
-            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
+            ref DestinationBufferWriter writer, ref ParquetWriter.RowGroupState.ColumnState state,
+            string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(long));
-            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName);
+            if (byteCount == 0)
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(byteCount);
 
             for (var i = 0; i < values.Length; i++)
             {
-                var deltaTicks = checked(values[i].UtcTicks - ColumnCodec.UnixEpochTicks);
-                var unixMicros = deltaTicks / ColumnCodec.TicksPerMicrosecond;
+                var deltaTicks = checked(values[i].UtcTicks - Encoding.UnixEpochTicks);
+                var unixMicros = deltaTicks / Encoding.TicksPerMicrosecond;
                 BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(i * 8, 8), unixMicros);
             }
 
+            writer.Advance(byteCount);
             state.EncodedLength = byteCount;
             state.UncompressedLength = byteCount;
         }
 
-        internal static void EncodeTimeOnly(ReadOnlySpan<TimeOnly> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeTimeOnly(ReadOnlySpan<TimeOnly> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(long));
-            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName);
+            if (byteCount == 0)
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(byteCount);
 
             for (var i = 0; i < values.Length; i++)
             {
-                var micros = values[i].Ticks / ColumnCodec.TicksPerMicrosecond;
+                var micros = values[i].Ticks / Encoding.TicksPerMicrosecond;
                 BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(i * 8, 8), micros);
             }
 
+            writer.Advance(byteCount);
             state.EncodedLength = byteCount;
             state.UncompressedLength = byteCount;
         }
 
-        internal static void EncodeString(ReadOnlySpan<string> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeString(ReadOnlySpan<string> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
-            var destination = ColumnCodec.GetDestination(ref state, maxEncodedBytes);
-            if (maxEncodedBytes > 0 && destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires more than {maxEncodedBytes} bytes but encoded buffer capacity is {maxEncodedBytes}.");
-
             var offset = 0;
             foreach (var value in values)
             {
                 var nonNullValue = value ??
                                    throw new InvalidOperationException($"Column '{columnName}' does not support null values.");
-                if (offset > destination.Length - sizeof(int))
-                    throw new InvalidOperationException($"Column '{columnName}' overflow while encoding UTF-8 payload.");
+                var byteCount = Encoding.Utf8.GetByteCount(nonNullValue);
 
-                var lengthOffset = offset;
-                offset += sizeof(int);
-                ColumnCodec.Utf8.GetEncoder().Convert(nonNullValue.AsSpan(), destination[offset..], flush: true,
-                    out var charsUsed, out var bytesWritten, out var completed);
-                if (!completed || charsUsed != nonNullValue.Length)
-                    throw new InvalidOperationException($"Column '{columnName}' overflow while encoding UTF-8 payload.");
-                offset = checked(offset + bytesWritten);
-                BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(lengthOffset, sizeof(int)), bytesWritten);
-            }
+                var lengthDestination = writer.GetSpan(sizeof(int));
+                BinaryPrimitives.WriteInt32LittleEndian(lengthDestination, byteCount);
+                writer.Advance(sizeof(int));
 
-            state.EncodedLength = offset;
-            state.UncompressedLength = offset;
-        }
-
-        internal static void EncodeByteArray(ReadOnlySpan<byte[]> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
-        {
-            var destination = ColumnCodec.GetDestination(ref state, maxEncodedBytes);
-            if (maxEncodedBytes > 0 && destination.IsEmpty)
-                throw new InvalidOperationException(
-                    $"Column '{columnName}' requires more than {maxEncodedBytes} bytes but encoded buffer capacity is {maxEncodedBytes}.");
-
-            var offset = 0;
-            foreach (var value in values)
-            {
-                var nonNullValue = value ??
-                                   throw new InvalidOperationException($"Column '{columnName}' does not support null values.");
-                if (offset > destination.Length - sizeof(int))
-                    throw new InvalidOperationException($"Column '{columnName}' overflow while encoding byte-array payload.");
-
-                BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(offset, sizeof(int)), nonNullValue.Length);
-                offset += sizeof(int);
-                if (nonNullValue.Length == 0)
+                if (byteCount == 0)
+                {
+                    offset += sizeof(int);
                     continue;
+                }
 
-                if (offset > destination.Length - nonNullValue.Length)
-                    throw new InvalidOperationException($"Column '{columnName}' overflow while encoding byte-array payload.");
+                var valueDestination = writer.GetSpan(byteCount);
+                var bytesWritten = Encoding.Utf8.GetBytes(nonNullValue.AsSpan(), valueDestination);
+                if (bytesWritten != byteCount)
+                    throw new InvalidOperationException($"Column '{columnName}' overflow while encoding UTF-8 payload.");
 
-                nonNullValue.AsSpan().CopyTo(destination[offset..]);
-                offset += nonNullValue.Length;
+                writer.Advance(bytesWritten);
+                offset += sizeof(int) + bytesWritten;
             }
 
             state.EncodedLength = offset;
             state.UncompressedLength = offset;
         }
 
-        internal static void EncodeFloat(ReadOnlySpan<float> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeByteArray(ReadOnlySpan<byte[]> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
+        {
+            var offset = 0;
+            foreach (var value in values)
+            {
+                var nonNullValue = value ??
+                                   throw new InvalidOperationException($"Column '{columnName}' does not support null values.");
+                var payloadLength = nonNullValue.Length;
+
+                var lengthDestination = writer.GetSpan(sizeof(int));
+                BinaryPrimitives.WriteInt32LittleEndian(lengthDestination, payloadLength);
+                writer.Advance(sizeof(int));
+
+                if (payloadLength == 0)
+                {
+                    offset += sizeof(int);
+                    continue;
+                }
+
+                var valueDestination = writer.GetSpan(payloadLength);
+                nonNullValue.AsSpan().CopyTo(valueDestination);
+                writer.Advance(payloadLength);
+                offset += sizeof(int) + payloadLength;
+            }
+
+            state.EncodedLength = offset;
+            state.UncompressedLength = offset;
+        }
+
+        internal static void EncodeFloat(ReadOnlySpan<float> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(float));
-            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName);
+            if (byteCount == 0)
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(byteCount);
 
             if (BitConverter.IsLittleEndian)
                 MemoryMarshal.AsBytes(values).CopyTo(destination);
@@ -201,15 +235,19 @@ static partial class Encoding
                     BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(i * 4, 4),
                         BitConverter.SingleToInt32Bits(values[i]));
 
+            writer.Advance(byteCount);
             state.EncodedLength = byteCount;
             state.UncompressedLength = byteCount;
         }
 
-        internal static void EncodeDouble(ReadOnlySpan<double> values, ref ParquetWriter.RowGroupState.ColumnState state,
-            string columnName, int maxEncodedBytes)
+        internal static void EncodeDouble(ReadOnlySpan<double> values, ref DestinationBufferWriter writer,
+            ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
         {
             var byteCount = checked(values.Length * sizeof(double));
-            var destination = ColumnCodec.CreateFixedSizeBuffer(ref state, byteCount, maxEncodedBytes, columnName);
+            if (byteCount == 0)
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+            var destination = writer.GetSpan(byteCount);
 
             if (BitConverter.IsLittleEndian)
                 MemoryMarshal.AsBytes(values).CopyTo(destination);
@@ -218,6 +256,7 @@ static partial class Encoding
                     BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(i * 8, 8),
                         BitConverter.DoubleToInt64Bits(values[i]));
 
+            writer.Advance(byteCount);
             state.EncodedLength = byteCount;
             state.UncompressedLength = byteCount;
         }

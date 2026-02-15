@@ -42,6 +42,7 @@ public sealed partial class ParquetWriter
                 Volatile.Write(ref state.WriteState, WriteStateEmpty);
                 state.Encoding = default;
                 state.Compression = default;
+                state.DataPayloadCompressed = false;
                 state.ExternalData = default;
                 if (state.ExternalDataOwner is not null)
                 {
@@ -89,7 +90,7 @@ public sealed partial class ParquetWriter
             state.StringUtf8WritePassTicks = 0;
         }
 
-        internal int EncodeColumn<T>(Column column, ReadOnlySpan<T> values, ParquetPhysicalType physicalType)
+        internal int EncodeColumn<T>(ParquetWriter writer, Column column, ReadOnlySpan<T> values, ParquetPhysicalType physicalType)
         {
             if (!_columnStore.Schema.ColumnOrdinals.TryGetValue(column, out var ordinal))
                 throw new ArgumentException("Column does not belong to this schema.", nameof(column));
@@ -107,10 +108,10 @@ public sealed partial class ParquetWriter
             state.ValueCount = values.Length;
             state.RowCount = values.Length;
             var encodeStarted = Stopwatch.GetTimestamp();
-            ColumnCodec.Encode(column, values, physicalType, _options.DateTimeKindHandling, ref state);
+            Encoding.Encode(column, values, physicalType, _options.DateTimeKindHandling, ref state);
             var encodeCompleted = Stopwatch.GetTimestamp();
             var compressStarted = encodeCompleted;
-            ColumnCodec.Compress(ref state, _options.Compression);
+            writer.CompressColumnPayload(column, ref state);
             var compressCompleted = Stopwatch.GetTimestamp();
             state.EncodeDurationTicks = encodeCompleted - encodeStarted;
             state.CompressionDurationTicks = compressCompleted - compressStarted;
@@ -128,7 +129,7 @@ public sealed partial class ParquetWriter
             return _buffers.RentEncoded(ordinal);
         }
 
-        internal int EncodeRepeatedColumn<T>(Column column, ReadOnlySpan<T[]> rows, ParquetPhysicalType physicalType)
+        internal int EncodeRepeatedColumn<T>(ParquetWriter writer, Column column, ReadOnlySpan<T[]> rows, ParquetPhysicalType physicalType)
         {
             if (!_columnStore.Schema.ColumnOrdinals.TryGetValue(column, out var ordinal))
                 throw new ArgumentException("Column does not belong to this schema.", nameof(column));
@@ -145,10 +146,10 @@ public sealed partial class ParquetWriter
                 state.EncodedBufferOwner = _buffers.RentEncoded(ordinal);
             state.RowCount = rows.Length;
             var encodeStarted = Stopwatch.GetTimestamp();
-            ColumnCodec.EncodeRepeated(column, rows, physicalType, _options.DateTimeKindHandling, ref state);
+            Encoding.EncodeRepeated(column, rows, physicalType, _options.DateTimeKindHandling, ref state);
             var encodeCompleted = Stopwatch.GetTimestamp();
             var compressStarted = encodeCompleted;
-            ColumnCodec.Compress(ref state, _options.Compression);
+            writer.CompressColumnPayload(column, ref state);
             var compressCompleted = Stopwatch.GetTimestamp();
             state.EncodeDurationTicks = encodeCompleted - encodeStarted;
             state.CompressionDurationTicks = compressCompleted - compressStarted;
@@ -175,6 +176,7 @@ public sealed partial class ParquetWriter
             state.RepetitionLevelsByteLength = serialized.RepetitionLevelsByteLength;
             state.Encoding = serialized.Encoding;
             state.Compression = serialized.Compression;
+            state.DataPayloadCompressed = serialized.DataPayloadCompressed;
             state.ExternalData = serialized.Payload;
             state.ExternalDataOwner = serialized.PayloadOwner;
             state.EncodeDurationTicks = 0;
@@ -288,6 +290,7 @@ public sealed partial class ParquetWriter
             internal IMemoryOwner<byte>? ExternalDataOwner;
             internal EncodingKind Encoding;
             internal CompressionKind Compression;
+            internal bool DataPayloadCompressed;
             internal long EncodeDurationTicks;
             internal long CompressionDurationTicks;
             internal long EncodedTimestampTicks;

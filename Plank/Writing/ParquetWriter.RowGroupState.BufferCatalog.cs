@@ -62,11 +62,11 @@ public sealed partial class ParquetWriter
                     if (rowGroupRowCountHint.HasValue)
                     {
                         var rowCount = checked((int)rowGroupRowCountHint.Value);
-                        if (ColumnCodec.TryGetFixedWidthBytes(column.PhysicalType, out var width))
+                        if (Encoding.TryGetFixedWidthBytes(column.PhysicalType, out var width))
                         {
                             var hintLength = checked(rowCount * width);
                             if (column.Options.Repetition is ParquetRepetition.Optional)
-                                hintLength = checked(hintLength + ColumnCodec.GetDefinitionLevelsByteCount(rowCount));
+                                hintLength = checked(hintLength + Encoding.GetDefinitionLevelsByteCount(rowCount));
                             if (hintLength > length)
                                 length = hintLength;
                         }
@@ -74,7 +74,7 @@ public sealed partial class ParquetWriter
                         {
                             var variableWidthHint = checked(rowCount * 8);
                             if (column.Options.Repetition is ParquetRepetition.Optional)
-                                variableWidthHint = checked(variableWidthHint + ColumnCodec.GetDefinitionLevelsByteCount(rowCount));
+                                variableWidthHint = checked(variableWidthHint + Encoding.GetDefinitionLevelsByteCount(rowCount));
                             if (variableWidthHint > length)
                                 length = variableWidthHint;
                         }

@@ -1,20 +1,16 @@
 using System.Buffers;
 using System.Buffers.Binary;
-using System.Collections.Immutable;
 using System.Text;
 using Plank.Schema;
 
 namespace Plank.Writing;
 
-static partial class ColumnCodec
+static partial class Encoding
 {
     internal const long TicksPerMicrosecond = 10;
     internal static readonly long UnixEpochTicks = DateTime.UnixEpoch.Ticks;
     internal static readonly int UnixEpochDayNumber = DateOnly.FromDateTime(DateTime.UnixEpoch).DayNumber;
     internal static readonly System.Text.Encoding Utf8 = new UTF8Encoding(false, true);
-
-    internal static void Compress(ref ParquetWriter.RowGroupState.ColumnState state, CompressionKind compression)
-        => state.Compression = compression;
 
     internal static bool TryGetFixedWidthBytes(ParquetPhysicalType physicalType, out int width)
     {
@@ -41,45 +37,29 @@ static partial class ColumnCodec
         }
     }
 
-    static EncodingKind ResolveDefaultEncoding(ImmutableArray<EncodingKind> encodings)
-        => encodings.IsDefaultOrEmpty ? EncodingKind.Plain : encodings[0];
-
-    internal static Span<byte> GetDestination(ref ParquetWriter.RowGroupState.ColumnState state, int byteCount)
+    internal static DestinationBufferWriter GetDestinationWriter(ref ParquetWriter.RowGroupState.ColumnState state,
+        int maxEncodedBytes, string columnName)
     {
+        if (maxEncodedBytes <= 0)
+            throw new InvalidOperationException(
+                $"Column '{columnName}' has no encoded buffer capacity.");
+
         if (state.EncodedBuffer is not null)
         {
-            if (state.EncodedBuffer.Length < byteCount)
-                return default;
-            return state.EncodedBuffer.AsSpan(0, byteCount);
+            if (state.EncodedBuffer.Length < maxEncodedBytes)
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' requires {maxEncodedBytes} bytes but encoded buffer capacity is {state.EncodedBuffer.Length}.");
+            return new DestinationBufferWriter(state.EncodedBuffer.AsMemory(0, maxEncodedBytes));
         }
 
         if (state.EncodedBufferOwner is null)
-            return default;
+            throw new InvalidOperationException($"Column '{columnName}' has no encoded buffer.");
 
-        var memory = state.EncodedBufferOwner.Memory;
-        return memory.Length < byteCount ?
-            default
-            : memory.Span[..byteCount];
-    }
-
-    internal static int GetDestinationCapacity(ref ParquetWriter.RowGroupState.ColumnState state)
-    {
-        if (state.EncodedBuffer is not null)
-            return state.EncodedBuffer.Length;
-        return state.EncodedBufferOwner is not null ?
-            state.EncodedBufferOwner.Memory.Length
-            : 0;
-    }
-
-    internal static Span<byte> CreateFixedSizeBuffer(ref ParquetWriter.RowGroupState.ColumnState state, int byteCount,
-        int maxEncodedBytes, string columnName)
-    {
-        var destination = GetDestination(ref state, byteCount);
-        if (destination.IsEmpty)
+        if (state.EncodedBufferOwner.Memory.Length < maxEncodedBytes)
             throw new InvalidOperationException(
-                $"Column '{columnName}' requires {byteCount} bytes but encoded buffer capacity is {maxEncodedBytes}.");
+                $"Column '{columnName}' requires {maxEncodedBytes} bytes but encoded buffer capacity is {state.EncodedBufferOwner.Memory.Length}.");
 
-        return destination;
+        return new DestinationBufferWriter(state.EncodedBufferOwner.Memory[..maxEncodedBytes]);
     }
 
     static VariableSizeBuffer CreateVariableSizeBuffer(ref ParquetWriter.RowGroupState.ColumnState state, int maxEncodedBytes,
@@ -105,57 +85,6 @@ static partial class ColumnCodec
                 $"Column '{columnName}' requires {maxEncodedBytes} bytes but encoded buffer capacity is {state.EncodedBufferOwner.Memory.Length}.");
 
         return new VariableSizeBuffer(state.EncodedBufferOwner.Memory[..maxEncodedBytes], columnName);
-    }
-
-    sealed class VariableSizeBuffer : IBufferWriter<byte>
-    {
-        readonly Memory<byte> _buffer;
-        readonly string _columnName;
-        internal int _written;
-
-        internal VariableSizeBuffer(Memory<byte> buffer, string columnName)
-        {
-            _buffer = buffer;
-            _columnName = columnName;
-            _written = 0;
-        }
-
-        internal void OverwriteInt32(int offset, int value)
-        {
-            if ((uint)offset > (uint)(_written - sizeof(int)))
-                throw new ArgumentOutOfRangeException(nameof(offset), offset, "Offset is outside written content.");
-
-            BinaryPrimitives.WriteInt32LittleEndian(_buffer.Span.Slice(offset, sizeof(int)), value);
-        }
-
-        public void Advance(int count)
-        {
-            ArgumentOutOfRangeException.ThrowIfNegative(count);
-            var next = checked(_written + count);
-            if ((uint)next > (uint)_buffer.Length)
-                throw new InvalidOperationException(
-                    $"Column '{_columnName}' requires more than {_buffer.Length} bytes but encoded buffer capacity is {_buffer.Length}.");
-            _written = next;
-        }
-
-        public Memory<byte> GetMemory(int sizeHint = 0)
-        {
-            if (sizeHint < 0)
-                throw new ArgumentOutOfRangeException(nameof(sizeHint), sizeHint, "Size hint must be non-negative.");
-
-            if (sizeHint == 0)
-                sizeHint = 1;
-
-            var remaining = _buffer.Length - _written;
-            if (sizeHint > remaining)
-                throw new InvalidOperationException(
-                    $"Column '{_columnName}' requires more than {_buffer.Length} bytes but encoded buffer capacity is {_buffer.Length}.");
-
-            return _buffer.Slice(_written, remaining);
-        }
-
-        public Span<byte> GetSpan(int sizeHint = 0)
-            => GetMemory(sizeHint).Span;
     }
 
     static void WriteInt32(VariableSizeBuffer writer, int value)

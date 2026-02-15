@@ -2,6 +2,8 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using K4os.Compression.LZ4;
+using Snappier;
 using Plank.Schema;
 
 namespace Plank.Writing;
@@ -145,8 +147,8 @@ public sealed partial class ParquetWriter : IDisposable
         };
         state.RowCount = values.Length;
         state.ValueCount = values.Length;
-        ColumnCodec.Encode(column, values, physicalType, _options.DateTimeKindHandling, ref state);
-        ColumnCodec.Compress(ref state, _options.Compression);
+        Encoding.Encode(column, values, physicalType, _options.DateTimeKindHandling, ref state);
+        CompressColumnPayload(column, ref state);
         var logicalType = ResolveSerializedLogicalType(typeof(T), column);
         return new SerializedColumn(
             column,
@@ -160,7 +162,8 @@ public sealed partial class ParquetWriter : IDisposable
             state.Encoding,
             state.Compression,
             logicalType,
-            repeatedElementOptional: false);
+            repeatedElementOptional: false,
+            dataPayloadCompressed: state.DataPayloadCompressed);
     }
 
     public SerializedColumn SerializeColumn<T>(Column column, ReadOnlySpan<T> values)
@@ -178,8 +181,8 @@ public sealed partial class ParquetWriter : IDisposable
             };
             state.RowCount = values.Length;
             state.ValueCount = values.Length;
-            ColumnCodec.Encode(column, values, physicalType, _options.DateTimeKindHandling, ref state);
-            ColumnCodec.Compress(ref state, _options.Compression);
+            Encoding.Encode(column, values, physicalType, _options.DateTimeKindHandling, ref state);
+            CompressColumnPayload(column, ref state);
             var logicalType = ResolveSerializedLogicalType(typeof(T), column);
             return new SerializedColumn(
                 column,
@@ -194,6 +197,7 @@ public sealed partial class ParquetWriter : IDisposable
                 state.Compression,
                 logicalType,
                 repeatedElementOptional: false,
+                dataPayloadCompressed: state.DataPayloadCompressed,
                 payloadOwner: owner);
         }
         catch
@@ -220,7 +224,7 @@ public sealed partial class ParquetWriter : IDisposable
             if (column.PhysicalType != repeatedPhysicalType)
                 throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {repeatedPhysicalType}.");
 
-            ColumnCodec.EncodeRepeated(column, rows, repeatedPhysicalType, _options.DateTimeKindHandling, ref state);
+            Encoding.EncodeRepeated(column, rows, repeatedPhysicalType, _options.DateTimeKindHandling, ref state);
             logicalType = ResolveSerializedLogicalType(typeof(T), column);
             repeatedElementOptional = ColumnSemanticRegistry.IsRepeatedElementOptional(typeof(T));
         }
@@ -231,12 +235,12 @@ public sealed partial class ParquetWriter : IDisposable
                 throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {scalarPhysicalType}.");
 
             state.ValueCount = rows.Length;
-            ColumnCodec.Encode(column, rows, scalarPhysicalType, _options.DateTimeKindHandling, ref state);
+            Encoding.Encode(column, rows, scalarPhysicalType, _options.DateTimeKindHandling, ref state);
             logicalType = ResolveSerializedLogicalType(typeof(T[]), column);
             repeatedElementOptional = false;
         }
 
-        ColumnCodec.Compress(ref state, _options.Compression);
+        CompressColumnPayload(column, ref state);
         return new SerializedColumn(
             column,
             state.EncodedBuffer.AsMemory(0, state.EncodedLength),
@@ -249,7 +253,8 @@ public sealed partial class ParquetWriter : IDisposable
             state.Encoding,
             state.Compression,
             logicalType,
-            repeatedElementOptional);
+            repeatedElementOptional,
+            dataPayloadCompressed: state.DataPayloadCompressed);
     }
 
     public SerializedColumn SerializeColumn<T>(Column column, ReadOnlySpan<T[]> rows)
@@ -271,7 +276,7 @@ public sealed partial class ParquetWriter : IDisposable
                 if (column.PhysicalType != repeatedPhysicalType)
                     throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {repeatedPhysicalType}.");
 
-                ColumnCodec.EncodeRepeated(column, rows, repeatedPhysicalType, _options.DateTimeKindHandling, ref state);
+                Encoding.EncodeRepeated(column, rows, repeatedPhysicalType, _options.DateTimeKindHandling, ref state);
                 logicalType = ResolveSerializedLogicalType(typeof(T), column);
                 repeatedElementOptional = ColumnSemanticRegistry.IsRepeatedElementOptional(typeof(T));
             }
@@ -282,12 +287,12 @@ public sealed partial class ParquetWriter : IDisposable
                     throw new InvalidOperationException($"Column '{column.Name}' expects {column.PhysicalType}, but received {scalarPhysicalType}.");
 
                 state.ValueCount = rows.Length;
-                ColumnCodec.Encode(column, rows, scalarPhysicalType, _options.DateTimeKindHandling, ref state);
+                Encoding.Encode(column, rows, scalarPhysicalType, _options.DateTimeKindHandling, ref state);
                 logicalType = ResolveSerializedLogicalType(typeof(T[]), column);
                 repeatedElementOptional = false;
             }
 
-            ColumnCodec.Compress(ref state, _options.Compression);
+            CompressColumnPayload(column, ref state);
             return new SerializedColumn(
                 column,
                 owner.Memory[..state.EncodedLength],
@@ -301,6 +306,7 @@ public sealed partial class ParquetWriter : IDisposable
                 state.Compression,
                 logicalType,
                 repeatedElementOptional,
+                dataPayloadCompressed: state.DataPayloadCompressed,
                 payloadOwner: owner);
         }
         catch
@@ -389,6 +395,110 @@ public sealed partial class ParquetWriter : IDisposable
         _lastWriteEndTimestamp = completed;
         _hasLastWriteEndTimestamp = true;
         _options.Log.StreamWriteObserved(payload.Length, completed - started, gapTicks);
+    }
+
+    internal void CompressColumnPayload(Column column, ref RowGroupState.ColumnState state)
+    {
+        var compression = _options.Compression;
+        state.Compression = compression;
+        state.DataPayloadCompressed = false;
+        if (compression == CompressionKind.None)
+            return;
+
+        var levelsByteLength = checked(state.DefinitionLevelsByteLength + state.RepetitionLevelsByteLength);
+        if (state.EncodedLength < levelsByteLength)
+            throw new InvalidOperationException($"Column '{column.Name}' encoded payload is invalid.");
+
+        var dataLength = state.EncodedLength - levelsByteLength;
+        if (dataLength <= 0)
+            return;
+
+        var source = GetSerializedPayload(ref state);
+        var data = source[levelsByteLength..state.EncodedLength];
+        var compressor = _pageCompressors.Select(compression);
+        ReadOnlySpan<byte> compressedData;
+        byte[]? scratch = null;
+        if (compressor.UsesStreamingOutput)
+        {
+            _streamingCompressedBuffer.Reset(_options.RowGroupOptions.MaxCompressedBytes);
+            _ = compressor.Compress(data, _streamingCompressedBuffer);
+            compressedData = _streamingCompressedBuffer.WrittenSpan;
+        }
+        else
+        {
+            var scratchLength = GetCompressionScratchLength(compression, dataLength, _options.RowGroupOptions.MaxCompressedBytes);
+            scratch = ArrayPool<byte>.Shared.Rent(scratchLength);
+            var written = compressor.Compress(data, scratch.AsSpan(0, scratchLength));
+            compressedData = scratch.AsSpan(0, written);
+        }
+
+        try
+        {
+            var requiredLength = checked(levelsByteLength + compressedData.Length);
+            var destination = EnsureSerializedDestinationCapacity(column, ref state, requiredLength, out var previousOwner);
+            if (levelsByteLength > 0)
+                source[..levelsByteLength].CopyTo(destination);
+            compressedData.CopyTo(destination[levelsByteLength..]);
+            previousOwner?.Dispose();
+            state.EncodedLength = requiredLength;
+            state.DataPayloadCompressed = true;
+        }
+        finally
+        {
+            if (scratch is not null)
+                ArrayPool<byte>.Shared.Return(scratch);
+        }
+    }
+
+    static int GetCompressionScratchLength(CompressionKind compression, int uncompressedLength, int maxCompressedBytes)
+    {
+        var length = compression switch
+        {
+            CompressionKind.Snappy => Snappy.GetMaxCompressedLength(uncompressedLength),
+            CompressionKind.Lz4 => LZ4Codec.MaximumOutputSize(uncompressedLength),
+            CompressionKind.Gzip => checked(uncompressedLength + Math.Max(256, uncompressedLength >> 3)),
+            CompressionKind.Brotli => checked(uncompressedLength + Math.Max(256, uncompressedLength >> 3)),
+            CompressionKind.Zstd => checked(uncompressedLength + Math.Max(256, uncompressedLength >> 3)),
+            CompressionKind.None => uncompressedLength,
+            _ => throw new NotSupportedException($"Compression '{compression}' is not supported yet.")
+        };
+
+        if (maxCompressedBytes > 0)
+            length = Math.Min(length, maxCompressedBytes);
+        if (length <= 0)
+            throw new InvalidOperationException("Compressed payload exceeds MaxCompressedBytes.");
+        return length;
+    }
+
+    static ReadOnlySpan<byte> GetSerializedPayload(ref RowGroupState.ColumnState state)
+    {
+        if (state.EncodedBuffer is not null)
+            return state.EncodedBuffer.AsSpan();
+        if (state.EncodedBufferOwner is not null)
+            return state.EncodedBufferOwner.Memory.Span;
+        throw new InvalidOperationException("Serialized payload buffer is missing.");
+    }
+
+    static Span<byte> EnsureSerializedDestinationCapacity(Column column, ref RowGroupState.ColumnState state, int requiredLength,
+        out IMemoryOwner<byte>? previousOwner)
+    {
+        previousOwner = null;
+        if (state.EncodedBuffer is not null)
+        {
+            if (state.EncodedBuffer.Length < requiredLength)
+                throw new InvalidOperationException(
+                    $"Column '{column.Name}' compressed payload requires {requiredLength} bytes but destination capacity is {state.EncodedBuffer.Length}.");
+            return state.EncodedBuffer.AsSpan(0, requiredLength);
+        }
+
+        if (state.EncodedBufferOwner is null)
+            throw new InvalidOperationException("Serialized payload buffer is missing.");
+        if (state.EncodedBufferOwner.Memory.Length >= requiredLength)
+            return state.EncodedBufferOwner.Memory.Span[..requiredLength];
+
+        previousOwner = state.EncodedBufferOwner;
+        state.EncodedBufferOwner = MemoryPool<byte>.Shared.Rent(requiredLength);
+        return state.EncodedBufferOwner.Memory.Span[..requiredLength];
     }
 
     internal void BeginColumnWriteTiming(int ordinal)

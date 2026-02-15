@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 
 namespace Plank.Writing;
 
-static partial class ColumnCodec
+static partial class Encoding
 {
     delegate void RepeatedValueWrite<T>(ReadOnlySpan<T[]> rows, VariableSizeBuffer writer,
         DateTimeKindHandling dateTimeKindHandling, string columnName);
@@ -160,7 +160,8 @@ static partial class ColumnCodec
     }
 
     static void EncodeRepeatedRequired<T, TWriter>(ReadOnlySpan<T[]> rows,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes,
+        VariableSizeBuffer writer, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
+        int maxEncodedBytes,
         DateTimeKindHandling dateTimeKindHandling)
         where TWriter : struct, IRepeatedScalarWriter<T>
     {
@@ -177,14 +178,14 @@ static partial class ColumnCodec
             }
         }
 
-        EncodeRepeatedRequiredCore(rows, ref state, columnName, maxEncodedBytes, dateTimeKindHandling, WriteValues);
+        EncodeRepeatedRequiredCore(rows, writer, ref state, columnName, maxEncodedBytes, dateTimeKindHandling, WriteValues);
     }
 
     static void EncodeRepeatedRequiredCore<T>(ReadOnlySpan<T[]> rows,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes,
+        VariableSizeBuffer writer, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
+        int maxEncodedBytes,
         DateTimeKindHandling dateTimeKindHandling, RepeatedValueWrite<T> writeValues)
     {
-        var writer = CreateVariableSizeBuffer(ref state, maxEncodedBytes, columnName);
         var dataValueCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
         var levelValueCount = checked(dataValueCount + emptyRowCount);
         var repetitionByteCount = GetDefinitionLevelsByteCount(levelValueCount);
@@ -202,12 +203,12 @@ static partial class ColumnCodec
     }
 
     static void EncodeRepeatedOptionalNullableStruct<T, TWriter>(ReadOnlySpan<T?[]> rows,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes,
+        VariableSizeBuffer writer, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
+        int maxEncodedBytes,
         DateTimeKindHandling dateTimeKindHandling)
         where T : struct
         where TWriter : struct, IRepeatedOptionalScalarWriter<T>
     {
-        var writer = CreateVariableSizeBuffer(ref state, maxEncodedBytes, columnName);
         var elementCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
         var nonNullCount = 0;
         foreach (var row in rows)
@@ -240,7 +241,7 @@ static partial class ColumnCodec
     }
 
     static void EncodeRepeatedBoolean(ReadOnlySpan<bool[]> rows, ref ParquetWriter.RowGroupState.ColumnState state,
-        string columnName, int maxEncodedBytes)
+        string columnName, int maxEncodedBytes, VariableSizeBuffer writer)
     {
         static void WriteValues(ReadOnlySpan<bool[]> rows, VariableSizeBuffer writer,
             DateTimeKindHandling dateTimeKindHandling, string columnName)
@@ -267,15 +268,15 @@ static partial class ColumnCodec
             writer.Advance((dataValueCount + 7) >> 3);
         }
 
-        EncodeRepeatedRequiredCore(rows, ref state, columnName, maxEncodedBytes, DateTimeKindHandling.None, WriteValues);
+        EncodeRepeatedRequiredCore(rows, writer, ref state, columnName, maxEncodedBytes, DateTimeKindHandling.None, WriteValues);
     }
 
     static void EncodeRepeatedOptionalReference<T, TWriter>(ReadOnlySpan<T?[]> rows,
-        ref ParquetWriter.RowGroupState.ColumnState state, string columnName, int maxEncodedBytes)
+        VariableSizeBuffer writer, ref ParquetWriter.RowGroupState.ColumnState state, string columnName,
+        int maxEncodedBytes)
         where T : class
         where TWriter : struct, IRepeatedOptionalReferenceWriter<T>
     {
-        var writer = CreateVariableSizeBuffer(ref state, maxEncodedBytes, columnName);
         var elementCount = CountRepeatedValues(rows, columnName, out var emptyRowCount);
         var nonNullCount = 0;
         foreach (var row in rows)

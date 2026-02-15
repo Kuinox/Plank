@@ -72,16 +72,10 @@ public sealed partial class ParquetWriter
             internal int SplitValueCount { get; }
         }
 
-        enum PageWriteMode
-        {
-            SinglePage,
-            SplitFixedWidthRequired,
-            SplitLevelFixedWidth,
-            SplitVariableWidthRequired
-        }
-
         PageWritePlan SelectPageWritePlan(ParquetWriter writer, int ordinal, ref ColumnState state)
         {
+            if (state.DataPayloadCompressed)
+                return new PageWritePlan(PageWriteMode.SinglePage, bytesPerValue: 0, splitValueCount: 0);
             if (TryCreateFixedWidthRequiredSplitPlan(ordinal, ref state, out var splitValueCount, out var bytesPerValue))
                 return new PageWritePlan(PageWriteMode.SplitFixedWidthRequired, bytesPerValue, splitValueCount);
             if (TryCreateLevelFixedWidthSplitPlan(writer, ordinal, ref state, out bytesPerValue))
@@ -125,7 +119,7 @@ public sealed partial class ParquetWriter
                 return false;
             if (_columnStore.Schema.Columns[ordinal].PhysicalType == ParquetPhysicalType.Boolean)
                 return false;
-            if (!ColumnCodec.TryGetFixedWidthBytes(_columnStore.Schema.Columns[ordinal].PhysicalType, out bytesPerValue))
+            if (!Encoding.TryGetFixedWidthBytes(_columnStore.Schema.Columns[ordinal].PhysicalType, out bytesPerValue))
                 return false;
             if (state.ValueCount <= 1)
                 return false;
@@ -162,7 +156,7 @@ public sealed partial class ParquetWriter
                 return false;
             if (_columnStore.Schema.Columns[ordinal].PhysicalType == ParquetPhysicalType.Boolean)
                 return false;
-            if (!ColumnCodec.TryGetFixedWidthBytes(_columnStore.Schema.Columns[ordinal].PhysicalType, out bytesPerValue))
+            if (!Encoding.TryGetFixedWidthBytes(_columnStore.Schema.Columns[ordinal].PhysicalType, out bytesPerValue))
                 return false;
             if (state.ValueCount <= 1)
                 return false;

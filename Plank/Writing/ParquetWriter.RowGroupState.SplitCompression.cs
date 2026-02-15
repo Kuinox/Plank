@@ -138,7 +138,16 @@ public sealed partial class ParquetWriter
             var compressedDataPayload = dataPayload;
             var compressedDataLength = dataPayload.Length;
             var isCompressed = false;
-            if (state.Compression != CompressionKind.None && dataPayload.Length > 0)
+            var uncompressedPayloadLength = checked(levelsByteLength + dataPayload.Length);
+            if (state.DataPayloadCompressed)
+            {
+                if (state.UncompressedLength < levelsByteLength)
+                    throw new InvalidOperationException("Compressed page payload metadata is invalid.");
+
+                uncompressedPayloadLength = state.UncompressedLength;
+                isCompressed = state.Compression != CompressionKind.None && dataPayload.Length > 0;
+            }
+            else if (state.Compression != CompressionKind.None && dataPayload.Length > 0)
             {
                 var compressor = writer._pageCompressors.Select(state.Compression);
                 compressedDataLength = CompressPayload(writer, compressor, dataPayload, ordinal, ref state, _options.RowGroupOptions.MaxCompressedBytes);
@@ -148,7 +157,6 @@ public sealed partial class ParquetWriter
                 isCompressed = true;
             }
 
-            var uncompressedPayloadLength = checked(levelsByteLength + dataPayload.Length);
             var compressedPayloadLength = checked(levelsByteLength + compressedDataLength);
 
             var headerLength = ParquetThriftWriter.WriteDataPageHeader(

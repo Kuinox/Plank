@@ -1,6 +1,6 @@
 namespace Plank.Writing;
 
-static partial class ColumnCodec
+static partial class Encoding
 {
     interface IOptionalLevelTraits<T>
     {
