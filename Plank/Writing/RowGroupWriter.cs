@@ -1,90 +1,102 @@
-using Plank.Schema;
+using System.Buffers.Binary;
 
 namespace Plank.Writing;
 
-public readonly struct RowGroupWriter : IEquatable<RowGroupWriter>
+public sealed class RowGroupWriter
 {
     readonly ParquetWriter _writer;
-    readonly ParquetWriter.RowGroupState _state;
+    BufferWriter _compressedContent;
+    int _nextColumnOrdinal;
+    int _rowCount;
+    bool _metadataStarted;
 
-    internal RowGroupWriter(ParquetWriter writer, ParquetWriter.RowGroupState state)
+    internal RowGroupWriter(ParquetWriter writer)
     {
         _writer = writer;
-        _state = state;
+        _compressedContent = default;
+        _nextColumnOrdinal = 0;
+        _rowCount = -1;
+        _metadataStarted = false;
     }
 
-    public ValueTask WriteAsync<T>(Column column, ReadOnlySpan<T> values, CancellationToken cancellationToken = default)
+    public void Write(SerializedColumn serialized)
     {
-        ArgumentNullException.ThrowIfNull(column);
-        if (cancellationToken.IsCancellationRequested)
-            return ValueTask.FromCanceled(cancellationToken);
+        ArgumentNullException.ThrowIfNull(serialized);
+        if (serialized.ColumnOrdinal < 0)
+            throw new InvalidOperationException(
+                "SerializedColumn has no serialized data. Call serialized.Serialize(column, values) before Write(...).");
 
-        _writer.RegisterValueType(column, typeof(T));
-        var physicalType = GetPhysicalType<T>();
-        var ordinal = _state.EncodeColumn(_writer, column, values, physicalType);
-        _state.TryDrain(_writer);
-        return _state.GetWriteTask(ordinal, cancellationToken);
-    }
-
-    public ValueTask WriteAsync<T>(Column column, ReadOnlySpan<T[]> rows, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(column);
-        if (cancellationToken.IsCancellationRequested)
-            return ValueTask.FromCanceled(cancellationToken);
-
-        int ordinal;
-        if (column.Options.Repetition is ParquetRepetition.Repeated)
+        if (serialized.ColumnOrdinal != _nextColumnOrdinal)
         {
-            _writer.RegisterValueType(column, typeof(T));
-            var physicalType = GetPhysicalType<T>();
-            ordinal = _state.EncodeRepeatedColumn(_writer, column, rows, physicalType);
-        }
-        else
-        {
-            _writer.RegisterValueType(column, typeof(T[]));
-            var resolution = ParquetTypeMap.ResolvePhysicalType<T[]>();
-            if (!resolution.IsSuccess)
-                throw new InvalidOperationException(
-                    $"Column '{column.Name}' is not Repeated and does not accept values of type '{typeof(T[])}'.");
-
-            var physicalType = resolution.PhysicalType;
-            ordinal = _state.EncodeColumn(_writer, column, rows, physicalType);
+            var expectedColumn = _writer.ColumnsByOrdinal[_nextColumnOrdinal];
+            var actualColumn = _writer.ColumnsByOrdinal[serialized.ColumnOrdinal];
+            throw new InvalidOperationException(
+                $"Invalid column order for this row group. Expected '{expectedColumn.Name}' (ordinal {_nextColumnOrdinal}) next, but got '{actualColumn.Name}' (ordinal {serialized.ColumnOrdinal}). Write columns in schema order.");
         }
 
-        _state.TryDrain(_writer);
-        return _state.GetWriteTask(ordinal, cancellationToken);
+        if (!_metadataStarted)
+        {
+            _rowCount = serialized.RowCount;
+            WriteRowGroupHeaderMetadata(_rowCount);
+            _metadataStarted = true;
+        }
+        else if (serialized.RowCount != _rowCount)
+            throw new InvalidOperationException(
+                $"Row count mismatch for row group. Expected {_rowCount}, got {serialized.RowCount}.");
+
+        var pages = serialized.Pages;
+        var compression = _writer.Compression;
+        if (compression != CompressionKind.None && !_compressedContent.IsInitialized)
+            _compressedContent = _writer.BufferWriters.CreatePageBufferWriter();
+        long totalUncompressedSize = 0;
+        long totalCompressedSize = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            var headerSize = page.Header.WrittenLength;
+            var uncompressedContentSize = page.Content.WrittenLength;
+            var compressedContentSize = uncompressedContentSize;
+            _writer.WriteBuffer(ref page.Header);
+            if (compression == CompressionKind.None || uncompressedContentSize == 0)
+                _writer.WriteBuffer(ref page.Content);
+            else
+            {
+                Compression.Compress(compression, _writer.BufferWriters, ref page.Content, ref _compressedContent);
+                compressedContentSize = _compressedContent.WrittenLength;
+                _writer.WriteBuffer(ref _compressedContent);
+            }
+
+            totalUncompressedSize += checked((long)headerSize + uncompressedContentSize);
+            totalCompressedSize += checked((long)headerSize + compressedContentSize);
+        }
+
+        WriteColumnMetadata(serialized.RowCount, totalUncompressedSize, totalCompressedSize);
+
+        serialized.Consume();
+        _nextColumnOrdinal++;
+        if (_nextColumnOrdinal == _writer.ColumnCount)
+            _writer.CompleteOpenRowGroup();
     }
 
-    public ValueTask WriteAsync(ParquetWriter.SerializedColumn serialized, CancellationToken cancellationToken = default)
+    void WriteRowGroupHeaderMetadata(int rowCount)
     {
-        if (cancellationToken.IsCancellationRequested)
-            return ValueTask.FromCanceled(cancellationToken);
-        ArgumentNullException.ThrowIfNull(serialized.Column);
-        if (!_state.TryGetOrdinal(serialized.Column, out var ordinal))
-            throw new ArgumentException("Column does not belong to this schema.", nameof(serialized));
-
-        _writer.RegisterSerializedColumnType(ordinal, serialized.Column, serialized.LogicalType, serialized.RepeatedElementOptional);
-        ordinal = _state.AcceptSerialized(ordinal, serialized);
-        _state.TryDrain(_writer);
-        return _state.GetWriteTask(ordinal, cancellationToken);
+        const int size = sizeof(int) + sizeof(int);
+        ref var metadata = ref _writer.SerializedRowGroupsMetadata;
+        var span = metadata.GetSpan(size);
+        BinaryPrimitives.WriteInt32LittleEndian(span[0..], rowCount);
+        BinaryPrimitives.WriteInt32LittleEndian(span[4..], _writer.ColumnCount);
+        metadata.Advance(size);
     }
 
-    public bool Equals(RowGroupWriter other)
-        => ReferenceEquals(_state, other._state)
-           && ReferenceEquals(_writer, other._writer);
-
-    public override bool Equals(object? obj)
-        => obj is RowGroupWriter other && Equals(other);
-
-    public override int GetHashCode()
-        => _state.GetHashCode();
-
-    public static bool operator ==(RowGroupWriter left, RowGroupWriter right)
-        => left.Equals(right);
-
-    public static bool operator !=(RowGroupWriter left, RowGroupWriter right)
-        => !left.Equals(right);
-
-    static ParquetPhysicalType GetPhysicalType<T>()
-        => ParquetTypeMap.GetPhysicalType<T>();
+    void WriteColumnMetadata(int rowCount, long totalUncompressedSize, long totalCompressedSize)
+    {
+        const int size = sizeof(int) + sizeof(int) + sizeof(long) + sizeof(long);
+        ref var metadata = ref _writer.SerializedRowGroupsMetadata;
+        var span = metadata.GetSpan(size);
+        BinaryPrimitives.WriteInt32LittleEndian(span[0..], rowCount);
+        BinaryPrimitives.WriteInt32LittleEndian(span[4..], rowCount);
+        BinaryPrimitives.WriteInt64LittleEndian(span[8..], totalUncompressedSize);
+        BinaryPrimitives.WriteInt64LittleEndian(span[16..], totalCompressedSize);
+        metadata.Advance(size);
+    }
 }

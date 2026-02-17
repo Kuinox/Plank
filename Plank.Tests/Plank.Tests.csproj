@@ -13,12 +13,10 @@
 
   <ItemGroup>
     <PackageReference Include="TUnit" Version="1.12.15" />
-    <PackageReference Include="ParquetSharp" Version="21.0.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Plank\Plank.csproj" />
-    <ProjectReference Include="..\Plank.SourceGen\Plank.SourceGen.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

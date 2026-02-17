@@ -14,8 +14,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.IO.ZeroAlloc.Tests", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.ThroughputBenchmarks", "Plank.ThroughputBenchmarks\Plank.ThroughputBenchmarks.csproj", "{C0247806-F6A0-49CF-AF59-9244C0747BCA}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank2", "Plank2\Plank2.csproj", "{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -110,18 +108,6 @@ Global
 		{C0247806-F6A0-49CF-AF59-9244C0747BCA}.Release|x64.Build.0 = Release|Any CPU
 		{C0247806-F6A0-49CF-AF59-9244C0747BCA}.Release|x86.ActiveCfg = Release|Any CPU
 		{C0247806-F6A0-49CF-AF59-9244C0747BCA}.Release|x86.Build.0 = Release|Any CPU
-		{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}.Debug|x64.Build.0 = Debug|Any CPU
-		{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}.Debug|x86.Build.0 = Debug|Any CPU
-		{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}.Release|Any CPU.Build.0 = Release|Any CPU
-		{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}.Release|x64.ActiveCfg = Release|Any CPU
-		{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}.Release|x64.Build.0 = Release|Any CPU
-		{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}.Release|x86.ActiveCfg = Release|Any CPU
-		{7E945D96-411A-4C86-91E1-B3DAB8DA04EF}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
