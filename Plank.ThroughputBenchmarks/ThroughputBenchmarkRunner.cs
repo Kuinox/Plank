@@ -44,7 +44,7 @@ public static class ThroughputBenchmarkRunner
         UseDeltaBinaryPackedEncoding = false
     };
 
-    static readonly ColumnOptions OptionalPlain = new(ParquetRepetition.Optional, [EncodingKind.Plain]);
+    static readonly ColumnOptions RequiredPlain = new(ParquetRepetition.Required, [EncodingKind.Plain]);
 
     static readonly DataField<int?> VendorIdField = new("VendorID");
     static readonly DataField<DateTime?> PickupDateTimeField = new("tpep_pickup_datetime");
@@ -88,30 +88,26 @@ public static class ThroughputBenchmarkRunner
         AirportFeeField);
 
     static readonly PlankSchema PlankWriteSchema = new([
-        new PlankColumn("VendorID", ParquetPhysicalType.Int32, OptionalPlain),
-        new PlankColumn("tpep_pickup_datetime", ParquetPhysicalType.Int64, OptionalPlain),
-        new PlankColumn("tpep_dropoff_datetime", ParquetPhysicalType.Int64, OptionalPlain),
-        new PlankColumn("passenger_count", ParquetPhysicalType.Int64, OptionalPlain),
-        new PlankColumn("trip_distance", ParquetPhysicalType.Double, OptionalPlain),
-        new PlankColumn("RatecodeID", ParquetPhysicalType.Int64, OptionalPlain),
-        new PlankColumn("store_and_fwd_flag", ParquetPhysicalType.ByteArray, OptionalPlain),
-        new PlankColumn("PULocationID", ParquetPhysicalType.Int32, OptionalPlain),
-        new PlankColumn("DOLocationID", ParquetPhysicalType.Int32, OptionalPlain),
-        new PlankColumn("payment_type", ParquetPhysicalType.Int64, OptionalPlain),
-        new PlankColumn("fare_amount", ParquetPhysicalType.Double, OptionalPlain),
-        new PlankColumn("extra", ParquetPhysicalType.Double, OptionalPlain),
-        new PlankColumn("mta_tax", ParquetPhysicalType.Double, OptionalPlain),
-        new PlankColumn("tip_amount", ParquetPhysicalType.Double, OptionalPlain),
-        new PlankColumn("tolls_amount", ParquetPhysicalType.Double, OptionalPlain),
-        new PlankColumn("improvement_surcharge", ParquetPhysicalType.Double, OptionalPlain),
-        new PlankColumn("total_amount", ParquetPhysicalType.Double, OptionalPlain),
-        new PlankColumn("congestion_surcharge", ParquetPhysicalType.Double, OptionalPlain),
-        new PlankColumn("Airport_fee", ParquetPhysicalType.Double, OptionalPlain)
+        new PlankColumn("VendorID", ParquetPhysicalType.Int32, RequiredPlain),
+        new PlankColumn("tpep_pickup_datetime", ParquetPhysicalType.Int64, RequiredPlain),
+        new PlankColumn("tpep_dropoff_datetime", ParquetPhysicalType.Int64, RequiredPlain),
+        new PlankColumn("passenger_count", ParquetPhysicalType.Int64, RequiredPlain),
+        new PlankColumn("trip_distance", ParquetPhysicalType.Double, RequiredPlain),
+        new PlankColumn("RatecodeID", ParquetPhysicalType.Int64, RequiredPlain),
+        new PlankColumn("store_and_fwd_flag", ParquetPhysicalType.ByteArray, RequiredPlain),
+        new PlankColumn("PULocationID", ParquetPhysicalType.Int32, RequiredPlain),
+        new PlankColumn("DOLocationID", ParquetPhysicalType.Int32, RequiredPlain),
+        new PlankColumn("payment_type", ParquetPhysicalType.Int64, RequiredPlain),
+        new PlankColumn("fare_amount", ParquetPhysicalType.Double, RequiredPlain),
+        new PlankColumn("extra", ParquetPhysicalType.Double, RequiredPlain),
+        new PlankColumn("mta_tax", ParquetPhysicalType.Double, RequiredPlain),
+        new PlankColumn("tip_amount", ParquetPhysicalType.Double, RequiredPlain),
+        new PlankColumn("tolls_amount", ParquetPhysicalType.Double, RequiredPlain),
+        new PlankColumn("improvement_surcharge", ParquetPhysicalType.Double, RequiredPlain),
+        new PlankColumn("total_amount", ParquetPhysicalType.Double, RequiredPlain),
+        new PlankColumn("congestion_surcharge", ParquetPhysicalType.Double, RequiredPlain),
+        new PlankColumn("Airport_fee", ParquetPhysicalType.Double, RequiredPlain)
     ]);
-    static readonly ParallelOptions PlankParallelOptions = new()
-    {
-        MaxDegreeOfParallelism = Math.Min(PlankWriteSchema.Columns.Length, Environment.ProcessorCount)
-    };
 
     public static async Task RunAsync(BenchmarkDataContext context, ThroughputBenchmarkOptions options, CancellationToken cancellationToken)
     {
@@ -201,54 +197,28 @@ public static class ThroughputBenchmarkRunner
     {
         var metricsLog = metricsPath is null ? null : new ThroughputPlankMetricsLog();
         await using var stream = CreateOutputStream(outputPath);
-        using var writer = Plank.Writing.ParquetWriter.Create(stream, PlankWriteSchema, CreatePlankOptions(context, metricsLog));
-        var pendingWrites = new ValueTask[PlankWriteSchema.Columns.Length];
+        var writer = Plank.Writing.ParquetWriter.Create(stream, PlankWriteSchema, CreatePlankOptions(context, metricsLog));
+        var serializedColumns = CreateSerializedColumns(writer);
 
         foreach (var trip in context.TripsByFile)
         {
             var rowGroup = writer.StartRowGroup();
-            Parallel.For(0, pendingWrites.Length, PlankParallelOptions, i => pendingWrites[i] = WritePlankColumn(rowGroup, trip, i));
-            await AwaitWrites(pendingWrites).ConfigureAwait(false);
+            SerializeTrip(serializedColumns, trip);
+            WriteSerializedColumns(rowGroup, serializedColumns);
         }
 
-        writer.CloseFile();
         var flushStart = Stopwatch.GetTimestamp();
-        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        writer.CloseFile();
         var flushEnd = Stopwatch.GetTimestamp();
         metricsLog?.FlushObserved(flushEnd - flushStart);
         if (metricsLog is not null && metricsPath is not null)
             await metricsLog.WriteParquetAsync(metricsPath, cancellationToken).ConfigureAwait(false);
     }
 
-    static ValueTask WritePlankColumn(Plank.Writing.RowGroupWriter rowGroup, NycTripData trip, int index)
-        => index switch
-        {
-            0 => rowGroup.WriteAsync(PlankWriteSchema.Columns[0], trip.VendorId),
-            1 => rowGroup.WriteAsync(PlankWriteSchema.Columns[1], trip.PickupDateTime),
-            2 => rowGroup.WriteAsync(PlankWriteSchema.Columns[2], trip.DropoffDateTime),
-            3 => rowGroup.WriteAsync(PlankWriteSchema.Columns[3], trip.PassengerCount),
-            4 => rowGroup.WriteAsync(PlankWriteSchema.Columns[4], trip.TripDistance),
-            5 => rowGroup.WriteAsync(PlankWriteSchema.Columns[5], trip.RatecodeId),
-            6 => rowGroup.WriteAsync(PlankWriteSchema.Columns[6], trip.StoreAndFwdFlag),
-            7 => rowGroup.WriteAsync(PlankWriteSchema.Columns[7], trip.PuLocationId),
-            8 => rowGroup.WriteAsync(PlankWriteSchema.Columns[8], trip.DoLocationId),
-            9 => rowGroup.WriteAsync(PlankWriteSchema.Columns[9], trip.PaymentType),
-            10 => rowGroup.WriteAsync(PlankWriteSchema.Columns[10], trip.FareAmount),
-            11 => rowGroup.WriteAsync(PlankWriteSchema.Columns[11], trip.Extra),
-            12 => rowGroup.WriteAsync(PlankWriteSchema.Columns[12], trip.MtaTax),
-            13 => rowGroup.WriteAsync(PlankWriteSchema.Columns[13], trip.TipAmount),
-            14 => rowGroup.WriteAsync(PlankWriteSchema.Columns[14], trip.TollsAmount),
-            15 => rowGroup.WriteAsync(PlankWriteSchema.Columns[15], trip.ImprovementSurcharge),
-            16 => rowGroup.WriteAsync(PlankWriteSchema.Columns[16], trip.TotalAmount),
-            17 => rowGroup.WriteAsync(PlankWriteSchema.Columns[17], trip.CongestionSurcharge),
-            18 => rowGroup.WriteAsync(PlankWriteSchema.Columns[18], trip.AirportFee),
-            _ => throw new ArgumentOutOfRangeException(nameof(index), index, "Column index is out of range.")
-        };
-
-    static async Task AwaitWrites(ValueTask[] writes)
+    static void WriteSerializedColumns(Plank.Writing.RowGroupWriter rowGroup, SerializedColumn[] serializedColumns)
     {
-        foreach (var write in writes)
-            await write.ConfigureAwait(false);
+        for (var i = 0; i < serializedColumns.Length; i++)
+            rowGroup.Write(serializedColumns[i]);
     }
 
     static async Task WriteParquetSharpAsync(BenchmarkDataContext context, string outputPath, CancellationToken cancellationToken, string? metricsPath)
@@ -350,82 +320,170 @@ public static class ThroughputBenchmarkRunner
     {
         var metricsLog = metricsPath is null ? null : new ThroughputPlankMetricsLog();
         await using var stream = CreateOutputStream(outputPath);
-        using var writer = Plank.Writing.ParquetWriter.Create(stream, PlankWriteSchema, CreatePlankOptions(context, metricsLog));
-        var pendingWrites = new ValueTask[PlankWriteSchema.Columns.Length];
-        var serializedColumns = new Plank.Writing.ParquetWriter.SerializedColumn[PlankWriteSchema.Columns.Length];
+        var writer = Plank.Writing.ParquetWriter.Create(stream, PlankWriteSchema, CreatePlankOptions(context, metricsLog));
+        var serializedColumns = CreateSerializedColumns(writer);
         var serializeTicks = new long[PlankWriteSchema.Columns.Length];
 
         foreach (var trip in context.TripsByFile)
         {
-            Parallel.For(0, serializedColumns.Length, PlankParallelOptions, i =>
+            for (var i = 0; i < serializedColumns.Length; i++)
             {
                 var started = Stopwatch.GetTimestamp();
-                serializedColumns[i] = SerializePlankColumnAhead(writer, trip, i);
+                SerializePlankColumnAhead(serializedColumns[i], trip, i);
                 serializeTicks[i] = Stopwatch.GetTimestamp() - started;
-            });
+            }
             if (metricsLog is not null)
                 for (var i = 0; i < serializedColumns.Length; i++)
                     metricsLog.ColumnWriteMetricsObserved(
                         PlankWriteSchema.Columns[i].Name,
                         trip.RowCount,
                         trip.RowCount,
-                        serializedColumns[i].Payload.Length,
+                        0,
                         serializeTicks[i],
                         0,
                         0,
                         0);
             var rowGroup = writer.StartRowGroup();
-            Parallel.For(0, pendingWrites.Length, PlankParallelOptions, i => pendingWrites[i] = rowGroup.WriteAsync(serializedColumns[i]));
-            await AwaitWrites(pendingWrites).ConfigureAwait(false);
+            WriteSerializedColumns(rowGroup, serializedColumns);
         }
 
-        writer.CloseFile();
         var flushStart = Stopwatch.GetTimestamp();
-        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        writer.CloseFile();
         var flushEnd = Stopwatch.GetTimestamp();
         metricsLog?.FlushObserved(flushEnd - flushStart);
         if (metricsLog is not null && metricsPath is not null)
             await metricsLog.WriteParquetAsync(metricsPath, cancellationToken).ConfigureAwait(false);
     }
 
-    static Plank.Writing.ParquetWriter.SerializedColumn SerializePlankColumnAhead(Plank.Writing.ParquetWriter writer, NycTripData trip, int index)
-        => index switch
+    static void SerializePlankColumnAhead(SerializedColumn serialized, NycTripData trip, int index)
+    {
+        switch (index)
         {
-            0 => writer.SerializeColumn(PlankWriteSchema.Columns[0], trip.VendorId),
-            1 => writer.SerializeColumn(PlankWriteSchema.Columns[1], trip.PickupDateTime),
-            2 => writer.SerializeColumn(PlankWriteSchema.Columns[2], trip.DropoffDateTime),
-            3 => writer.SerializeColumn(PlankWriteSchema.Columns[3], trip.PassengerCount),
-            4 => writer.SerializeColumn(PlankWriteSchema.Columns[4], trip.TripDistance),
-            5 => writer.SerializeColumn(PlankWriteSchema.Columns[5], trip.RatecodeId),
-            6 => writer.SerializeColumn(PlankWriteSchema.Columns[6], trip.StoreAndFwdFlag),
-            7 => writer.SerializeColumn(PlankWriteSchema.Columns[7], trip.PuLocationId),
-            8 => writer.SerializeColumn(PlankWriteSchema.Columns[8], trip.DoLocationId),
-            9 => writer.SerializeColumn(PlankWriteSchema.Columns[9], trip.PaymentType),
-            10 => writer.SerializeColumn(PlankWriteSchema.Columns[10], trip.FareAmount),
-            11 => writer.SerializeColumn(PlankWriteSchema.Columns[11], trip.Extra),
-            12 => writer.SerializeColumn(PlankWriteSchema.Columns[12], trip.MtaTax),
-            13 => writer.SerializeColumn(PlankWriteSchema.Columns[13], trip.TipAmount),
-            14 => writer.SerializeColumn(PlankWriteSchema.Columns[14], trip.TollsAmount),
-            15 => writer.SerializeColumn(PlankWriteSchema.Columns[15], trip.ImprovementSurcharge),
-            16 => writer.SerializeColumn(PlankWriteSchema.Columns[16], trip.TotalAmount),
-            17 => writer.SerializeColumn(PlankWriteSchema.Columns[17], trip.CongestionSurcharge),
-            18 => writer.SerializeColumn(PlankWriteSchema.Columns[18], trip.AirportFee),
-            _ => throw new ArgumentOutOfRangeException(nameof(index), index, "Column index is out of range.")
-        };
+            case 0:
+                serialized.Serialize(PlankWriteSchema.Columns[0], ToRequiredInt32(trip.VendorId));
+                return;
+            case 1:
+                serialized.Serialize(PlankWriteSchema.Columns[1], ToRequiredTicks(trip.PickupDateTime));
+                return;
+            case 2:
+                serialized.Serialize(PlankWriteSchema.Columns[2], ToRequiredTicks(trip.DropoffDateTime));
+                return;
+            case 3:
+                serialized.Serialize(PlankWriteSchema.Columns[3], ToRequiredInt64(trip.PassengerCount));
+                return;
+            case 4:
+                serialized.Serialize(PlankWriteSchema.Columns[4], ToRequiredDouble(trip.TripDistance));
+                return;
+            case 5:
+                serialized.Serialize(PlankWriteSchema.Columns[5], ToRequiredInt64(trip.RatecodeId));
+                return;
+            case 6:
+                serialized.Serialize(PlankWriteSchema.Columns[6], ToRequiredUtf8(trip.StoreAndFwdFlag));
+                return;
+            case 7:
+                serialized.Serialize(PlankWriteSchema.Columns[7], ToRequiredInt32(trip.PuLocationId));
+                return;
+            case 8:
+                serialized.Serialize(PlankWriteSchema.Columns[8], ToRequiredInt32(trip.DoLocationId));
+                return;
+            case 9:
+                serialized.Serialize(PlankWriteSchema.Columns[9], ToRequiredInt64(trip.PaymentType));
+                return;
+            case 10:
+                serialized.Serialize(PlankWriteSchema.Columns[10], ToRequiredDouble(trip.FareAmount));
+                return;
+            case 11:
+                serialized.Serialize(PlankWriteSchema.Columns[11], ToRequiredDouble(trip.Extra));
+                return;
+            case 12:
+                serialized.Serialize(PlankWriteSchema.Columns[12], ToRequiredDouble(trip.MtaTax));
+                return;
+            case 13:
+                serialized.Serialize(PlankWriteSchema.Columns[13], ToRequiredDouble(trip.TipAmount));
+                return;
+            case 14:
+                serialized.Serialize(PlankWriteSchema.Columns[14], ToRequiredDouble(trip.TollsAmount));
+                return;
+            case 15:
+                serialized.Serialize(PlankWriteSchema.Columns[15], ToRequiredDouble(trip.ImprovementSurcharge));
+                return;
+            case 16:
+                serialized.Serialize(PlankWriteSchema.Columns[16], ToRequiredDouble(trip.TotalAmount));
+                return;
+            case 17:
+                serialized.Serialize(PlankWriteSchema.Columns[17], ToRequiredDouble(trip.CongestionSurcharge));
+                return;
+            case 18:
+                serialized.Serialize(PlankWriteSchema.Columns[18], ToRequiredDouble(trip.AirportFee));
+                return;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(index), index, "Column index is out of range.");
+        }
+    }
+
+    static SerializedColumn[] CreateSerializedColumns(Plank.Writing.ParquetWriter writer)
+    {
+        var result = new SerializedColumn[PlankWriteSchema.Columns.Length];
+        for (var i = 0; i < result.Length; i++)
+            result[i] = writer.CreateSerializedColumn();
+        return result;
+    }
+
+    static void SerializeTrip(SerializedColumn[] serializedColumns, NycTripData trip)
+    {
+        for (var i = 0; i < serializedColumns.Length; i++)
+            SerializePlankColumnAhead(serializedColumns[i], trip, i);
+    }
 
     static ParquetWriterOptions CreatePlankOptions(BenchmarkDataContext context, ThroughputPlankMetricsLog? metricsLog)
-        => new()
+    {
+        _ = context;
+        _ = metricsLog;
+        return new ParquetWriterOptions
         {
-            ExpectedRowGroupCount = checked((uint)context.SourceFiles.Length),
-            RowGroupRowCountHint = checked((uint)context.TripsByFile.Max(static values => values.RowCount)),
-            Compression = CompressionKind.None,
-            DateTimeKindHandling = DateTimeKindHandling.PreserveClockTime,
-            Log = metricsLog is null ? ParquetLog.None : metricsLog,
-            RowGroupOptions = new RowGroupOptions
-            {
-                MaxCompressedBytes = 32 * 1024 * 1024
-            }
+            Compression = CompressionKind.None
         };
+    }
+
+    static int[] ToRequiredInt32(int?[] values)
+    {
+        var result = new int[values.Length];
+        for (var i = 0; i < values.Length; i++)
+            result[i] = values[i] ?? default;
+        return result;
+    }
+
+    static long[] ToRequiredInt64(long?[] values)
+    {
+        var result = new long[values.Length];
+        for (var i = 0; i < values.Length; i++)
+            result[i] = values[i] ?? default;
+        return result;
+    }
+
+    static long[] ToRequiredTicks(DateTime?[] values)
+    {
+        var result = new long[values.Length];
+        for (var i = 0; i < values.Length; i++)
+            result[i] = values[i]?.Ticks ?? default;
+        return result;
+    }
+
+    static double[] ToRequiredDouble(double?[] values)
+    {
+        var result = new double[values.Length];
+        for (var i = 0; i < values.Length; i++)
+            result[i] = values[i] ?? default;
+        return result;
+    }
+
+    static byte[][] ToRequiredUtf8(string?[] values)
+    {
+        var result = new byte[values.Length][];
+        for (var i = 0; i < values.Length; i++)
+            result[i] = System.Text.Encoding.UTF8.GetBytes(values[i] ?? string.Empty);
+        return result;
+    }
 
     static FileStream CreateOutputStream(string outputPath)
         => new(

@@ -1,35 +1,9 @@
-using Plank.Schema;
-using Plank.Writing;
 using System.Diagnostics;
 
 namespace Plank.Benchmarks;
 
-public sealed class ThroughputPlankMetricsLog : IParquetLog
+public sealed class ThroughputPlankMetricsLog
 {
-    static readonly ColumnOptions RequiredPlain = new(ParquetRepetition.Required, [EncodingKind.Plain]);
-    static readonly ColumnOptions OptionalPlain = new(ParquetRepetition.Optional, [EncodingKind.Plain]);
-    static readonly ParquetSchema MetricsSchema = new([
-        new Column("event_index", ParquetPhysicalType.Int32, RequiredPlain),
-        new Column("event_type", ParquetPhysicalType.ByteArray, RequiredPlain),
-        new Column("bytes", ParquetPhysicalType.Int64, OptionalPlain),
-        new Column("gap_ticks", ParquetPhysicalType.Int64, RequiredPlain),
-        new Column("write_ticks", ParquetPhysicalType.Int64, OptionalPlain),
-        new Column("flush_ticks", ParquetPhysicalType.Int64, OptionalPlain),
-        new Column("time_ticks", ParquetPhysicalType.Int64, RequiredPlain),
-        new Column("time_ms", ParquetPhysicalType.Double, RequiredPlain),
-        new Column("cumulative_bytes", ParquetPhysicalType.Int64, RequiredPlain),
-        new Column("write_mib_per_s", ParquetPhysicalType.Double, OptionalPlain),
-        new Column("column_name", ParquetPhysicalType.ByteArray, OptionalPlain),
-        new Column("column_row_count", ParquetPhysicalType.Int32, OptionalPlain),
-        new Column("column_value_count", ParquetPhysicalType.Int32, OptionalPlain),
-        new Column("column_encode_ticks", ParquetPhysicalType.Int64, OptionalPlain),
-        new Column("column_compress_ticks", ParquetPhysicalType.Int64, OptionalPlain),
-        new Column("column_wait_for_write_ticks", ParquetPhysicalType.Int64, OptionalPlain),
-        new Column("column_write_ticks", ParquetPhysicalType.Int64, OptionalPlain),
-        new Column("column_start_ms", ParquetPhysicalType.Double, OptionalPlain),
-        new Column("column_end_ms", ParquetPhysicalType.Double, OptionalPlain)
-    ]);
-
     readonly List<StreamWriteMetricSample> _writeSamples = [];
     readonly List<FlushMetricSample> _flushSamples = [];
     readonly List<ColumnWriteMetricSample> _columnSamples = [];
@@ -117,56 +91,13 @@ public sealed class ThroughputPlankMetricsLog : IParquetLog
 
     public async Task WriteParquetAsync(string path, CancellationToken cancellationToken)
     {
+        // TODO: restore Parquet metrics output once nullable encoding and logging hooks are reintroduced.
         var directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
         var rows = BuildRows();
         if (rows.Count == 0)
             return;
-
-        var eventIndex = new int[rows.Count];
-        var eventType = new string[rows.Count];
-        var bytes = new long?[rows.Count];
-        var gapTicks = new long[rows.Count];
-        var writeTicks = new long?[rows.Count];
-        var flushTicks = new long?[rows.Count];
-        var timeTicks = new long[rows.Count];
-        var timeMs = new double[rows.Count];
-        var cumulativeBytes = new long[rows.Count];
-        var writeMiBPerSecond = new double?[rows.Count];
-        var columnName = new string?[rows.Count];
-        var columnRowCount = new int?[rows.Count];
-        var columnValueCount = new int?[rows.Count];
-        var columnEncodeTicks = new long?[rows.Count];
-        var columnCompressTicks = new long?[rows.Count];
-        var columnWaitForWriteTicks = new long?[rows.Count];
-        var columnWriteTicks = new long?[rows.Count];
-        var columnStartMs = new double?[rows.Count];
-        var columnEndMs = new double?[rows.Count];
-
-        for (var i = 0; i < rows.Count; i++)
-        {
-            var row = rows[i];
-            eventIndex[i] = row.EventIndex;
-            eventType[i] = row.EventType;
-            bytes[i] = row.Bytes;
-            gapTicks[i] = row.GapTicks;
-            writeTicks[i] = row.WriteTicks;
-            flushTicks[i] = row.FlushTicks;
-            timeTicks[i] = row.TimeTicks;
-            timeMs[i] = row.TimeMs;
-            cumulativeBytes[i] = row.CumulativeBytes;
-            writeMiBPerSecond[i] = row.WriteMiBPerSecond;
-            columnName[i] = row.ColumnName;
-            columnRowCount[i] = row.ColumnRowCount;
-            columnValueCount[i] = row.ColumnValueCount;
-            columnEncodeTicks[i] = row.ColumnEncodeTicks;
-            columnCompressTicks[i] = row.ColumnCompressTicks;
-            columnWaitForWriteTicks[i] = row.ColumnWaitForWriteTicks;
-            columnWriteTicks[i] = row.ColumnWriteTicks;
-            columnStartMs[i] = row.ColumnStartMs;
-            columnEndMs[i] = row.ColumnEndMs;
-        }
 
         await using var stream = new FileStream(path, new FileStreamOptions
         {
@@ -176,35 +107,17 @@ public sealed class ThroughputPlankMetricsLog : IParquetLog
             BufferSize = 256 * 1024,
             Options = FileOptions.Asynchronous
         });
-        using var writer = ParquetWriter.Create(stream, MetricsSchema, new ParquetWriterOptions
+        await using var writer = new StreamWriter(stream);
+        await writer.WriteLineAsync("event_index\tevent_type\tbytes\tgap_ticks\twrite_ticks\tflush_ticks\ttime_ticks\ttime_ms\tcumulative_bytes\twrite_mib_per_s\tcolumn_name\tcolumn_row_count\tcolumn_value_count\tcolumn_encode_ticks\tcolumn_compress_ticks\tcolumn_wait_for_write_ticks\tcolumn_write_ticks\tcolumn_start_ms\tcolumn_end_ms").ConfigureAwait(false);
+        for (var i = 0; i < rows.Count; i++)
         {
-            Compression = CompressionKind.None,
-            DateTimeKindHandling = DateTimeKindHandling.PreserveClockTime,
-            ExpectedRowGroupCount = 1,
-            RowGroupRowCountHint = checked((uint)rows.Count),
-            Log = ParquetLog.None
-        });
-        var rowGroup = writer.StartRowGroup();
-        await rowGroup.WriteAsync(MetricsSchema.Columns[0], eventIndex).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[1], eventType).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[2], bytes).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[3], gapTicks).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[4], writeTicks).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[5], flushTicks).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[6], timeTicks).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[7], timeMs).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[8], cumulativeBytes).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[9], writeMiBPerSecond).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[10], columnName).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[11], columnRowCount).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[12], columnValueCount).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[13], columnEncodeTicks).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[14], columnCompressTicks).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[15], columnWaitForWriteTicks).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[16], columnWriteTicks).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[17], columnStartMs).ConfigureAwait(false);
-        await rowGroup.WriteAsync(MetricsSchema.Columns[18], columnEndMs).ConfigureAwait(false);
-        writer.CloseFile(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            var row = rows[i];
+            await writer.WriteLineAsync(
+                $"{row.EventIndex}\t{Escape(row.EventType)}\t{Format(row.Bytes)}\t{row.GapTicks}\t{Format(row.WriteTicks)}\t{Format(row.FlushTicks)}\t{row.TimeTicks}\t{row.TimeMs}\t{row.CumulativeBytes}\t{Format(row.WriteMiBPerSecond)}\t{Escape(row.ColumnName)}\t{Format(row.ColumnRowCount)}\t{Format(row.ColumnValueCount)}\t{Format(row.ColumnEncodeTicks)}\t{Format(row.ColumnCompressTicks)}\t{Format(row.ColumnWaitForWriteTicks)}\t{Format(row.ColumnWriteTicks)}\t{Format(row.ColumnStartMs)}\t{Format(row.ColumnEndMs)}").ConfigureAwait(false);
+        }
+
+        await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     List<MetricRow> BuildRows()
@@ -339,6 +252,13 @@ public sealed class ThroughputPlankMetricsLog : IParquetLog
         long? ColumnWriteTicks,
         double? ColumnStartMs,
         double? ColumnEndMs);
+
+    static string Escape(string? value)
+        => value is null ? string.Empty : value.Replace('\t', ' ').Replace('\n', ' ').Replace('\r', ' ');
+
+    static string Format<T>(T? value)
+        where T : struct
+        => value.HasValue ? value.Value.ToString()! : string.Empty;
 
     void EnsureOrigin()
     {

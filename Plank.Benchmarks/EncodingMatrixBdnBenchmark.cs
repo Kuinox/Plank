@@ -32,6 +32,7 @@ public class EncodingMatrixBdnBenchmark
     float[] _floatValues = [];
     double[] _doubleValues = [];
     string[] _stringValues = [];
+    byte[][] _stringByteValues = [];
     byte[] _lastParquetBuffer = [];
     string _currentLibrary = string.Empty;
 
@@ -46,6 +47,7 @@ public class EncodingMatrixBdnBenchmark
         _floatValues = new float[Rows];
         _doubleValues = new double[Rows];
         _stringValues = new string[Rows];
+        _stringByteValues = new byte[Rows][];
         for (var i = 0; i < Rows; i++)
         {
             _boolValues[i] = (i & 1) == 0;
@@ -54,6 +56,7 @@ public class EncodingMatrixBdnBenchmark
             _floatValues[i] = (i % 10_000) / 3f;
             _doubleValues[i] = (i % 10_000) / 7d;
             _stringValues[i] = $"val-{i % 2048}";
+            _stringByteValues[i] = System.Text.Encoding.UTF8.GetBytes(_stringValues[i]);
         }
     }
 
@@ -105,40 +108,43 @@ public class EncodingMatrixBdnBenchmark
             new ColumnOptions(ParquetRepetition.Required, [MapPlankEncoding(EncodingName)]));
         var schema = new PlankSchema([column]);
         await using var stream = new MemoryStream(capacity: Rows * 16);
-        using var writer = Plank.Writing.ParquetWriter.Create(stream, schema, new ParquetWriterOptions
+        var writer = Plank.Writing.ParquetWriter.Create(stream, schema, new ParquetWriterOptions
         {
-            Compression = CompressionKind.None,
-            ExpectedRowGroupCount = 1,
-            RowGroupRowCountHint = checked((uint)Rows),
-            DateTimeKindHandling = DateTimeKindHandling.PreserveClockTime
+            Compression = CompressionKind.None
         });
         var rowGroup = writer.StartRowGroup();
+        var serialized = writer.CreateSerializedColumn();
         switch (DataType)
         {
             case "bool":
-                await rowGroup.WriteAsync(column, _boolValues).ConfigureAwait(false);
+                serialized.Serialize(column, _boolValues);
+                rowGroup.Write(serialized);
                 break;
             case "int32":
-                await rowGroup.WriteAsync(column, _int32Values).ConfigureAwait(false);
+                serialized.Serialize(column, _int32Values);
+                rowGroup.Write(serialized);
                 break;
             case "int64":
-                await rowGroup.WriteAsync(column, _int64Values).ConfigureAwait(false);
+                serialized.Serialize(column, _int64Values);
+                rowGroup.Write(serialized);
                 break;
             case "float":
-                await rowGroup.WriteAsync(column, _floatValues).ConfigureAwait(false);
+                serialized.Serialize(column, _floatValues);
+                rowGroup.Write(serialized);
                 break;
             case "double":
-                await rowGroup.WriteAsync(column, _doubleValues).ConfigureAwait(false);
+                serialized.Serialize(column, _doubleValues);
+                rowGroup.Write(serialized);
                 break;
             case "string":
-                await rowGroup.WriteAsync(column, _stringValues).ConfigureAwait(false);
+                serialized.Serialize(column, _stringByteValues);
+                rowGroup.Write(serialized);
                 break;
             default:
                 throw new InvalidOperationException($"Unknown type '{DataType}'.");
         }
 
         writer.CloseFile();
-        await stream.FlushAsync().ConfigureAwait(false);
         _lastParquetBuffer = stream.ToArray();
     }
 
