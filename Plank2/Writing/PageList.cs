@@ -36,6 +36,13 @@ public sealed class PageList
     public void Clear()
         => _count = 0;
 
+    public void RemoveLast()
+    {
+        if (_count == 0)
+            throw new InvalidOperationException("Cannot remove a page from an empty page list.");
+        _count--;
+    }
+
     void EnsureCapacity(int required)
     {
         if (required <= _pages.Length)

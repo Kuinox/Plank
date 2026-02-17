@@ -10,6 +10,8 @@ public sealed class ParquetWriter
     readonly ParquetWriterOptions _options;
     internal readonly Column[] ColumnsByOrdinal;
     internal readonly int ColumnCount;
+    internal readonly BufferWriterFactory BufferWriters;
+    internal readonly CompressionKind Compression;
     internal BufferWriter SerializedRowGroupsMetadata;
     int _rowGroupCount;
     bool _rowGroupOpen;
@@ -24,9 +26,13 @@ public sealed class ParquetWriter
         _stream = stream;
         _schema = schema;
         _options = options;
+        _options.Validate();
         ColumnsByOrdinal = _schema.Columns.IsDefault ? [] : _schema.Columns.ToArray();
         ColumnCount = ColumnsByOrdinal.Length;
-        SerializedRowGroupsMetadata = default;
+        BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
+            _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
+        Compression = _options.Compression;
+        SerializedRowGroupsMetadata = BufferWriters.CreateMetadataBufferWriter();
         _rowGroupCount = 0;
         _rowGroupOpen = false;
         _streamDisposed = false;
@@ -106,8 +112,8 @@ public sealed class ParquetWriter
         throw new ArgumentException("SerializedColumn column does not belong to this schema.", nameof(column));
     }
 
-    internal void WriteBuffer(BufferWriter buffer)
-        => _stream.Write(buffer.WrittenSpan);
+    internal void WriteBuffer(ref BufferWriter buffer)
+        => buffer.WriteTo(_stream);
 
     internal void CompleteOpenRowGroup()
     {
