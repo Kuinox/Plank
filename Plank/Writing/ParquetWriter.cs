@@ -5,15 +5,21 @@ namespace Plank.Writing;
 
 public sealed class ParquetWriter
 {
-    Stream _stream;
+    static readonly byte[] FileMagic = "PAR1"u8.ToArray();
+
+    Stream _stream = null!;
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
     internal readonly Column[] ColumnsByOrdinal;
     internal readonly int ColumnCount;
     internal readonly BufferWriterFactory BufferWriters;
     internal readonly CompressionKind Compression;
+    internal readonly ColumnChunkMetadata[] OpenRowGroupColumnMetadata;
     internal BufferWriter SerializedRowGroupsMetadata;
+    internal BufferWriter SerializedFileMetadata;
+    internal long FileOffset;
     int _rowGroupCount;
+    long _totalRowCount;
     bool _rowGroupOpen;
     bool _streamDisposed;
 
@@ -23,7 +29,6 @@ public sealed class ParquetWriter
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(options);
 
-        _stream = stream;
         _schema = schema;
         _options = options;
         _options.Validate();
@@ -32,11 +37,12 @@ public sealed class ParquetWriter
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
             _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
         Compression = _options.Compression;
+        OpenRowGroupColumnMetadata = ColumnCount == 0 ? [] : new ColumnChunkMetadata[ColumnCount];
         SerializedRowGroupsMetadata = BufferWriters.CreateMetadataBufferWriter();
-        _rowGroupCount = 0;
-        _rowGroupOpen = false;
-        _streamDisposed = false;
+        SerializedFileMetadata = BufferWriters.CreateMetadataBufferWriter();
+        FileOffset = 0;
         _schema.Validate();
+        OpenFile(stream);
     }
 
     public static ParquetWriter Create(Stream stream, ParquetSchema schema,
@@ -54,10 +60,7 @@ public sealed class ParquetWriter
             throw new InvalidOperationException("Cannot reset while a row group is open.");
 
         DisposeCurrentStream();
-        _stream = stream;
-        _streamDisposed = false;
-        SerializedRowGroupsMetadata.Reset();
-        _rowGroupCount = 0;
+        OpenFile(stream);
     }
 
     public RowGroupWriter StartRowGroup()
@@ -69,12 +72,9 @@ public sealed class ParquetWriter
         _rowGroupOpen = true;
         if (ColumnCount == 0)
         {
-            const int size = sizeof(int) + sizeof(int);
-            var span = SerializedRowGroupsMetadata.GetSpan(size);
-            BinaryPrimitives.WriteInt32LittleEndian(span[0..], 0);
-            BinaryPrimitives.WriteInt32LittleEndian(span[4..], 0);
-            SerializedRowGroupsMetadata.Advance(size);
-            CompleteOpenRowGroup();
+            ParquetMetadataThriftWriter.WriteRowGroup(ref SerializedRowGroupsMetadata, ColumnsByOrdinal,
+                OpenRowGroupColumnMetadata, 0);
+            CompleteOpenRowGroup(0);
         }
 
         return new RowGroupWriter(this);
@@ -86,6 +86,7 @@ public sealed class ParquetWriter
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot close the file while a row group is still open.");
 
+        WriteFileFooter();
         DisposeCurrentStream();
     }
 
@@ -113,11 +114,48 @@ public sealed class ParquetWriter
     }
 
     internal void WriteBuffer(ref BufferWriter buffer)
-        => buffer.WriteTo(_stream);
+    {
+        buffer.WriteTo(_stream);
+        FileOffset = checked(FileOffset + buffer.WrittenLength);
+    }
 
-    internal void CompleteOpenRowGroup()
+    void OpenFile(Stream stream)
+    {
+        _stream = stream;
+        _streamDisposed = false;
+        _rowGroupCount = 0;
+        _totalRowCount = 0;
+        _rowGroupOpen = false;
+        FileOffset = 0;
+        SerializedRowGroupsMetadata.Reset();
+        SerializedFileMetadata.Reset();
+        WriteFileHeader();
+    }
+
+    void WriteFileHeader()
+    {
+        _stream.Write(FileMagic);
+        FileOffset = checked(FileOffset + FileMagic.Length);
+    }
+
+    void WriteFileFooter()
+    {
+        SerializedFileMetadata.Reset();
+        ParquetMetadataThriftWriter.WriteFileMetaData(ref SerializedFileMetadata, _schema, _rowGroupCount, _totalRowCount,
+            ref SerializedRowGroupsMetadata);
+        var metadataLength = SerializedFileMetadata.WrittenLength;
+        WriteBuffer(ref SerializedFileMetadata);
+        Span<byte> suffix = stackalloc byte[sizeof(int) + 4];
+        BinaryPrimitives.WriteInt32LittleEndian(suffix, metadataLength);
+        FileMagic.CopyTo(suffix[sizeof(int)..]);
+        _stream.Write(suffix);
+        FileOffset = checked(FileOffset + suffix.Length);
+    }
+
+    internal void CompleteOpenRowGroup(int rowCount)
     {
         _rowGroupCount++;
+        _totalRowCount = checked(_totalRowCount + rowCount);
         _rowGroupOpen = false;
     }
 }

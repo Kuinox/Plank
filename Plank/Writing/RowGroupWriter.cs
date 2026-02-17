@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+using Plank.Schema;
 
 namespace Plank.Writing;
 
@@ -8,7 +8,6 @@ public sealed class RowGroupWriter
     BufferWriter _compressedContent;
     int _nextColumnOrdinal;
     int _rowCount;
-    bool _metadataStarted;
 
     internal RowGroupWriter(ParquetWriter writer)
     {
@@ -16,7 +15,6 @@ public sealed class RowGroupWriter
         _compressedContent = default;
         _nextColumnOrdinal = 0;
         _rowCount = -1;
-        _metadataStarted = false;
     }
 
     public void Write(SerializedColumn serialized)
@@ -34,25 +32,43 @@ public sealed class RowGroupWriter
                 $"Invalid column order for this row group. Expected '{expectedColumn.Name}' (ordinal {_nextColumnOrdinal}) next, but got '{actualColumn.Name}' (ordinal {serialized.ColumnOrdinal}). Write columns in schema order.");
         }
 
-        if (!_metadataStarted)
-        {
+        if (_nextColumnOrdinal == 0)
             _rowCount = serialized.RowCount;
-            WriteRowGroupHeaderMetadata(_rowCount);
-            _metadataStarted = true;
-        }
         else if (serialized.RowCount != _rowCount)
             throw new InvalidOperationException(
                 $"Row count mismatch for row group. Expected {_rowCount}, got {serialized.RowCount}.");
 
+        var column = _writer.ColumnsByOrdinal[serialized.ColumnOrdinal];
         var pages = serialized.Pages;
         var compression = _writer.Compression;
         if (compression != CompressionKind.None && !_compressedContent.IsInitialized)
             _compressedContent = _writer.BufferWriters.CreatePageBufferWriter();
         long totalUncompressedSize = 0;
         long totalCompressedSize = 0;
+        var dataPageOffset = -1L;
+        var dictionaryPageOffset = 0L;
+        var hasDictionaryPage = false;
+        var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         for (var i = 0; i < pages.Count; i++)
         {
             ref var page = ref pages[i];
+            var pageOffset = _writer.FileOffset;
+            if (TryReadPageKind(ref page.Header, out var pageKind))
+            {
+                if (!hasDictionaryPage && pageKind == PageKind.Dictionary)
+                {
+                    hasDictionaryPage = true;
+                    dictionaryPageOffset = pageOffset;
+                }
+
+                if (dataPageOffset < 0 && (pageKind == PageKind.DataV1 || pageKind == PageKind.DataV2))
+                {
+                    dataPageOffset = pageOffset;
+                    if (TryReadDataPageEncoding(ref page.Header, out var headerEncoding))
+                        dataEncoding = headerEncoding;
+                }
+            }
+
             var headerSize = page.Header.WrittenLength;
             var uncompressedContentSize = page.Content.WrittenLength;
             var compressedContentSize = uncompressedContentSize;
@@ -70,33 +86,57 @@ public sealed class RowGroupWriter
             totalCompressedSize += checked((long)headerSize + compressedContentSize);
         }
 
-        WriteColumnMetadata(serialized.RowCount, totalUncompressedSize, totalCompressedSize);
+        if (dataPageOffset < 0)
+            dataPageOffset = hasDictionaryPage ? dictionaryPageOffset : _writer.FileOffset;
+
+        ref var columnMetadata = ref _writer.OpenRowGroupColumnMetadata[serialized.ColumnOrdinal];
+        columnMetadata.DataPageOffset = dataPageOffset;
+        columnMetadata.DictionaryPageOffset = dictionaryPageOffset;
+        columnMetadata.ValueCount = serialized.RowCount;
+        columnMetadata.TotalUncompressedSize = totalUncompressedSize;
+        columnMetadata.TotalCompressedSize = totalCompressedSize;
+        columnMetadata.DataEncoding = dataEncoding;
+        columnMetadata.Compression = compression;
+        columnMetadata.HasDictionaryPage = hasDictionaryPage;
 
         serialized.Consume();
         _nextColumnOrdinal++;
-        if (_nextColumnOrdinal == _writer.ColumnCount)
-            _writer.CompleteOpenRowGroup();
+        if (_nextColumnOrdinal != _writer.ColumnCount)
+            return;
+
+        ParquetMetadataThriftWriter.WriteRowGroup(ref _writer.SerializedRowGroupsMetadata, _writer.ColumnsByOrdinal,
+            _writer.OpenRowGroupColumnMetadata, _rowCount);
+        _writer.CompleteOpenRowGroup(_rowCount);
     }
 
-    void WriteRowGroupHeaderMetadata(int rowCount)
+    static bool TryReadPageKind(ref BufferWriter header, out PageKind pageKind)
     {
-        const int size = sizeof(int) + sizeof(int);
-        ref var metadata = ref _writer.SerializedRowGroupsMetadata;
-        var span = metadata.GetSpan(size);
-        BinaryPrimitives.WriteInt32LittleEndian(span[0..], rowCount);
-        BinaryPrimitives.WriteInt32LittleEndian(span[4..], _writer.ColumnCount);
-        metadata.Advance(size);
+        if (!header.TryGetSingleWrittenSpan(out var span) || span.Length == 0)
+        {
+            pageKind = default;
+            return false;
+        }
+
+        pageKind = (PageKind)span[0];
+        return pageKind == PageKind.DataV1 || pageKind == PageKind.DataV2 || pageKind == PageKind.Dictionary;
     }
 
-    void WriteColumnMetadata(int rowCount, long totalUncompressedSize, long totalCompressedSize)
+    static bool TryReadDataPageEncoding(ref BufferWriter header, out EncodingKind encoding)
     {
-        const int size = sizeof(int) + sizeof(int) + sizeof(long) + sizeof(long);
-        ref var metadata = ref _writer.SerializedRowGroupsMetadata;
-        var span = metadata.GetSpan(size);
-        BinaryPrimitives.WriteInt32LittleEndian(span[0..], rowCount);
-        BinaryPrimitives.WriteInt32LittleEndian(span[4..], rowCount);
-        BinaryPrimitives.WriteInt64LittleEndian(span[8..], totalUncompressedSize);
-        BinaryPrimitives.WriteInt64LittleEndian(span[16..], totalCompressedSize);
-        metadata.Advance(size);
+        if (!header.TryGetSingleWrittenSpan(out var span) || span.Length < 2)
+        {
+            encoding = default;
+            return false;
+        }
+
+        var value = span[1];
+        if (value > (byte)EncodingKind.ByteStreamSplit)
+        {
+            encoding = default;
+            return false;
+        }
+
+        encoding = (EncodingKind)value;
+        return true;
     }
 }

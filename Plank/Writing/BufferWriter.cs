@@ -144,6 +144,33 @@ public struct BufferWriter : IBufferWriter<byte>
         }
     }
 
+    internal void Write(ReadOnlySpan<byte> source)
+    {
+        var remaining = source;
+        while (remaining.Length > 0)
+        {
+            var destination = GetSpan(remaining.Length);
+            var toCopy = Math.Min(destination.Length, remaining.Length);
+            remaining[..toCopy].CopyTo(destination);
+            Advance(toCopy);
+            remaining = remaining[toCopy..];
+        }
+    }
+
+    internal void CopyFrom(ref BufferWriter source)
+    {
+        if (source._segments is null || source._writtenLength == 0)
+            return;
+
+        for (var i = 0; i < source._segmentCount; i++)
+        {
+            var written = source._segments[i].Written;
+            if (written == 0)
+                continue;
+            Write(source._segments[i].Buffer.AsSpan(0, written));
+        }
+    }
+
     void EnsureWritable(int sizeHint)
     {
         if (sizeHint < 0)
