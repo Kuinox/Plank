@@ -60,7 +60,7 @@ public sealed class RowGroupWriter
             var writeCompressedContent = false;
             if (compression != CompressionKind.None && uncompressedContentSize > 0)
             {
-                Compression.Compress(compression, _writer.BufferWriters, ref page.Content, ref _compressedContent);
+                Compression.Compress(compression, _writer.CompressionContext, ref page.Content, ref _compressedContent);
                 compressedContentSize = _compressedContent.WrittenLength;
                 writeCompressedContent = true;
             }
