@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Plank.Schema;
 
 namespace Plank.Writing;
@@ -53,34 +54,58 @@ public sealed class RowGroupWriter
         {
             ref var page = ref pages[i];
             var pageOffset = _writer.FileOffset;
-            if (TryReadPageKind(ref page.Header, out var pageKind))
-            {
-                if (!hasDictionaryPage && pageKind == PageKind.Dictionary)
-                {
-                    hasDictionaryPage = true;
-                    dictionaryPageOffset = pageOffset;
-                }
-
-                if (dataPageOffset < 0 && (pageKind == PageKind.DataV1 || pageKind == PageKind.DataV2))
-                {
-                    dataPageOffset = pageOffset;
-                    if (TryReadDataPageEncoding(ref page.Header, out var headerEncoding))
-                        dataEncoding = headerEncoding;
-                }
-            }
-
-            var headerSize = page.Header.WrittenLength;
+            var pageKind = ReadPageKind(ref page.Header);
             var uncompressedContentSize = page.Content.WrittenLength;
             var compressedContentSize = uncompressedContentSize;
-            _writer.WriteBuffer(ref page.Header);
-            if (compression == CompressionKind.None || uncompressedContentSize == 0)
-                _writer.WriteBuffer(ref page.Content);
-            else
+            var writeCompressedContent = false;
+            if (compression != CompressionKind.None && uncompressedContentSize > 0)
             {
                 Compression.Compress(compression, _writer.BufferWriters, ref page.Content, ref _compressedContent);
                 compressedContentSize = _compressedContent.WrittenLength;
-                _writer.WriteBuffer(ref _compressedContent);
+                writeCompressedContent = true;
             }
+
+            switch (pageKind)
+            {
+                case PageKind.Dictionary:
+                {
+                    if (!hasDictionaryPage)
+                    {
+                        hasDictionaryPage = true;
+                        dictionaryPageOffset = pageOffset;
+                    }
+
+                    var dictionaryValueCount = ReadDictionaryValueCount(ref page.Header);
+                    page.Header.Reset();
+                    ParquetMetadataThriftWriter.WriteDictionaryPageHeader(ref page.Header, dictionaryValueCount,
+                        uncompressedContentSize, compressedContentSize);
+                    break;
+                }
+                case PageKind.DataV1:
+                case PageKind.DataV2:
+                {
+                    ReadDataPageMetadata(ref page.Header, out var dataPageRowCount, out var pageEncoding);
+                    if (dataPageOffset < 0)
+                    {
+                        dataPageOffset = pageOffset;
+                        dataEncoding = pageEncoding;
+                    }
+
+                    page.Header.Reset();
+                    ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, dataPageRowCount, pageEncoding,
+                        uncompressedContentSize, compressedContentSize, writeCompressedContent);
+                    break;
+                }
+                default:
+                    throw new InvalidOperationException($"Unknown page kind '{pageKind}'.");
+            }
+
+            var headerSize = page.Header.WrittenLength;
+            _writer.WriteBuffer(ref page.Header);
+            if (!writeCompressedContent)
+                _writer.WriteBuffer(ref page.Content);
+            else
+                _writer.WriteBuffer(ref _compressedContent);
 
             totalUncompressedSize += checked((long)headerSize + uncompressedContentSize);
             totalCompressedSize += checked((long)headerSize + compressedContentSize);
@@ -109,34 +134,22 @@ public sealed class RowGroupWriter
         _writer.CompleteOpenRowGroup(_rowCount);
     }
 
-    static bool TryReadPageKind(ref BufferWriter header, out PageKind pageKind)
+    static PageKind ReadPageKind(ref BufferWriter header)
     {
-        if (!header.TryGetSingleWrittenSpan(out var span) || span.Length == 0)
-        {
-            pageKind = default;
-            return false;
-        }
-
-        pageKind = (PageKind)span[0];
-        return pageKind == PageKind.DataV1 || pageKind == PageKind.DataV2 || pageKind == PageKind.Dictionary;
+        header.TryGetSingleWrittenSpan(out var span);
+        return (PageKind)span[0];
     }
 
-    static bool TryReadDataPageEncoding(ref BufferWriter header, out EncodingKind encoding)
+    static void ReadDataPageMetadata(ref BufferWriter header, out int rowCount, out EncodingKind encoding)
     {
-        if (!header.TryGetSingleWrittenSpan(out var span) || span.Length < 2)
-        {
-            encoding = default;
-            return false;
-        }
+        header.TryGetSingleWrittenSpan(out var span);
+        rowCount = BinaryPrimitives.ReadInt32LittleEndian(span[2..]);
+        encoding = (EncodingKind)span[1];
+    }
 
-        var value = span[1];
-        if (value > (byte)EncodingKind.ByteStreamSplit)
-        {
-            encoding = default;
-            return false;
-        }
-
-        encoding = (EncodingKind)value;
-        return true;
+    static int ReadDictionaryValueCount(ref BufferWriter header)
+    {
+        header.TryGetSingleWrittenSpan(out var span);
+        return BinaryPrimitives.ReadInt32LittleEndian(span[1..]);
     }
 }

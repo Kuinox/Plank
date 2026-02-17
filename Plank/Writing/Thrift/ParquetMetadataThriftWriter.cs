@@ -9,6 +9,47 @@ static class ParquetMetadataThriftWriter
 {
     static readonly TextEncoding Utf8 = new UTF8Encoding(false, true);
 
+    internal static void WriteDataPageHeaderV2(ref BufferWriter destination, int rowCount, EncodingKind encoding,
+        int uncompressedPageSize, int compressedPageSize, bool isCompressed)
+    {
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        writer.WriteFieldI32(1, (int)PageType.DataPageV2);
+        writer.WriteFieldI32(2, uncompressedPageSize);
+        writer.WriteFieldI32(3, compressedPageSize);
+        writer.WriteFieldHeader(8, CompactType.Struct);
+
+        var previousData = writer.BeginStruct();
+        writer.WriteFieldI32(1, rowCount);
+        writer.WriteFieldI32(2, 0);
+        writer.WriteFieldI32(3, rowCount);
+        writer.WriteFieldI32(4, GetEncoding(encoding));
+        writer.WriteFieldI32(5, 0);
+        writer.WriteFieldI32(6, 0);
+        writer.WriteFieldBool(7, isCompressed);
+        writer.EndStruct(previousData);
+
+        writer.EndStruct(previous);
+    }
+
+    internal static void WriteDictionaryPageHeader(ref BufferWriter destination, int valueCount, int uncompressedPageSize,
+        int compressedPageSize)
+    {
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        writer.WriteFieldI32(1, (int)PageType.DictionaryPage);
+        writer.WriteFieldI32(2, uncompressedPageSize);
+        writer.WriteFieldI32(3, compressedPageSize);
+        writer.WriteFieldHeader(7, CompactType.Struct);
+
+        var previousDictionary = writer.BeginStruct();
+        writer.WriteFieldI32(1, valueCount);
+        writer.WriteFieldI32(2, GetEncoding(EncodingKind.Plain));
+        writer.EndStruct(previousDictionary);
+
+        writer.EndStruct(previous);
+    }
+
     internal static void WriteFileMetaData(ref BufferWriter destination, ParquetSchema schema, int rowGroupCount,
         long totalRowCount, ref BufferWriter serializedRowGroups)
     {
@@ -82,6 +123,7 @@ static class ParquetMetadataThriftWriter
     static void WriteColumnChunk(ref CompactWriter writer, Column column, in ColumnChunkMetadata metadata)
     {
         var previousChunk = writer.BeginStruct();
+        writer.WriteFieldI64(2, metadata.DataPageOffset);
         writer.WriteFieldHeader(3, CompactType.Struct);
 
         var previousMetadata = writer.BeginStruct();
@@ -219,6 +261,14 @@ static class ParquetMetadataThriftWriter
         Zstd = 6
     }
 
+    enum PageType
+    {
+        DataPage = 0,
+        IndexPage = 1,
+        DictionaryPage = 2,
+        DataPageV2 = 3
+    }
+
     enum CompactType : byte
     {
         Stop = 0,
@@ -292,6 +342,9 @@ static class ParquetMetadataThriftWriter
             WriteBinary(value);
         }
 
+        internal void WriteFieldBool(int fieldId, bool value)
+            => WriteFieldHeader(fieldId, value ? CompactType.BooleanTrue : CompactType.BooleanFalse);
+
         internal void WriteListHeader(int count, CompactType elementType)
         {
             if (count < 15)
@@ -338,7 +391,7 @@ static class ParquetMetadataThriftWriter
         {
             while (value >= 0x80)
             {
-                WriteByte((byte)(value | 0x80));
+                WriteByte((byte)((value & 0x7F) | 0x80));
                 value >>= 7;
             }
 
@@ -349,7 +402,7 @@ static class ParquetMetadataThriftWriter
         {
             while (value >= 0x80)
             {
-                WriteByte((byte)(value | 0x80));
+                WriteByte((byte)((value & 0x7F) | 0x80));
                 value >>= 7;
             }
 

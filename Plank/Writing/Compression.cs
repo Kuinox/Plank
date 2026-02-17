@@ -22,7 +22,7 @@ static class Compression
                 GzipCompression.Compress(ref source, ref destination);
                 return;
             case CompressionKind.Zstd:
-                ZstdCompression.Compress(ref source, ref destination);
+                ZstdCompression.Compress(bufferWriters, ref source, ref destination);
                 return;
             case CompressionKind.Lz4:
                 Lz4Compression.Compress(bufferWriters, ref source, ref destination);

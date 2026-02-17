@@ -53,7 +53,7 @@ public sealed class SerializedColumn
     sealed class DefaultStrategy : IPageStrategy
     {
         public DictionaryMode GetDictionaryMode(Column column)
-            => DictionaryMode.Maybe;
+            => DictionaryMode.Disabled;
 
         public bool ShouldDropDictionary<T>(Column column, IReadOnlyDictionary<T, int> dictionary, int totalRowCount,
             int rowsSeen)
