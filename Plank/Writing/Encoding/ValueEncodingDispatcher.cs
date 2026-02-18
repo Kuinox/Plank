@@ -4,31 +4,32 @@ namespace Plank.Writing;
 
 static class ValueEncodingDispatcher
 {
-    internal static void WriteValue<T>(EncodingKind encoding, Column column, T value, ref BufferWriter writer)
+    internal static void WriteValues<T>(EncodingKind encoding, Column column, ReadOnlySpan<T> values,
+        ref BufferWriter writer)
         where T : notnull
     {
         switch (encoding)
         {
             case EncodingKind.Plain:
-                PlainEncoding.WriteValue(column, value, ref writer);
+                PlainEncoding.WriteValues(column, values, ref writer);
                 return;
             case EncodingKind.Rle:
-                RleEncoding.WriteValue(column, value, ref writer);
+                RleEncoding.WriteValues(column, values, ref writer);
                 return;
             case EncodingKind.BitPacked:
-                BitPackedEncoding.WriteValue(column, value, ref writer);
+                BitPackedEncoding.WriteValues(column, values, ref writer);
                 return;
             case EncodingKind.DeltaBinaryPacked:
-                DeltaBinaryPackedEncoding.WriteValue(column, value, ref writer);
+                DeltaBinaryPackedEncoding.WriteValues(column, values, ref writer);
                 return;
             case EncodingKind.DeltaLengthByteArray:
-                DeltaLengthByteArrayEncoding.WriteValue(column, value, ref writer);
+                DeltaLengthByteArrayEncoding.WriteValues(column, values, ref writer);
                 return;
             case EncodingKind.DeltaByteArray:
-                DeltaByteArrayEncoding.WriteValue(column, value, ref writer);
+                DeltaByteArrayEncoding.WriteValues(column, values, ref writer);
                 return;
             case EncodingKind.ByteStreamSplit:
-                ByteStreamSplitEncoding.WriteValue(column, value, ref writer);
+                ByteStreamSplitEncoding.WriteValues(column, values, ref writer);
                 return;
             case EncodingKind.PlainDictionary:
             case EncodingKind.RleDictionary:

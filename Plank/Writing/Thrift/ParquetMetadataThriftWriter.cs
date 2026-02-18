@@ -7,7 +7,7 @@ namespace Plank.Writing;
 
 static class ParquetMetadataThriftWriter
 {
-    static readonly TextEncoding Utf8 = new UTF8Encoding(false, true);
+    static readonly TextEncoding _utf8 = new UTF8Encoding(false, true);
 
     internal static void WriteDataPageHeaderV2(ref BufferWriter destination, int rowCount, EncodingKind encoding,
         int uncompressedPageSize, int compressedPageSize, bool isCompressed)
@@ -370,13 +370,13 @@ static class ParquetMetadataThriftWriter
 
         internal void WriteBinary(string value)
         {
-            var byteCount = Utf8.GetByteCount(value);
+            var byteCount = _utf8.GetByteCount(value);
             WriteVarInt32((uint)byteCount);
             if (byteCount == 0)
                 return;
 
             var destination = _buffer.GetSpan(byteCount);
-            Utf8.GetBytes(value.AsSpan(), destination[..byteCount]);
+            _utf8.GetBytes(value.AsSpan(), destination[..byteCount]);
             _buffer.Advance(byteCount);
         }
 

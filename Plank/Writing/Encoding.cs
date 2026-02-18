@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 using Plank.Schema;
 
 namespace Plank.Writing;
@@ -18,40 +20,34 @@ static class Encoding
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
         var useDictionary = TryWriteDictionaryPage(bufferWriters, column, values, strategy, pages, out var dictionary);
-
         if (values.Length == 0)
             return;
 
-        var currentPageIndex = AddNewDataPage(bufferWriters, pages);
-        var currentPageRowCount = 0;
-
-        for (var i = 0; i < values.Length; i++)
+        var rowsWritten = 0;
+        while (rowsWritten < values.Length)
         {
-            ref var currentPage = ref pages[currentPageIndex];
-            var value = values[i];
-            if (useDictionary)
+            var pageStart = rowsWritten;
+            var pageRowCount = 0;
+            while (rowsWritten < values.Length)
             {
-                var dictionaryIndex = dictionary![value];
-                DictionaryIndexEncodingDispatcher.WriteIndex(dictionaryEncoding, dictionaryIndex, ref currentPage.Content);
+                rowsWritten++;
+                pageRowCount++;
+                if (rowsWritten == values.Length)
+                    break;
+                if (strategy.ShouldStartNewDataPage(column, values.Length, rowsWritten, pageRowCount))
+                    break;
             }
+
+            var pageIndex = AddNewDataPage(bufferWriters, pages);
+            ref var page = ref pages[pageIndex];
+            var pageValues = values.Slice(pageStart, pageRowCount);
+            if (useDictionary)
+                WriteDictionaryIndexes(dictionaryEncoding, dictionary!, pageValues, ref page.Content);
             else
-                ValueEncodingDispatcher.WriteValue(dataEncoding, column, value, ref currentPage.Content);
+                ValueEncodingDispatcher.WriteValues(dataEncoding, column, pageValues, ref page.Content);
 
-            currentPageRowCount++;
-
-            var rowsWritten = i + 1;
-            if (rowsWritten == values.Length)
-                continue;
-            if (!strategy.ShouldStartNewDataPage(column, values.Length, rowsWritten, currentPageRowCount))
-                continue;
-
-            WriteDataPageHeader(ref currentPage.Header, currentPageRowCount, useDictionary ? dictionaryEncoding : dataEncoding);
-            currentPageIndex = AddNewDataPage(bufferWriters, pages);
-            currentPageRowCount = 0;
+            WriteDataPageHeader(ref page.Header, pageRowCount, useDictionary ? dictionaryEncoding : dataEncoding);
         }
-
-        ref var lastPage = ref pages[currentPageIndex];
-        WriteDataPageHeader(ref lastPage.Header, currentPageRowCount, useDictionary ? dictionaryEncoding : dataEncoding);
     }
 
     static bool TryWriteDictionaryPage<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
@@ -90,8 +86,7 @@ static class Encoding
             return false;
         }
 
-        for (var i = 0; i < dictionaryValues.Count; i++)
-            PlainEncoding.WriteValue(column, dictionaryValues[i], ref dictionaryPage.Content);
+        PlainEncoding.WriteValues(column, CollectionsMarshal.AsSpan(dictionaryValues), ref dictionaryPage.Content);
 
         const int dictionaryHeaderSize = sizeof(byte) + sizeof(int);
         var header = dictionaryPage.Header.GetSpan(dictionaryHeaderSize);
@@ -136,5 +131,33 @@ static class Encoding
         header[1] = (byte)encoding;
         BinaryPrimitives.WriteInt32LittleEndian(header[2..], rowCount);
         headerWriter.Advance(dataPageHeaderSize);
+    }
+
+    static void WriteDictionaryIndexes<T>(EncodingKind encoding, Dictionary<T, int> dictionary, ReadOnlySpan<T> values,
+        ref BufferWriter writer)
+        where T : notnull
+    {
+        var rentedIndexes = ArrayPool<int>.Shared.Rent(Math.Max(values.Length, 1));
+        var indexes = rentedIndexes.AsSpan(0, values.Length);
+
+        try
+        {
+            for (var i = 0; i < values.Length; i++)
+            {
+                if (dictionary.TryGetValue(values[i], out var index))
+                {
+                    indexes[i] = index;
+                    continue;
+                }
+
+                throw new InvalidOperationException("Dictionary-encoded page contains a value that is missing from the dictionary page.");
+            }
+
+            DictionaryIndexEncodingDispatcher.WriteIndexes(encoding, indexes, dictionary.Count, ref writer);
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(rentedIndexes);
+        }
     }
 }

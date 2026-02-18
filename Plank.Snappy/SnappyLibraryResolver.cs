@@ -6,11 +6,11 @@ namespace Plank.Snappy;
 
 static class SnappyLibraryResolver
 {
-    static int ResolverRegistered;
+    static int _resolverRegistered;
 
     internal static void Register()
     {
-        if (Interlocked.Exchange(ref ResolverRegistered, 1) != 0)
+        if (Interlocked.Exchange(ref _resolverRegistered, 1) != 0)
             return;
 
         NativeLibrary.SetDllImportResolver(typeof(SnappyLibraryResolver).Assembly, Resolve);

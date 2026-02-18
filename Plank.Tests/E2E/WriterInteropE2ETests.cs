@@ -1,4 +1,7 @@
+using System.Collections.Immutable;
+using Plank.Schema;
 using Plank.Writing;
+using PlankColumn = Plank.Schema.Column;
 
 namespace Plank.Tests;
 
@@ -139,17 +142,153 @@ internal sealed class WriterInteropE2ETests
         }
     }
 
+    [Test]
+    public async Task RequiredColumnsWithDeltaBinaryPackedEncodingAreReadableByBothImplementations()
+    {
+        var path = NewPath("delta-binary-packed");
+        var schema = CreateSchema(int32Encoding: EncodingKind.DeltaBinaryPacked);
+        var rowGroups = new[]
+        {
+            CreateGeneratedRowGroup(1024, offset: 10000)
+        };
+
+        await WriteFileAsync(path, schema, CompressionKind.None, rowGroups).ConfigureAwait(false);
+        try
+        {
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task RequiredColumnsWithDeltaLengthByteArrayEncodingAreReadableByBothImplementations()
+    {
+        var path = NewPath("delta-length-byte-array");
+        var schema = CreateSchema(binaryEncoding: EncodingKind.DeltaLengthByteArray);
+        var rowGroups = new[]
+        {
+            CreateGeneratedRowGroup(600, offset: 21000)
+        };
+
+        await WriteFileAsync(path, schema, CompressionKind.None, rowGroups).ConfigureAwait(false);
+        try
+        {
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task RequiredColumnsWithDeltaByteArrayEncodingAreReadableByBothImplementations()
+    {
+        var path = NewPath("delta-byte-array");
+        var schema = CreateSchema(binaryEncoding: EncodingKind.DeltaByteArray);
+        var rowGroups = new[]
+        {
+            CreateGeneratedRowGroupWithSharedBinaryPrefixes(700, offset: 32000)
+        };
+
+        await WriteFileAsync(path, schema, CompressionKind.None, rowGroups).ConfigureAwait(false);
+        try
+        {
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task RequiredColumnsWithByteStreamSplitEncodingAreReadableByBothImplementations()
+    {
+        var path = NewPath("byte-stream-split");
+        var schema = CreateSchema(doubleEncoding: EncodingKind.ByteStreamSplit);
+        var rowGroups = new[]
+        {
+            CreateGeneratedRowGroup(512, offset: 45000)
+        };
+
+        await WriteFileAsync(path, schema, CompressionKind.None, rowGroups).ConfigureAwait(false);
+        try
+        {
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task RequiredColumnsWithRleDictionaryEncodingAreReadableByBothImplementations()
+    {
+        var path = NewPath("rle-dictionary");
+        var schema = CreateSchema(int32Encoding: EncodingKind.RleDictionary);
+        var rowGroups = new[]
+        {
+            CreateGeneratedRowGroupWithRepeatingIntegers(1024, valueRange: 13)
+        };
+
+        await WriteFileAsync(path, schema, CompressionKind.None, rowGroups).ConfigureAwait(false);
+        try
+        {
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task RequiredColumnsWithPlainDictionaryEncodingAreReadableByBothImplementations()
+    {
+        var path = NewPath("plain-dictionary");
+        var schema = CreateSchema(int32Encoding: EncodingKind.PlainDictionary);
+        var rowGroups = new[]
+        {
+            CreateGeneratedRowGroupWithRepeatingIntegers(1024, valueRange: 9)
+        };
+
+        await WriteFileAsync(path, schema, CompressionKind.None, rowGroups).ConfigureAwait(false);
+        try
+        {
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
     static string NewPath(string suffix)
         => Path.Combine(Path.GetTempPath(), $"plank-writer-interop-{suffix}-{Guid.NewGuid():N}.parquet");
 
     static async Task WriteFileAsync(string path, CompressionKind compression, IReadOnlyList<ExpectedRowGroup> rowGroups)
+        => await WriteFileAsync(path, WriterInteropSchema.Schema, compression, rowGroups).ConfigureAwait(false);
+
+    static async Task WriteFileAsync(string path, ParquetSchema schema, CompressionKind compression,
+        IReadOnlyList<ExpectedRowGroup> rowGroups)
     {
         using var stream = File.Create(path);
-        var writer = ParquetWriter.Create(stream, WriterInteropSchema.Schema, new ParquetWriterOptions
+        var writer = ParquetWriter.Create(stream, schema, new ParquetWriterOptions
         {
             Compression = compression
         });
-        var columns = WriterInteropSchema.Schema.Columns;
+        var columns = schema.Columns;
         var int32Column = writer.CreateSerializedColumn();
         var int64Column = writer.CreateSerializedColumn();
         var doubleColumn = writer.CreateSerializedColumn();
@@ -174,6 +313,20 @@ internal sealed class WriterInteropE2ETests
 
         writer.CloseFile();
     }
+
+    static ParquetSchema CreateSchema(EncodingKind int32Encoding = EncodingKind.Plain,
+        EncodingKind int64Encoding = EncodingKind.Plain, EncodingKind doubleEncoding = EncodingKind.Plain,
+        EncodingKind binaryEncoding = EncodingKind.Plain)
+        => new([
+            new PlankColumn(WriterInteropSchema.Int32ColumnName, ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(int32Encoding))),
+            new PlankColumn(WriterInteropSchema.Int64ColumnName, ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: ImmutableArray.Create(int64Encoding))),
+            new PlankColumn(WriterInteropSchema.DoubleColumnName, ParquetPhysicalType.Double,
+                new ColumnOptions(encodings: ImmutableArray.Create(doubleEncoding))),
+            new PlankColumn(WriterInteropSchema.BinaryColumnName, ParquetPhysicalType.ByteArray,
+                new ColumnOptions(encodings: ImmutableArray.Create(binaryEncoding)))
+        ]);
 
     static void ValidateRowGroupInput(ExpectedRowGroup rowGroupInput)
     {
@@ -258,6 +411,42 @@ internal sealed class WriterInteropE2ETests
             int64Values[i] = value * 1000L;
             doubleValues[i] = value + 0.125;
             binaryValues[i] = [(byte)(value & 0xFF), (byte)((value >> 8) & 0xFF)];
+        }
+
+        return new ExpectedRowGroup(int32Values, int64Values, doubleValues, binaryValues);
+    }
+
+    static ExpectedRowGroup CreateGeneratedRowGroupWithSharedBinaryPrefixes(int count, int offset)
+    {
+        var int32Values = new int[count];
+        var int64Values = new long[count];
+        var doubleValues = new double[count];
+        var binaryValues = new byte[count][];
+        for (var i = 0; i < count; i++)
+        {
+            var value = i + offset;
+            int32Values[i] = value;
+            int64Values[i] = value * 10L;
+            doubleValues[i] = value + 0.5;
+            binaryValues[i] = [0x61, 0x62, 0x63, (byte)(value & 0x0F), (byte)(value >> 4), 0x7F];
+        }
+
+        return new ExpectedRowGroup(int32Values, int64Values, doubleValues, binaryValues);
+    }
+
+    static ExpectedRowGroup CreateGeneratedRowGroupWithRepeatingIntegers(int count, int valueRange)
+    {
+        var int32Values = new int[count];
+        var int64Values = new long[count];
+        var doubleValues = new double[count];
+        var binaryValues = new byte[count][];
+        for (var i = 0; i < count; i++)
+        {
+            var value = i % valueRange;
+            int32Values[i] = value;
+            int64Values[i] = value * 100L;
+            doubleValues[i] = value + 0.25;
+            binaryValues[i] = [(byte)value, 0x42];
         }
 
         return new ExpectedRowGroup(int32Values, int64Values, doubleValues, binaryValues);

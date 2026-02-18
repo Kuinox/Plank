@@ -23,16 +23,6 @@ internal sealed class CompressionContext
         return scratch.AsSpan(0, source.WrittenLength);
     }
 
-    internal ArraySegment<byte> GetContiguousSourceSegment(ref BufferWriter source)
-    {
-        if (source.TryGetSingleWrittenArraySegment(out var segment))
-            return segment;
-
-        var scratch = EnsureSourceScratch(source.WrittenLength);
-        source.CopyTo(scratch.AsSpan(0, source.WrittenLength));
-        return new ArraySegment<byte>(scratch, 0, source.WrittenLength);
-    }
-
     internal byte[] GetGzipOutputBuffer(int minimumLength)
     {
         if (_gzipOutputBuffer is null || _gzipOutputBuffer.Length < minimumLength)

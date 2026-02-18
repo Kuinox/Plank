@@ -1,7 +1,9 @@
 root = true
 
 [*.cs]
-dotnet_style_require_accessibility_modifiers = never:suggestion
+dotnet_style_require_accessibility_modifiers = never:none
+dotnet_diagnostic.IDE0040.severity = none
+resharper_inconsistent_modifiers_highlighting = none
 csharp_prefer_braces = false:suggestion
 csharp_style_expression_bodied_methods = when_on_single_line:suggestion
 dotnet_diagnostic.CA1034.severity = none
@@ -10,9 +12,13 @@ dotnet_naming_rule.const_fields_should_be_pascal_case.symbols = const_fields
 dotnet_naming_rule.const_fields_should_be_pascal_case.style = pascal_case_style
 dotnet_naming_rule.const_fields_should_be_pascal_case.severity = suggestion
 
-dotnet_naming_rule.static_readonly_fields_should_be_pascal_case.symbols = static_readonly_fields
+dotnet_naming_rule.static_readonly_fields_should_be_pascal_case.symbols = non_private_static_readonly_fields
 dotnet_naming_rule.static_readonly_fields_should_be_pascal_case.style = pascal_case_style
 dotnet_naming_rule.static_readonly_fields_should_be_pascal_case.severity = suggestion
+
+dotnet_naming_rule.private_static_readonly_fields_should_have_underscore.symbols = private_static_readonly_fields
+dotnet_naming_rule.private_static_readonly_fields_should_have_underscore.style = underscore_camel_case_style
+dotnet_naming_rule.private_static_readonly_fields_should_have_underscore.severity = suggestion
 
 dotnet_naming_rule.non_public_instance_fields_should_have_underscore.symbols = non_public_instance_fields
 dotnet_naming_rule.non_public_instance_fields_should_have_underscore.style = underscore_camel_case_style
@@ -21,9 +27,13 @@ dotnet_naming_rule.non_public_instance_fields_should_have_underscore.severity = 
 dotnet_naming_symbols.const_fields.applicable_kinds = field
 dotnet_naming_symbols.const_fields.required_modifiers = const
 
-dotnet_naming_symbols.static_readonly_fields.applicable_kinds = field
-dotnet_naming_symbols.static_readonly_fields.required_modifiers = static, readonly
-dotnet_naming_symbols.static_readonly_fields.applicable_accessibilities = private, internal, protected, protected_internal, private_protected
+dotnet_naming_symbols.non_private_static_readonly_fields.applicable_kinds = field
+dotnet_naming_symbols.non_private_static_readonly_fields.required_modifiers = static, readonly
+dotnet_naming_symbols.non_private_static_readonly_fields.applicable_accessibilities = internal, protected, protected_internal, private_protected, public
+
+dotnet_naming_symbols.private_static_readonly_fields.applicable_kinds = field
+dotnet_naming_symbols.private_static_readonly_fields.required_modifiers = static, readonly
+dotnet_naming_symbols.private_static_readonly_fields.applicable_accessibilities = private
 
 dotnet_naming_symbols.non_public_instance_fields.applicable_kinds = field
 dotnet_naming_symbols.non_public_instance_fields.applicable_accessibilities = private, protected, protected_internal, private_protected

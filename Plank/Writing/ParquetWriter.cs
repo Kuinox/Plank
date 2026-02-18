@@ -5,7 +5,7 @@ namespace Plank.Writing;
 
 public sealed class ParquetWriter
 {
-    static readonly byte[] FileMagic = "PAR1"u8.ToArray();
+    static readonly byte[] _fileMagic = "PAR1"u8.ToArray();
 
     Stream _stream = null!;
     readonly ParquetSchema _schema;
@@ -136,8 +136,8 @@ public sealed class ParquetWriter
 
     void WriteFileHeader()
     {
-        _stream.Write(FileMagic);
-        FileOffset = checked(FileOffset + FileMagic.Length);
+        _stream.Write(_fileMagic);
+        FileOffset = checked(FileOffset + _fileMagic.Length);
     }
 
     void WriteFileFooter()
@@ -149,7 +149,7 @@ public sealed class ParquetWriter
         WriteBuffer(ref SerializedFileMetadata);
         Span<byte> suffix = stackalloc byte[sizeof(int) + 4];
         BinaryPrimitives.WriteInt32LittleEndian(suffix, metadataLength);
-        FileMagic.CopyTo(suffix[sizeof(int)..]);
+        _fileMagic.CopyTo(suffix[sizeof(int)..]);
         _stream.Write(suffix);
         FileOffset = checked(FileOffset + suffix.Length);
     }

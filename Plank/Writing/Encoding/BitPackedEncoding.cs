@@ -4,7 +4,8 @@ namespace Plank.Writing;
 
 static class BitPackedEncoding
 {
-    internal static void WriteValue<T>(Column column, T value, ref BufferWriter writer)
+    internal static void WriteValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
-        => PlainEncoding.WriteValue(column, value, ref writer);
+        => throw new NotSupportedException(
+            $"Encoding '{EncodingKind.BitPacked}' is deprecated and not supported for data values in this writer (column '{column.Name}').");
 }

@@ -97,38 +97,6 @@ public struct BufferWriter : IBufferWriter<byte>
         return true;
     }
 
-    internal bool TryGetSingleWrittenArraySegment(out ArraySegment<byte> segment)
-    {
-        if (_segments is null || _writtenLength == 0)
-        {
-            segment = default;
-            return true;
-        }
-
-        var segmentWithData = -1;
-        for (var i = 0; i < _segmentCount; i++)
-        {
-            if (_segments[i].Written == 0)
-                continue;
-            if (segmentWithData >= 0)
-            {
-                segment = default;
-                return false;
-            }
-
-            segmentWithData = i;
-        }
-
-        if (segmentWithData < 0)
-        {
-            segment = default;
-            return true;
-        }
-
-        segment = new ArraySegment<byte>(_segments[segmentWithData].Buffer, 0, _segments[segmentWithData].Written);
-        return true;
-    }
-
     internal void Reset()
     {
         if (_segments is null)

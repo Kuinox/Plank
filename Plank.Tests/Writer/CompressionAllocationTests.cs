@@ -4,7 +4,7 @@ namespace Plank.Tests;
 
 internal sealed class CompressionAllocationTests
 {
-    static readonly CompressionKind[] CompressionKinds =
+    static readonly CompressionKind[] _compressionKinds =
     [
         CompressionKind.None,
         CompressionKind.Snappy,
@@ -18,9 +18,9 @@ internal sealed class CompressionAllocationTests
     public void CompressionCodecsDoNotAllocateAfterWarmupForContiguousInput()
     {
         var failures = new List<string>();
-        for (var i = 0; i < CompressionKinds.Length; i++)
+        for (var i = 0; i < _compressionKinds.Length; i++)
         {
-            var codec = CompressionKinds[i];
+            var codec = _compressionKinds[i];
             var allocated = MeasureSteadyStateAllocations(codec, multiSegmentInput: false);
             if (allocated != 0)
                 failures.Add($"codec '{codec}' allocated {allocated} bytes.");
@@ -35,9 +35,9 @@ internal sealed class CompressionAllocationTests
     public void CompressionCodecsDoNotAllocateAfterWarmupForSegmentedInput()
     {
         var failures = new List<string>();
-        for (var i = 0; i < CompressionKinds.Length; i++)
+        for (var i = 0; i < _compressionKinds.Length; i++)
         {
-            var codec = CompressionKinds[i];
+            var codec = _compressionKinds[i];
             var allocated = MeasureSteadyStateAllocations(codec, multiSegmentInput: true);
             if (allocated != 0)
                 failures.Add($"codec '{codec}' allocated {allocated} bytes.");

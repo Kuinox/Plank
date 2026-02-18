@@ -14,7 +14,7 @@ unsafe sealed class GzipDeflater
             ZlibNative.DeflateEnd(stream);
     }
 
-    internal void Compress(ArraySegment<byte> input, byte[] outputBuffer, ref BufferWriter destination)
+    internal void Compress(ReadOnlySpan<byte> input, byte[] outputBuffer, ref BufferWriter destination)
     {
         fixed (ZlibNative.StreamState* stream = &_stream)
         {
@@ -26,13 +26,8 @@ unsafe sealed class GzipDeflater
 
             fixed (byte* output = outputBuffer)
             {
-                if (input.Count == 0)
-                    DeflateInput(stream, null, 0, output, outputBuffer, ref destination);
-                else
-                {
-                    fixed (byte* inputStart = &input.Array![input.Offset])
-                        DeflateInput(stream, inputStart, input.Count, output, outputBuffer, ref destination);
-                }
+                fixed (byte* inputStart = input)
+                    DeflateInput(stream, inputStart, input.Length, output, outputBuffer, ref destination);
             }
         }
     }

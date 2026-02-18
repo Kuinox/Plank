@@ -5,14 +5,14 @@ namespace Plank.Writing;
 
 public sealed class SerializedColumn
 {
-    static readonly IPageStrategy DefaultPageStrategy = new DefaultStrategy();
+    static readonly IPageStrategy _defaultPageStrategy = new DefaultStrategy();
 
     readonly ParquetWriter _owner;
     
     internal readonly PageList Pages;
     internal int ColumnOrdinal;
     internal int RowCount;
-    bool IsWritten;
+    bool _isWritten;
 
     internal SerializedColumn(ParquetWriter owner, int initialPageCapacity)
     {
@@ -21,14 +21,14 @@ public sealed class SerializedColumn
         _owner = owner;
         ColumnOrdinal = -1;
         RowCount = 0;
-        IsWritten = false;
+        _isWritten = false;
     }
 
     public void Serialize<T>(Column column, ReadOnlySpan<T> values)
         where T : notnull
     {
         ArgumentNullException.ThrowIfNull(column);
-        if (!IsWritten && ColumnOrdinal >= 0)
+        if (!_isWritten && ColumnOrdinal >= 0)
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
 
@@ -36,9 +36,9 @@ public sealed class SerializedColumn
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = values.Length;
-        IsWritten = false;
+        _isWritten = false;
 
-        Encoding.Encode(_owner.BufferWriters, column, values, DefaultPageStrategy, Pages);
+        Encoding.Encode(_owner.BufferWriters, column, values, _defaultPageStrategy, Pages);
     }
 
     /// <summary>
@@ -47,13 +47,20 @@ public sealed class SerializedColumn
     internal void Consume()
     {
         ColumnOrdinal = -1;
-        IsWritten = true;
+        _isWritten = true;
     }
 
     sealed class DefaultStrategy : IPageStrategy
     {
         public DictionaryMode GetDictionaryMode(Column column)
-            => DictionaryMode.Disabled;
+        {
+            var encodings = column.Options.Encodings;
+            for (var i = 0; i < encodings.Length; i++)
+                if (encodings[i] is EncodingKind.PlainDictionary or EncodingKind.RleDictionary)
+                    return DictionaryMode.Forced;
+
+            return DictionaryMode.Disabled;
+        }
 
         public bool ShouldDropDictionary<T>(Column column, IReadOnlyDictionary<T, int> dictionary, int totalRowCount,
             int rowsSeen)
