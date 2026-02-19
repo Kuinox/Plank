@@ -5,8 +5,8 @@ namespace Plank.Writing;
 public struct BufferWriter : IBufferWriter<byte>
 {
     Segment[]? _segments;
-    IParquetBufferPool? _pool;
-    int _chunkSizeBytes;
+    readonly IParquetBufferPool? _pool;
+    readonly int _chunkSizeBytes;
     int _segmentCount;
     int _currentSegmentIndex;
     int _currentSegmentWritten;
