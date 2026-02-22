@@ -6,6 +6,7 @@
 - `public enum ParquetPhysicalType`
 - `public enum ParquetRepetition`
 - `public enum EncodingKind`
+- `public enum NodeKind`
 
 ### Attributes
 - `public sealed class GenerateRowApiAttribute : Attribute`
@@ -32,7 +33,28 @@
   - `override int GetHashCode()`
   - `void Validate()`
 
-- `public sealed record ParquetSchema(ImmutableArray<Column> Columns)`
+- `public sealed record ColumnDefinition`
+  - `required string Name { get; init; }`
+  - `required NodeKind Kind { get; init; }`
+  - `required ParquetRepetition Repetition { get; init; }`
+  - `ParquetPhysicalType? PhysicalType { get; init; }`
+  - `ColumnOptions? Options { get; init; }`
+  - `ImmutableArray<ColumnDefinition> Children { get; init; }`
+  - `void Validate()`
+
+- `public static class ColumnDef`
+  - `ColumnDefinition RequiredGroup(string name, params ColumnDefinition[] children)`
+  - `ColumnDefinition OptionalGroup(string name, params ColumnDefinition[] children)`
+  - `ColumnDefinition RequiredLeaf(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null)`
+  - `ColumnDefinition OptionalLeaf(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null)`
+  - `ColumnDefinition List(string name, ColumnDefinition element, ParquetRepetition repetition = ParquetRepetition.Required)`
+  - `ColumnDefinition Map(string name, ColumnDefinition key, ColumnDefinition value, ParquetRepetition repetition = ParquetRepetition.Required)`
+
+- `public sealed record ParquetSchema`
+  - `ParquetSchema(ImmutableArray<Column> columns)`
+  - `ParquetSchema(ImmutableArray<ColumnDefinition> definitions)`
+  - `ImmutableArray<Column> Columns { get; }`
+  - `ImmutableArray<ColumnDefinition> Definitions { get; }`
   - `void Validate()`
 
 ## `Plank.Writing`

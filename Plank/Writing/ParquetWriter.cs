@@ -34,6 +34,10 @@ public sealed class ParquetWriter
         _schema = schema;
         _options = options;
         _options.Validate();
+        _schema.Validate();
+        if (_schema.Columns.IsDefaultOrEmpty && !_schema.Definitions.IsDefaultOrEmpty)
+            throw new NotSupportedException(
+                "Nested schema definitions are not implemented in the writer yet. Use flat leaf columns for now.");
         ColumnsByOrdinal = _schema.Columns.IsDefault ? [] : _schema.Columns.ToArray();
         ColumnCount = ColumnsByOrdinal.Length;
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
@@ -44,7 +48,6 @@ public sealed class ParquetWriter
         SerializedRowGroupsMetadata = BufferWriters.CreateMetadataBufferWriter();
         SerializedFileMetadata = BufferWriters.CreateMetadataBufferWriter();
         FileOffset = 0;
-        _schema.Validate();
         OpenFile(stream);
     }
 
