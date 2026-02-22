@@ -132,7 +132,7 @@ static class ParquetMetadataThriftWriter
             NodeKind.Leaf => 1,
             NodeKind.Group => checked(1 + CountSchemaNodes(node.Children.AsSpan())),
             NodeKind.List => checked(2 + CountSchemaNodes(GetListElement(node))),
-            NodeKind.Map => throw new NotSupportedException("MAP schema emission is not implemented yet."),
+            NodeKind.Map => checked(2 + CountSchemaNodes(GetMapKey(node)) + CountSchemaNodes(GetMapValue(node))),
             _ => throw new NotSupportedException($"Node kind '{node.Kind}' is not supported.")
         };
 
@@ -150,7 +150,8 @@ static class ParquetMetadataThriftWriter
                 WriteListSchemaNode(ref writer, nameOverride ?? node.Name, node);
                 return;
             case NodeKind.Map:
-                throw new NotSupportedException("MAP schema emission is not implemented yet.");
+                WriteMapSchemaNode(ref writer, nameOverride ?? node.Name, node);
+                return;
             default:
                 throw new NotSupportedException($"Node kind '{node.Kind}' is not supported.");
         }
@@ -216,6 +217,47 @@ static class ParquetMetadataThriftWriter
 
         throw new InvalidOperationException($"LIST node '{node.Name}' must contain exactly one child element.");
     }
+
+    static void WriteMapSchemaNode(ref CompactWriter writer, string name, ColumnDefinition node)
+    {
+        var key = GetMapKey(node);
+        var value = GetMapValue(node);
+
+        var mapGroup = writer.BeginStruct();
+        writer.WriteFieldI32(3, GetRepetition(node.Repetition));
+        writer.WriteFieldBinary(4, name);
+        writer.WriteFieldI32(5, 1);
+        writer.WriteFieldI32(6, (int)ConvertedType.Map);
+        writer.EndStruct(mapGroup);
+
+        var keyValue = writer.BeginStruct();
+        writer.WriteFieldI32(3, GetRepetition(ParquetRepetition.Repeated));
+        writer.WriteFieldBinary(4, "key_value");
+        writer.WriteFieldI32(5, 2);
+        writer.EndStruct(keyValue);
+
+        WriteSchemaNode(ref writer, ForceRepetition(key, ParquetRepetition.Required), "key");
+        WriteSchemaNode(ref writer, value, "value");
+    }
+
+    static ColumnDefinition GetMapKey(ColumnDefinition node)
+    {
+        if (node.Children.Length == 2)
+            return node.Children[0];
+
+        throw new InvalidOperationException($"MAP node '{node.Name}' must contain exactly two child nodes (key,value).");
+    }
+
+    static ColumnDefinition GetMapValue(ColumnDefinition node)
+    {
+        if (node.Children.Length == 2)
+            return node.Children[1];
+
+        throw new InvalidOperationException($"MAP node '{node.Name}' must contain exactly two child nodes (key,value).");
+    }
+
+    static ColumnDefinition ForceRepetition(ColumnDefinition node, ParquetRepetition repetition)
+        => node with { Repetition = repetition };
 
     static void WriteColumnChunk(ref CompactWriter writer, Column column, ReadOnlySpan<string> path,
         in ColumnChunkMetadata metadata)
@@ -378,6 +420,7 @@ static class ParquetMetadataThriftWriter
 
     enum ConvertedType
     {
+        Map = 1,
         List = 3
     }
 

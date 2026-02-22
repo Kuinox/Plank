@@ -45,7 +45,8 @@ public sealed class SerializedColumn
         RowCount = values.Length;
         HasPendingData = true;
 
-        Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, column, values, strategy, Pages);
+        Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, column, values, strategy, Pages,
+            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal]);
     }
 
     /// <summary>

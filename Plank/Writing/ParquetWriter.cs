@@ -13,6 +13,7 @@ public sealed class ParquetWriter
     readonly ParquetWriterOptions _options;
     internal readonly Column[] ColumnsByOrdinal;
     internal readonly string[][] ColumnPathsByOrdinal;
+    internal readonly LeafProjectionInfo[] ColumnProjectionInfosByOrdinal;
     internal readonly int ColumnCount;
     internal readonly BufferWriterFactory BufferWriters;
     internal readonly CompressionKind Compression;
@@ -40,8 +41,13 @@ public sealed class ParquetWriter
         ColumnPathsByOrdinal = _schema.LeafPaths.IsDefault || _schema.LeafPaths.Length == 0
             ? ColumnsByOrdinal.Select(static c => new[] { c.Name }).ToArray()
             : _schema.LeafPaths.Select(static p => p.ToArray()).ToArray();
+        ColumnProjectionInfosByOrdinal = _schema.LeafProjectionInfos.IsDefault || _schema.LeafProjectionInfos.Length == 0
+            ? ColumnsByOrdinal.Select(static _ => new LeafProjectionInfo(IsList: false, ListOptional: false, ElementOptional: false)).ToArray()
+            : _schema.LeafProjectionInfos.ToArray();
         if (ColumnPathsByOrdinal.Length != ColumnsByOrdinal.Length)
             throw new InvalidOperationException("Leaf path projection did not match projected column count.");
+        if (ColumnProjectionInfosByOrdinal.Length != ColumnsByOrdinal.Length)
+            throw new InvalidOperationException("Leaf projection metadata did not match projected column count.");
         ColumnCount = ColumnsByOrdinal.Length;
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
             _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);

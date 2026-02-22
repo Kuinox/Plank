@@ -72,5 +72,10 @@ public sealed record ColumnDefinition
             if (!seen.Add(child.Name))
                 throw new InvalidOperationException($"Node '{Name}' has duplicate child name '{child.Name}'.");
         }
+
+        if (Kind == NodeKind.List && Children.Length != 1)
+            throw new InvalidOperationException($"LIST node '{Name}' must contain exactly one child element.");
+        if (Kind == NodeKind.Map && Children.Length != 2)
+            throw new InvalidOperationException($"MAP node '{Name}' must contain exactly two child nodes (key,value).");
     }
 }
