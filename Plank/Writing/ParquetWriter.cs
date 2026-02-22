@@ -12,6 +12,7 @@ public sealed class ParquetWriter
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
     internal readonly Column[] ColumnsByOrdinal;
+    internal readonly string[][] ColumnPathsByOrdinal;
     internal readonly int ColumnCount;
     internal readonly BufferWriterFactory BufferWriters;
     internal readonly CompressionKind Compression;
@@ -35,10 +36,12 @@ public sealed class ParquetWriter
         _options = options;
         _options.Validate();
         _schema.Validate();
-        if (_schema.Columns.IsDefaultOrEmpty && !_schema.Definitions.IsDefaultOrEmpty)
-            throw new NotSupportedException(
-                "Nested schema definitions are not implemented in the writer yet. Use flat leaf columns for now.");
         ColumnsByOrdinal = _schema.Columns.IsDefault ? [] : _schema.Columns.ToArray();
+        ColumnPathsByOrdinal = _schema.LeafPaths.IsDefault || _schema.LeafPaths.Length == 0
+            ? ColumnsByOrdinal.Select(static c => new[] { c.Name }).ToArray()
+            : _schema.LeafPaths.Select(static p => p.ToArray()).ToArray();
+        if (ColumnPathsByOrdinal.Length != ColumnsByOrdinal.Length)
+            throw new InvalidOperationException("Leaf path projection did not match projected column count.");
         ColumnCount = ColumnsByOrdinal.Length;
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
             _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
@@ -82,7 +85,7 @@ public sealed class ParquetWriter
         if (ColumnCount == 0)
         {
             ParquetMetadataThriftWriter.WriteRowGroup(ref SerializedRowGroupsMetadata, ColumnsByOrdinal,
-                OpenRowGroupColumnMetadata, 0);
+                ColumnPathsByOrdinal, OpenRowGroupColumnMetadata, 0);
             CompleteOpenRowGroup(0);
         }
 

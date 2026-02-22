@@ -167,7 +167,7 @@ public sealed class RowGroupWriter
             return;
 
         ParquetMetadataThriftWriter.WriteRowGroup(ref _writer.SerializedRowGroupsMetadata, _writer.ColumnsByOrdinal,
-            _writer.OpenRowGroupColumnMetadata, _rowCount);
+            _writer.ColumnPathsByOrdinal, _writer.OpenRowGroupColumnMetadata, _rowCount);
         _writer.CompleteOpenRowGroup(_rowCount);
     }
 

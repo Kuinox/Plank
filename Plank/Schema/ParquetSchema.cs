@@ -8,17 +8,29 @@ public sealed record ParquetSchema
     {
         Columns = columns.IsDefault ? [] : columns;
         Definitions = NormalizeDefinitions(Columns);
+        LeafPaths = BuildFlatLeafPaths(Columns);
     }
 
     public ParquetSchema(ImmutableArray<ColumnDefinition> definitions)
     {
         Definitions = definitions.IsDefault ? [] : definitions;
-        Columns = TryProjectFlatColumns(Definitions, out var projected) ? projected : [];
+        if (TryProjectLeafColumns(Definitions, out var projectedColumns, out var projectedPaths))
+        {
+            Columns = projectedColumns;
+            LeafPaths = projectedPaths;
+        }
+        else
+        {
+            Columns = [];
+            LeafPaths = [];
+        }
     }
 
     public ImmutableArray<Column> Columns { get; }
 
     public ImmutableArray<ColumnDefinition> Definitions { get; }
+
+    internal ImmutableArray<ImmutableArray<string>> LeafPaths { get; }
 
     public void Validate()
     {
@@ -77,35 +89,118 @@ public sealed record ParquetSchema
         return builder.MoveToImmutable();
     }
 
-    static bool TryProjectFlatColumns(ImmutableArray<ColumnDefinition> definitions, out ImmutableArray<Column> columns)
+    static ImmutableArray<ImmutableArray<string>> BuildFlatLeafPaths(ImmutableArray<Column> columns)
+    {
+        if (columns.IsDefaultOrEmpty)
+            return [];
+
+        var builder = ImmutableArray.CreateBuilder<ImmutableArray<string>>(columns.Length);
+        for (var i = 0; i < columns.Length; i++)
+            builder.Add([columns[i].Name]);
+        return builder.MoveToImmutable();
+    }
+
+    static bool TryProjectLeafColumns(ImmutableArray<ColumnDefinition> definitions, out ImmutableArray<Column> columns,
+        out ImmutableArray<ImmutableArray<string>> leafPaths)
     {
         if (definitions.IsDefaultOrEmpty)
         {
             columns = [];
+            leafPaths = [];
             return true;
         }
 
-        var builder = ImmutableArray.CreateBuilder<Column>(definitions.Length);
+        var columnsBuilder = ImmutableArray.CreateBuilder<Column>();
+        var pathsBuilder = ImmutableArray.CreateBuilder<ImmutableArray<string>>();
+        var pathBuffer = new List<string>(8);
         for (var i = 0; i < definitions.Length; i++)
-        {
-            var definition = definitions[i];
-            if (definition.Kind != NodeKind.Leaf || definition.PhysicalType is null || !definition.Children.IsDefaultOrEmpty)
+            if (!TryCollectLeaves(definitions[i], columnsBuilder, pathsBuilder, pathBuffer, hasRepeatedAncestor: false,
+                    hasOptionalAncestor: false))
             {
                 columns = [];
+                leafPaths = [];
                 return false;
             }
 
-            var repetition = definition.Repetition == ParquetRepetition.Unspecified
-                ? ParquetRepetition.Required
-                : definition.Repetition;
-            var options = definition.Options ?? ColumnOptions.Default;
-            if (options.Repetition != repetition)
-                options = new ColumnOptions(repetition, options.Encodings, options.TypeLength);
-
-            builder.Add(new Column(definition.Name, definition.PhysicalType.Value, options));
-        }
-
-        columns = builder.MoveToImmutable();
+        columns = columnsBuilder.ToImmutable();
+        leafPaths = pathsBuilder.ToImmutable();
         return true;
+    }
+
+    static bool TryCollectLeaves(ColumnDefinition node, ImmutableArray<Column>.Builder columnsBuilder,
+        ImmutableArray<ImmutableArray<string>>.Builder pathsBuilder, List<string> pathBuffer, bool hasRepeatedAncestor,
+        bool hasOptionalAncestor)
+    {
+        pathBuffer.Add(node.Name);
+        var nodeOptional = node.Repetition == ParquetRepetition.Optional;
+        var optionalChain = hasOptionalAncestor || nodeOptional;
+        try
+        {
+            switch (node.Kind)
+            {
+                case NodeKind.Leaf:
+                {
+                    if (node.PhysicalType is null)
+                        return false;
+                    var repetition = hasRepeatedAncestor
+                        ? ParquetRepetition.Repeated
+                        : optionalChain ? ParquetRepetition.Optional : ParquetRepetition.Required;
+                    var options = node.Options ?? ColumnOptions.Default;
+                    if (options.Repetition != repetition)
+                        options = new ColumnOptions(repetition, options.Encodings, options.TypeLength);
+                    var path = pathBuffer.ToArray().ToImmutableArray();
+                    var columnName = string.Join(".", path);
+                    columnsBuilder.Add(new Column(columnName, node.PhysicalType.Value, options));
+                    pathsBuilder.Add(path);
+                    return true;
+                }
+                case NodeKind.Group:
+                {
+                    if (node.Children.IsDefaultOrEmpty)
+                        return false;
+                    for (var i = 0; i < node.Children.Length; i++)
+                        if (!TryCollectLeaves(node.Children[i], columnsBuilder, pathsBuilder, pathBuffer, hasRepeatedAncestor,
+                                optionalChain))
+                            return false;
+                    return true;
+                }
+                case NodeKind.List:
+                {
+                    if (node.Children.Length != 1)
+                        return false;
+
+                    pathBuffer.Add("list");
+                    var element = node.Children[0];
+                    pathBuffer.Add(element.Name);
+                    try
+                    {
+                        if (element.Kind != NodeKind.Leaf || element.PhysicalType is null)
+                            return false;
+                        var repetition = ParquetRepetition.Repeated;
+                        var options = element.Options ?? ColumnOptions.Default;
+                        if (options.Repetition != repetition)
+                            options = new ColumnOptions(repetition, options.Encodings, options.TypeLength);
+                        var path = pathBuffer.ToArray().ToImmutableArray();
+                        var columnName = string.Join(".", path);
+                        columnsBuilder.Add(new Column(columnName, element.PhysicalType.Value, options));
+                        pathsBuilder.Add(path);
+                        return true;
+                    }
+                    finally
+                    {
+                        pathBuffer.RemoveAt(pathBuffer.Count - 1);
+                        pathBuffer.RemoveAt(pathBuffer.Count - 1);
+                    }
+                }
+                case NodeKind.Map:
+                    return false;
+                default:
+                    return false;
+            }
+        }
+        finally
+        {
+            pathBuffer.RemoveAt(pathBuffer.Count - 1);
+        }
     }
 }

@@ -67,6 +67,10 @@ static class ParquetMetadataThriftWriter
 
     internal static void WriteRowGroup(ref BufferWriter destination, ReadOnlySpan<Column> columns,
         ReadOnlySpan<ColumnChunkMetadata> metadata, int rowCount)
+        => WriteRowGroup(ref destination, columns, default, metadata, rowCount);
+
+    internal static void WriteRowGroup(ref BufferWriter destination, ReadOnlySpan<Column> columns,
+        ReadOnlySpan<string[]> columnPaths, ReadOnlySpan<ColumnChunkMetadata> metadata, int rowCount)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
@@ -80,7 +84,8 @@ static class ParquetMetadataThriftWriter
         for (var i = 0; i < columns.Length; i++)
         {
             ref readonly var chunk = ref metadata[i];
-            WriteColumnChunk(ref writer, columns[i], chunk);
+            var path = columnPaths.IsEmpty ? GetPathSegments(columns[i].Name) : columnPaths[i];
+            WriteColumnChunk(ref writer, columns[i], path, chunk);
             totalUncompressedSize = checked(totalUncompressedSize + chunk.TotalUncompressedSize);
             totalCompressedSize = checked(totalCompressedSize + chunk.TotalCompressedSize);
             if (hasRowGroupOffset)
@@ -99,31 +104,121 @@ static class ParquetMetadataThriftWriter
 
     static void WriteSchema(ref CompactWriter writer, ParquetSchema schema)
     {
-        ImmutableArray<Column> columns = schema.Columns.IsDefault ? [] : schema.Columns;
+        ImmutableArray<ColumnDefinition> definitions = schema.Definitions.IsDefault ? [] : schema.Definitions;
         writer.WriteFieldHeader(2, CompactType.List);
-        writer.WriteListHeader(checked(columns.Length + 1), CompactType.Struct);
+        writer.WriteListHeader(checked(CountSchemaNodes(definitions.AsSpan()) + 1), CompactType.Struct);
 
         var previousRoot = writer.BeginStruct();
         writer.WriteFieldBinary(4, "schema");
-        writer.WriteFieldI32(5, columns.Length);
+        writer.WriteFieldI32(5, definitions.Length);
         writer.EndStruct(previousRoot);
 
-        for (var i = 0; i < columns.Length; i++)
-            WriteColumnSchema(ref writer, columns[i]);
+        for (var i = 0; i < definitions.Length; i++)
+            WriteSchemaNode(ref writer, definitions[i]);
     }
 
-    static void WriteColumnSchema(ref CompactWriter writer, Column column)
+    static int CountSchemaNodes(ReadOnlySpan<ColumnDefinition> definitions)
     {
+        var count = 0;
+        for (var i = 0; i < definitions.Length; i++)
+            count = checked(count + CountSchemaNodes(definitions[i]));
+
+        return count;
+    }
+
+    static int CountSchemaNodes(ColumnDefinition node)
+        => node.Kind switch
+        {
+            NodeKind.Leaf => 1,
+            NodeKind.Group => checked(1 + CountSchemaNodes(node.Children.AsSpan())),
+            NodeKind.List => checked(2 + CountSchemaNodes(GetListElement(node))),
+            NodeKind.Map => throw new NotSupportedException("MAP schema emission is not implemented yet."),
+            _ => throw new NotSupportedException($"Node kind '{node.Kind}' is not supported.")
+        };
+
+    static void WriteSchemaNode(ref CompactWriter writer, ColumnDefinition node, string? nameOverride = null)
+    {
+        switch (node.Kind)
+        {
+            case NodeKind.Leaf:
+                WriteLeafSchemaNode(ref writer, nameOverride ?? node.Name, node);
+                return;
+            case NodeKind.Group:
+                WriteGroupSchemaNode(ref writer, nameOverride ?? node.Name, node);
+                return;
+            case NodeKind.List:
+                WriteListSchemaNode(ref writer, nameOverride ?? node.Name, node);
+                return;
+            case NodeKind.Map:
+                throw new NotSupportedException("MAP schema emission is not implemented yet.");
+            default:
+                throw new NotSupportedException($"Node kind '{node.Kind}' is not supported.");
+        }
+    }
+
+    static void WriteLeafSchemaNode(ref CompactWriter writer, string name, ColumnDefinition node)
+    {
+        if (node.PhysicalType is not { } physicalType)
+            throw new InvalidOperationException($"LEAF node '{node.Name}' must define a physical type.");
+
         var previous = writer.BeginStruct();
-        writer.WriteFieldI32(1, GetPhysicalType(column.PhysicalType));
-        if (column.PhysicalType == ParquetPhysicalType.FixedLenByteArray)
-            writer.WriteFieldI32(2, checked((int)column.Options.TypeLength));
-        writer.WriteFieldI32(3, GetRepetition(column.Options.Repetition));
-        writer.WriteFieldBinary(4, column.Name);
+        writer.WriteFieldI32(1, GetPhysicalType(physicalType));
+        var options = node.Options ?? ColumnOptions.Default;
+        if (physicalType == ParquetPhysicalType.FixedLenByteArray)
+            writer.WriteFieldI32(2, checked((int)options.TypeLength));
+        writer.WriteFieldI32(3, GetRepetition(node.Repetition));
+        writer.WriteFieldBinary(4, name);
         writer.EndStruct(previous);
     }
 
-    static void WriteColumnChunk(ref CompactWriter writer, Column column, in ColumnChunkMetadata metadata)
+    static void WriteGroupSchemaNode(ref CompactWriter writer, string name, ColumnDefinition node)
+    {
+        var previous = writer.BeginStruct();
+        writer.WriteFieldI32(3, GetRepetition(node.Repetition));
+        writer.WriteFieldBinary(4, name);
+        writer.WriteFieldI32(5, node.Children.Length);
+        writer.EndStruct(previous);
+
+        for (var i = 0; i < node.Children.Length; i++)
+            WriteSchemaNode(ref writer, node.Children[i]);
+    }
+
+    static void WriteListSchemaNode(ref CompactWriter writer, string name, ColumnDefinition node)
+    {
+        var element = GetListElement(node);
+
+        var listGroup = writer.BeginStruct();
+        writer.WriteFieldI32(3, GetRepetition(node.Repetition));
+        writer.WriteFieldBinary(4, name);
+        writer.WriteFieldI32(5, 1);
+        writer.WriteFieldI32(6, (int)ConvertedType.List);
+        writer.WriteFieldHeader(10, CompactType.Struct);
+        var previousLogicalType = writer.BeginStruct();
+        writer.WriteFieldHeader(3, CompactType.Struct);
+        var previousListType = writer.BeginStruct();
+        writer.EndStruct(previousListType);
+        writer.EndStruct(previousLogicalType);
+        writer.EndStruct(listGroup);
+
+        var repeatedList = writer.BeginStruct();
+        writer.WriteFieldI32(3, GetRepetition(ParquetRepetition.Repeated));
+        writer.WriteFieldBinary(4, "list");
+        writer.WriteFieldI32(5, 1);
+        writer.EndStruct(repeatedList);
+
+        WriteSchemaNode(ref writer, element, "element");
+    }
+
+    static ColumnDefinition GetListElement(ColumnDefinition node)
+    {
+        if (node.Children.Length == 1)
+            return node.Children[0];
+
+        throw new InvalidOperationException($"LIST node '{node.Name}' must contain exactly one child element.");
+    }
+
+    static void WriteColumnChunk(ref CompactWriter writer, Column column, ReadOnlySpan<string> path,
+        in ColumnChunkMetadata metadata)
     {
         var previousChunk = writer.BeginStruct();
         writer.WriteFieldI64(2, metadata.DataPageOffset);
@@ -132,7 +227,7 @@ static class ParquetMetadataThriftWriter
         var previousMetadata = writer.BeginStruct();
         writer.WriteFieldI32(1, GetPhysicalType(column.PhysicalType));
         WriteEncodings(ref writer, metadata.DataEncoding, metadata.HasDictionaryPage);
-        WritePath(ref writer, column.Name);
+        WritePath(ref writer, path);
         writer.WriteFieldI32(4, GetCompression(metadata.Compression));
         writer.WriteFieldI64(5, metadata.ValueCount);
         writer.WriteFieldI64(6, metadata.TotalUncompressedSize);
@@ -164,11 +259,20 @@ static class ParquetMetadataThriftWriter
         writer.WriteI32(data);
     }
 
-    static void WritePath(ref CompactWriter writer, string name)
+    static string[] GetPathSegments(string columnName)
+    {
+        if (columnName.IndexOf('.') < 0)
+            return [columnName];
+
+        return columnName.Split('.', StringSplitOptions.None);
+    }
+
+    static void WritePath(ref CompactWriter writer, ReadOnlySpan<string> path)
     {
         writer.WriteFieldHeader(3, CompactType.List);
-        writer.WriteListHeader(1, CompactType.Binary);
-        writer.WriteBinary(name);
+        writer.WriteListHeader(path.Length, CompactType.Binary);
+        for (var i = 0; i < path.Length; i++)
+            writer.WriteBinary(path[i]);
     }
 
     static int GetPhysicalType(ParquetPhysicalType type)
@@ -270,6 +374,11 @@ static class ParquetMetadataThriftWriter
         IndexPage = 1,
         DictionaryPage = 2,
         DataPageV2 = 3
+    }
+
+    enum ConvertedType
+    {
+        List = 3
     }
 
     enum CompactType : byte

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Plank.Schema;
 using Plank.Writing.PageStrategy;
@@ -23,8 +24,10 @@ static class Encoding
             return;
 
         if (column.Options.Repetition == ParquetRepetition.Repeated)
-            throw new NotSupportedException(
-                $"Column '{column.Name}' uses repetition '{ParquetRepetition.Repeated}', which requires list/map annotated schema paths and is not implemented yet.");
+        {
+            EncodeRepeatedRows(bufferWriters, column, values, pages);
+            return;
+        }
 
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
@@ -165,6 +168,156 @@ static class Encoding
             if (rentedIndexesBytes is not null)
                 bufferWriters.ReturnScratch(rentedIndexesBytes);
         }
+    }
+
+    static void EncodeRepeatedRows<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> rows, PageList pages)
+        where T : notnull
+    {
+        var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
+        var pageIndex = AddNewDataPage(bufferWriters, pages);
+        ref var page = ref pages[pageIndex];
+
+        switch (column.PhysicalType)
+        {
+            case ParquetPhysicalType.Boolean:
+                if (typeof(T) == typeof(bool[]))
+                {
+                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool[]>>(ref rows), ref page);
+                    return;
+                }
+                break;
+            case ParquetPhysicalType.Int32:
+                if (typeof(T) == typeof(int[]))
+                {
+                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int[]>>(ref rows), ref page);
+                    return;
+                }
+                break;
+            case ParquetPhysicalType.Int64:
+                if (typeof(T) == typeof(long[]))
+                {
+                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long[]>>(ref rows), ref page);
+                    return;
+                }
+                break;
+            case ParquetPhysicalType.Float:
+                if (typeof(T) == typeof(float[]))
+                {
+                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float[]>>(ref rows), ref page);
+                    return;
+                }
+                break;
+            case ParquetPhysicalType.Double:
+                if (typeof(T) == typeof(double[]))
+                {
+                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double[]>>(ref rows), ref page);
+                    return;
+                }
+                break;
+            case ParquetPhysicalType.ByteArray:
+            case ParquetPhysicalType.Int96:
+            case ParquetPhysicalType.FixedLenByteArray:
+                if (typeof(T) == typeof(byte[][]))
+                {
+                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[][]>>(ref rows), ref page);
+                    return;
+                }
+                break;
+        }
+
+        throw new InvalidOperationException(
+            $"Repeated column '{column.Name}' with physical type '{column.PhysicalType}' expects rows of '{column.PhysicalType}[]'.");
+    }
+
+    static void EncodeRepeatedRowsCore<TElement>(BufferWriterFactory bufferWriters, Column column, EncodingKind dataEncoding,
+        ReadOnlySpan<TElement[]> rows, ref Page page)
+        where TElement : notnull
+    {
+        var rowCount = rows.Length;
+        var valueCount = 0;
+        for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
+        {
+            var row = rows[rowIndex] ?? throw new InvalidOperationException(
+                $"Column '{column.Name}' has repeated values; null row arrays are not supported.");
+            if (row.Length == 0)
+                throw new InvalidOperationException(
+                    $"Column '{column.Name}' has repeated values; empty rows are not supported yet.");
+            valueCount = checked(valueCount + row.Length);
+        }
+
+        var flatValues = new TElement[valueCount];
+        var flatIndex = 0;
+        for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
+        {
+            var row = rows[rowIndex];
+            row.CopyTo(flatValues.AsSpan(flatIndex));
+            flatIndex += row.Length;
+        }
+
+        var repetitionLength = WriteRepeatedLevels(rows, ref page.Content);
+        var definitionLength = WriteRepeatedRequiredElementDefinitionLevels(valueCount, ref page.Content);
+        ValueEncodingDispatcher.WriteValues(dataEncoding, column, flatValues, bufferWriters, ref page.Content);
+        WriteDataPageHeader(ref page.Header, rowCount, valueCount, 0, repetitionLength, definitionLength, dataEncoding);
+    }
+
+    static int WriteRepeatedLevels<TElement>(ReadOnlySpan<TElement[]> rows, ref BufferWriter writer)
+        where TElement : notnull
+    {
+        var start = writer.WrittenLength;
+        for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
+        {
+            var rowLength = rows[rowIndex].Length;
+            WriteLevelRun(0, 1, 1, ref writer);
+            if (rowLength > 1)
+                WriteLevelRun(1, rowLength - 1, 1, ref writer);
+        }
+
+        return writer.WrittenLength - start;
+    }
+
+    static int WriteRepeatedRequiredElementDefinitionLevels(int valueCount, ref BufferWriter writer)
+    {
+        var start = writer.WrittenLength;
+        WriteLevelRun(1, valueCount, 1, ref writer);
+        return writer.WrittenLength - start;
+    }
+
+    static void WriteLevelRun(int value, int runLength, int bitWidth, ref BufferWriter writer)
+    {
+        if (runLength <= 0)
+            return;
+
+        WriteUnsignedVarInt(((uint)runLength) << 1, ref writer);
+        var byteWidth = (bitWidth + 7) >> 3;
+        if (byteWidth == 0)
+            return;
+
+        var destination = writer.GetSpan(byteWidth);
+        var unsignedValue = unchecked((uint)value);
+        for (var i = 0; i < byteWidth; i++)
+            destination[i] = (byte)(unsignedValue >> (8 * i));
+        writer.Advance(byteWidth);
+    }
+
+    static void WriteUnsignedVarInt(uint value, ref BufferWriter writer)
+    {
+        while (value >= 0x80)
+        {
+            var byteSpan = writer.GetSpan(1);
+            byteSpan[0] = (byte)(value | 0x80);
+            writer.Advance(1);
+            value >>= 7;
+        }
+
+        var finalByte = writer.GetSpan(1);
+        finalByte[0] = (byte)value;
+        writer.Advance(1);
     }
 
 
