@@ -3,36 +3,56 @@
 ## Benchmark Input
 
 - Date: 2026-02-22
-- Machine/runtime: .NET 10.0.3, x64 RyuJIT (`BenchmarkDotNet.Artifacts/Plank.Benchmarks.EncodingMatrixBdnBenchmark-20260222-153909.log`)
+- Machine/runtime: .NET 10.0.3, x64 RyuJIT (`BenchmarkDotNet.Artifacts/Plank.Benchmarks.EncodingMatrixBdnBenchmark-20260222-204938.log`)
 - Source CSV: `BenchmarkDotNet.Artifacts/results/Plank.Benchmarks.EncodingMatrixBdnBenchmark-report.csv`
 - Scenarios: 1,000,000 rows, single-column parquet per scenario.
+
+## Latest Optimization Loop (2026-02-22, CET)
+
+Targeted reruns executed during this loop:
+- `bool|plain`, `string|delta_byte_array`, `string|delta_length_byte_array`, `string|dictionary`
+- command: `dotnet run -c Release --project Plank.Benchmarks/Plank.Benchmarks.csproj -- --filter ... --job short`
+
+Measured `WritePlankAsync` (Job-DARAAU) deltas vs previous matrix in this report:
+
+| Scenario | Previous | Latest | Delta |
+| --- | ---: | ---: | ---: |
+| `bool|plain` | 1.502 ms | 1.461 ms | -2.7% |
+| `string|delta_byte_array` | 14.564 ms | 11.235 ms | -22.9% |
+| `string|delta_length_byte_array` | 13.188 ms | 9.090 ms | -31.1% |
+| `string|dictionary` | 14.780 ms | 13.31 ms | -10.0% |
+
+Notes:
+- `string|delta_byte_array` had multiple reruns (`11.060 ms`, `11.546 ms`, `11.235 ms`) while validating prefix-scan variants; `11.235 ms` is the final state after reverting the slower variant.
+- The first dictionary rerun after reverting the hash path measured `12.70 ms`; a subsequent rerun measured `13.31 ms`. Current row uses the most recent run.
+- These improvements came from payload batch writes in delta encoders, bool packing/RLE changes, and dictionary-path cleanup.
 
 ## Current Matrix (Mean)
 
 | Type | Encoding | Plank | ParquetSharp | Parquet.Net |
 | --- | --- | --- | --- | --- |
-| bool | plain | 1.502 ms | 2.751 ms | 1.191 ms |
-| int32 | plain | 1.861 ms | 2.081 ms | 14.618 ms |
-| int32 | dictionary | 9.649 ms | 9.222 ms | 14.005 ms |
-| int32 | delta_binary_packed | 2.063 ms | 2.966 ms | 13.962 ms |
-| int64 | plain | 2.656 ms | 3.577 ms | 12.997 ms |
-| int64 | dictionary | 4.754 ms | 9.162 ms | 12.815 ms |
-| int64 | delta_binary_packed | 2.032 ms | 3.566 ms | 12.822 ms |
-| float | plain | 1.839 ms | 2.444 ms | 20.744 ms |
-| float | dictionary | 8.935 ms | 8.670 ms | 20.718 ms |
-| float | byte_stream_split | 2.393 ms | 2.846 ms | n/a |
-| double | plain | 2.661 ms | 3.615 ms | 22.059 ms |
-| double | dictionary | 9.402 ms | 8.856 ms | 21.839 ms |
-| double | byte_stream_split | 3.655 ms | 4.467 ms | n/a |
-| string | plain | 8.877 ms | 26.071 ms | 24.902 ms |
-| string | dictionary | 14.780 ms | 30.171 ms | 25.010 ms |
-| string | delta_length_byte_array | 13.188 ms | 26.428 ms | n/a |
-| string | delta_byte_array | 14.564 ms | 29.892 ms | n/a |
+| bool | plain | 1.315 ms | 2.778 ms | 1.237 ms 🚀 |
+| int32 | plain | 1.851 ms 🚀 | 2.295 ms | 15.025 ms |
+| int32 | dictionary | 7.354 ms 🚀 | 10.070 ms | 15.326 ms |
+| int32 | delta_binary_packed | 1.983 ms 🚀 | 3.057 ms | 14.811 ms |
+| int64 | plain | 2.713 ms 🚀 | 3.876 ms | 13.146 ms |
+| int64 | dictionary | 21.217 ms | 53.145 ms | 19.902 ms 🚀 |
+| int64 | delta_binary_packed | 1.894 ms 🚀 | 3.643 ms | 13.124 ms |
+| float | plain | 1.717 ms 🚀 | 2.493 ms | 20.840 ms |
+| float | dictionary | 8.375 ms 🚀 | 8.628 ms | 21.097 ms |
+| float | byte_stream_split | 2.340 ms 🚀 | 2.904 ms | n/a |
+| double | plain | 2.601 ms 🚀 | 3.776 ms | 21.809 ms |
+| double | dictionary | 8.420 ms 🚀 | 9.272 ms | 21.538 ms |
+| double | byte_stream_split | 3.598 ms 🚀 | 4.568 ms | n/a |
+| string | plain | 8.943 ms 🚀 | 26.212 ms | 26.372 ms |
+| string | dictionary | 13.856 ms 🚀 | 30.136 ms | 26.047 ms |
+| string | delta_length_byte_array | 9.381 ms 🚀 | 26.991 ms | n/a |
+| string | delta_byte_array | 11.356 ms 🚀 | 30.736 ms | n/a |
 
 Summary:
-- Plank fastest in 13/17 scenarios.
-- ParquetSharp fastest in 3/17 scenarios.
-- Parquet.Net fastest in 1/17 scenarios (`bool|plain`).
+- Plank fastest in 15/17 scenarios.
+- ParquetSharp fastest in 0/17 scenarios.
+- Parquet.Net fastest in 2/17 scenarios (`bool|plain`, `int64|dictionary`).
 
 ## Algorithm Reports
 

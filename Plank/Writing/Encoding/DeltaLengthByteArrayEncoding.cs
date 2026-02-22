@@ -1,12 +1,13 @@
-using System.Buffers;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Plank.Schema;
 
 namespace Plank.Writing;
 
 static class DeltaLengthByteArrayEncoding
 {
-    internal static void WriteValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
+    internal static void WriteValues<T>(Column column, ReadOnlySpan<T> values, BufferWriterFactory bufferWriters,
+        ref BufferWriter writer)
         where T : notnull
     {
         if (column.PhysicalType != ParquetPhysicalType.ByteArray)
@@ -17,13 +18,16 @@ static class DeltaLengthByteArrayEncoding
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.ByteArray}' values, but got '{typeof(T)}'.");
 
         var byteArrayValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
-        WriteByteArrayValues(column, byteArrayValues, ref writer);
+        WriteByteArrayValues(column, byteArrayValues, bufferWriters, ref writer);
     }
 
-    static void WriteByteArrayValues(Column column, ReadOnlySpan<byte[]> values, ref BufferWriter writer)
+    static void WriteByteArrayValues(Column column, ReadOnlySpan<byte[]> values, BufferWriterFactory bufferWriters,
+        ref BufferWriter writer)
     {
-        var rentedLengths = ArrayPool<int>.Shared.Rent(Math.Max(values.Length, 1));
-        var lengths = rentedLengths.AsSpan(0, values.Length);
+        var byteLength = checked(values.Length * sizeof(int));
+        var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
+        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.AsSpan(0, byteLength));
+        var totalPayloadBytes = 0;
 
         try
         {
@@ -31,16 +35,29 @@ static class DeltaLengthByteArrayEncoding
             {
                 var value = values[i] ?? throw new InvalidOperationException(
                     $"Column '{column.Name}' does not support null values.");
-                lengths[i] = value.Length;
+                var length = value.Length;
+                lengths[i] = length;
+                totalPayloadBytes = checked(totalPayloadBytes + length);
             }
 
             DeltaBinaryPackedEncoding.WriteInt32(lengths, ref writer);
+            if (totalPayloadBytes == 0)
+                return;
+
+            var payload = writer.GetSpan(totalPayloadBytes);
+            var payloadOffset = 0;
             for (var i = 0; i < values.Length; i++)
-                writer.Write(values[i]);
+            {
+                var value = values[i]!;
+                value.CopyTo(payload[payloadOffset..]);
+                payloadOffset += value.Length;
+            }
+
+            writer.Advance(payloadOffset);
         }
         finally
         {
-            ArrayPool<int>.Shared.Return(rentedLengths);
+            bufferWriters.ReturnScratch(rentedLengthsBytes);
         }
     }
 }

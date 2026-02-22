@@ -10,25 +10,30 @@ public sealed class SerializedColumn
     readonly ParquetWriter _owner;
     
     internal readonly PageList Pages;
-    internal int ColumnOrdinal;
+    internal uint ColumnOrdinal;
     internal int RowCount;
-    bool _isWritten;
+    internal bool HasPendingData;
 
     internal SerializedColumn(ParquetWriter owner, uint initialPageCapacity)
     {
         ArgumentNullException.ThrowIfNull(owner);
         Pages = new PageList(initialPageCapacity);
         _owner = owner;
-        ColumnOrdinal = -1;
+        ColumnOrdinal = 0;
         RowCount = 0;
-        _isWritten = false;
+        HasPendingData = false;
     }
 
     public void Serialize<T>(Column column, ReadOnlySpan<T> values)
         where T : notnull
+        => Serialize(column, values, _defaultPageStrategy);
+
+    public void Serialize<T>(Column column, ReadOnlySpan<T> values, IPageStrategy strategy)
+        where T : notnull
     {
         ArgumentNullException.ThrowIfNull(column);
-        if (!_isWritten && ColumnOrdinal >= 0)
+        ArgumentNullException.ThrowIfNull(strategy);
+        if (HasPendingData)
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
 
@@ -36,9 +41,9 @@ public sealed class SerializedColumn
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = values.Length;
-        _isWritten = false;
+        HasPendingData = true;
 
-        Encoding.Encode(_owner.BufferWriters, column, values, _defaultPageStrategy, Pages);
+        Encoding.Encode(_owner.BufferWriters, column, values, strategy, Pages);
     }
 
     /// <summary>
@@ -46,7 +51,6 @@ public sealed class SerializedColumn
     /// </summary>
     internal void Consume()
     {
-        ColumnOrdinal = -1;
-        _isWritten = true;
+        HasPendingData = false;
     }
 }

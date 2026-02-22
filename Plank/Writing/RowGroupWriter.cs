@@ -7,7 +7,7 @@ public sealed class RowGroupWriter
 {
     readonly ParquetWriter _writer;
     BufferWriter _compressedContent;
-    int _nextColumnOrdinal;
+    uint _nextColumnOrdinal;
     int _rowCount;
 
     internal RowGroupWriter(ParquetWriter writer)
@@ -21,14 +21,14 @@ public sealed class RowGroupWriter
     public void Write(SerializedColumn serialized)
     {
         ArgumentNullException.ThrowIfNull(serialized);
-        if (serialized.ColumnOrdinal < 0)
+        if (!serialized.HasPendingData)
             throw new InvalidOperationException(
                 "SerializedColumn has no serialized data. Call serialized.Serialize(column, values) before Write(...).");
 
         if (serialized.ColumnOrdinal != _nextColumnOrdinal)
         {
-            var expectedColumn = _writer.ColumnsByOrdinal[_nextColumnOrdinal];
-            var actualColumn = _writer.ColumnsByOrdinal[serialized.ColumnOrdinal];
+            var expectedColumn = _writer.ColumnsByOrdinal[(int)_nextColumnOrdinal];
+            var actualColumn = _writer.ColumnsByOrdinal[(int)serialized.ColumnOrdinal];
             throw new InvalidOperationException(
                 $"Invalid column order for this row group. Expected '{expectedColumn.Name}' (ordinal {_nextColumnOrdinal}) next, but got '{actualColumn.Name}' (ordinal {serialized.ColumnOrdinal}). Write columns in schema order.");
         }
@@ -39,7 +39,8 @@ public sealed class RowGroupWriter
             throw new InvalidOperationException(
                 $"Row count mismatch for row group. Expected {_rowCount}, got {serialized.RowCount}.");
 
-        var column = _writer.ColumnsByOrdinal[serialized.ColumnOrdinal];
+        var columnOrdinal = (int)serialized.ColumnOrdinal;
+        var column = _writer.ColumnsByOrdinal[columnOrdinal];
         var pages = serialized.Pages;
         var compression = _writer.Compression;
         if (compression != CompressionKind.None && !_compressedContent.IsInitialized)
@@ -114,7 +115,7 @@ public sealed class RowGroupWriter
         if (dataPageOffset < 0)
             dataPageOffset = hasDictionaryPage ? dictionaryPageOffset : _writer.FileOffset;
 
-        ref var columnMetadata = ref _writer.OpenRowGroupColumnMetadata[serialized.ColumnOrdinal];
+        ref var columnMetadata = ref _writer.OpenRowGroupColumnMetadata[columnOrdinal];
         columnMetadata.DataPageOffset = dataPageOffset;
         columnMetadata.DictionaryPageOffset = dictionaryPageOffset;
         columnMetadata.ValueCount = serialized.RowCount;
@@ -126,7 +127,7 @@ public sealed class RowGroupWriter
 
         serialized.Consume();
         _nextColumnOrdinal++;
-        if (_nextColumnOrdinal != _writer.ColumnCount)
+        if (_nextColumnOrdinal != (uint)_writer.ColumnCount)
             return;
 
         ParquetMetadataThriftWriter.WriteRowGroup(ref _writer.SerializedRowGroupsMetadata, _writer.ColumnsByOrdinal,

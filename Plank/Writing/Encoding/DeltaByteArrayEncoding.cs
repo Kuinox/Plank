@@ -1,12 +1,13 @@
-using System.Buffers;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Plank.Schema;
 
 namespace Plank.Writing;
 
 static class DeltaByteArrayEncoding
 {
-    internal static void WriteValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
+    internal static void WriteValues<T>(Column column, ReadOnlySpan<T> values, BufferWriterFactory bufferWriters,
+        ref BufferWriter writer)
         where T : notnull
     {
         if (column.PhysicalType != ParquetPhysicalType.ByteArray)
@@ -17,15 +18,18 @@ static class DeltaByteArrayEncoding
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.ByteArray}' values, but got '{typeof(T)}'.");
 
         var byteArrayValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
-        WriteByteArrayValues(column, byteArrayValues, ref writer);
+        WriteByteArrayValues(column, byteArrayValues, bufferWriters, ref writer);
     }
 
-    static void WriteByteArrayValues(Column column, ReadOnlySpan<byte[]> values, ref BufferWriter writer)
+    static void WriteByteArrayValues(Column column, ReadOnlySpan<byte[]> values, BufferWriterFactory bufferWriters,
+        ref BufferWriter writer)
     {
-        var rentedPrefixLengths = ArrayPool<int>.Shared.Rent(Math.Max(values.Length, 1));
-        var rentedSuffixLengths = ArrayPool<int>.Shared.Rent(Math.Max(values.Length, 1));
-        var prefixLengths = rentedPrefixLengths.AsSpan(0, values.Length);
-        var suffixLengths = rentedSuffixLengths.AsSpan(0, values.Length);
+        var byteLength = checked(values.Length * sizeof(int));
+        var rentedPrefixLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
+        var rentedSuffixLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
+        var prefixLengths = MemoryMarshal.Cast<byte, int>(rentedPrefixLengthsBytes.AsSpan(0, byteLength));
+        var suffixLengths = MemoryMarshal.Cast<byte, int>(rentedSuffixLengthsBytes.AsSpan(0, byteLength));
+        var totalSuffixBytes = 0;
 
         try
         {
@@ -39,25 +43,36 @@ static class DeltaByteArrayEncoding
                 var suffixLength = current.Length - prefixLength;
                 prefixLengths[i] = prefixLength;
                 suffixLengths[i] = suffixLength;
+                totalSuffixBytes = checked(totalSuffixBytes + suffixLength);
                 previous = current;
             }
 
             DeltaBinaryPackedEncoding.WriteInt32(prefixLengths, ref writer);
             DeltaBinaryPackedEncoding.WriteInt32(suffixLengths, ref writer);
 
+            if (totalSuffixBytes == 0)
+                return;
+
+            var suffixDestination = writer.GetSpan(totalSuffixBytes);
+            var suffixOffset = 0;
             for (var i = 0; i < values.Length; i++)
             {
                 var current = values[i]!;
                 var prefixLength = prefixLengths[i];
                 var suffixLength = suffixLengths[i];
                 if (suffixLength > 0)
-                    writer.Write(current.AsSpan(prefixLength, suffixLength));
+                {
+                    current.AsSpan(prefixLength, suffixLength).CopyTo(suffixDestination[suffixOffset..]);
+                    suffixOffset += suffixLength;
+                }
             }
+
+            writer.Advance(suffixOffset);
         }
         finally
         {
-            ArrayPool<int>.Shared.Return(rentedPrefixLengths);
-            ArrayPool<int>.Shared.Return(rentedSuffixLengths);
+            bufferWriters.ReturnScratch(rentedPrefixLengthsBytes);
+            bufferWriters.ReturnScratch(rentedSuffixLengthsBytes);
         }
     }
 

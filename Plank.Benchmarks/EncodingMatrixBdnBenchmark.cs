@@ -3,6 +3,7 @@ using BenchmarkDotNet.Engines;
 using Parquet;
 using Parquet.Schema;
 using ParquetSharp;
+using System.Collections.Generic;
 using Plank.Schema;
 using Plank.Writing;
 using CompressionMethod = Parquet.CompressionMethod;
@@ -22,6 +23,7 @@ public class EncodingMatrixBdnBenchmark
     const string PlankLibrary = "plank";
     const string ParquetSharpLibrary = "parquetsharp";
     const string ParquetNetLibrary = "parquet.net";
+    static readonly IPageStrategy _forceDictionaryPageStrategy = new ForceDictionaryPageStrategy();
 
     bool[] _boolValues = [];
     int[] _int32Values = [];
@@ -91,6 +93,7 @@ public class EncodingMatrixBdnBenchmark
 
     void RecordMetrics(string library, SingleColumnScenario scenario, byte[] parquetBuffer)
     {
+        EnsureDictionaryEncodingIfRequired(library, scenario, parquetBuffer);
         var snapshot = ReadColumnBytes(parquetBuffer);
         EncodingBenchmarkMetrics.Record(library, scenario.DataType, scenario.EncodingName, Rows, snapshot);
     }
@@ -109,25 +112,36 @@ public class EncodingMatrixBdnBenchmark
         });
         var rowGroup = writer.StartRowGroup();
         var serialized = writer.CreateSerializedColumn();
+        var forceDictionary = scenario.EncodingName == "dictionary";
+
+        void SerializeValues<T>(ReadOnlySpan<T> values)
+            where T : notnull
+        {
+            if (forceDictionary)
+                serialized.Serialize(column, values, _forceDictionaryPageStrategy);
+            else
+                serialized.Serialize(column, values);
+        }
+
         switch (scenario.DataType)
         {
             case "bool":
-                serialized.Serialize(column, _boolValues);
+                SerializeValues(_boolValues);
                 break;
             case "int32":
-                serialized.Serialize(column, _int32Values);
+                SerializeValues(_int32Values);
                 break;
             case "int64":
-                serialized.Serialize(column, _int64Values);
+                SerializeValues(_int64Values);
                 break;
             case "float":
-                serialized.Serialize(column, _floatValues);
+                SerializeValues(_floatValues);
                 break;
             case "double":
-                serialized.Serialize(column, _doubleValues);
+                SerializeValues(_doubleValues);
                 break;
             case "string":
-                serialized.Serialize(column, _stringByteValues);
+                SerializeValues(_stringByteValues);
                 break;
             default:
                 throw new InvalidOperationException($"Unknown type '{scenario.DataType}'.");
@@ -141,7 +155,7 @@ public class EncodingMatrixBdnBenchmark
     byte[] WriteWithParquetSharp(SingleColumnScenario scenario)
     {
         using var stream = new MemoryStream(capacity: Rows * 16);
-        using var writerProperties = BuildParquetSharpWriterProperties(scenario.EncodingName);
+        using var writerProperties = BuildParquetSharpWriterProperties(scenario, Rows);
         using var writer = new ParquetFileWriter(stream, [BuildParquetSharpColumn(scenario.DataType)], null,
             writerProperties, null, true);
         using var rowGroupWriter = writer.AppendRowGroup();
@@ -231,6 +245,36 @@ public class EncodingMatrixBdnBenchmark
             parquetData.LongLength);
     }
 
+    static void EnsureDictionaryEncodingIfRequired(string library, SingleColumnScenario scenario, byte[] parquetData)
+    {
+        if (scenario.EncodingName != "dictionary")
+            return;
+
+        var encodings = ReadColumnEncodings(parquetData);
+        if (ContainsDictionaryEncoding(encodings))
+            return;
+
+        throw new InvalidOperationException(
+            $"Dictionary encoding was requested for benchmark '{scenario}' ({library}), but output column metadata did not contain dictionary encoding.");
+    }
+
+    static Encoding[] ReadColumnEncodings(byte[] parquetData)
+    {
+        using var stream = new MemoryStream(parquetData, writable: false);
+        using var reader = new ParquetFileReader(stream);
+        using var rowGroup = reader.RowGroup(0);
+        using var chunk = rowGroup.MetaData.GetColumnChunkMetaData(0);
+        return chunk.Encodings;
+    }
+
+    static bool ContainsDictionaryEncoding(Encoding[] encodings)
+    {
+        for (var i = 0; i < encodings.Length; i++)
+            if (encodings[i] is Encoding.PlainDictionary or Encoding.RleDictionary)
+                return true;
+        return false;
+    }
+
     static ParquetPhysicalType MapPlankPhysicalType(string dataType)
         => dataType switch
         {
@@ -255,29 +299,44 @@ public class EncodingMatrixBdnBenchmark
             _ => throw new InvalidOperationException($"Unknown type '{dataType}'.")
         };
 
-    static WriterProperties BuildParquetSharpWriterProperties(string encoding)
+    static WriterProperties BuildParquetSharpWriterProperties(SingleColumnScenario scenario, int rows)
     {
         var builder = new WriterPropertiesBuilder().Compression(Compression.Uncompressed);
-        if (encoding == "dictionary")
-            return builder.EnableDictionary().Build();
+        if (scenario.EncodingName == "dictionary")
+            return builder.EnableDictionary().DictionaryPagesizeLimit(GetForcedDictionaryPageSizeLimitBytes(
+                scenario.DataType, rows)).Build();
 
-        var mapped = encoding switch
+        var mapped = scenario.EncodingName switch
         {
             "plain" => Encoding.Plain,
             "delta_binary_packed" => Encoding.DeltaBinaryPacked,
             "delta_length_byte_array" => Encoding.DeltaLengthByteArray,
             "delta_byte_array" => Encoding.DeltaByteArray,
             "byte_stream_split" => Encoding.ByteStreamSplit,
-            _ => throw new InvalidOperationException($"Unknown encoding '{encoding}'.")
+            _ => throw new InvalidOperationException($"Unknown encoding '{scenario.EncodingName}'.")
         };
         return builder.DisableDictionary().Encoding(mapped).Build();
+    }
+
+    static long GetForcedDictionaryPageSizeLimitBytes(string dataType, int rows)
+    {
+        var estimatedValueSizeBytes = dataType switch
+        {
+            "int32" => 4L,
+            "int64" => 8L,
+            "float" => 4L,
+            "double" => 8L,
+            "string" => 32L,
+            _ => 8L
+        };
+        return checked(rows * estimatedValueSizeBytes * 4L);
     }
 
     static ParquetOptions BuildParquetNetOptions(string encoding)
         => encoding switch
         {
             "plain" => new ParquetOptions(),
-            "dictionary" => new ParquetOptions { UseDictionaryEncoding = true },
+            "dictionary" => new ParquetOptions { UseDictionaryEncoding = true, DictionaryEncodingThreshold = 1.0 },
             "delta_binary_packed" => new ParquetOptions { UseDeltaBinaryPackedEncoding = true },
             _ => throw new InvalidOperationException($"Parquet.Net does not support encoding '{encoding}'.")
         };
@@ -293,4 +352,24 @@ public class EncodingMatrixBdnBenchmark
             "byte_stream_split" => EncodingKind.ByteStreamSplit,
             _ => throw new InvalidOperationException($"Unknown encoding '{encoding}'.")
         };
+
+    sealed class ForceDictionaryPageStrategy : IPageStrategy
+    {
+        public DictionaryMode GetDictionaryMode(PlankColumn column)
+        {
+            var encodings = column.Options.Encodings;
+            for (var i = 0; i < encodings.Length; i++)
+                if (encodings[i] is EncodingKind.PlainDictionary or EncodingKind.RleDictionary)
+                    return DictionaryMode.Forced;
+            return DictionaryMode.Disabled;
+        }
+
+        public bool ShouldDropDictionary<T>(PlankColumn column, IReadOnlyDictionary<T, int> dictionary,
+            int totalRowCount, int rowsSeen)
+            where T : notnull
+            => false;
+
+        public bool ShouldStartNewDataPage(PlankColumn column, int totalRowCount, int rowsWritten, int currentPageRowCount)
+            => false;
+    }
 }

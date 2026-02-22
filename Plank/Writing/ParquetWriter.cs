@@ -106,11 +106,11 @@ public sealed class ParquetWriter
         _streamDisposed = true;
     }
 
-    internal int GetColumnOrdinal(Column column)
+    internal uint GetColumnOrdinal(Column column)
     {
         var ordinal = Array.IndexOf(ColumnsByOrdinal, column);
         if (ordinal >= 0)
-            return ordinal;
+            return (uint)ordinal;
 
         throw new ArgumentException("SerializedColumn column does not belong to this schema.", nameof(column));
     }

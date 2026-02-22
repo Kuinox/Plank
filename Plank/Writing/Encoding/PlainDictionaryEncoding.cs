@@ -2,10 +2,6 @@ namespace Plank.Writing;
 
 static class PlainDictionaryEncoding
 {
-    internal static void WriteIndexes(ReadOnlySpan<int> indexes, int dictionaryValueCount, ref BufferWriter writer)
-    {
-        var maxValue = dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1;
-        var bitWidth = RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(maxValue);
-        RleBitPackingHybridEncoding.WriteWithBitWidthPrefix(indexes, bitWidth, ref writer);
-    }
+    internal static void WriteIndexes(ReadOnlySpan<int> indexes, int bitWidth, ref BufferWriter writer)
+        => RleBitPackingHybridEncoding.WriteWithBitWidthPrefixUnchecked(indexes, bitWidth, ref writer);
 }

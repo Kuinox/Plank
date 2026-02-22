@@ -179,20 +179,21 @@ static class ByteStreamSplitEncoding
         if (byteCount == 0)
             return;
 
+        for (var i = 0; i < fixedLengthValues.Length; i++)
+        {
+            var value = fixedLengthValues[i] ?? throw new InvalidOperationException(
+                $"Column '{column.Name}' does not support null values.");
+            if (value.Length != valueLength)
+                throw new InvalidOperationException(
+                    $"Column '{column.Name}' expects fixed-length values of {valueLength} bytes, but got {value.Length}.");
+        }
+
         var destination = writer.GetSpan(byteCount);
         for (var lane = 0; lane < valueLength; lane++)
         {
             var baseOffset = lane * fixedLengthValues.Length;
             for (var i = 0; i < fixedLengthValues.Length; i++)
-            {
-                var value = fixedLengthValues[i] ?? throw new InvalidOperationException(
-                    $"Column '{column.Name}' does not support null values.");
-                if (value.Length != valueLength)
-                    throw new InvalidOperationException(
-                        $"Column '{column.Name}' expects fixed-length values of {valueLength} bytes, but got {value.Length}.");
-
-                destination[baseOffset + i] = value[lane];
-            }
+                destination[baseOffset + i] = fixedLengthValues[i]![lane];
         }
 
         writer.Advance(byteCount);

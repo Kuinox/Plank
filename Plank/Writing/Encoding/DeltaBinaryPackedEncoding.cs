@@ -194,17 +194,15 @@ static class DeltaBinaryPackedEncoding
 
     static void WriteUnsignedVarInt(ulong value, ref BufferWriter writer)
     {
-        Span<byte> buffer = stackalloc byte[10];
+        var destination = writer.GetSpan(10);
         var offset = 0;
         while (value >= 0x80)
         {
-            buffer[offset++] = (byte)(value | 0x80);
+            destination[offset++] = (byte)(value | 0x80);
             value >>= 7;
         }
 
-        buffer[offset++] = (byte)value;
-        var destination = writer.GetSpan(offset);
-        buffer[..offset].CopyTo(destination);
+        destination[offset++] = (byte)value;
         writer.Advance(offset);
     }
 

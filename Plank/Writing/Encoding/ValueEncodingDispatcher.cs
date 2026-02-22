@@ -5,7 +5,7 @@ namespace Plank.Writing;
 static class ValueEncodingDispatcher
 {
     internal static void WriteValues<T>(EncodingKind encoding, Column column, ReadOnlySpan<T> values,
-        ref BufferWriter writer)
+        BufferWriterFactory bufferWriters, ref BufferWriter writer)
         where T : notnull
     {
         switch (encoding)
@@ -23,10 +23,10 @@ static class ValueEncodingDispatcher
                 DeltaBinaryPackedEncoding.WriteValues(column, values, ref writer);
                 return;
             case EncodingKind.DeltaLengthByteArray:
-                DeltaLengthByteArrayEncoding.WriteValues(column, values, ref writer);
+                DeltaLengthByteArrayEncoding.WriteValues(column, values, bufferWriters, ref writer);
                 return;
             case EncodingKind.DeltaByteArray:
-                DeltaByteArrayEncoding.WriteValues(column, values, ref writer);
+                DeltaByteArrayEncoding.WriteValues(column, values, bufferWriters, ref writer);
                 return;
             case EncodingKind.ByteStreamSplit:
                 ByteStreamSplitEncoding.WriteValues(column, values, ref writer);

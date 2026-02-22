@@ -55,10 +55,31 @@ static class PlainEncoding
             return;
 
         var destination = writer.GetSpan(byteCount);
-        destination[..byteCount].Clear();
-        for (var i = 0; i < booleanValues.Length; i++)
-            if (booleanValues[i])
-                destination[i >> 3] |= (byte)(1 << (i & 7));
+        var valueIndex = 0;
+        var fullByteCount = booleanValues.Length >> 3;
+        for (var byteIndex = 0; byteIndex < fullByteCount; byteIndex++)
+        {
+            var packed =
+                (booleanValues[valueIndex] ? 1 : 0) |
+                ((booleanValues[valueIndex + 1] ? 1 : 0) << 1) |
+                ((booleanValues[valueIndex + 2] ? 1 : 0) << 2) |
+                ((booleanValues[valueIndex + 3] ? 1 : 0) << 3) |
+                ((booleanValues[valueIndex + 4] ? 1 : 0) << 4) |
+                ((booleanValues[valueIndex + 5] ? 1 : 0) << 5) |
+                ((booleanValues[valueIndex + 6] ? 1 : 0) << 6) |
+                ((booleanValues[valueIndex + 7] ? 1 : 0) << 7);
+            destination[byteIndex] = (byte)packed;
+            valueIndex += 8;
+        }
+
+        var tailCount = booleanValues.Length - valueIndex;
+        if (tailCount > 0)
+        {
+            var packed = 0;
+            for (var bit = 0; bit < tailCount; bit++)
+                packed |= (booleanValues[valueIndex + bit] ? 1 : 0) << bit;
+            destination[fullByteCount] = (byte)packed;
+        }
 
         writer.Advance(byteCount);
     }
