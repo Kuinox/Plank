@@ -1,4 +1,5 @@
 using ZstdSharp;
+using Plank.Writing.Compression;
 
 namespace Plank.Writing;
 

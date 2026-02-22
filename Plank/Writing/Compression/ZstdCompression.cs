@@ -1,6 +1,6 @@
 using ZstdSharp;
 
-namespace Plank.Writing;
+namespace Plank.Writing.Compression;
 
 static class ZstdCompression
 {

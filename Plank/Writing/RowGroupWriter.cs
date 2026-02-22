@@ -1,5 +1,8 @@
 using System.Buffers.Binary;
 using Plank.Schema;
+using Plank.Writing.Compression;
+using Plank.Writing.Encoding;
+using Plank.Writing.Thrift;
 
 namespace Plank.Writing;
 
@@ -64,7 +67,8 @@ public sealed class RowGroupWriter
             var writeCompressedContent = false;
             if (compression != CompressionKind.None && uncompressedContentSize > 0)
             {
-                Compression.Compress(compression, _writer.CompressionContext, ref page.Content, ref _compressedContent);
+                Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionContext, ref page.Content,
+                    ref _compressedContent);
                 compressedContentSize = _compressedContent.WrittenLength;
                 writeCompressedContent = true;
             }

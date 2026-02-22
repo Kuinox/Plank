@@ -1,9 +1,9 @@
+using System.Collections.Immutable;
 using Plank.Schema;
 using Plank.Writing;
 using PlankColumn = Plank.Schema.Column;
-using System.Collections.Immutable;
 
-namespace Plank.Tests;
+namespace Plank.Tests.Writer;
 
 internal sealed class RowGroupWriterContractTests
 {

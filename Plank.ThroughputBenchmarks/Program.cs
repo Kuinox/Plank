@@ -1,4 +1,4 @@
-using Plank.Benchmarks;
+using Plank.ThroughputBenchmarks;
 using XenoAtom.CommandLine;
 
 const string spacer = "";

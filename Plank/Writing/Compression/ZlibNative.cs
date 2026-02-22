@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace Plank.Writing;
+namespace Plank.Writing.Compression;
 
 unsafe static partial class ZlibNative
 {

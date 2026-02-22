@@ -6,6 +6,7 @@ using ParquetSharp;
 using System.Collections.Generic;
 using Plank.Schema;
 using Plank.Writing;
+using Plank.Writing.PageStrategy;
 using CompressionMethod = Parquet.CompressionMethod;
 using DataColumn = Parquet.Data.DataColumn;
 using Encoding = ParquetSharp.Encoding;

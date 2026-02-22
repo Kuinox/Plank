@@ -1,6 +1,6 @@
 namespace Plank.Writing;
 
-public sealed class PageList
+internal sealed class PageList
 {
     Page[] _pages;
     int _count;

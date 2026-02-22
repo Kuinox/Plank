@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Plank.Schema;
 
-namespace Plank.Writing;
+namespace Plank.Writing.Encoding;
 
 static class PlainEncoding
 {

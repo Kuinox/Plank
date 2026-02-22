@@ -2,8 +2,9 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Plank.Schema;
+using Plank.Writing.PageStrategy;
 
-namespace Plank.Writing;
+namespace Plank.Writing.Encoding;
 
 static class Encoding
 {

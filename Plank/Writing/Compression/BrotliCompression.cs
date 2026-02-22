@@ -1,6 +1,6 @@
 using System.IO.Compression;
 
-namespace Plank.Writing;
+namespace Plank.Writing.Compression;
 
 static class BrotliCompression
 {

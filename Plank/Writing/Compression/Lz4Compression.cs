@@ -1,6 +1,6 @@
 using K4os.Compression.LZ4;
 
-namespace Plank.Writing;
+namespace Plank.Writing.Compression;
 
 static class Lz4Compression
 {

@@ -3,7 +3,7 @@ using System.Text;
 using Plank.Schema;
 using TextEncoding = System.Text.Encoding;
 
-namespace Plank.Writing;
+namespace Plank.Writing.Thrift;
 
 static class ParquetMetadataThriftWriter
 {

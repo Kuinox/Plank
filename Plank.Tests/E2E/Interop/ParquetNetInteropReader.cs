@@ -1,7 +1,7 @@
 using Parquet;
 using Parquet.Schema;
 
-namespace Plank.Tests;
+namespace Plank.Tests.E2E.Interop;
 
 sealed class ParquetNetInteropReader : IParquetInteropReader
 {

@@ -1,7 +1,7 @@
 using Plank.Schema;
 using PlankColumn = Plank.Schema.Column;
 
-namespace Plank.Tests;
+namespace Plank.Tests.E2E.Interop;
 
 static class WriterInteropSchema
 {

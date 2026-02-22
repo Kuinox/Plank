@@ -1,6 +1,6 @@
 using ParquetSharp;
 
-namespace Plank.Benchmarks;
+namespace Plank.ThroughputBenchmarks;
 
 public sealed class NycDatasetManager
 {

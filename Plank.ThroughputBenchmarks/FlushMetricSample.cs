@@ -1,4 +1,4 @@
-namespace Plank.Benchmarks;
+namespace Plank.ThroughputBenchmarks;
 
 public readonly record struct FlushMetricSample(
     int Index,

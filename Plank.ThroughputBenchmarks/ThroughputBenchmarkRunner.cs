@@ -1,9 +1,9 @@
+using System.Diagnostics;
 using Parquet;
 using Parquet.Schema;
 using ParquetSharp;
 using Plank.Schema;
 using Plank.Writing;
-using System.Diagnostics;
 using Column = ParquetSharp.Column;
 using CompressionMethod = Parquet.CompressionMethod;
 using DataColumn = Parquet.Data.DataColumn;
@@ -11,7 +11,7 @@ using ParquetSchema = Parquet.Schema.ParquetSchema;
 using PlankColumn = Plank.Schema.Column;
 using PlankSchema = Plank.Schema.ParquetSchema;
 
-namespace Plank.Benchmarks;
+namespace Plank.ThroughputBenchmarks;
 
 public static class ThroughputBenchmarkRunner
 {

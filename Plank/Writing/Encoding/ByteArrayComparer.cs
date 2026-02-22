@@ -1,6 +1,4 @@
-using System.Collections.Generic;
-
-namespace Plank.Writing;
+namespace Plank.Writing.Encoding;
 
 sealed class ByteArrayComparer : IEqualityComparer<byte[]>
 {

@@ -1,7 +1,6 @@
-using System.Collections.Generic;
 using Plank.Schema;
 
-namespace Plank.Writing;
+namespace Plank.Writing.PageStrategy;
 
 sealed class DefaultStrategy : IPageStrategy
 {

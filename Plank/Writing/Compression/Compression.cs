@@ -1,4 +1,4 @@
-namespace Plank.Writing;
+namespace Plank.Writing.Compression;
 
 static class Compression
 {

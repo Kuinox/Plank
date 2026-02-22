@@ -1,6 +1,7 @@
 using Plank.Writing;
+using Plank.Writing.Compression;
 
-namespace Plank.Tests;
+namespace Plank.Tests.Writer;
 
 internal sealed class CompressionAllocationTests
 {

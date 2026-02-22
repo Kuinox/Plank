@@ -1,5 +1,5 @@
-using System.Collections.Immutable;
 using System.Buffers.Binary;
+using System.Collections.Immutable;
 using Parquet;
 using ParquetSharp;
 using Plank.Schema;
@@ -8,7 +8,7 @@ using PlankColumn = Plank.Schema.Column;
 using PlankParquetSchema = Plank.Schema.ParquetSchema;
 using PlankWriter = Plank.Writing.ParquetWriter;
 
-namespace Plank.Tests;
+namespace Plank.Tests.E2E;
 
 internal sealed class EncodingTypeMatrixE2ETests
 {

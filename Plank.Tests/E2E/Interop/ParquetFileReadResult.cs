@@ -1,4 +1,4 @@
-namespace Plank.Tests;
+namespace Plank.Tests.E2E.Interop;
 
 sealed class ParquetFileReadResult
 {

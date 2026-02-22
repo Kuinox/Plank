@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using Plank.Schema;
+using Plank.Writing.Encoding;
+using Plank.Writing.PageStrategy;
 
 namespace Plank.Writing;
 
@@ -43,7 +45,7 @@ public sealed class SerializedColumn
         RowCount = values.Length;
         HasPendingData = true;
 
-        Encoding.Encode(_owner.BufferWriters, column, values, strategy, Pages);
+        Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, column, values, strategy, Pages);
     }
 
     /// <summary>

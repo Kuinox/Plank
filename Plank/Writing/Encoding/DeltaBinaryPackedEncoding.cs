@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using Plank.Schema;
 
-namespace Plank.Writing;
+namespace Plank.Writing.Encoding;
 
 static class DeltaBinaryPackedEncoding
 {

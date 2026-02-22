@@ -1,9 +1,10 @@
 using System.Collections.Immutable;
 using Plank.Schema;
+using Plank.Tests.E2E.Interop;
 using Plank.Writing;
 using PlankColumn = Plank.Schema.Column;
 
-namespace Plank.Tests;
+namespace Plank.Tests.E2E;
 
 internal sealed class WriterInteropE2ETests
 {

@@ -1,6 +1,6 @@
 namespace Plank.Writing;
 
-public struct Page
+internal struct Page
 {
     public BufferWriter Header;
 

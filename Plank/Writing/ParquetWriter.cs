@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using Plank.Schema;
+using Plank.Writing.Thrift;
 
 namespace Plank.Writing;
 

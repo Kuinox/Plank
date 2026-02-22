@@ -1,6 +1,6 @@
 using Plank.Schema;
 
-namespace Plank.Writing;
+namespace Plank.Writing.Encoding;
 
 static class ValueEncodingDispatcher
 {
