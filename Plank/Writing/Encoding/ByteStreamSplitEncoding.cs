@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Plank.Schema;
 
 namespace Plank.Writing;
@@ -44,9 +45,18 @@ static class ByteStreamSplitEncoding
             return;
 
         var destination = writer.GetSpan(byteCount);
-        for (var lane = 0; lane < sizeof(int); lane++)
-            for (var i = 0; i < intValues.Length; i++)
-                destination[lane * intValues.Length + i] = (byte)(intValues[i] >> (lane * 8));
+        var lane0 = destination[..intValues.Length];
+        var lane1 = destination.Slice(intValues.Length, intValues.Length);
+        var lane2 = destination.Slice(intValues.Length * 2, intValues.Length);
+        var lane3 = destination.Slice(intValues.Length * 3, intValues.Length);
+        for (var i = 0; i < intValues.Length; i++)
+        {
+            var value = intValues[i];
+            lane0[i] = (byte)value;
+            lane1[i] = (byte)(value >> 8);
+            lane2[i] = (byte)(value >> 16);
+            lane3[i] = (byte)(value >> 24);
+        }
 
         writer.Advance(byteCount);
     }
@@ -64,9 +74,26 @@ static class ByteStreamSplitEncoding
             return;
 
         var destination = writer.GetSpan(byteCount);
-        for (var lane = 0; lane < sizeof(long); lane++)
-            for (var i = 0; i < longValues.Length; i++)
-                destination[lane * longValues.Length + i] = (byte)(longValues[i] >> (lane * 8));
+        var lane0 = destination[..longValues.Length];
+        var lane1 = destination.Slice(longValues.Length, longValues.Length);
+        var lane2 = destination.Slice(longValues.Length * 2, longValues.Length);
+        var lane3 = destination.Slice(longValues.Length * 3, longValues.Length);
+        var lane4 = destination.Slice(longValues.Length * 4, longValues.Length);
+        var lane5 = destination.Slice(longValues.Length * 5, longValues.Length);
+        var lane6 = destination.Slice(longValues.Length * 6, longValues.Length);
+        var lane7 = destination.Slice(longValues.Length * 7, longValues.Length);
+        for (var i = 0; i < longValues.Length; i++)
+        {
+            var value = longValues[i];
+            lane0[i] = (byte)value;
+            lane1[i] = (byte)(value >> 8);
+            lane2[i] = (byte)(value >> 16);
+            lane3[i] = (byte)(value >> 24);
+            lane4[i] = (byte)(value >> 32);
+            lane5[i] = (byte)(value >> 40);
+            lane6[i] = (byte)(value >> 48);
+            lane7[i] = (byte)(value >> 56);
+        }
 
         writer.Advance(byteCount);
     }
@@ -84,10 +111,19 @@ static class ByteStreamSplitEncoding
             return;
 
         var destination = writer.GetSpan(byteCount);
-        for (var lane = 0; lane < sizeof(float); lane++)
-            for (var i = 0; i < floatValues.Length; i++)
-                destination[lane * floatValues.Length + i] =
-                    (byte)(BitConverter.SingleToInt32Bits(floatValues[i]) >> (lane * 8));
+        var intValues = MemoryMarshal.Cast<float, int>(floatValues);
+        var lane0 = destination[..intValues.Length];
+        var lane1 = destination.Slice(intValues.Length, intValues.Length);
+        var lane2 = destination.Slice(intValues.Length * 2, intValues.Length);
+        var lane3 = destination.Slice(intValues.Length * 3, intValues.Length);
+        for (var i = 0; i < intValues.Length; i++)
+        {
+            var value = intValues[i];
+            lane0[i] = (byte)value;
+            lane1[i] = (byte)(value >> 8);
+            lane2[i] = (byte)(value >> 16);
+            lane3[i] = (byte)(value >> 24);
+        }
 
         writer.Advance(byteCount);
     }
@@ -105,10 +141,27 @@ static class ByteStreamSplitEncoding
             return;
 
         var destination = writer.GetSpan(byteCount);
-        for (var lane = 0; lane < sizeof(double); lane++)
-            for (var i = 0; i < doubleValues.Length; i++)
-                destination[lane * doubleValues.Length + i] =
-                    (byte)(BitConverter.DoubleToInt64Bits(doubleValues[i]) >> (lane * 8));
+        var longValues = MemoryMarshal.Cast<double, long>(doubleValues);
+        var lane0 = destination[..longValues.Length];
+        var lane1 = destination.Slice(longValues.Length, longValues.Length);
+        var lane2 = destination.Slice(longValues.Length * 2, longValues.Length);
+        var lane3 = destination.Slice(longValues.Length * 3, longValues.Length);
+        var lane4 = destination.Slice(longValues.Length * 4, longValues.Length);
+        var lane5 = destination.Slice(longValues.Length * 5, longValues.Length);
+        var lane6 = destination.Slice(longValues.Length * 6, longValues.Length);
+        var lane7 = destination.Slice(longValues.Length * 7, longValues.Length);
+        for (var i = 0; i < longValues.Length; i++)
+        {
+            var value = longValues[i];
+            lane0[i] = (byte)value;
+            lane1[i] = (byte)(value >> 8);
+            lane2[i] = (byte)(value >> 16);
+            lane3[i] = (byte)(value >> 24);
+            lane4[i] = (byte)(value >> 32);
+            lane5[i] = (byte)(value >> 40);
+            lane6[i] = (byte)(value >> 48);
+            lane7[i] = (byte)(value >> 56);
+        }
 
         writer.Advance(byteCount);
     }

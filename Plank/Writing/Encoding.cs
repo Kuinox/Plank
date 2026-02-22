@@ -8,6 +8,8 @@ namespace Plank.Writing;
 
 static class Encoding
 {
+    const int DictionaryDropCheckPeriodRows = 2048;
+
     internal static void Encode<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         IPageStrategy strategy, PageList pages)
         where T : notnull
@@ -17,84 +19,120 @@ static class Encoding
         ArgumentNullException.ThrowIfNull(pages);
 
         pages.Clear();
-
-        var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
-        var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
-        var useDictionary = TryWriteDictionaryPage(bufferWriters, column, values, strategy, pages, out var dictionary);
         if (values.Length == 0)
             return;
 
+        var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
+        var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
+        var useDictionary = TryWriteDictionaryPage(bufferWriters, column, values, strategy, pages,
+            out var dictionaryValueCount, out var dictionaryIndexes);
+
         var rowsWritten = 0;
-        while (rowsWritten < values.Length)
+        try
         {
-            var pageStart = rowsWritten;
-            var pageRowCount = 0;
             while (rowsWritten < values.Length)
             {
-                rowsWritten++;
-                pageRowCount++;
-                if (rowsWritten == values.Length)
-                    break;
-                if (strategy.ShouldStartNewDataPage(column, values.Length, rowsWritten, pageRowCount))
-                    break;
+                var pageStart = rowsWritten;
+                var pageRowCount = 0;
+                while (rowsWritten < values.Length)
+                {
+                    rowsWritten++;
+                    pageRowCount++;
+                    if (rowsWritten == values.Length)
+                        break;
+                    if (strategy.ShouldStartNewDataPage(column, values.Length, rowsWritten, pageRowCount))
+                        break;
+                }
+
+                var pageIndex = AddNewDataPage(bufferWriters, pages);
+                ref var page = ref pages[pageIndex];
+                var pageValues = values.Slice(pageStart, pageRowCount);
+                if (useDictionary)
+                {
+                    if (dictionaryIndexes is null)
+                        throw new InvalidOperationException("Dictionary index buffer is missing for dictionary-encoded page.");
+                    DictionaryIndexEncodingDispatcher.WriteIndexes(dictionaryEncoding,
+                        dictionaryIndexes.AsSpan(pageStart, pageRowCount), dictionaryValueCount, ref page.Content);
+                }
+                else
+                    ValueEncodingDispatcher.WriteValues(dataEncoding, column, pageValues, ref page.Content);
+
+                WriteDataPageHeader(ref page.Header, pageRowCount, useDictionary ? dictionaryEncoding : dataEncoding);
             }
-
-            var pageIndex = AddNewDataPage(bufferWriters, pages);
-            ref var page = ref pages[pageIndex];
-            var pageValues = values.Slice(pageStart, pageRowCount);
-            if (useDictionary)
-                WriteDictionaryIndexes(dictionaryEncoding, dictionary!, pageValues, ref page.Content);
-            else
-                ValueEncodingDispatcher.WriteValues(dataEncoding, column, pageValues, ref page.Content);
-
-            WriteDataPageHeader(ref page.Header, pageRowCount, useDictionary ? dictionaryEncoding : dataEncoding);
+        }
+        finally
+        {
+            if (dictionaryIndexes is not null)
+                ArrayPool<int>.Shared.Return(dictionaryIndexes);
         }
     }
 
     static bool TryWriteDictionaryPage<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
-        IPageStrategy strategy, PageList pages, out Dictionary<T, int>? dictionary)
+        IPageStrategy strategy, PageList pages, out int dictionaryValueCount, out int[]? dictionaryIndexes)
         where T : notnull
     {
+        dictionaryValueCount = 0;
+        dictionaryIndexes = null;
+
         var dictionaryMode = strategy.GetDictionaryMode(column);
         if (dictionaryMode == DictionaryMode.Disabled)
         {
-            dictionary = null;
             return false;
         }
 
         var dictionaryPageIndex = AddDictionaryPage(bufferWriters, pages);
         ref var dictionaryPage = ref pages[dictionaryPageIndex];
-        dictionary = new Dictionary<T, int>(GetDictionaryComparer<T>());
+        var dictionary = new Dictionary<T, int>(GetDictionaryComparer<T>());
         var dictionaryValues = new List<T>();
-        for (var i = 0; i < values.Length; i++)
+        int[]? rentedIndexes = ArrayPool<int>.Shared.Rent(Math.Max(values.Length, 1));
+        try
         {
-            var value = values[i];
-            if (!dictionary.TryGetValue(value, out _))
+            var indexes = rentedIndexes.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
             {
-                dictionary.Add(value, dictionary.Count);
-                dictionaryValues.Add(value);
+                var value = values[i];
+                if (!dictionary.TryGetValue(value, out var index))
+                {
+                    index = dictionary.Count;
+                    dictionary.Add(value, index);
+                    dictionaryValues.Add(value);
+                }
+
+                indexes[i] = index;
+
+                if (dictionaryMode != DictionaryMode.Maybe)
+                    continue;
+                var rowsSeen = i + 1;
+                if (rowsSeen % DictionaryDropCheckPeriodRows != 0 && rowsSeen != values.Length)
+                    continue;
+                if (!strategy.ShouldDropDictionary(column, dictionary, values.Length, rowsSeen))
+                    continue;
+
+                dictionaryPage.Header.Reset();
+                dictionaryPage.Content.Reset();
+                pages.RemoveLast();
+                ArrayPool<int>.Shared.Return(rentedIndexes);
+                rentedIndexes = null;
+                return false;
             }
 
-            if (dictionaryMode != DictionaryMode.Maybe)
-                continue;
-            if (!strategy.ShouldDropDictionary(column, dictionary, values.Length, i + 1))
-                continue;
+            PlainEncoding.WriteValues(column, CollectionsMarshal.AsSpan(dictionaryValues), ref dictionaryPage.Content);
 
-            dictionaryPage.Header.Reset();
-            dictionaryPage.Content.Reset();
-            pages.RemoveLast();
-            dictionary = null;
-            return false;
+            const int dictionaryHeaderSize = sizeof(byte) + sizeof(int);
+            var header = dictionaryPage.Header.GetSpan(dictionaryHeaderSize);
+            header[0] = (byte)PageKind.Dictionary;
+            BinaryPrimitives.WriteInt32LittleEndian(header[1..], dictionary.Count);
+            dictionaryPage.Header.Advance(dictionaryHeaderSize);
+            dictionaryValueCount = dictionary.Count;
+            dictionaryIndexes = rentedIndexes;
+            rentedIndexes = null;
+            return true;
         }
-
-        PlainEncoding.WriteValues(column, CollectionsMarshal.AsSpan(dictionaryValues), ref dictionaryPage.Content);
-
-        const int dictionaryHeaderSize = sizeof(byte) + sizeof(int);
-        var header = dictionaryPage.Header.GetSpan(dictionaryHeaderSize);
-        header[0] = (byte)PageKind.Dictionary;
-        BinaryPrimitives.WriteInt32LittleEndian(header[1..], dictionary.Count);
-        dictionaryPage.Header.Advance(dictionaryHeaderSize);
-        return true;
+        finally
+        {
+            if (rentedIndexes is not null)
+                ArrayPool<int>.Shared.Return(rentedIndexes);
+        }
     }
 
     static int AddDictionaryPage(BufferWriterFactory bufferWriters, PageList pages)
@@ -132,34 +170,6 @@ static class Encoding
         header[1] = (byte)encoding;
         BinaryPrimitives.WriteInt32LittleEndian(header[2..], rowCount);
         headerWriter.Advance(dataPageHeaderSize);
-    }
-
-    static void WriteDictionaryIndexes<T>(EncodingKind encoding, Dictionary<T, int> dictionary, ReadOnlySpan<T> values,
-        ref BufferWriter writer)
-        where T : notnull
-    {
-        var rentedIndexes = ArrayPool<int>.Shared.Rent(Math.Max(values.Length, 1));
-        var indexes = rentedIndexes.AsSpan(0, values.Length);
-
-        try
-        {
-            for (var i = 0; i < values.Length; i++)
-            {
-                if (dictionary.TryGetValue(values[i], out var index))
-                {
-                    indexes[i] = index;
-                    continue;
-                }
-
-                throw new InvalidOperationException("Dictionary-encoded page contains a value that is missing from the dictionary page.");
-            }
-
-            DictionaryIndexEncodingDispatcher.WriteIndexes(encoding, indexes, dictionary.Count, ref writer);
-        }
-        finally
-        {
-            ArrayPool<int>.Shared.Return(rentedIndexes);
-        }
     }
 
     static IEqualityComparer<T> GetDictionaryComparer<T>()
