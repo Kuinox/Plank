@@ -27,7 +27,7 @@ internal sealed class CompressionContext
     {
         if (_gzipOutputBuffer is null || _gzipOutputBuffer.Length < minimumLength)
         {
-            var replacement = _bufferWriters.RentScratch(minimumLength);
+            var replacement = _bufferWriters.RentScratch(checked((uint)minimumLength));
             if (_gzipOutputBuffer is not null)
                 _bufferWriters.ReturnScratch(_gzipOutputBuffer);
             _gzipOutputBuffer = replacement;
@@ -46,7 +46,7 @@ internal sealed class CompressionContext
     {
         if (_sourceScratch is null || _sourceScratch.Length < minimumLength)
         {
-            var replacement = _bufferWriters.RentScratch(minimumLength);
+            var replacement = _bufferWriters.RentScratch(checked((uint)minimumLength));
             if (_sourceScratch is not null)
                 _bufferWriters.ReturnScratch(_sourceScratch);
             _sourceScratch = replacement;

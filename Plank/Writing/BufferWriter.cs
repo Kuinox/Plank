@@ -12,18 +12,24 @@ public struct BufferWriter : IBufferWriter<byte>
     int _currentSegmentWritten;
     int _writtenLength;
 
-    internal BufferWriter(IParquetBufferPool pool, int chunkSizeBytes, int initialBufferBytes)
+    internal BufferWriter(IParquetBufferPool pool, uint chunkSizeBytes, uint initialBufferBytes)
     {
         ArgumentNullException.ThrowIfNull(pool);
-        if (chunkSizeBytes <= 0)
+        if (chunkSizeBytes == 0)
             throw new ArgumentOutOfRangeException(nameof(chunkSizeBytes), chunkSizeBytes,
                 "Buffer chunk size must be greater than zero.");
-        if (initialBufferBytes <= 0)
+        if (initialBufferBytes == 0)
             throw new ArgumentOutOfRangeException(nameof(initialBufferBytes), initialBufferBytes,
                 "Initial buffer size must be greater than zero.");
+        if (chunkSizeBytes > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(chunkSizeBytes), chunkSizeBytes,
+                $"Buffer chunk size must be <= {int.MaxValue}.");
+        if (initialBufferBytes > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(initialBufferBytes), initialBufferBytes,
+                $"Initial buffer size must be <= {int.MaxValue}.");
 
         _pool = pool;
-        _chunkSizeBytes = chunkSizeBytes;
+        _chunkSizeBytes = checked((int)chunkSizeBytes);
         _segments = new Segment[GetInitialSegmentCapacity(initialBufferBytes, chunkSizeBytes)];
         _segmentCount = 0;
         _currentSegmentIndex = 0;
@@ -223,7 +229,7 @@ public struct BufferWriter : IBufferWriter<byte>
             return;
 
         var minimumSize = Math.Max(_chunkSizeBytes, sizeHint);
-        var buffer = _pool.Rent(minimumSize);
+        var buffer = _pool.Rent(checked((uint)minimumSize));
         _segments[_currentSegmentIndex] = new Segment(buffer);
         _segmentCount = _currentSegmentIndex + 1;
     }
@@ -243,10 +249,13 @@ public struct BufferWriter : IBufferWriter<byte>
         ParquetMetrics.BufferWriterSegmentTableAllocations.Add(1);
     }
 
-    static int GetInitialSegmentCapacity(int initialBufferBytes, int chunkSizeBytes)
+    static int GetInitialSegmentCapacity(uint initialBufferBytes, uint chunkSizeBytes)
     {
-        var count = checked((initialBufferBytes + chunkSizeBytes - 1) / chunkSizeBytes);
-        return count <= 0 ? 1 : count;
+        var count = (initialBufferBytes + chunkSizeBytes - 1) / chunkSizeBytes;
+        if (count > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(initialBufferBytes), initialBufferBytes,
+                $"Initial segment capacity must be <= {int.MaxValue}.");
+        return checked((int)count);
     }
 
     struct Segment

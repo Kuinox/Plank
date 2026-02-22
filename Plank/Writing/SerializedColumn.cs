@@ -14,7 +14,7 @@ public sealed class SerializedColumn
     internal int RowCount;
     bool _isWritten;
 
-    internal SerializedColumn(ParquetWriter owner, int initialPageCapacity)
+    internal SerializedColumn(ParquetWriter owner, uint initialPageCapacity)
     {
         ArgumentNullException.ThrowIfNull(owner);
         Pages = new PageList(initialPageCapacity);

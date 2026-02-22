@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Plank.Schema;
 
@@ -63,7 +64,7 @@ static class Encoding
 
         var dictionaryPageIndex = AddDictionaryPage(bufferWriters, pages);
         ref var dictionaryPage = ref pages[dictionaryPageIndex];
-        dictionary = new Dictionary<T, int>();
+        dictionary = new Dictionary<T, int>(GetDictionaryComparer<T>());
         var dictionaryValues = new List<T>();
         for (var i = 0; i < values.Length; i++)
         {
@@ -159,5 +160,14 @@ static class Encoding
         {
             ArrayPool<int>.Shared.Return(rentedIndexes);
         }
+    }
+
+    static IEqualityComparer<T> GetDictionaryComparer<T>()
+        where T : notnull
+    {
+        if (typeof(T) == typeof(byte[]))
+            return (IEqualityComparer<T>)(object)ByteArrayComparer.Instance;
+
+        return EqualityComparer<T>.Default;
     }
 }

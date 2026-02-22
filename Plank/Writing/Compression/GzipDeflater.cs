@@ -2,43 +2,53 @@ namespace Plank.Writing;
 
 unsafe sealed class GzipDeflater
 {
-    ZlibNative.StreamState _stream;
+    readonly ZlibNative.StreamState* _stream;
     bool _initialized;
+
+    internal GzipDeflater()
+    {
+        _stream = (ZlibNative.StreamState*)System.Runtime.InteropServices.NativeMemory.AllocZeroed(
+            (nuint)sizeof(ZlibNative.StreamState));
+        if (_stream is null)
+            throw new OutOfMemoryException("Failed to allocate zlib stream state.");
+    }
 
     ~GzipDeflater()
     {
-        if (!_initialized)
-            return;
+        if (_initialized)
+            ZlibNative.DeflateEnd(_stream);
 
-        fixed (ZlibNative.StreamState* stream = &_stream)
-            ZlibNative.DeflateEnd(stream);
+        System.Runtime.InteropServices.NativeMemory.Free(_stream);
     }
 
     internal void Compress(ReadOnlySpan<byte> input, byte[] outputBuffer, ref BufferWriter destination)
     {
-        fixed (ZlibNative.StreamState* stream = &_stream)
+        EnsureInitialized();
+
+        var resetCode = ZlibNative.DeflateReset(_stream);
+        if (resetCode != ZlibNative.ResultOk)
+            throw new InvalidOperationException($"zlib deflateReset failed with code {resetCode}.");
+
+        fixed (byte* output = outputBuffer)
         {
-            EnsureInitialized(stream);
-
-            var resetCode = ZlibNative.DeflateReset(stream);
-            if (resetCode != ZlibNative.ResultOk)
-                throw new InvalidOperationException($"zlib deflateReset failed with code {resetCode}.");
-
-            fixed (byte* output = outputBuffer)
+            if (input.Length == 0)
             {
-                fixed (byte* inputStart = input)
-                    DeflateInput(stream, inputStart, input.Length, output, outputBuffer, ref destination);
+                DeflateInput(_stream, null, 0, output, outputBuffer, ref destination);
+                return;
             }
+
+            fixed (byte* inputStart = input)
+                DeflateInput(_stream, inputStart, input.Length, output, outputBuffer, ref destination);
         }
     }
 
-    void EnsureInitialized(ZlibNative.StreamState* stream)
+    void EnsureInitialized()
     {
         if (_initialized)
             return;
 
         var version = ZlibNative.GetVersion();
-        var initCode = ZlibNative.DeflateInit2(stream, ZlibNative.CompressionLevelFast, ZlibNative.CompressionMethodDeflate,
+        var initCode = ZlibNative.DeflateInit2(_stream, ZlibNative.CompressionLevelFast, ZlibNative.CompressionMethodDeflate,
             ZlibNative.WindowBitsGzip, ZlibNative.MemoryLevelDefault, ZlibNative.CompressionStrategyDefault, (byte*)version,
             sizeof(ZlibNative.StreamState));
         if (initCode != ZlibNative.ResultOk)

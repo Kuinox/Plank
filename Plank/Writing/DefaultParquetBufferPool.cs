@@ -10,8 +10,8 @@ public sealed class DefaultParquetBufferPool : IParquetBufferPool
     {
     }
 
-    public byte[] Rent(int minimumLength)
-        => ArrayPool<byte>.Shared.Rent(minimumLength);
+    public byte[] Rent(uint minimumLength)
+        => ArrayPool<byte>.Shared.Rent(checked((int)minimumLength));
 
     public void Return(byte[] buffer)
     {

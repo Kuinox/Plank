@@ -24,5 +24,11 @@ public sealed record Column
             throw new ArgumentOutOfRangeException(nameof(PhysicalType), PhysicalType, "PhysicalType must be a defined ParquetPhysicalType value.");
 
         Options.Validate();
+        if (PhysicalType == ParquetPhysicalType.FixedLenByteArray && Options.TypeLength <= 0)
+            throw new InvalidOperationException(
+                $"Column '{Name}' uses physical type '{ParquetPhysicalType.FixedLenByteArray}' and requires a positive '{nameof(ColumnOptions.TypeLength)}'.");
+        if (PhysicalType != ParquetPhysicalType.FixedLenByteArray && Options.TypeLength != 0)
+            throw new InvalidOperationException(
+                $"Column '{Name}' sets '{nameof(ColumnOptions.TypeLength)}', but only '{ParquetPhysicalType.FixedLenByteArray}' columns can set it.");
     }
 }

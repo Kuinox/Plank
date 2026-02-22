@@ -34,7 +34,8 @@ static class PlainEncoding
                 WriteFixedLengthByteArrayValues(column, values, ref writer);
                 return;
             case ParquetPhysicalType.Int96:
-                throw new NotSupportedException("Parquet INT96 encoding is TODO.");
+                WriteInt96Values(column, values, ref writer);
+                return;
             default:
                 throw new NotSupportedException(
                     $"Physical type '{column.PhysicalType}' is not supported by plain encoding.");
@@ -186,34 +187,76 @@ static class PlainEncoding
         writer.Advance(offset);
     }
 
+    static void WriteInt96Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
+        where T : notnull
+    {
+        if (typeof(T) != typeof(byte[]))
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' expects '{ParquetPhysicalType.Int96}' values as 12-byte payloads, but got '{typeof(T)}'.");
+
+        var int96Values = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
+        const int int96Size = 12;
+        var byteCount = checked(int96Values.Length * int96Size);
+        if (byteCount == 0)
+            return;
+
+        var destination = writer.GetSpan(byteCount);
+        var offset = 0;
+        for (var i = 0; i < int96Values.Length; i++)
+        {
+            var value = int96Values[i] ?? throw new InvalidOperationException(
+                $"Column '{column.Name}' does not support null values.");
+            if (value.Length != int96Size)
+                throw new InvalidOperationException(
+                    $"Column '{column.Name}' expects INT96 payloads of {int96Size} bytes, but got {value.Length}.");
+
+            value.CopyTo(destination[offset..]);
+            offset += int96Size;
+        }
+
+        writer.Advance(offset);
+    }
+
     static void WriteFixedLengthByteArrayValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
         if (typeof(T) != typeof(byte[]))
             throw new InvalidOperationException(
-                $"Column '{column.Name}' expects '{ParquetPhysicalType.FixedLenByteArray}' values, but got '{typeof(T)}'.");
+                $"Column '{column.Name}' expects '{ParquetPhysicalType.FixedLenByteArray}' values as byte[] payloads, but got '{typeof(T)}'.");
 
-        var byteArrayValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
-        if (byteArrayValues.Length == 0)
+        var valueLength = GetFixedLength(column);
+        var fixedLengthValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
+        var byteCount = checked(fixedLengthValues.Length * valueLength);
+        if (byteCount == 0)
             return;
 
-        var fixedLength = byteArrayValues[0]?.Length ?? throw new InvalidOperationException(
-            $"Column '{column.Name}' does not support null values.");
-        var byteCount = checked(byteArrayValues.Length * fixedLength);
         var destination = writer.GetSpan(byteCount);
         var offset = 0;
-        for (var i = 0; i < byteArrayValues.Length; i++)
+        for (var i = 0; i < fixedLengthValues.Length; i++)
         {
-            var value = byteArrayValues[i] ?? throw new InvalidOperationException(
+            var value = fixedLengthValues[i] ?? throw new InvalidOperationException(
                 $"Column '{column.Name}' does not support null values.");
-            if (value.Length != fixedLength)
+            if (value.Length != valueLength)
                 throw new InvalidOperationException(
-                    $"Column '{column.Name}' expects fixed-length byte arrays of length {fixedLength}, but got {value.Length}.");
+                    $"Column '{column.Name}' expects fixed-length values of {valueLength} bytes, but got {value.Length}.");
 
             value.CopyTo(destination[offset..]);
-            offset += fixedLength;
+            offset += valueLength;
         }
 
         writer.Advance(offset);
+    }
+
+    static int GetFixedLength(Column column)
+    {
+        var valueLength = column.Options.TypeLength;
+        if (valueLength == 0)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' is '{ParquetPhysicalType.FixedLenByteArray}' and requires a positive '{nameof(ColumnOptions.TypeLength)}'.");
+        if (valueLength > int.MaxValue)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' fixed length ({valueLength}) exceeds supported maximum of {int.MaxValue}.");
+
+        return checked((int)valueLength);
     }
 }

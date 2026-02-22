@@ -5,12 +5,13 @@ public sealed class PageList
     Page[] _pages;
     int _count;
 
-    public PageList(int initialCapacity)
+    public PageList(uint initialCapacity)
     {
-        if (initialCapacity < 0)
+        if (initialCapacity > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(initialCapacity), initialCapacity,
-                "Initial capacity must be non-negative.");
-        _pages = new Page[initialCapacity];
+                $"Initial capacity must be <= {int.MaxValue}.");
+
+        _pages = new Page[checked((int)initialCapacity)];
         _count = 0;
     }
 

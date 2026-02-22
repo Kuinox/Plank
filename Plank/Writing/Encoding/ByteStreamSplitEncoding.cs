@@ -118,28 +118,44 @@ static class ByteStreamSplitEncoding
     {
         if (typeof(T) != typeof(byte[]))
             throw new InvalidOperationException(
-                $"Column '{column.Name}' expects '{ParquetPhysicalType.FixedLenByteArray}' values, but got '{typeof(T)}'.");
+                $"Column '{column.Name}' expects '{ParquetPhysicalType.FixedLenByteArray}' values as byte[] payloads, but got '{typeof(T)}'.");
 
-        var byteArrayValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
-        if (byteArrayValues.Length == 0)
+        var valueLength = GetFixedLength(column);
+        var fixedLengthValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
+        var byteCount = checked(fixedLengthValues.Length * valueLength);
+        if (byteCount == 0)
             return;
 
-        var fixedLength = byteArrayValues[0]?.Length ?? throw new InvalidOperationException(
-            $"Column '{column.Name}' does not support null values.");
-        var byteCount = checked(fixedLength * byteArrayValues.Length);
         var destination = writer.GetSpan(byteCount);
-        for (var lane = 0; lane < fixedLength; lane++)
-            for (var i = 0; i < byteArrayValues.Length; i++)
+        for (var lane = 0; lane < valueLength; lane++)
+        {
+            var baseOffset = lane * fixedLengthValues.Length;
+            for (var i = 0; i < fixedLengthValues.Length; i++)
             {
-                var value = byteArrayValues[i] ?? throw new InvalidOperationException(
+                var value = fixedLengthValues[i] ?? throw new InvalidOperationException(
                     $"Column '{column.Name}' does not support null values.");
-                if (value.Length != fixedLength)
+                if (value.Length != valueLength)
                     throw new InvalidOperationException(
-                        $"Column '{column.Name}' expects fixed-length byte arrays of length {fixedLength}, but got {value.Length}.");
+                        $"Column '{column.Name}' expects fixed-length values of {valueLength} bytes, but got {value.Length}.");
 
-                destination[lane * byteArrayValues.Length + i] = value[lane];
+                destination[baseOffset + i] = value[lane];
             }
+        }
 
         writer.Advance(byteCount);
     }
+
+    static int GetFixedLength(Column column)
+    {
+        var valueLength = column.Options.TypeLength;
+        if (valueLength == 0)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' is '{ParquetPhysicalType.FixedLenByteArray}' and requires a positive '{nameof(ColumnOptions.TypeLength)}'.");
+        if (valueLength > int.MaxValue)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' fixed length ({valueLength}) exceeds supported maximum of {int.MaxValue}.");
+
+        return checked((int)valueLength);
+    }
+
 }

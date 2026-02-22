@@ -7,6 +7,11 @@ namespace Plank.Tests;
 
 internal sealed class WriterInteropE2ETests
 {
+    const int FuzzRowGroupCount = 2;
+    const int MinFuzzRowCount = 12;
+    const int MaxFuzzRowCount = 28;
+    static readonly int[] FuzzSeeds = [17107, 36433, 56921];
+
     [Test]
     public async Task RequiredColumnsSingleRowGroupAreReadableByBothImplementations()
     {
@@ -274,6 +279,158 @@ internal sealed class WriterInteropE2ETests
         }
     }
 
+    [Test]
+    public async Task RequiredColumnsFuzzedAcrossSupportedEncodingsRoundTripByBothImplementations()
+    {
+        foreach (var fuzzCase in EnumerateFuzzCases())
+            for (var seedIndex = 0; seedIndex < FuzzSeeds.Length; seedIndex++)
+                await WriteAndAssertFuzzCaseAsync(fuzzCase, FuzzSeeds[seedIndex]).ConfigureAwait(false);
+    }
+
+    static IEnumerable<FuzzCase> EnumerateFuzzCases()
+    {
+        yield return new FuzzCase("plain", CreateSchema(), FuzzPattern.General);
+        yield return new FuzzCase("delta-binary-packed", CreateSchema(int32Encoding: EncodingKind.DeltaBinaryPacked),
+            FuzzPattern.MonotonicIntegers);
+        yield return new FuzzCase("byte-stream-split", CreateSchema(doubleEncoding: EncodingKind.ByteStreamSplit),
+            FuzzPattern.General);
+        yield return new FuzzCase("delta-length-byte-array", CreateSchema(binaryEncoding: EncodingKind.DeltaLengthByteArray),
+            FuzzPattern.VariableBinaryLength);
+        yield return new FuzzCase("delta-byte-array", CreateSchema(binaryEncoding: EncodingKind.DeltaByteArray),
+            FuzzPattern.SharedBinaryPrefix);
+        yield return new FuzzCase("rle-dictionary", CreateSchema(int32Encoding: EncodingKind.RleDictionary),
+            FuzzPattern.DictionaryFriendly);
+        yield return new FuzzCase("plain-dictionary", CreateSchema(int32Encoding: EncodingKind.PlainDictionary),
+            FuzzPattern.DictionaryFriendly);
+    }
+
+    static async Task WriteAndAssertFuzzCaseAsync(FuzzCase fuzzCase, int seed)
+    {
+        var path = NewPath($"fuzz-{fuzzCase.Name}-seed-{seed}");
+        var rowGroups = CreateFuzzRowGroups(fuzzCase, seed);
+        try
+        {
+            await WriteFileAsync(path, fuzzCase.Schema, CompressionKind.None, rowGroups).ConfigureAwait(false);
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    static ExpectedRowGroup[] CreateFuzzRowGroups(FuzzCase fuzzCase, int seed)
+    {
+        var random = new DeterministicRng(seed);
+        var rowGroups = new ExpectedRowGroup[FuzzRowGroupCount];
+        for (var rowGroupIndex = 0; rowGroupIndex < rowGroups.Length; rowGroupIndex++)
+        {
+            var rowCount = random.NextInt(MinFuzzRowCount, MaxFuzzRowCount + 1);
+            rowGroups[rowGroupIndex] = CreateFuzzRowGroup(random, rowCount, fuzzCase.Pattern);
+        }
+
+        return rowGroups;
+    }
+
+    static ExpectedRowGroup CreateFuzzRowGroup(DeterministicRng random, int rowCount, FuzzPattern pattern)
+    {
+        var int32Values = new int[rowCount];
+        var int64Values = new long[rowCount];
+        var doubleValues = new double[rowCount];
+        var binaryValues = new byte[rowCount][];
+        var int32Accumulator = random.NextInt(-20_000, 20_001);
+        var int64Accumulator = random.NextInt64(-2_000_000L, 2_000_001L);
+        var prefix = CreateRandomBytes(random, minLength: 3, maxLength: 3);
+        var int32Dictionary = CreateInt32Dictionary(random, uniqueCount: 11);
+        var int64Dictionary = CreateInt64Dictionary(random, uniqueCount: 9);
+        var binaryDictionary = CreateBinaryDictionary(random, uniqueCount: 7, minLength: 1, maxLength: 7);
+
+        for (var i = 0; i < rowCount; i++)
+        {
+            switch (pattern)
+            {
+                case FuzzPattern.General:
+                    int32Values[i] = random.NextInt(-50_000, 50_001);
+                    int64Values[i] = random.NextInt64(-5_000_000L, 5_000_001L);
+                    doubleValues[i] = (random.NextDouble() - 0.5) * 10_000d;
+                    binaryValues[i] = CreateRandomBytes(random, minLength: 0, maxLength: 11);
+                    break;
+                case FuzzPattern.MonotonicIntegers:
+                    int32Accumulator += random.NextInt(0, 9);
+                    int64Accumulator += random.NextInt(0, 2_500);
+                    int32Values[i] = int32Accumulator;
+                    int64Values[i] = int64Accumulator;
+                    doubleValues[i] = int32Accumulator * 0.25 + random.NextDouble();
+                    binaryValues[i] = CreateRandomBytes(random, minLength: 1, maxLength: 8);
+                    break;
+                case FuzzPattern.DictionaryFriendly:
+                    int32Values[i] = int32Dictionary[random.NextInt(0, int32Dictionary.Length)];
+                    int64Values[i] = int64Dictionary[random.NextInt(0, int64Dictionary.Length)];
+                    doubleValues[i] = (random.NextInt(0, 8) - 3) * 0.5;
+                    binaryValues[i] = binaryDictionary[random.NextInt(0, binaryDictionary.Length)];
+                    break;
+                case FuzzPattern.VariableBinaryLength:
+                    int32Values[i] = random.NextInt(-10_000, 10_001);
+                    int64Values[i] = random.NextInt64(-1_000_000L, 1_000_001L);
+                    doubleValues[i] = random.NextInt(-1000, 1001) + random.NextDouble();
+                    binaryValues[i] = CreateRandomBytes(random, minLength: 1, maxLength: 16);
+                    break;
+                case FuzzPattern.SharedBinaryPrefix:
+                    int32Values[i] = random.NextInt(-10_000, 10_001);
+                    int64Values[i] = random.NextInt64(-3_000_000L, 3_000_001L);
+                    doubleValues[i] = (random.NextDouble() - 0.5) * 2_000d;
+                    binaryValues[i] = CreateBytesWithPrefix(random, prefix, minSuffixLength: 1, maxSuffixLength: 8);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(pattern), pattern, "Unexpected fuzz pattern.");
+            }
+        }
+
+        return new ExpectedRowGroup(int32Values, int64Values, doubleValues, binaryValues);
+    }
+
+    static int[] CreateInt32Dictionary(DeterministicRng random, int uniqueCount)
+    {
+        var values = new int[uniqueCount];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = random.NextInt(-2000, 2001);
+        return values;
+    }
+
+    static long[] CreateInt64Dictionary(DeterministicRng random, int uniqueCount)
+    {
+        var values = new long[uniqueCount];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = random.NextInt64(-500_000L, 500_001L);
+        return values;
+    }
+
+    static byte[][] CreateBinaryDictionary(DeterministicRng random, int uniqueCount, int minLength, int maxLength)
+    {
+        var values = new byte[uniqueCount][];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = CreateRandomBytes(random, minLength, maxLength);
+        return values;
+    }
+
+    static byte[] CreateRandomBytes(DeterministicRng random, int minLength, int maxLength)
+    {
+        var length = random.NextInt(minLength, maxLength + 1);
+        var value = new byte[length];
+        random.NextBytes(value);
+        return value;
+    }
+
+    static byte[] CreateBytesWithPrefix(DeterministicRng random, byte[] prefix, int minSuffixLength, int maxSuffixLength)
+    {
+        var suffixLength = random.NextInt(minSuffixLength, maxSuffixLength + 1);
+        var value = new byte[prefix.Length + suffixLength];
+        Array.Copy(prefix, value, prefix.Length);
+        random.NextBytes(value.AsSpan(prefix.Length, suffixLength));
+        return value;
+    }
+
     static string NewPath(string suffix)
         => Path.Combine(Path.GetTempPath(), $"plank-writer-interop-{suffix}-{Guid.NewGuid():N}.parquet");
 
@@ -457,4 +614,66 @@ internal sealed class WriterInteropE2ETests
         long[] Int64Values,
         double[] DoubleValues,
         byte[][] BinaryValues);
+
+    readonly record struct FuzzCase(string Name, ParquetSchema Schema, FuzzPattern Pattern);
+
+    enum FuzzPattern
+    {
+        General,
+        MonotonicIntegers,
+        DictionaryFriendly,
+        VariableBinaryLength,
+        SharedBinaryPrefix
+    }
+
+    sealed class DeterministicRng
+    {
+        uint _state;
+
+        public DeterministicRng(int seed)
+            => _state = seed == 0 ? 0x9E3779B9U : unchecked((uint)seed);
+
+        public int NextInt(int minInclusive, int maxExclusive)
+        {
+            if (minInclusive >= maxExclusive)
+                throw new ArgumentOutOfRangeException(nameof(maxExclusive),
+                    "maxExclusive must be greater than minInclusive.");
+
+            var range = (uint)(maxExclusive - minInclusive);
+            return minInclusive + (int)(NextUInt32() % range);
+        }
+
+        public long NextInt64(long minInclusive, long maxExclusive)
+        {
+            if (minInclusive >= maxExclusive)
+                throw new ArgumentOutOfRangeException(nameof(maxExclusive),
+                    "maxExclusive must be greater than minInclusive.");
+
+            var range = (ulong)(maxExclusive - minInclusive);
+            return minInclusive + (long)(NextUInt64() % range);
+        }
+
+        public double NextDouble()
+            => NextUInt64() / ((double)ulong.MaxValue + 1d);
+
+        public void NextBytes(byte[] buffer)
+            => NextBytes(buffer.AsSpan());
+
+        public void NextBytes(Span<byte> buffer)
+        {
+            for (var i = 0; i < buffer.Length; i++)
+                buffer[i] = (byte)(NextUInt32() & 0xFF);
+        }
+
+        uint NextUInt32()
+        {
+            _state ^= _state << 13;
+            _state ^= _state >> 17;
+            _state ^= _state << 5;
+            return _state;
+        }
+
+        ulong NextUInt64()
+            => ((ulong)NextUInt32() << 32) | NextUInt32();
+    }
 }

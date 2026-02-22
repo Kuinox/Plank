@@ -115,6 +115,8 @@ static class ParquetMetadataThriftWriter
     {
         var previous = writer.BeginStruct();
         writer.WriteFieldI32(1, GetPhysicalType(column.PhysicalType));
+        if (column.PhysicalType == ParquetPhysicalType.FixedLenByteArray)
+            writer.WriteFieldI32(2, checked((int)column.Options.TypeLength));
         writer.WriteFieldI32(3, GetRepetition(column.Options.Repetition));
         writer.WriteFieldBinary(4, column.Name);
         writer.EndStruct(previous);

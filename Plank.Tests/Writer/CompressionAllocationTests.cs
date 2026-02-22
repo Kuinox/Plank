@@ -50,8 +50,8 @@ internal sealed class CompressionAllocationTests
 
     static long MeasureSteadyStateAllocations(CompressionKind codec, bool multiSegmentInput)
     {
-        var chunkSize = multiSegmentInput ? 1024 : 128 * 1024;
-        var initialBuffer = multiSegmentInput ? 1024 : 128 * 1024;
+        uint chunkSize = multiSegmentInput ? 1024U : 128U * 1024;
+        uint initialBuffer = multiSegmentInput ? 1024U : 128U * 1024;
         var factory = new BufferWriterFactory(DefaultParquetBufferPool.Shared, chunkSize, initialBuffer, initialBuffer, initialBuffer);
         var context = new CompressionContext(factory);
         var source = factory.CreatePageBufferWriter();

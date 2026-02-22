@@ -1,6 +1,8 @@
 using BenchmarkDotNet.Columns;
 using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
+using BenchmarkDotNet.Parameters;
+using System.Globalization;
 
 namespace Plank.Benchmarks;
 
@@ -59,17 +61,60 @@ public sealed class EncodingSizeMetricColumn : IColumn
         };
         if (library.Length == 0)
             return "?";
-        if (benchmarkCase.Parameters[nameof(EncodingMatrixBdnBenchmark.DataType)] is not string dataType)
+        if (!TryGetScenario(benchmarkCase.Parameters, out var scenario))
             return "?";
-        if (benchmarkCase.Parameters[nameof(EncodingMatrixBdnBenchmark.EncodingName)] is not string encoding)
+        if (!TryGetRows(benchmarkCase.Parameters, out var rows))
             return "?";
-        if (benchmarkCase.Parameters[nameof(EncodingMatrixBdnBenchmark.Rows)] is not int rows)
-            return "?";
-        return EncodingBenchmarkMetrics.TryGet(library, dataType, encoding, rows, out var snapshot)
-            ? _selector(snapshot).ToString(System.Globalization.CultureInfo.InvariantCulture)
+        return EncodingBenchmarkMetrics.TryGet(library, scenario.DataType, scenario.EncodingName, rows, out var snapshot)
+            ? _selector(snapshot).ToString(CultureInfo.InvariantCulture)
             : "?";
     }
 
     public override string ToString()
         => ColumnName;
+
+    static bool TryGetScenario(ParameterInstances parameters, out SingleColumnScenario scenario)
+    {
+        foreach (var item in parameters.Items)
+        {
+            if (item.Value is SingleColumnScenario typedScenario)
+            {
+                scenario = typedScenario;
+                return true;
+            }
+
+            if (item.Value is string scenarioText && SingleColumnScenario.TryParse(scenarioText, out var parsedScenario))
+            {
+                scenario = parsedScenario;
+                return true;
+            }
+        }
+
+        scenario = default;
+        return false;
+    }
+
+    static bool TryGetRows(ParameterInstances parameters, out int rows)
+    {
+        foreach (var item in parameters.Items)
+        {
+            if (!string.Equals(item.Name, nameof(EncodingMatrixBdnBenchmark.Rows), StringComparison.Ordinal))
+                continue;
+            if (item.Value is int typedRows)
+            {
+                rows = typedRows;
+                return true;
+            }
+
+            if (item.Value is string rowText
+                && int.TryParse(rowText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedRows))
+            {
+                rows = parsedRows;
+                return true;
+            }
+        }
+
+        rows = 0;
+        return false;
+    }
 }
