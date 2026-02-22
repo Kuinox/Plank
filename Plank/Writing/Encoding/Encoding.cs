@@ -22,6 +22,10 @@ static class Encoding
         if (values.Length == 0)
             return;
 
+        if (column.Options.Repetition == ParquetRepetition.Repeated)
+            throw new NotSupportedException(
+                $"Column '{column.Name}' uses repetition '{ParquetRepetition.Repeated}', which requires list/map annotated schema paths and is not implemented yet.");
+
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
         var useDictionary = TryWriteDictionaryPage(bufferWriters, column, values, strategy, pages,
@@ -63,7 +67,8 @@ static class Encoding
                 else
                     ValueEncodingDispatcher.WriteValues(dataEncoding, column, pageValues, bufferWriters, ref page.Content);
 
-                WriteDataPageHeader(ref page.Header, pageRowCount, useDictionary ? dictionaryEncoding : dataEncoding);
+                WriteDataPageHeader(ref page.Header, pageRowCount, pageRowCount, 0, 0, 0,
+                    useDictionary ? dictionaryEncoding : dataEncoding);
             }
         }
         finally
@@ -162,6 +167,7 @@ static class Encoding
         }
     }
 
+
     static int AddDictionaryPage(BufferWriterFactory bufferWriters, PageList pages)
     {
         ref var page = ref pages.Add();
@@ -189,13 +195,19 @@ static class Encoding
         buffer = useColumnBuffer ? bufferWriters.CreateColumnBufferWriter() : bufferWriters.CreatePageBufferWriter();
     }
 
-    static void WriteDataPageHeader(ref BufferWriter headerWriter, int rowCount, EncodingKind encoding)
+    static void WriteDataPageHeader(ref BufferWriter headerWriter, int rowCount, int valueCount, int nullCount,
+        int repetitionLevelsByteLength, int definitionLevelsByteLength, EncodingKind encoding)
     {
-        const int dataPageHeaderSize = sizeof(byte) + sizeof(byte) + sizeof(int);
+        const int dataPageHeaderSize = sizeof(byte) + sizeof(byte) + sizeof(int) + sizeof(int) + sizeof(int) +
+                                       sizeof(int) + sizeof(int);
         var header = headerWriter.GetSpan(dataPageHeaderSize);
-        header[0] = (byte)PageKind.DataV1;
+        header[0] = (byte)PageKind.DataV2;
         header[1] = (byte)encoding;
         BinaryPrimitives.WriteInt32LittleEndian(header[2..], rowCount);
+        BinaryPrimitives.WriteInt32LittleEndian(header[6..], nullCount);
+        BinaryPrimitives.WriteInt32LittleEndian(header[10..], valueCount);
+        BinaryPrimitives.WriteInt32LittleEndian(header[14..], repetitionLevelsByteLength);
+        BinaryPrimitives.WriteInt32LittleEndian(header[18..], definitionLevelsByteLength);
         headerWriter.Advance(dataPageHeaderSize);
     }
 

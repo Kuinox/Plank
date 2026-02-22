@@ -62,21 +62,25 @@ public sealed class RowGroupWriter
             ref var page = ref pages[i];
             var pageOffset = _writer.FileOffset;
             var pageKind = ReadPageKind(ref page.Header);
-            var uncompressedContentSize = page.Content.WrittenLength;
-            var compressedContentSize = uncompressedContentSize;
+            var pageContentSize = page.Content.WrittenLength;
+            var compressedContentSize = pageContentSize;
+            var uncompressedPageHeaderSize = pageContentSize;
             var writeCompressedContent = false;
-            if (compression != CompressionKind.None && uncompressedContentSize > 0)
-            {
-                Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionContext, ref page.Content,
-                    ref _compressedContent);
-                compressedContentSize = _compressedContent.WrittenLength;
-                writeCompressedContent = true;
-            }
+            var storedContentSize = pageContentSize;
 
             switch (pageKind)
             {
                 case PageKind.Dictionary:
                 {
+                    if (compression != CompressionKind.None && pageContentSize > 0)
+                    {
+                        Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionContext,
+                            ref page.Content, ref _compressedContent);
+                        compressedContentSize = _compressedContent.WrittenLength;
+                        storedContentSize = compressedContentSize;
+                        writeCompressedContent = true;
+                    }
+
                     if (!hasDictionaryPage)
                     {
                         hasDictionaryPage = true;
@@ -86,13 +90,37 @@ public sealed class RowGroupWriter
                     var dictionaryValueCount = ReadDictionaryValueCount(ref page.Header);
                     page.Header.Reset();
                     ParquetMetadataThriftWriter.WriteDictionaryPageHeader(ref page.Header, dictionaryValueCount,
-                        uncompressedContentSize, compressedContentSize);
+                        pageContentSize, compressedContentSize);
                     break;
                 }
                 case PageKind.DataV1:
                 case PageKind.DataV2:
                 {
-                    ReadDataPageMetadata(ref page.Header, out var dataPageRowCount, out var pageEncoding);
+                    ReadDataPageMetadata(ref page.Header, out var dataPageRowCount, out var dataPageValueCount,
+                        out var dataPageNullCount, out var repetitionLevelsByteLength,
+                        out var definitionLevelsByteLength, out var pageEncoding);
+                    var levelBytes = checked(repetitionLevelsByteLength + definitionLevelsByteLength);
+                    if ((uint)levelBytes > (uint)pageContentSize)
+                        throw new InvalidOperationException(
+                            $"Invalid level byte lengths ({levelBytes}) for data page content size {pageContentSize}.");
+                    var valueBytes = pageContentSize - levelBytes;
+                    uncompressedPageHeaderSize = pageContentSize;
+                    compressedContentSize = pageContentSize;
+                    storedContentSize = pageContentSize;
+
+                    if (compression != CompressionKind.None && valueBytes > 0)
+                    {
+                        if (levelBytes > 0)
+                            throw new NotSupportedException(
+                                "Compression for data pages containing repetition/definition levels is not implemented yet.");
+
+                        Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionContext,
+                            ref page.Content, ref _compressedContent);
+                        compressedContentSize = _compressedContent.WrittenLength;
+                        storedContentSize = compressedContentSize;
+                        writeCompressedContent = true;
+                    }
+
                     if (dataPageOffset < 0)
                     {
                         dataPageOffset = pageOffset;
@@ -100,8 +128,9 @@ public sealed class RowGroupWriter
                     }
 
                     page.Header.Reset();
-                    ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, dataPageRowCount, pageEncoding,
-                        uncompressedContentSize, compressedContentSize, writeCompressedContent);
+                    ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, dataPageRowCount,
+                        dataPageValueCount, dataPageNullCount, repetitionLevelsByteLength, definitionLevelsByteLength,
+                        pageEncoding, uncompressedPageHeaderSize, compressedContentSize, writeCompressedContent);
                     break;
                 }
                 default:
@@ -115,8 +144,8 @@ public sealed class RowGroupWriter
             else
                 _writer.WriteBuffer(ref _compressedContent);
 
-            totalUncompressedSize += checked((long)headerSize + uncompressedContentSize);
-            totalCompressedSize += checked((long)headerSize + compressedContentSize);
+            totalUncompressedSize += checked((long)headerSize + pageContentSize);
+            totalCompressedSize += checked((long)headerSize + storedContentSize);
         }
 
         if (dataPageOffset < 0)
@@ -148,10 +177,15 @@ public sealed class RowGroupWriter
         return (PageKind)span[0];
     }
 
-    static void ReadDataPageMetadata(ref BufferWriter header, out int rowCount, out EncodingKind encoding)
+    static void ReadDataPageMetadata(ref BufferWriter header, out int rowCount, out int valueCount, out int nullCount,
+        out int repetitionLevelsByteLength, out int definitionLevelsByteLength, out EncodingKind encoding)
     {
         header.TryGetSingleWrittenSpan(out var span);
         rowCount = BinaryPrimitives.ReadInt32LittleEndian(span[2..]);
+        nullCount = BinaryPrimitives.ReadInt32LittleEndian(span[6..]);
+        valueCount = BinaryPrimitives.ReadInt32LittleEndian(span[10..]);
+        repetitionLevelsByteLength = BinaryPrimitives.ReadInt32LittleEndian(span[14..]);
+        definitionLevelsByteLength = BinaryPrimitives.ReadInt32LittleEndian(span[18..]);
         encoding = (EncodingKind)span[1];
     }
 

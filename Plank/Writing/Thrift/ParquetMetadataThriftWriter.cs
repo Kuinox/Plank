@@ -9,8 +9,9 @@ static class ParquetMetadataThriftWriter
 {
     static readonly TextEncoding _utf8 = new UTF8Encoding(false, true);
 
-    internal static void WriteDataPageHeaderV2(ref BufferWriter destination, int rowCount, EncodingKind encoding,
-        int uncompressedPageSize, int compressedPageSize, bool isCompressed)
+    internal static void WriteDataPageHeaderV2(ref BufferWriter destination, int rowCount, int valueCount, int nullCount,
+        int repetitionLevelsByteLength, int definitionLevelsByteLength, EncodingKind encoding, int uncompressedPageSize,
+        int compressedPageSize, bool isCompressed)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
@@ -20,12 +21,12 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldHeader(8, CompactType.Struct);
 
         var previousData = writer.BeginStruct();
-        writer.WriteFieldI32(1, rowCount);
-        writer.WriteFieldI32(2, 0);
+        writer.WriteFieldI32(1, valueCount);
+        writer.WriteFieldI32(2, nullCount);
         writer.WriteFieldI32(3, rowCount);
         writer.WriteFieldI32(4, GetEncoding(encoding));
-        writer.WriteFieldI32(5, 0);
-        writer.WriteFieldI32(6, 0);
+        writer.WriteFieldI32(5, definitionLevelsByteLength);
+        writer.WriteFieldI32(6, repetitionLevelsByteLength);
         writer.WriteFieldBool(7, isCompressed);
         writer.EndStruct(previousData);
 
