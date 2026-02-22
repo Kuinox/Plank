@@ -16,6 +16,8 @@ public sealed class ParquetWriterOptions
 
     public CompressionKind Compression { get; init; } = CompressionKind.None;
 
+    public uint RowApiMaxParallelism { get; init; } = checked((uint)Environment.ProcessorCount);
+
     internal void Validate()
     {
         ArgumentNullException.ThrowIfNull(BufferPool);
@@ -28,6 +30,9 @@ public sealed class ParquetWriterOptions
         if (InitialColumnBufferBytes == 0)
             throw new ArgumentOutOfRangeException(nameof(InitialColumnBufferBytes), InitialColumnBufferBytes,
                 "Initial column buffer size must be greater than zero.");
+        if (RowApiMaxParallelism == 0)
+            throw new ArgumentOutOfRangeException(nameof(RowApiMaxParallelism), RowApiMaxParallelism,
+                "Row API max parallelism must be greater than zero.");
         if (!Enum.IsDefined(Compression))
             throw new ArgumentOutOfRangeException(nameof(Compression), Compression,
                 "Compression must be a defined CompressionKind value.");

@@ -51,6 +51,9 @@ public sealed class ParquetWriter
         ParquetWriterOptions? options = null)
         => new(stream, schema, options ?? ParquetWriterOptions.Default);
 
+    public uint RowApiMaxParallelism
+        => _options.RowApiMaxParallelism;
+
     public SerializedColumn CreateSerializedColumn()
         => new(this, _options.InitialPageCapacity);
 

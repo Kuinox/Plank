@@ -18,6 +18,9 @@ public sealed class RowGroupWriter
         _rowCount = -1;
     }
 
+    public SerializedColumn CreateSerializedColumn()
+        => _writer.CreateSerializedColumn();
+
     public void Write(SerializedColumn serialized)
     {
         ArgumentNullException.ThrowIfNull(serialized);
