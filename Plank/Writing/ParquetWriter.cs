@@ -42,7 +42,9 @@ public sealed class ParquetWriter
             ? ColumnsByOrdinal.Select(static c => new[] { c.Name }).ToArray()
             : _schema.LeafPaths.Select(static p => p.ToArray()).ToArray();
         ColumnProjectionInfosByOrdinal = _schema.LeafProjectionInfos.IsDefault || _schema.LeafProjectionInfos.Length == 0
-            ? ColumnsByOrdinal.Select(static _ => new LeafProjectionInfo(IsList: false, ListOptional: false, ElementOptional: false)).ToArray()
+            ? ColumnsByOrdinal.Select(static c => new LeafProjectionInfo(IsList: false, ListOptional: false,
+                ElementOptional: false, MaxRepetitionLevel: 0,
+                MaxDefinitionLevel: c.Options.Repetition == ParquetRepetition.Optional ? 1 : 0)).ToArray()
             : _schema.LeafProjectionInfos.ToArray();
         if (ColumnPathsByOrdinal.Length != ColumnsByOrdinal.Length)
             throw new InvalidOperationException("Leaf path projection did not match projected column count.");

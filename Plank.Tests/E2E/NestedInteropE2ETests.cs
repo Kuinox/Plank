@@ -226,6 +226,51 @@ internal sealed class NestedInteropE2ETests
         }
     }
 
+    [Test]
+    public async Task RequiredListOfRequiredListOfInt32SupportsEmptyInnerAndOuterLists()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-list-list-{Guid.NewGuid():N}.parquet");
+        int[][][] rows =
+        [
+            [new[] { 1, 2 }, Array.Empty<int>(), new[] { 3 }],
+            [],
+            [new[] { 4 }]
+        ];
+
+        var schema = new PlankSchema([
+            ColumnDef.List("outer",
+                ColumnDef.List("inner", ColumnDef.RequiredLeaf("value", ParquetPhysicalType.Int32),
+                    repetition: ParquetRepetition.Required),
+                repetition: ParquetRepetition.Required)
+        ]);
+
+        try
+        {
+            using (var stream = File.Create(path))
+            {
+                var writer = PlankParquetWriter.Create(stream, schema, new ParquetWriterOptions
+                {
+                    Compression = CompressionKind.Snappy
+                });
+                var rowGroup = writer.StartRowGroup();
+
+                var serialized = rowGroup.CreateSerializedColumn();
+                serialized.Serialize(schema.Columns[0], rows);
+                rowGroup.Write(serialized);
+
+                writer.CloseFile();
+            }
+
+            AssertParquetSharpNestedList(path, rows);
+            await AssertParquetNetNestedListAsync(path, rows).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
     static async Task AssertParquetNetCanReadAsync(string path, int expectedLeafCount)
     {
         using var stream = File.OpenRead(path);
@@ -307,6 +352,49 @@ internal sealed class NestedInteropE2ETests
         }
     }
 
+    static void AssertParquetSharpNestedList(string path, int[][][] expectedRows)
+    {
+        using var reader = new ParquetFileReader(path);
+        using var rowGroup = reader.RowGroup(0);
+        using var logical = rowGroup.Column(0).LogicalReader<int[][]>();
+        var actualRows = logical.ReadAll(expectedRows.Length);
+        if (actualRows.Length != expectedRows.Length)
+            throw new InvalidOperationException($"Expected {expectedRows.Length} rows, got {actualRows.Length}.");
+
+        for (var i = 0; i < expectedRows.Length; i++)
+        {
+            var expectedRow = expectedRows[i];
+            var actualRow = actualRows[i];
+            if (actualRow.Length != expectedRow.Length)
+                throw new InvalidOperationException($"Row {i} inner list count mismatch.");
+            for (var j = 0; j < expectedRow.Length; j++)
+                if (!actualRow[j].AsSpan().SequenceEqual(expectedRow[j]))
+                    throw new InvalidOperationException($"Row {i} inner list {j} mismatch.");
+        }
+    }
+
+    static async Task AssertParquetNetNestedListAsync(string path, int[][][] expectedRows)
+    {
+        using var stream = File.OpenRead(path);
+        using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
+        var fields = reader.Schema.GetDataFields();
+        if (fields.Length != 1)
+            throw new InvalidOperationException($"Expected one nested list field, got {fields.Length}.");
+
+        using var rowGroup = reader.OpenRowGroupReader(0);
+        var column = await rowGroup.ReadColumnAsync(fields[0]).ConfigureAwait(false);
+        if (column.Data.Length == 0)
+            throw new InvalidOperationException("Nested list column returned no data.");
+        if (column.RepetitionLevels is not int[] rep)
+            throw new InvalidOperationException("Nested list column is missing repetition levels.");
+        if (column.DefinitionLevels is not int[] def)
+            throw new InvalidOperationException("Nested list column is missing definition levels.");
+        if (rep.Length != def.Length)
+            throw new InvalidOperationException("Nested list repetition/definition level lengths mismatch.");
+        if (rep.Length < expectedRows.Length)
+            throw new InvalidOperationException($"Expected at least {expectedRows.Length} level entries, got {rep.Length}.");
+    }
+
     static void AssertJaggedEqual(int[][] expected, int[][] actual)
     {
         if (actual.Length != expected.Length)
@@ -323,5 +411,19 @@ internal sealed class NestedInteropE2ETests
         for (var i = 0; i < expected.Length; i++)
             if (!actual[i].AsSpan().SequenceEqual(expected[i]))
                 throw new InvalidOperationException($"Row {i} mismatch.");
+    }
+
+    static void AssertJaggedEqual(int[][][] expected, int[][][] actual)
+    {
+        if (actual.Length != expected.Length)
+            throw new InvalidOperationException($"Expected {expected.Length} rows, got {actual.Length}.");
+        for (var i = 0; i < expected.Length; i++)
+        {
+            if (actual[i].Length != expected[i].Length)
+                throw new InvalidOperationException($"Row {i} inner count mismatch.");
+            for (var j = 0; j < expected[i].Length; j++)
+                if (!actual[i][j].AsSpan().SequenceEqual(expected[i][j]))
+                    throw new InvalidOperationException($"Row {i}, inner {j} mismatch.");
+        }
     }
 }

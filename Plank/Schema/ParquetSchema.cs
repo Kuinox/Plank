@@ -112,7 +112,8 @@ public sealed record ParquetSchema
 
         var builder = ImmutableArray.CreateBuilder<LeafProjectionInfo>(columns.Length);
         for (var i = 0; i < columns.Length; i++)
-            builder.Add(new LeafProjectionInfo(IsList: false, ListOptional: false, ElementOptional: false));
+            builder.Add(new LeafProjectionInfo(IsList: false, ListOptional: false, ElementOptional: false,
+                MaxRepetitionLevel: 0, MaxDefinitionLevel: columns[i].Options.Repetition == ParquetRepetition.Optional ? 1 : 0));
         return builder.MoveToImmutable();
     }
 
@@ -132,9 +133,8 @@ public sealed record ParquetSchema
         var infosBuilder = ImmutableArray.CreateBuilder<LeafProjectionInfo>();
         var pathBuffer = new List<string>(8);
         for (var i = 0; i < definitions.Length; i++)
-            if (!TryCollectLeaves(definitions[i], columnsBuilder, pathsBuilder, pathBuffer, hasRepeatedAncestor: false,
-                    hasOptionalAncestor: false, infosBuilder, isListLeaf: false, listOptional: false,
-                    elementOptional: false))
+            if (!TryCollectLeaves(definitions[i], columnsBuilder, pathsBuilder, pathBuffer, repeatedLevel: 0,
+                    definitionLevel: 0, infosBuilder, isListLeaf: false, listOptional: false, elementOptional: false))
             {
                 columns = [];
                 leafPaths = [];
@@ -149,13 +149,15 @@ public sealed record ParquetSchema
     }
 
     static bool TryCollectLeaves(ColumnDefinition node, ImmutableArray<Column>.Builder columnsBuilder,
-        ImmutableArray<ImmutableArray<string>>.Builder pathsBuilder, List<string> pathBuffer, bool hasRepeatedAncestor,
-        bool hasOptionalAncestor, ImmutableArray<LeafProjectionInfo>.Builder infosBuilder, bool isListLeaf,
+        ImmutableArray<ImmutableArray<string>>.Builder pathsBuilder, List<string> pathBuffer, int repeatedLevel,
+        int definitionLevel, ImmutableArray<LeafProjectionInfo>.Builder infosBuilder, bool isListLeaf,
         bool listOptional, bool elementOptional)
     {
         pathBuffer.Add(node.Name);
+        var nodeRepetition = node.Repetition == ParquetRepetition.Repeated;
         var nodeOptional = node.Repetition == ParquetRepetition.Optional;
-        var optionalChain = hasOptionalAncestor || nodeOptional;
+        var nextRepeatedLevel = repeatedLevel + (nodeRepetition ? 1 : 0);
+        var nextDefinitionLevel = definitionLevel + (nodeRepetition || nodeOptional ? 1 : 0);
         try
         {
             switch (node.Kind)
@@ -164,9 +166,9 @@ public sealed record ParquetSchema
                 {
                     if (node.PhysicalType is null)
                         return false;
-                    var repetition = hasRepeatedAncestor
+                    var repetition = repeatedLevel > 0
                         ? ParquetRepetition.Repeated
-                        : optionalChain ? ParquetRepetition.Optional : ParquetRepetition.Required;
+                        : nodeOptional ? ParquetRepetition.Optional : ParquetRepetition.Required;
                     var options = node.Options ?? ColumnOptions.Default;
                     if (options.Repetition != repetition)
                         options = new ColumnOptions(repetition, options.Encodings, options.TypeLength);
@@ -174,7 +176,8 @@ public sealed record ParquetSchema
                     var columnName = string.Join(".", path);
                     columnsBuilder.Add(new Column(columnName, node.PhysicalType.Value, options));
                     pathsBuilder.Add(path);
-                    infosBuilder.Add(new LeafProjectionInfo(isListLeaf, listOptional, elementOptional));
+                    infosBuilder.Add(new LeafProjectionInfo(isListLeaf, listOptional, elementOptional,
+                        MaxRepetitionLevel: nextRepeatedLevel, MaxDefinitionLevel: nextDefinitionLevel));
                     return true;
                 }
                 case NodeKind.Group:
@@ -182,8 +185,8 @@ public sealed record ParquetSchema
                     if (node.Children.IsDefaultOrEmpty)
                         return false;
                     for (var i = 0; i < node.Children.Length; i++)
-                        if (!TryCollectLeaves(node.Children[i], columnsBuilder, pathsBuilder, pathBuffer, hasRepeatedAncestor,
-                                optionalChain, infosBuilder, isListLeaf, listOptional, elementOptional))
+                        if (!TryCollectLeaves(node.Children[i], columnsBuilder, pathsBuilder, pathBuffer, nextRepeatedLevel,
+                                nextDefinitionLevel, infosBuilder, isListLeaf, listOptional, elementOptional))
                             return false;
                     return true;
                 }
@@ -196,9 +199,9 @@ public sealed record ParquetSchema
                     var element = node.Children[0] with { Name = "element" };
                     try
                     {
-                        return TryCollectLeaves(element, columnsBuilder, pathsBuilder, pathBuffer, hasRepeatedAncestor: true,
-                            hasOptionalAncestor: optionalChain, infosBuilder, isListLeaf: true,
-                            listOptional: node.Repetition == ParquetRepetition.Optional,
+                        return TryCollectLeaves(element, columnsBuilder, pathsBuilder, pathBuffer,
+                            repeatedLevel: nextRepeatedLevel + 1, definitionLevel: nextDefinitionLevel + 1, infosBuilder,
+                            isListLeaf: true, listOptional: listOptional || node.Repetition == ParquetRepetition.Optional,
                             elementOptional: element.Repetition == ParquetRepetition.Optional);
                     }
                     finally
@@ -215,8 +218,8 @@ public sealed record ParquetSchema
                     var valueNode = node.Children[1];
 
                     pathBuffer.Add("key_value");
-                    var keyOk = TryCollectLeaves(keyNode with { Name = "key" }, columnsBuilder, pathsBuilder, pathBuffer, hasRepeatedAncestor: true,
-                        hasOptionalAncestor: optionalChain, infosBuilder, isListLeaf: true,
+                    var keyOk = TryCollectLeaves(keyNode with { Name = "key" }, columnsBuilder, pathsBuilder, pathBuffer,
+                        repeatedLevel: nextRepeatedLevel + 1, definitionLevel: nextDefinitionLevel + 1, infosBuilder, isListLeaf: true,
                         listOptional: node.Repetition == ParquetRepetition.Optional,
                         elementOptional: false);
                     if (!keyOk)
@@ -226,7 +229,7 @@ public sealed record ParquetSchema
                     }
 
                     var valueOk = TryCollectLeaves(valueNode with { Name = "value" }, columnsBuilder, pathsBuilder, pathBuffer,
-                        hasRepeatedAncestor: true, hasOptionalAncestor: optionalChain, infosBuilder,
+                        repeatedLevel: nextRepeatedLevel + 1, definitionLevel: nextDefinitionLevel + 1, infosBuilder,
                         isListLeaf: true, listOptional: node.Repetition == ParquetRepetition.Optional,
                         elementOptional: valueNode.Repetition == ParquetRepetition.Optional);
                     pathBuffer.RemoveAt(pathBuffer.Count - 1);

@@ -1,3 +1,4 @@
 namespace Plank.Schema;
 
-internal readonly record struct LeafProjectionInfo(bool IsList, bool ListOptional, bool ElementOptional);
+internal readonly record struct LeafProjectionInfo(bool IsList, bool ListOptional, bool ElementOptional,
+    int MaxRepetitionLevel, int MaxDefinitionLevel);
