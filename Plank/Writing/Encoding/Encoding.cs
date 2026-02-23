@@ -282,7 +282,7 @@ static class Encoding
         var physicalValueCount = 0;
         var levelValueCount = 0;
         var nullCount = 0;
-        var allowsNullRow = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional;
+        var allowsNullRow = leafProjectionInfo.ListOptional;
         var listDefinedDefinitionLevel = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional ? 1 : 0;
         var presentElementDefinitionLevel = listDefinedDefinitionLevel + 1;
         var definitionBitWidth = GetBitWidth(presentElementDefinitionLevel);
@@ -345,7 +345,7 @@ static class Encoding
         var physicalValueCount = 0;
         var levelValueCount = 0;
         var nullCount = 0;
-        var allowsNullRow = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional;
+        var allowsNullRow = leafProjectionInfo.ListOptional;
         var listDefinedDefinitionLevel = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional ? 1 : 0;
         var nullElementDefinitionLevel = listDefinedDefinitionLevel + 1;
         var presentElementDefinitionLevel = listDefinedDefinitionLevel + 2;
@@ -420,7 +420,7 @@ static class Encoding
         var physicalValueCount = 0;
         var levelValueCount = 0;
         var nullCount = 0;
-        var allowsNullRow = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional;
+        var allowsNullRow = leafProjectionInfo.ListOptional;
         var listDefinedDefinitionLevel = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional ? 1 : 0;
         var nullElementDefinitionLevel = listDefinedDefinitionLevel + 1;
         var presentElementDefinitionLevel = listDefinedDefinitionLevel + 2;

@@ -116,6 +116,116 @@ internal sealed class NestedInteropE2ETests
         }
     }
 
+    [Test]
+    public async Task RequiredMapOfInt32ToInt32LeavesWithSnappyIsReadableByBothImplementations()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-map-snappy-{Guid.NewGuid():N}.parquet");
+        var keyRows = new[]
+        {
+            new[] { 1, 2 },
+            new[] { 3 }
+        };
+        var valueRows = new[]
+        {
+            new[] { 100, 200 },
+            new[] { 300 }
+        };
+
+        var schema = new PlankSchema([
+            ColumnDef.Map("scores",
+                ColumnDef.RequiredLeaf("k", ParquetPhysicalType.Int32),
+                ColumnDef.RequiredLeaf("v", ParquetPhysicalType.Int32),
+                repetition: ParquetRepetition.Required)
+        ]);
+
+        try
+        {
+            using (var stream = File.Create(path))
+            {
+                var writer = PlankParquetWriter.Create(stream, schema, new ParquetWriterOptions
+                {
+                    Compression = CompressionKind.Snappy
+                });
+                var rowGroup = writer.StartRowGroup();
+
+                var serializedKeys = rowGroup.CreateSerializedColumn();
+                serializedKeys.Serialize(schema.Columns[0], keyRows);
+                rowGroup.Write(serializedKeys);
+
+                var serializedValues = rowGroup.CreateSerializedColumn();
+                serializedValues.Serialize(schema.Columns[1], valueRows);
+                rowGroup.Write(serializedValues);
+
+                writer.CloseFile();
+            }
+
+            AssertParquetSharpMapLeaves(path, keyRows, valueRows);
+            await AssertParquetNetCanReadAsync(path, expectedLeafCount: 2).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task OptionalMapOfInt32ToOptionalInt32SupportsNullRowsEmptyRowsAndNullValues()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-map-optional-{Guid.NewGuid():N}.parquet");
+        int[][] keyRows =
+        [
+            new[] { 1, 2 },
+            null!,
+            Array.Empty<int>(),
+            new[] { 3 }
+        ];
+        int?[][] valueRows =
+        [
+            new int?[] { 10, null },
+            null!,
+            Array.Empty<int?>(),
+            new int?[] { 30 }
+        ];
+
+        var schema = new PlankSchema([
+            ColumnDef.Map("scores",
+                ColumnDef.RequiredLeaf("k", ParquetPhysicalType.Int32),
+                ColumnDef.OptionalLeaf("v", ParquetPhysicalType.Int32),
+                repetition: ParquetRepetition.Optional)
+        ]);
+
+        try
+        {
+            using (var stream = File.Create(path))
+            {
+                var writer = PlankParquetWriter.Create(stream, schema, new ParquetWriterOptions
+                {
+                    Compression = CompressionKind.Snappy
+                });
+                var rowGroup = writer.StartRowGroup();
+
+                var serializedKeys = rowGroup.CreateSerializedColumn();
+                serializedKeys.Serialize(schema.Columns[0], keyRows);
+                rowGroup.Write(serializedKeys);
+
+                var serializedValues = rowGroup.CreateSerializedColumn();
+                serializedValues.Serialize(schema.Columns[1], valueRows);
+                rowGroup.Write(serializedValues);
+
+                writer.CloseFile();
+            }
+
+            AssertParquetSharpOptionalMapLeaves(path, keyRows, valueRows);
+            await AssertParquetNetCanReadAsync(path, expectedLeafCount: 2).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
     static async Task AssertParquetNetCanReadAsync(string path, int expectedLeafCount)
     {
         using var stream = File.OpenRead(path);
@@ -154,6 +264,47 @@ internal sealed class NestedInteropE2ETests
         using var valuesLogical = rowGroup.Column(1).LogicalReader<int[]>();
         var actualValues = valuesLogical.ReadAll(expectedValues.Length);
         AssertJaggedEqual(expectedValues, actualValues);
+    }
+
+    static void AssertParquetSharpOptionalMapLeaves(string path, int[][] expectedKeys, int?[][] expectedValues)
+    {
+        using var reader = new ParquetFileReader(path);
+        using var rowGroup = reader.RowGroup(0);
+
+        using var keysLogical = rowGroup.Column(0).LogicalReader<int[]?>();
+        var actualKeys = keysLogical.ReadAll(expectedKeys.Length);
+        if (actualKeys.Length != expectedKeys.Length)
+            throw new InvalidOperationException($"Expected {expectedKeys.Length} key rows, got {actualKeys.Length}.");
+        for (var i = 0; i < expectedKeys.Length; i++)
+        {
+            var expected = expectedKeys[i];
+            var actual = actualKeys[i];
+            if (expected is null && actual is null)
+                continue;
+            if (expected is null || actual is null)
+                throw new InvalidOperationException($"Key row {i} nullability mismatch.");
+            if (!actual.AsSpan().SequenceEqual(expected))
+                throw new InvalidOperationException($"Key row {i} mismatch.");
+        }
+
+        using var valuesLogical = rowGroup.Column(1).LogicalReader<int?[]?>();
+        var actualValues = valuesLogical.ReadAll(expectedValues.Length);
+        if (actualValues.Length != expectedValues.Length)
+            throw new InvalidOperationException($"Expected {expectedValues.Length} value rows, got {actualValues.Length}.");
+        for (var i = 0; i < expectedValues.Length; i++)
+        {
+            var expected = expectedValues[i];
+            var actual = actualValues[i];
+            if (expected is null && actual is null)
+                continue;
+            if (expected is null || actual is null)
+                throw new InvalidOperationException($"Value row {i} nullability mismatch.");
+            if (expected.Length != actual.Length)
+                throw new InvalidOperationException($"Value row {i} length mismatch.");
+            for (var j = 0; j < expected.Length; j++)
+                if (expected[j] != actual[j])
+                    throw new InvalidOperationException($"Value row {i} element {j} mismatch.");
+        }
     }
 
     static void AssertJaggedEqual(int[][] expected, int[][] actual)

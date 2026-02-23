@@ -177,6 +177,48 @@ internal sealed class ListInteropE2ETests
         }
     }
 
+    [Test]
+    public async Task OptionalListOfOptionalInt32WithSnappyIsReadableByBothImplementations()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-list-optional-elements-snappy-{Guid.NewGuid():N}.parquet");
+        int?[][] rows =
+        [
+            new int?[] { 1, null, 2 },
+            null!,
+            Array.Empty<int?>(),
+            new int?[] { 3 }
+        ];
+
+        var schema = new PlankSchema([
+            ColumnDef.List("numbers", ColumnDef.OptionalLeaf("element", ParquetPhysicalType.Int32),
+                repetition: ParquetRepetition.Optional)
+        ]);
+
+        try
+        {
+            using (var stream = File.Create(path))
+            {
+                var writer = PlankParquetWriter.Create(stream, schema, new ParquetWriterOptions
+                {
+                    Compression = CompressionKind.Snappy
+                });
+                var rowGroup = writer.StartRowGroup();
+                var serialized = rowGroup.CreateSerializedColumn();
+                serialized.Serialize(schema.Columns[0], rows);
+                rowGroup.Write(serialized);
+                writer.CloseFile();
+            }
+
+            AssertParquetSharpOptionalNullable(path, rows);
+            await AssertParquetNetOptionalNullableAsync(path, rows).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
     static async Task AssertParquetNetAsync(string path, int[]?[] expectedRows, bool allowsNullRows)
     {
         using var stream = File.OpenRead(path);

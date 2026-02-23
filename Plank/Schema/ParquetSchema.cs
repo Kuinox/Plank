@@ -216,7 +216,8 @@ public sealed record ParquetSchema
 
                     pathBuffer.Add("key_value");
                     var keyOk = TryCollectLeaves(keyNode with { Name = "key" }, columnsBuilder, pathsBuilder, pathBuffer, hasRepeatedAncestor: true,
-                        hasOptionalAncestor: optionalChain, infosBuilder, isListLeaf: false, listOptional: false,
+                        hasOptionalAncestor: optionalChain, infosBuilder, isListLeaf: true,
+                        listOptional: node.Repetition == ParquetRepetition.Optional,
                         elementOptional: false);
                     if (!keyOk)
                     {
@@ -226,7 +227,8 @@ public sealed record ParquetSchema
 
                     var valueOk = TryCollectLeaves(valueNode with { Name = "value" }, columnsBuilder, pathsBuilder, pathBuffer,
                         hasRepeatedAncestor: true, hasOptionalAncestor: optionalChain, infosBuilder,
-                        isListLeaf: false, listOptional: false, elementOptional: false);
+                        isListLeaf: true, listOptional: node.Repetition == ParquetRepetition.Optional,
+                        elementOptional: valueNode.Repetition == ParquetRepetition.Optional);
                     pathBuffer.RemoveAt(pathBuffer.Count - 1);
                     return valueOk;
                 }

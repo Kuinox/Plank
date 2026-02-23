@@ -10,6 +10,8 @@ public sealed class RowGroupWriter
 {
     readonly ParquetWriter _writer;
     BufferWriter _compressedContent;
+    BufferWriter _compressionInput;
+    BufferWriter _compressedValues;
     uint _nextColumnOrdinal;
     int _rowCount;
 
@@ -17,6 +19,8 @@ public sealed class RowGroupWriter
     {
         _writer = writer;
         _compressedContent = default;
+        _compressionInput = default;
+        _compressedValues = default;
         _nextColumnOrdinal = 0;
         _rowCount = -1;
     }
@@ -51,6 +55,10 @@ public sealed class RowGroupWriter
         var compression = _writer.Compression;
         if (compression != CompressionKind.None && !_compressedContent.IsInitialized)
             _compressedContent = _writer.BufferWriters.CreatePageBufferWriter();
+        if (compression != CompressionKind.None && !_compressionInput.IsInitialized)
+            _compressionInput = _writer.BufferWriters.CreatePageBufferWriter();
+        if (compression != CompressionKind.None && !_compressedValues.IsInitialized)
+            _compressedValues = _writer.BufferWriters.CreatePageBufferWriter();
         long totalUncompressedSize = 0;
         long totalCompressedSize = 0;
         var dataPageOffset = -1L;
@@ -110,13 +118,29 @@ public sealed class RowGroupWriter
 
                     if (compression != CompressionKind.None && valueBytes > 0)
                     {
-                        if (levelBytes > 0)
-                            throw new NotSupportedException(
-                                "Compression for data pages containing repetition/definition levels is not implemented yet.");
+                        if (levelBytes == 0)
+                        {
+                            Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionContext,
+                                ref page.Content, ref _compressedContent);
+                            compressedContentSize = _compressedContent.WrittenLength;
+                        }
+                        else
+                        {
+                            _compressionInput.Reset();
+                            _compressedValues.Reset();
+                            _compressedContent.Reset();
 
-                        Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionContext,
-                            ref page.Content, ref _compressedContent);
-                        compressedContentSize = _compressedContent.WrittenLength;
+                            var source = _writer.CompressionContext.GetContiguousSourceSpan(ref page.Content);
+                            var levels = source[..levelBytes];
+                            var values = source[levelBytes..];
+                            _compressionInput.Write(values);
+                            Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionContext,
+                                ref _compressionInput, ref _compressedValues);
+                            _compressedContent.Write(levels);
+                            _compressedContent.CopyFrom(ref _compressedValues);
+                            compressedContentSize = _compressedContent.WrittenLength;
+                        }
+
                         storedContentSize = compressedContentSize;
                         writeCompressedContent = true;
                     }
