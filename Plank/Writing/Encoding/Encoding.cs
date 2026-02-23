@@ -178,38 +178,40 @@ static class Encoding
         var pageIndex = AddNewDataPage(bufferWriters, pages);
         ref var page = ref pages[pageIndex];
 
-        if (leafProjectionInfo.MaxRepetitionLevel == 2)
+        if (leafProjectionInfo.MaxRepetitionLevel > 1)
         {
             switch (column.PhysicalType)
             {
-                case ParquetPhysicalType.Int32 when typeof(T) == typeof(int[][]):
-                    EncodeRepeatedRowsTwoLevelCore(bufferWriters, column, dataEncoding,
-                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int[][]>>(ref rows), ref page, leafProjectionInfo);
+                case ParquetPhysicalType.Boolean:
+                    EncodeRepeatedRowsNestedCore<bool, T>(bufferWriters, column, dataEncoding, rows, ref page,
+                        leafProjectionInfo);
                     return;
-                case ParquetPhysicalType.Int64 when typeof(T) == typeof(long[][]):
-                    EncodeRepeatedRowsTwoLevelCore(bufferWriters, column, dataEncoding,
-                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long[][]>>(ref rows), ref page, leafProjectionInfo);
+                case ParquetPhysicalType.Int32:
+                    EncodeRepeatedRowsNestedCore<int, T>(bufferWriters, column, dataEncoding, rows, ref page,
+                        leafProjectionInfo);
                     return;
-                case ParquetPhysicalType.Float when typeof(T) == typeof(float[][]):
-                    EncodeRepeatedRowsTwoLevelCore(bufferWriters, column, dataEncoding,
-                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float[][]>>(ref rows), ref page, leafProjectionInfo);
+                case ParquetPhysicalType.Int64:
+                    EncodeRepeatedRowsNestedCore<long, T>(bufferWriters, column, dataEncoding, rows, ref page,
+                        leafProjectionInfo);
                     return;
-                case ParquetPhysicalType.Double when typeof(T) == typeof(double[][]):
-                    EncodeRepeatedRowsTwoLevelCore(bufferWriters, column, dataEncoding,
-                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double[][]>>(ref rows), ref page, leafProjectionInfo);
+                case ParquetPhysicalType.Float:
+                    EncodeRepeatedRowsNestedCore<float, T>(bufferWriters, column, dataEncoding, rows, ref page,
+                        leafProjectionInfo);
                     return;
-                case ParquetPhysicalType.Boolean when typeof(T) == typeof(bool[][]):
-                    EncodeRepeatedRowsTwoLevelCore(bufferWriters, column, dataEncoding,
-                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool[][]>>(ref rows), ref page, leafProjectionInfo);
+                case ParquetPhysicalType.Double:
+                    EncodeRepeatedRowsNestedCore<double, T>(bufferWriters, column, dataEncoding, rows, ref page,
+                        leafProjectionInfo);
                     return;
-                case ParquetPhysicalType.ByteArray when typeof(T) == typeof(byte[][][]):
-                    EncodeRepeatedRowsTwoLevelCore(bufferWriters, column, dataEncoding,
-                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[][][]>>(ref rows), ref page, leafProjectionInfo);
+                case ParquetPhysicalType.ByteArray:
+                case ParquetPhysicalType.Int96:
+                case ParquetPhysicalType.FixedLenByteArray:
+                    EncodeRepeatedRowsNestedCore<byte[], T>(bufferWriters, column, dataEncoding, rows, ref page,
+                        leafProjectionInfo);
                     return;
             }
 
             throw new InvalidOperationException(
-                $"Repeated column '{column.Name}' requires nested row values for repetition level {leafProjectionInfo.MaxRepetitionLevel}.");
+                $"Repeated column '{column.Name}' with physical type '{column.PhysicalType}' is not supported for repetition level {leafProjectionInfo.MaxRepetitionLevel}.");
         }
 
         switch (column.PhysicalType)
@@ -517,83 +519,81 @@ static class Encoding
             dataEncoding);
     }
 
-    static void EncodeRepeatedRowsTwoLevelCore<TElement>(BufferWriterFactory bufferWriters, Column column,
-        EncodingKind dataEncoding, ReadOnlySpan<TElement[][]> rows, ref Page page, LeafProjectionInfo leafProjectionInfo)
+    static void EncodeRepeatedRowsNestedCore<TElement, TRow>(BufferWriterFactory bufferWriters, Column column,
+        EncodingKind dataEncoding, ReadOnlySpan<TRow> rows, ref Page page, LeafProjectionInfo leafProjectionInfo)
         where TElement : notnull
+        where TRow : notnull
     {
         if (leafProjectionInfo.ElementOptional)
             throw new NotSupportedException(
                 $"Column '{column.Name}' nested repeated optional elements are not implemented yet.");
 
-        var rowCount = rows.Length;
-        var levelValueCount = 0;
-        var physicalValueCount = 0;
-        var nullCount = 0;
         var allowsNullRow = leafProjectionInfo.ListOptional;
         var rowDefinedLevel = allowsNullRow ? 1 : 0;
-        var innerDefinedLevel = rowDefinedLevel + 1;
-        var presentDefinitionLevel = leafProjectionInfo.MaxDefinitionLevel;
-        var definitionBitWidth = GetBitWidth(presentDefinitionLevel);
-        var repetitionBitWidth = GetBitWidth(leafProjectionInfo.MaxRepetitionLevel);
-
-        for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
+        var repLevels = new List<int>(rows.Length * 2);
+        var defLevels = new List<int>(rows.Length * 2);
+        var values = new List<TElement>(rows.Length * 2);
+        for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
         {
-            var row = rows[rowIndex];
-            if (row is null)
+            object? row = rows[rowIndex];
+            TraverseNestedRepeatedRow(row, depth: 1, repForFirst: 0, currentDefinitionLevel: rowDefinedLevel,
+                allowsNullRow, leafProjectionInfo.MaxRepetitionLevel, leafProjectionInfo.MaxDefinitionLevel, repLevels, defLevels,
+                values, column.Name);
+        }
+
+        var repBitWidth = GetBitWidth(leafProjectionInfo.MaxRepetitionLevel);
+        var defBitWidth = GetBitWidth(leafProjectionInfo.MaxDefinitionLevel);
+        var repetitionLength = WriteLevelSequence(repLevels, repBitWidth, ref page.Content);
+        var definitionLength = WriteLevelSequence(defLevels, defBitWidth, ref page.Content);
+        ValueEncodingDispatcher.WriteValues(dataEncoding, column, CollectionsMarshal.AsSpan(values), bufferWriters, ref page.Content);
+        var nullCount = defLevels.Count - values.Count;
+        WriteDataPageHeader(ref page.Header, rows.Length, defLevels.Count, nullCount, repetitionLength, definitionLength,
+            dataEncoding);
+
+        static void TraverseNestedRepeatedRow(object? node, int depth, int repForFirst, int currentDefinitionLevel,
+            bool allowNullNode, int maxRepetitionLevel, int maxDefinitionLevel, List<int> repLevels, List<int> defLevels,
+            List<TElement> values, string columnName)
+        {
+            if (node is null)
             {
-                if (!allowsNullRow)
+                if (!allowNullNode)
                     throw new InvalidOperationException(
-                        $"Column '{column.Name}' has repeated values; null row arrays are not supported.");
-                levelValueCount = checked(levelValueCount + 1);
-                nullCount = checked(nullCount + 1);
-                continue;
+                        $"Column '{columnName}' has repeated values; null array is not supported at depth {depth}.");
+                repLevels.Add(repForFirst);
+                defLevels.Add(currentDefinitionLevel - 1);
+                return;
             }
 
-            if (row.Length == 0)
+            if (node is not Array array)
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' expects jagged array rows for nested repetition level {maxRepetitionLevel}.");
+
+            if (array.Length == 0)
             {
-                levelValueCount = checked(levelValueCount + 1);
-                nullCount = checked(nullCount + 1);
-                continue;
+                repLevels.Add(repForFirst);
+                defLevels.Add(currentDefinitionLevel);
+                return;
             }
 
-            for (var innerIndex = 0; innerIndex < row.Length; innerIndex++)
+            for (var i = 0; i < array.Length; i++)
             {
-                var inner = row[innerIndex];
-                if (inner is null || inner.Length == 0)
+                var rep = i == 0 ? repForFirst : depth;
+                var element = array.GetValue(i);
+                if (depth == maxRepetitionLevel)
                 {
-                    levelValueCount = checked(levelValueCount + 1);
-                    nullCount = checked(nullCount + 1);
+                    if (element is not TElement value)
+                        throw new InvalidOperationException(
+                            $"Column '{columnName}' has incompatible leaf value type '{element?.GetType()}'.");
+                    repLevels.Add(rep);
+                    defLevels.Add(maxDefinitionLevel);
+                    values.Add(value);
                     continue;
                 }
 
-                levelValueCount = checked(levelValueCount + inner.Length);
-                physicalValueCount = checked(physicalValueCount + inner.Length);
+                TraverseNestedRepeatedRow(element, depth + 1, rep, currentDefinitionLevel + 1, allowNullNode: false,
+                    maxRepetitionLevel, maxDefinitionLevel, repLevels, defLevels, values, columnName);
             }
         }
-
-        var flatValues = new TElement[physicalValueCount];
-        var flatIndex = 0;
-        for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
-        {
-            var row = rows[rowIndex];
-            if (row is null || row.Length == 0)
-                continue;
-            for (var innerIndex = 0; innerIndex < row.Length; innerIndex++)
-            {
-                var inner = row[innerIndex];
-                if (inner is null || inner.Length == 0)
-                    continue;
-                inner.CopyTo(flatValues.AsSpan(flatIndex));
-                flatIndex += inner.Length;
-            }
-        }
-
-        var repetitionLength = WriteRepeatedLevelsTwoLevel(rows, repetitionBitWidth, ref page.Content);
-        var definitionLength = WriteDefinitionLevelsTwoLevel(rows, allowsNullRow, rowDefinedLevel, innerDefinedLevel,
-            presentDefinitionLevel, definitionBitWidth, ref page.Content);
-        ValueEncodingDispatcher.WriteValues(dataEncoding, column, flatValues, bufferWriters, ref page.Content);
-        WriteDataPageHeader(ref page.Header, rowCount, levelValueCount, nullCount, repetitionLength, definitionLength,
-            dataEncoding);
     }
 
     static int WriteRepeatedLevels<TElement>(ReadOnlySpan<TElement[]> rows, ref BufferWriter writer)
@@ -617,34 +617,29 @@ static class Encoding
         return writer.WrittenLength - start;
     }
 
-    static int WriteRepeatedLevelsTwoLevel<TElement>(ReadOnlySpan<TElement[][]> rows, int repetitionBitWidth,
-        ref BufferWriter writer)
+    static int WriteLevelSequence(List<int> levels, int bitWidth, ref BufferWriter writer)
     {
+        if (levels.Count == 0)
+            return 0;
+
         var start = writer.WrittenLength;
-        for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
+        var runValue = levels[0];
+        var runLength = 1;
+        for (var i = 1; i < levels.Count; i++)
         {
-            var row = rows[rowIndex];
-            if (row is null || row.Length == 0)
+            var value = levels[i];
+            if (value == runValue)
             {
-                WriteLevelRun(0, 1, repetitionBitWidth, ref writer);
+                runLength++;
                 continue;
             }
 
-            for (var innerIndex = 0; innerIndex < row.Length; innerIndex++)
-            {
-                var inner = row[innerIndex];
-                if (inner is null || inner.Length == 0)
-                {
-                    WriteLevelRun(innerIndex == 0 ? 0 : 1, 1, repetitionBitWidth, ref writer);
-                    continue;
-                }
-
-                WriteLevelRun(innerIndex == 0 ? 0 : 1, 1, repetitionBitWidth, ref writer);
-                if (inner.Length > 1)
-                    WriteLevelRun(2, inner.Length - 1, repetitionBitWidth, ref writer);
-            }
+            WriteLevelRun(runValue, runLength, bitWidth, ref writer);
+            runValue = value;
+            runLength = 1;
         }
 
+        WriteLevelRun(runValue, runLength, bitWidth, ref writer);
         return writer.WrittenLength - start;
     }
 
@@ -670,43 +665,6 @@ static class Encoding
             }
 
             WriteLevelRun(presentElementDefinitionLevel, row.Length, definitionBitWidth, ref writer);
-        }
-
-        return writer.WrittenLength - start;
-    }
-
-    static int WriteDefinitionLevelsTwoLevel<TElement>(ReadOnlySpan<TElement[][]> rows, bool allowsNullRow,
-        int rowDefinedLevel, int innerDefinedLevel, int presentDefinitionLevel, int definitionBitWidth, ref BufferWriter writer)
-    {
-        var start = writer.WrittenLength;
-        for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
-        {
-            var row = rows[rowIndex];
-            if (row is null)
-            {
-                if (!allowsNullRow)
-                    throw new InvalidOperationException("Null row is not allowed for this repeated column.");
-                WriteLevelRun(0, 1, definitionBitWidth, ref writer);
-                continue;
-            }
-
-            if (row.Length == 0)
-            {
-                WriteLevelRun(rowDefinedLevel, 1, definitionBitWidth, ref writer);
-                continue;
-            }
-
-            for (var innerIndex = 0; innerIndex < row.Length; innerIndex++)
-            {
-                var inner = row[innerIndex];
-                if (inner is null || inner.Length == 0)
-                {
-                    WriteLevelRun(innerDefinedLevel, 1, definitionBitWidth, ref writer);
-                    continue;
-                }
-
-                WriteLevelRun(presentDefinitionLevel, inner.Length, definitionBitWidth, ref writer);
-            }
         }
 
         return writer.WrittenLength - start;
