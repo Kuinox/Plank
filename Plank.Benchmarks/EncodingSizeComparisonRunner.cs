@@ -1,9 +1,7 @@
-using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Engines;
 using Parquet;
+using Parquet.Data;
 using Parquet.Schema;
 using ParquetSharp;
-using System.Collections.Generic;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
@@ -16,90 +14,91 @@ using PlankSchema = Plank.Schema.ParquetSchema;
 
 namespace Plank.Benchmarks;
 
-[MemoryDiagnoser]
-[SimpleJob(RunStrategy.Throughput, launchCount: 1, warmupCount: 3, iterationCount: 8)]
-public class EncodingMatrixBdnBenchmark
+public static class EncodingSizeComparisonRunner
 {
-    static readonly IPageStrategy _forceDictionaryPageStrategy = new ForceDictionaryPageStrategy();
+    static readonly IPageStrategy ForceDictionaryPageStrategyInstance = new ForceDictionaryPageStrategy();
 
-    bool[] _boolValues = [];
-    int[] _int32Values = [];
-    long[] _int64Values = [];
-    float[] _floatValues = [];
-    double[] _doubleValues = [];
-    string[] _stringValues = [];
-    byte[][] _stringByteValues = [];
-
-    [Params(1_000_000)]
-    public int Rows { get; set; }
-
-    public IEnumerable<SingleColumnScenario> PlankScenarios
-        => SingleColumnScenarioCatalog.Plank;
-
-    public IEnumerable<SingleColumnScenario> ParquetSharpScenarios
-        => SingleColumnScenarioCatalog.ParquetSharp;
-
-    public IEnumerable<SingleColumnScenario> ParquetNetScenarios
-        => SingleColumnScenarioCatalog.ParquetNet;
-
-    [GlobalSetup]
-    public void GlobalSetup()
+    public static async Task<int> RunAsync(string[] args)
     {
-        _boolValues = new bool[Rows];
-        _int32Values = new int[Rows];
-        _int64Values = new long[Rows];
-        _floatValues = new float[Rows];
-        _doubleValues = new double[Rows];
-        _stringValues = new string[Rows];
-        _stringByteValues = new byte[Rows][];
-        for (var i = 0; i < Rows; i++)
-        {
-            _boolValues[i] = (i & 1) == 0;
-            _int32Values[i] = i % 100_000;
-            _int64Values[i] = i * 37L;
-            _floatValues[i] = (i % 10_000) / 3f;
-            _doubleValues[i] = (i % 10_000) / 7d;
-            _stringValues[i] = $"val-{i % 2048}";
-            _stringByteValues[i] = System.Text.Encoding.UTF8.GetBytes(_stringValues[i]);
-        }
+        var rows = ReadRows(args);
+        var data = CreateData(rows);
+        var results = new List<ResultRow>(capacity: 256);
+
+        foreach (var scenario in SingleColumnScenarioCatalog.Plank)
+            results.Add(await WritePlankAsync(rows, scenario, data).ConfigureAwait(false));
+        foreach (var scenario in SingleColumnScenarioCatalog.ParquetSharp)
+            results.Add(WriteParquetSharp(rows, scenario, data));
+        foreach (var scenario in SingleColumnScenarioCatalog.ParquetNet)
+            results.Add(await WriteParquetNetAsync(rows, scenario, data).ConfigureAwait(false));
+
+        PrintResults(results);
+        return 0;
     }
 
-    [Benchmark(Baseline = true)]
-    [ArgumentsSource(nameof(PlankScenarios))]
-    public async Task WritePlankAsync(SingleColumnScenario scenario)
-        => await WriteWithPlankAsync(scenario).ConfigureAwait(false);
+    static int ReadRows(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (!string.Equals(arg, "--rows", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (i + 1 >= args.Length)
+                throw new ArgumentException("Missing value for --rows.");
+            if (!int.TryParse(args[i + 1], out var rows) || rows <= 0)
+                throw new ArgumentException($"Invalid --rows value '{args[i + 1]}'.");
+            return rows;
+        }
 
-    [Benchmark]
-    [ArgumentsSource(nameof(ParquetSharpScenarios))]
-    public void WriteParquetSharp(SingleColumnScenario scenario)
-        => WriteWithParquetSharp(scenario);
+        return 1_000_000;
+    }
 
-    [Benchmark]
-    [ArgumentsSource(nameof(ParquetNetScenarios))]
-    public async Task WriteParquetNetAsync(SingleColumnScenario scenario)
-        => await WriteWithParquetNetAsync(scenario).ConfigureAwait(false);
+    static BenchmarkData CreateData(int rows)
+    {
+        var boolValues = new bool[rows];
+        var int32Values = new int[rows];
+        var int64Values = new long[rows];
+        var floatValues = new float[rows];
+        var doubleValues = new double[rows];
+        var stringValues = new string[rows];
+        var stringByteValues = new byte[rows][];
 
-    async Task<byte[]> WriteWithPlankAsync(SingleColumnScenario scenario)
+        for (var i = 0; i < rows; i++)
+        {
+            boolValues[i] = (i & 1) == 0;
+            int32Values[i] = i % 100_000;
+            int64Values[i] = i * 37L;
+            floatValues[i] = (i % 10_000) / 3f;
+            doubleValues[i] = (i % 10_000) / 7d;
+            stringValues[i] = $"val-{i % 2048}";
+            stringByteValues[i] = System.Text.Encoding.UTF8.GetBytes(stringValues[i]);
+        }
+
+        return new BenchmarkData(boolValues, int32Values, int64Values, floatValues, doubleValues, stringValues,
+            stringByteValues);
+    }
+
+    static async Task<ResultRow> WritePlankAsync(int rows, SingleColumnScenario scenario, BenchmarkData data)
     {
         var column = new PlankColumn(
             "value",
             MapPlankPhysicalType(scenario.DataType),
             new ColumnOptions(ParquetRepetition.Required, [MapPlankEncoding(scenario.EncodingName)]));
         var schema = new PlankSchema([column]);
-        await using var stream = new MemoryStream(capacity: Rows * 16);
+
+        await using var stream = new MemoryStream(capacity: rows * 16);
         var writer = Plank.Writing.ParquetWriter.Create(stream, schema, new ParquetWriterOptions
         {
             Compression = CompressionKind.None
         });
         var rowGroup = writer.StartRowGroup();
         var serialized = writer.CreateSerializedColumn();
-        var forceDictionary = scenario.EncodingName == "dictionary";
+        var forceDictionary = string.Equals(scenario.EncodingName, "dictionary", StringComparison.Ordinal);
 
         void SerializeValues<T>(ReadOnlySpan<T> values)
             where T : notnull
         {
             if (forceDictionary)
-                serialized.Serialize(column, values, _forceDictionaryPageStrategy);
+                serialized.Serialize(column, values, ForceDictionaryPageStrategyInstance);
             else
                 serialized.Serialize(column, values);
         }
@@ -107,22 +106,22 @@ public class EncodingMatrixBdnBenchmark
         switch (scenario.DataType)
         {
             case "bool":
-                SerializeValues(_boolValues);
+                SerializeValues(data.BoolValues);
                 break;
             case "int32":
-                SerializeValues(_int32Values);
+                SerializeValues(data.Int32Values);
                 break;
             case "int64":
-                SerializeValues(_int64Values);
+                SerializeValues(data.Int64Values);
                 break;
             case "float":
-                SerializeValues(_floatValues);
+                SerializeValues(data.FloatValues);
                 break;
             case "double":
-                SerializeValues(_doubleValues);
+                SerializeValues(data.DoubleValues);
                 break;
             case "string":
-                SerializeValues(_stringByteValues);
+                SerializeValues(data.StringByteValues);
                 break;
             default:
                 throw new InvalidOperationException($"Unknown type '{scenario.DataType}'.");
@@ -130,80 +129,91 @@ public class EncodingMatrixBdnBenchmark
 
         rowGroup.Write(serialized);
         writer.CloseFile();
-        return stream.ToArray();
+        var buffer = stream.ToArray();
+        ValidateDictionaryIfRequired("plank", scenario, buffer);
+        var snapshot = ReadColumnBytes(buffer);
+        return new ResultRow("plank", scenario, rows, snapshot);
     }
 
-    byte[] WriteWithParquetSharp(SingleColumnScenario scenario)
+    static ResultRow WriteParquetSharp(int rows, SingleColumnScenario scenario, BenchmarkData data)
     {
-        using var stream = new MemoryStream(capacity: Rows * 16);
-        using var writerProperties = BuildParquetSharpWriterProperties(scenario, Rows);
+        using var stream = new MemoryStream(capacity: rows * 16);
+        using var writerProperties = BuildParquetSharpWriterProperties(scenario, rows);
         using var writer = new ParquetFileWriter(stream, [BuildParquetSharpColumn(scenario.DataType)], null,
             writerProperties, null, true);
         using var rowGroupWriter = writer.AppendRowGroup();
+
         switch (scenario.DataType)
         {
             case "bool":
                 using (var col = rowGroupWriter.NextColumn().LogicalWriter<bool>())
-                    col.WriteBatch(_boolValues);
+                    col.WriteBatch(data.BoolValues);
                 break;
             case "int32":
                 using (var col = rowGroupWriter.NextColumn().LogicalWriter<int>())
-                    col.WriteBatch(_int32Values);
+                    col.WriteBatch(data.Int32Values);
                 break;
             case "int64":
                 using (var col = rowGroupWriter.NextColumn().LogicalWriter<long>())
-                    col.WriteBatch(_int64Values);
+                    col.WriteBatch(data.Int64Values);
                 break;
             case "float":
                 using (var col = rowGroupWriter.NextColumn().LogicalWriter<float>())
-                    col.WriteBatch(_floatValues);
+                    col.WriteBatch(data.FloatValues);
                 break;
             case "double":
                 using (var col = rowGroupWriter.NextColumn().LogicalWriter<double>())
-                    col.WriteBatch(_doubleValues);
+                    col.WriteBatch(data.DoubleValues);
                 break;
             case "string":
                 using (var col = rowGroupWriter.NextColumn().LogicalWriter<string>())
-                    col.WriteBatch(_stringValues);
+                    col.WriteBatch(data.StringValues);
                 break;
             default:
                 throw new InvalidOperationException($"Unknown type '{scenario.DataType}'.");
         }
 
         writer.Close();
-        return stream.ToArray();
+        var buffer = stream.ToArray();
+        ValidateDictionaryIfRequired("parquetsharp", scenario, buffer);
+        var snapshot = ReadColumnBytes(buffer);
+        return new ResultRow("parquetsharp", scenario, rows, snapshot);
     }
 
-    async Task<byte[]> WriteWithParquetNetAsync(SingleColumnScenario scenario)
+    static async Task<ResultRow> WriteParquetNetAsync(int rows, SingleColumnScenario scenario, BenchmarkData data)
     {
         var options = BuildParquetNetOptions(scenario.EncodingName);
-        await using var stream = new MemoryStream(capacity: Rows * 16);
+        await using var stream = new MemoryStream(capacity: rows * 16);
+
         switch (scenario.DataType)
         {
             case "bool":
-                await WriteParquetNetColumnAsync(new DataField<bool>("value"), _boolValues).ConfigureAwait(false);
+                await WriteParquetNetColumnAsync(new DataField<bool>("value"), data.BoolValues).ConfigureAwait(false);
                 break;
             case "int32":
-                await WriteParquetNetColumnAsync(new DataField<int>("value"), _int32Values).ConfigureAwait(false);
+                await WriteParquetNetColumnAsync(new DataField<int>("value"), data.Int32Values).ConfigureAwait(false);
                 break;
             case "int64":
-                await WriteParquetNetColumnAsync(new DataField<long>("value"), _int64Values).ConfigureAwait(false);
+                await WriteParquetNetColumnAsync(new DataField<long>("value"), data.Int64Values).ConfigureAwait(false);
                 break;
             case "float":
-                await WriteParquetNetColumnAsync(new DataField<float>("value"), _floatValues).ConfigureAwait(false);
+                await WriteParquetNetColumnAsync(new DataField<float>("value"), data.FloatValues).ConfigureAwait(false);
                 break;
             case "double":
-                await WriteParquetNetColumnAsync(new DataField<double>("value"), _doubleValues).ConfigureAwait(false);
+                await WriteParquetNetColumnAsync(new DataField<double>("value"), data.DoubleValues).ConfigureAwait(false);
                 break;
             case "string":
-                await WriteParquetNetColumnAsync(new DataField<string>("value"), _stringValues).ConfigureAwait(false);
+                await WriteParquetNetColumnAsync(new DataField<string>("value"), data.StringValues).ConfigureAwait(false);
                 break;
             default:
                 throw new InvalidOperationException($"Unknown type '{scenario.DataType}'.");
         }
 
         await stream.FlushAsync().ConfigureAwait(false);
-        return stream.ToArray();
+        var buffer = stream.ToArray();
+        ValidateDictionaryIfRequired("parquet.net", scenario, buffer);
+        var snapshot = ReadColumnBytes(buffer);
+        return new ResultRow("parquet.net", scenario, rows, snapshot);
 
         async Task WriteParquetNetColumnAsync<T>(DataField<T> field, T[] values)
         {
@@ -213,6 +223,58 @@ public class EncodingMatrixBdnBenchmark
             writer.CompressionMethod = CompressionMethod.None;
             using var rowGroupWriter = writer.CreateRowGroup();
             await rowGroupWriter.WriteColumnAsync(new DataColumn(field, values)).ConfigureAwait(false);
+        }
+    }
+
+    static EncodingBenchmarkSizeSnapshot ReadColumnBytes(byte[] parquetData)
+    {
+        using var stream = new MemoryStream(parquetData, writable: false);
+        using var reader = new ParquetFileReader(stream);
+        using var rowGroup = reader.RowGroup(0);
+        using var chunk = rowGroup.MetaData.GetColumnChunkMetaData(0);
+        return new EncodingBenchmarkSizeSnapshot(chunk.TotalCompressedSize, chunk.TotalUncompressedSize,
+            parquetData.LongLength);
+    }
+
+    static void ValidateDictionaryIfRequired(string library, SingleColumnScenario scenario, byte[] parquetData)
+    {
+        if (!string.Equals(scenario.EncodingName, "dictionary", StringComparison.Ordinal))
+            return;
+
+        var encodings = ReadColumnEncodings(parquetData);
+        if (ContainsDictionaryEncoding(encodings))
+            return;
+
+        throw new InvalidOperationException(
+            $"Dictionary encoding was requested for scenario '{scenario}' ({library}), but output metadata did not contain dictionary encoding.");
+    }
+
+    static Encoding[] ReadColumnEncodings(byte[] parquetData)
+    {
+        using var stream = new MemoryStream(parquetData, writable: false);
+        using var reader = new ParquetFileReader(stream);
+        using var rowGroup = reader.RowGroup(0);
+        using var chunk = rowGroup.MetaData.GetColumnChunkMetaData(0);
+        return chunk.Encodings;
+    }
+
+    static bool ContainsDictionaryEncoding(Encoding[] encodings)
+    {
+        for (var i = 0; i < encodings.Length; i++)
+            if (encodings[i] is Encoding.PlainDictionary or Encoding.RleDictionary)
+                return true;
+        return false;
+    }
+
+    static void PrintResults(List<ResultRow> results)
+    {
+        Console.WriteLine("library,data_type,encoding,rows,column_compressed_bytes,column_uncompressed_bytes,file_bytes");
+        foreach (var row in results.OrderBy(static row => row.Library, StringComparer.Ordinal)
+                     .ThenBy(static row => row.Scenario.DataType, StringComparer.Ordinal)
+                     .ThenBy(static row => row.Scenario.EncodingName, StringComparer.Ordinal))
+        {
+            Console.WriteLine(
+                $"{row.Library},{row.Scenario.DataType},{row.Scenario.EncodingName},{row.Rows},{row.Snapshot.ColumnCompressedBytes},{row.Snapshot.ColumnUncompressedBytes},{row.Snapshot.FileBytes}");
         }
     }
 
@@ -293,6 +355,18 @@ public class EncodingMatrixBdnBenchmark
             "byte_stream_split" => EncodingKind.ByteStreamSplit,
             _ => throw new InvalidOperationException($"Unknown encoding '{encoding}'.")
         };
+
+    readonly record struct BenchmarkData(
+        bool[] BoolValues,
+        int[] Int32Values,
+        long[] Int64Values,
+        float[] FloatValues,
+        double[] DoubleValues,
+        string[] StringValues,
+        byte[][] StringByteValues);
+
+    readonly record struct ResultRow(string Library, SingleColumnScenario Scenario, int Rows,
+        EncodingBenchmarkSizeSnapshot Snapshot);
 
     sealed class ForceDictionaryPageStrategy : IPageStrategy
     {
