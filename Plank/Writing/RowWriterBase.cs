@@ -4,7 +4,7 @@ using Plank.Schema;
 namespace Plank.Writing;
 
 public abstract class RowWriterBase<TSlot>
-    where TSlot : class, IRowWriterSlot
+    where TSlot : class
 {
     readonly ParquetWriter _writer;
     readonly Queue<QueuedSlot> _readySlots;
@@ -49,6 +49,9 @@ public abstract class RowWriterBase<TSlot>
     }
 
     protected abstract TSlot CreateSlot(ParquetWriter writer);
+    protected abstract void SerializeSlot(TSlot slot);
+    protected abstract void WriteSerializedSlot(TSlot slot, RowGroupWriter rowGroupWriter);
+    protected abstract void ResetSlotForReuse(TSlot slot);
 
     protected void InitializeSlots()
     {
@@ -186,7 +189,7 @@ public abstract class RowWriterBase<TSlot>
 
             try
             {
-                queuedSlot.Slot.SerializeColumns();
+                SerializeSlot(queuedSlot.Slot);
                 lock (_writeGate)
                 {
                     while (queuedSlot.Sequence != _nextWriteSequence && _fault is null)
@@ -194,7 +197,7 @@ public abstract class RowWriterBase<TSlot>
 
                     ThrowIfFaulted();
                     var rowGroupWriter = _writer.StartRowGroup();
-                    queuedSlot.Slot.WriteSerialized(rowGroupWriter);
+                    WriteSerializedSlot(queuedSlot.Slot, rowGroupWriter);
                     _nextWriteSequence++;
                     Monitor.PulseAll(_writeGate);
                 }
@@ -205,7 +208,7 @@ public abstract class RowWriterBase<TSlot>
             }
             finally
             {
-                queuedSlot.Slot.ResetForReuse();
+                ResetSlotForReuse(queuedSlot.Slot);
                 lock (_gate)
                 {
                     _freeSlots.Enqueue(queuedSlot.Slot);
