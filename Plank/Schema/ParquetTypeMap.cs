@@ -19,6 +19,12 @@ static class ParquetTypeMap
     public static PhysicalTypeResolution ResolvePhysicalType<T>()
         => TypeCache<T>.Resolution;
 
+    public static PhysicalTypeResolution ResolvePhysicalType(Type type)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        return CreateResolution(type);
+    }
+
     public static bool TryGetPhysicalType<T>(out ParquetPhysicalType physicalType)
     {
         var resolution = ResolvePhysicalType<T>();

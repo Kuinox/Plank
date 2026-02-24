@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using Plank.Schema;
 using Plank.Writing.Compression;
 using Plank.Writing.Encoding;
@@ -69,7 +68,7 @@ public sealed class RowGroupWriter
         {
             ref var page = ref pages[i];
             var pageOffset = _writer.FileOffset;
-            var pageKind = ReadPageKind(ref page.Header);
+            var pageKind = page.Kind;
             var pageContentSize = page.Content.WrittenLength;
             var compressedContentSize = pageContentSize;
             var uncompressedPageHeaderSize = pageContentSize;
@@ -95,7 +94,7 @@ public sealed class RowGroupWriter
                         dictionaryPageOffset = pageOffset;
                     }
 
-                    var dictionaryValueCount = ReadDictionaryValueCount(ref page.Header);
+                    var dictionaryValueCount = page.DictionaryValueCount;
                     page.Header.Reset();
                     ParquetMetadataThriftWriter.WriteDictionaryPageHeader(ref page.Header, dictionaryValueCount,
                         pageContentSize, compressedContentSize);
@@ -104,9 +103,12 @@ public sealed class RowGroupWriter
                 case PageKind.DataV1:
                 case PageKind.DataV2:
                 {
-                    ReadDataPageMetadata(ref page.Header, out var dataPageRowCount, out var dataPageValueCount,
-                        out var dataPageNullCount, out var repetitionLevelsByteLength,
-                        out var definitionLevelsByteLength, out var pageEncoding);
+                    var dataPageRowCount = page.RowCount;
+                    var dataPageValueCount = page.ValueCount;
+                    var dataPageNullCount = page.NullCount;
+                    var repetitionLevelsByteLength = page.RepetitionLevelsByteLength;
+                    var definitionLevelsByteLength = page.DefinitionLevelsByteLength;
+                    var pageEncoding = page.Encoding;
                     var levelBytes = checked(repetitionLevelsByteLength + definitionLevelsByteLength);
                     if ((uint)levelBytes > (uint)pageContentSize)
                         throw new InvalidOperationException(
@@ -193,29 +195,5 @@ public sealed class RowGroupWriter
         ParquetMetadataThriftWriter.WriteRowGroup(ref _writer.SerializedRowGroupsMetadata, _writer.ColumnsByOrdinal,
             _writer.ColumnPathsByOrdinal, _writer.OpenRowGroupColumnMetadata, _rowCount);
         _writer.CompleteOpenRowGroup(_rowCount);
-    }
-
-    static PageKind ReadPageKind(ref BufferWriter header)
-    {
-        header.TryGetSingleWrittenSpan(out var span);
-        return (PageKind)span[0];
-    }
-
-    static void ReadDataPageMetadata(ref BufferWriter header, out int rowCount, out int valueCount, out int nullCount,
-        out int repetitionLevelsByteLength, out int definitionLevelsByteLength, out EncodingKind encoding)
-    {
-        header.TryGetSingleWrittenSpan(out var span);
-        rowCount = BinaryPrimitives.ReadInt32LittleEndian(span[2..]);
-        nullCount = BinaryPrimitives.ReadInt32LittleEndian(span[6..]);
-        valueCount = BinaryPrimitives.ReadInt32LittleEndian(span[10..]);
-        repetitionLevelsByteLength = BinaryPrimitives.ReadInt32LittleEndian(span[14..]);
-        definitionLevelsByteLength = BinaryPrimitives.ReadInt32LittleEndian(span[18..]);
-        encoding = (EncodingKind)span[1];
-    }
-
-    static int ReadDictionaryValueCount(ref BufferWriter header)
-    {
-        header.TryGetSingleWrittenSpan(out var span);
-        return BinaryPrimitives.ReadInt32LittleEndian(span[1..]);
     }
 }

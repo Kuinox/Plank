@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -70,7 +69,7 @@ static class Encoding
                 else
                     ValueEncodingDispatcher.WriteValues(dataEncoding, column, pageValues, bufferWriters, ref page.Content);
 
-                WriteDataPageHeader(ref page.Header, pageRowCount, pageRowCount, 0, 0, 0,
+                WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0,
                     useDictionary ? dictionaryEncoding : dataEncoding);
             }
         }
@@ -96,7 +95,9 @@ static class Encoding
 
         var dictionaryPageIndex = AddDictionaryPage(bufferWriters, pages);
         ref var dictionaryPage = ref pages[dictionaryPageIndex];
-        var initialUniqueCapacity = Math.Clamp(values.Length / 4, 256, 65_536);
+        var initialUniqueCapacity = dictionaryMode == DictionaryMode.Forced
+            ? Math.Max(256, values.Length)
+            : Math.Clamp(values.Length / 4, 256, 65_536);
         var dictionary = new Dictionary<T, int>(initialUniqueCapacity, GetDictionaryComparer<T>());
         var dictionaryValues = new List<T>(initialUniqueCapacity);
         var indexByteLength = checked(values.Length * sizeof(int));
@@ -153,11 +154,7 @@ static class Encoding
 
             PlainEncoding.WriteValues(column, CollectionsMarshal.AsSpan(dictionaryValues), ref dictionaryPage.Content);
 
-            const int dictionaryHeaderSize = sizeof(byte) + sizeof(int);
-            var header = dictionaryPage.Header.GetSpan(dictionaryHeaderSize);
-            header[0] = (byte)PageKind.Dictionary;
-            BinaryPrimitives.WriteInt32LittleEndian(header[1..], dictionary.Count);
-            dictionaryPage.Header.Advance(dictionaryHeaderSize);
+            dictionaryPage.SetDictionaryPageMetadata(dictionary.Count);
             dictionaryValueCount = dictionary.Count;
             dictionaryIndexesBytes = rentedIndexesBytes;
             rentedIndexesBytes = null;
@@ -365,7 +362,7 @@ static class Encoding
         var definitionLength = WriteRepeatedDefinitionLevels(rows, listDefinedDefinitionLevel,
             presentElementDefinitionLevel, allowsNullRow, definitionBitWidth, ref page.Content);
         ValueEncodingDispatcher.WriteValues(dataEncoding, column, flatValues, bufferWriters, ref page.Content);
-        WriteDataPageHeader(ref page.Header, rowCount, levelValueCount, nullCount, repetitionLength, definitionLength,
+        WriteDataPageHeader(ref page, rowCount, levelValueCount, nullCount, repetitionLength, definitionLength,
             dataEncoding);
     }
 
@@ -440,7 +437,7 @@ static class Encoding
         var definitionLength = WriteRepeatedDefinitionLevelsNullableValues(rows, listDefinedDefinitionLevel,
             nullElementDefinitionLevel, presentElementDefinitionLevel, allowsNullRow, definitionBitWidth, ref page.Content);
         ValueEncodingDispatcher.WriteValues(dataEncoding, column, flatValues, bufferWriters, ref page.Content);
-        WriteDataPageHeader(ref page.Header, rowCount, levelValueCount, nullCount, repetitionLength, definitionLength,
+        WriteDataPageHeader(ref page, rowCount, levelValueCount, nullCount, repetitionLength, definitionLength,
             dataEncoding);
     }
 
@@ -515,7 +512,7 @@ static class Encoding
         var definitionLength = WriteRepeatedDefinitionLevelsNullableReferences(rows, listDefinedDefinitionLevel,
             nullElementDefinitionLevel, presentElementDefinitionLevel, allowsNullRow, definitionBitWidth, ref page.Content);
         ValueEncodingDispatcher.WriteValues(dataEncoding, column, flatValues, bufferWriters, ref page.Content);
-        WriteDataPageHeader(ref page.Header, rowCount, levelValueCount, nullCount, repetitionLength, definitionLength,
+        WriteDataPageHeader(ref page, rowCount, levelValueCount, nullCount, repetitionLength, definitionLength,
             dataEncoding);
     }
 
@@ -547,7 +544,7 @@ static class Encoding
         var definitionLength = WriteLevelSequence(defLevels, defBitWidth, ref page.Content);
         ValueEncodingDispatcher.WriteValues(dataEncoding, column, CollectionsMarshal.AsSpan(values), bufferWriters, ref page.Content);
         var nullCount = defLevels.Count - values.Count;
-        WriteDataPageHeader(ref page.Header, rows.Length, defLevels.Count, nullCount, repetitionLength, definitionLength,
+        WriteDataPageHeader(ref page, rows.Length, defLevels.Count, nullCount, repetitionLength, definitionLength,
             dataEncoding);
 
         static void TraverseNestedRepeatedRow(object? node, int depth, int repForFirst, int currentDefinitionLevel,
@@ -773,6 +770,7 @@ static class Encoding
         ref var page = ref pages.Add();
         EnsureInitialized(bufferWriters, ref page.Header, useColumnBuffer: false);
         EnsureInitialized(bufferWriters, ref page.Content, useColumnBuffer: true);
+        page.ResetMetadata();
         return pages.Count - 1;
     }
 
@@ -781,6 +779,7 @@ static class Encoding
         ref var page = ref pages.Add();
         EnsureInitialized(bufferWriters, ref page.Header, useColumnBuffer: false);
         EnsureInitialized(bufferWriters, ref page.Content, useColumnBuffer: false);
+        page.ResetMetadata();
         return pages.Count - 1;
     }
 
@@ -795,21 +794,10 @@ static class Encoding
         buffer = useColumnBuffer ? bufferWriters.CreateColumnBufferWriter() : bufferWriters.CreatePageBufferWriter();
     }
 
-    static void WriteDataPageHeader(ref BufferWriter headerWriter, int rowCount, int valueCount, int nullCount,
+    static void WriteDataPageHeader(ref Page page, int rowCount, int valueCount, int nullCount,
         int repetitionLevelsByteLength, int definitionLevelsByteLength, EncodingKind encoding)
-    {
-        const int dataPageHeaderSize = sizeof(byte) + sizeof(byte) + sizeof(int) + sizeof(int) + sizeof(int) +
-                                       sizeof(int) + sizeof(int);
-        var header = headerWriter.GetSpan(dataPageHeaderSize);
-        header[0] = (byte)PageKind.DataV2;
-        header[1] = (byte)encoding;
-        BinaryPrimitives.WriteInt32LittleEndian(header[2..], rowCount);
-        BinaryPrimitives.WriteInt32LittleEndian(header[6..], nullCount);
-        BinaryPrimitives.WriteInt32LittleEndian(header[10..], valueCount);
-        BinaryPrimitives.WriteInt32LittleEndian(header[14..], repetitionLevelsByteLength);
-        BinaryPrimitives.WriteInt32LittleEndian(header[18..], definitionLevelsByteLength);
-        headerWriter.Advance(dataPageHeaderSize);
-    }
+        => page.SetDataPageMetadata(rowCount, valueCount, nullCount, repetitionLevelsByteLength,
+            definitionLevelsByteLength, encoding);
 
     static IEqualityComparer<T> GetDictionaryComparer<T>()
         where T : notnull
