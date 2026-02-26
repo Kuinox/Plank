@@ -14,3 +14,8 @@ Subagent responsiveness
 - Use subagents for parallel side work; continue main-thread edits and execution immediately.
 - When the user redirects, interrupt/pause subagent work and switch instantly.
 - Keep subagents alive across task switches; prefer retasking over closing so concurrent work streams stay active.
+
+Architecture directives
+
+- Backward compatibility is not required yet (library is not released); prefer the cleanest design over compatibility shims.
+- Page strategy decisions must use shared per-column statistics across row groups (writer-lifetime context), not only per-row-group local heuristics.

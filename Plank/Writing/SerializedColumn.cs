@@ -7,9 +7,8 @@ namespace Plank.Writing;
 
 public sealed class SerializedColumn
 {
-    static readonly IPageStrategy _defaultPageStrategy = new DefaultStrategy();
-
     readonly ParquetWriter _owner;
+    object? _dictionaryState;
     
     internal readonly PageList Pages;
     internal uint ColumnOrdinal;
@@ -28,9 +27,18 @@ public sealed class SerializedColumn
 
     public void Serialize<T>(Column column, ReadOnlySpan<T> values)
         where T : notnull
-        => Serialize(column, values, _defaultPageStrategy);
+    {
+        var columnOrdinal = _owner.GetColumnOrdinal(column);
+        SerializeCore(column, values, columnOrdinal, _owner.GetPageStrategy(columnOrdinal));
+    }
 
-    public void Serialize<T>(Column column, ReadOnlySpan<T> values, IPageStrategy strategy)
+    public void Serialize(Column column, ReadOnlyMemory<byte>[] values)
+        => Serialize<ReadOnlyMemory<byte>>(column, values);
+
+    public void Serialize(Column column, string[] values)
+        => Serialize<string>(column, values);
+
+    void SerializeCore<T>(Column column, ReadOnlySpan<T> values, uint columnOrdinal, IPageStrategy strategy)
         where T : notnull
     {
         ArgumentNullException.ThrowIfNull(column);
@@ -38,15 +46,13 @@ public sealed class SerializedColumn
         if (HasPendingData)
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
-
-        var columnOrdinal = _owner.GetColumnOrdinal(column);
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = values.Length;
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, column, values, strategy, Pages,
-            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal]);
+            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<T>());
     }
 
     /// <summary>
@@ -55,5 +61,16 @@ public sealed class SerializedColumn
     internal void Consume()
     {
         HasPendingData = false;
+    }
+
+    ReusableDictionaryState<T> GetOrCreateDictionaryState<T>()
+        where T : notnull
+    {
+        if (_dictionaryState is ReusableDictionaryState<T> state)
+            return state;
+
+        state = new ReusableDictionaryState<T>();
+        _dictionaryState = state;
+        return state;
     }
 }

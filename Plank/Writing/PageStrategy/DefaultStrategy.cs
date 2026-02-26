@@ -1,22 +1,40 @@
+using System.Threading;
 using Plank.Schema;
 
 namespace Plank.Writing.PageStrategy;
 
 sealed class DefaultStrategy : IPageStrategy
 {
-    public DictionaryMode GetDictionaryMode(Column column)
+    readonly DictionaryMode _dictionaryMode;
+    int _dictionarySortOrder = (int)DictionarySortOrder.Unknown;
+
+    public DefaultStrategy(Column column)
     {
         var encodings = column.Options.Encodings;
         for (var i = 0; i < encodings.Length; i++)
             if (encodings[i] is EncodingKind.PlainDictionary or EncodingKind.RleDictionary)
-                return DictionaryMode.Maybe;
+            {
+                _dictionaryMode = DictionaryMode.Maybe;
+                return;
+            }
 
-        return DictionaryMode.Disabled;
+        _dictionaryMode = DictionaryMode.Disabled;
     }
 
-    public bool ShouldDropDictionary<T>(Column column, IReadOnlyDictionary<T, int> dictionary, int totalRowCount,
-        int rowsSeen)
-        where T : notnull
+    public DictionaryMode GetDictionaryMode()
+        => _dictionaryMode;
+
+    public DictionarySortOrder GetDictionarySortOrder()
+        => (DictionarySortOrder)Volatile.Read(ref _dictionarySortOrder);
+
+    public void SetDictionarySortOrder(DictionarySortOrder sortOrder)
+    {
+        if (sortOrder is < DictionarySortOrder.Unknown or > DictionarySortOrder.Unsorted)
+            throw new ArgumentOutOfRangeException(nameof(sortOrder), sortOrder, "Unknown dictionary sort order.");
+        Volatile.Write(ref _dictionarySortOrder, (int)sortOrder);
+    }
+
+    public bool ShouldDropDictionary(int uniqueCount, int totalRowCount, int rowsSeen)
     {
         if (rowsSeen <= 0 || totalRowCount <= 0)
             return false;
@@ -25,7 +43,6 @@ sealed class DefaultStrategy : IPageStrategy
         if (rowsSeen < minRowsForDecision && rowsSeen < totalRowCount)
             return false;
 
-        var uniqueCount = dictionary.Count;
         if (uniqueCount <= 1)
             return false;
 
@@ -38,6 +55,6 @@ sealed class DefaultStrategy : IPageStrategy
                && (long)uniqueCount * 100 >= (long)rowsSeen * 85;
     }
 
-    public bool ShouldStartNewDataPage(Column column, int totalRowCount, int rowsWritten, int currentPageRowCount)
+    public bool ShouldStartNewDataPage(int totalRowCount, int rowsWritten, int currentPageRowCount)
         => false;
 }

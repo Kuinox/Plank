@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using Plank.Schema;
+using Plank.Writing.PageStrategy;
 using Plank.Writing.Thrift;
 
 namespace Plank.Writing;
@@ -12,6 +13,7 @@ public sealed class ParquetWriter
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
     internal readonly Column[] ColumnsByOrdinal;
+    readonly IPageStrategy[] _pageStrategiesByOrdinal;
     internal readonly string[][] ColumnPathsByOrdinal;
     internal readonly LeafProjectionInfo[] ColumnProjectionInfosByOrdinal;
     internal readonly int ColumnCount;
@@ -19,6 +21,7 @@ public sealed class ParquetWriter
     internal readonly CompressionKind Compression;
     internal readonly CompressionContext CompressionContext;
     internal readonly ColumnChunkMetadata[] OpenRowGroupColumnMetadata;
+    readonly RowGroupWriter _rowGroupWriter;
     internal BufferWriter SerializedRowGroupsMetadata;
     internal BufferWriter SerializedFileMetadata;
     internal long FileOffset;
@@ -51,11 +54,13 @@ public sealed class ParquetWriter
         if (ColumnProjectionInfosByOrdinal.Length != ColumnsByOrdinal.Length)
             throw new InvalidOperationException("Leaf projection metadata did not match projected column count.");
         ColumnCount = ColumnsByOrdinal.Length;
+        _pageStrategiesByOrdinal = CreateColumnPageStrategies(ColumnsByOrdinal, _schema.PageStrategiesByColumnName);
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
             _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
         Compression = _options.Compression;
         CompressionContext = new CompressionContext(BufferWriters);
         OpenRowGroupColumnMetadata = ColumnCount == 0 ? [] : new ColumnChunkMetadata[ColumnCount];
+        _rowGroupWriter = new RowGroupWriter(this);
         SerializedRowGroupsMetadata = BufferWriters.CreateMetadataBufferWriter();
         SerializedFileMetadata = BufferWriters.CreateMetadataBufferWriter();
         FileOffset = 0;
@@ -74,12 +79,14 @@ public sealed class ParquetWriter
 
     public void Reset(Stream stream)
     {
-        ThrowIfStreamClosed();
         ArgumentNullException.ThrowIfNull(stream);
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot reset while a row group is open.");
 
-        DisposeCurrentStream();
+        if (ReferenceEquals(stream, _stream))
+            PrepareCurrentStreamForReset();
+        else
+            DisposeCurrentStream();
         OpenFile(stream);
     }
 
@@ -97,7 +104,8 @@ public sealed class ParquetWriter
             CompleteOpenRowGroup(0);
         }
 
-        return new RowGroupWriter(this);
+        _rowGroupWriter.ResetForNewRowGroup();
+        return _rowGroupWriter;
     }
 
     public void CloseFile()
@@ -124,6 +132,16 @@ public sealed class ParquetWriter
         _streamDisposed = true;
     }
 
+    void PrepareCurrentStreamForReset()
+    {
+        if (!_stream.CanSeek)
+            throw new InvalidOperationException("Cannot reset to the same stream when it is not seekable.");
+        if (!_stream.CanWrite)
+            throw new InvalidOperationException("Cannot reset to the same stream when it is not writable.");
+        _stream.Position = 0;
+        _stream.SetLength(0);
+    }
+
     internal uint GetColumnOrdinal(Column column)
     {
         var ordinal = Array.IndexOf(ColumnsByOrdinal, column);
@@ -131,6 +149,26 @@ public sealed class ParquetWriter
             return (uint)ordinal;
 
         throw new ArgumentException("SerializedColumn column does not belong to this schema.", nameof(column));
+    }
+
+    internal IPageStrategy GetPageStrategy(uint columnOrdinal)
+        => _pageStrategiesByOrdinal[columnOrdinal];
+
+    static IPageStrategy[] CreateColumnPageStrategies(Column[] columns,
+        IReadOnlyDictionary<string, IPageStrategy> pageStrategiesByColumnName)
+    {
+        if (columns.Length == 0)
+            return [];
+
+        var result = new IPageStrategy[columns.Length];
+        for (var i = 0; i < result.Length; i++)
+        {
+            if (pageStrategiesByColumnName.TryGetValue(columns[i].Name, out var overrideStrategy))
+                result[i] = overrideStrategy;
+            else
+                result[i] = new DefaultStrategy(columns[i]);
+        }
+        return result;
     }
 
     internal void WriteBuffer(ref BufferWriter buffer)

@@ -1,9 +1,13 @@
 using System.Collections.Immutable;
+using Plank.Writing.PageStrategy;
 
 namespace Plank.Schema;
 
 public sealed record ParquetSchema
 {
+    static readonly ImmutableDictionary<string, IPageStrategy> EmptyPageStrategies =
+        ImmutableDictionary.Create<string, IPageStrategy>(StringComparer.Ordinal);
+
     public ParquetSchema(ImmutableArray<Column> columns)
     {
         Columns = columns.IsDefault ? [] : columns;
@@ -33,12 +37,17 @@ public sealed record ParquetSchema
 
     public ImmutableArray<ColumnDefinition> Definitions { get; }
 
+    public ImmutableDictionary<string, IPageStrategy> PageStrategiesByColumnName { get; init; } = EmptyPageStrategies;
+
     internal ImmutableArray<ImmutableArray<string>> LeafPaths { get; }
 
     internal ImmutableArray<LeafProjectionInfo> LeafProjectionInfos { get; }
 
     public void Validate()
     {
+        ArgumentNullException.ThrowIfNull(PageStrategiesByColumnName);
+        foreach (var pair in PageStrategiesByColumnName)
+            ArgumentNullException.ThrowIfNull(pair.Value);
         ValidateDefinitions();
 
         if (Columns.IsDefaultOrEmpty)

@@ -1,13 +1,12 @@
-using Plank.Schema;
-
 namespace Plank.Writing.PageStrategy;
 
 public interface IPageStrategy
 {
-    DictionaryMode GetDictionaryMode(Column column);
+    DictionaryMode GetDictionaryMode();
+    DictionarySortOrder GetDictionarySortOrder();
+    void SetDictionarySortOrder(DictionarySortOrder sortOrder);
 
-    bool ShouldDropDictionary<T>(Column column, IReadOnlyDictionary<T, int> dictionary, int totalRowCount, int rowsSeen)
-        where T : notnull;
+    bool ShouldDropDictionary(int uniqueCount, int totalRowCount, int rowsSeen);
 
-    bool ShouldStartNewDataPage(Column column, int totalRowCount, int rowsWritten, int currentPageRowCount);
+    bool ShouldStartNewDataPage(int totalRowCount, int rowsWritten, int currentPageRowCount);
 }

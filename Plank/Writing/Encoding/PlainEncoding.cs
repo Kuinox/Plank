@@ -1,12 +1,16 @@
 using System.Buffers.Binary;
+using System.Text;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Plank.Schema;
+using TextEncoding = System.Text.Encoding;
 
 namespace Plank.Writing.Encoding;
 
 static class PlainEncoding
 {
+    static readonly TextEncoding Utf8 = TextEncoding.UTF8;
+
     internal static void WriteValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
@@ -177,35 +181,92 @@ static class PlainEncoding
     static void WriteByteArrayValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
-        if (typeof(T) != typeof(byte[]))
-            throw new InvalidOperationException(
-                $"Column '{column.Name}' expects '{ParquetPhysicalType.ByteArray}' values, but got '{typeof(T)}'.");
-
-        var byteArrayValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
-        var byteCount = 0;
-        for (var i = 0; i < byteArrayValues.Length; i++)
+        if (typeof(T) == typeof(byte[]))
         {
-            var value = byteArrayValues[i] ?? throw new InvalidOperationException(
-                $"Column '{column.Name}' does not support null values.");
+            var byteArrayValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
+            var byteCount = 0;
+            for (var i = 0; i < byteArrayValues.Length; i++)
+            {
+                var value = byteArrayValues[i] ?? throw new InvalidOperationException(
+                    $"Column '{column.Name}' does not support null values.");
 
-            byteCount = checked(byteCount + sizeof(int) + value.Length);
-        }
+                byteCount = checked(byteCount + sizeof(int) + value.Length);
+            }
 
-        if (byteCount == 0)
+            if (byteCount == 0)
+                return;
+
+            var destination = writer.GetSpan(byteCount);
+            var offset = 0;
+            for (var i = 0; i < byteArrayValues.Length; i++)
+            {
+                var value = byteArrayValues[i]!;
+                BinaryPrimitives.WriteInt32LittleEndian(destination[offset..], value.Length);
+                offset += sizeof(int);
+                value.CopyTo(destination[offset..]);
+                offset += value.Length;
+            }
+
+            writer.Advance(offset);
             return;
-
-        var destination = writer.GetSpan(byteCount);
-        var offset = 0;
-        for (var i = 0; i < byteArrayValues.Length; i++)
-        {
-            var value = byteArrayValues[i]!;
-            BinaryPrimitives.WriteInt32LittleEndian(destination[offset..], value.Length);
-            offset += sizeof(int);
-            value.CopyTo(destination[offset..]);
-            offset += value.Length;
         }
 
-        writer.Advance(offset);
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+        {
+            var memoryValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>>>(ref values);
+            var byteCount = 0;
+            for (var i = 0; i < memoryValues.Length; i++)
+                byteCount = checked(byteCount + sizeof(int) + memoryValues[i].Length);
+            if (byteCount == 0)
+                return;
+
+            var destination = writer.GetSpan(byteCount);
+            var offset = 0;
+            for (var i = 0; i < memoryValues.Length; i++)
+            {
+                var value = memoryValues[i];
+                BinaryPrimitives.WriteInt32LittleEndian(destination[offset..], value.Length);
+                offset += sizeof(int);
+                value.Span.CopyTo(destination[offset..]);
+                offset += value.Length;
+            }
+
+            writer.Advance(offset);
+            return;
+        }
+
+        if (typeof(T) == typeof(string))
+        {
+            var stringValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<string>>(ref values);
+            var byteCount = 0;
+            for (var i = 0; i < stringValues.Length; i++)
+            {
+                var value = stringValues[i] ?? throw new InvalidOperationException(
+                    $"Column '{column.Name}' does not support null values.");
+                byteCount = checked(byteCount + sizeof(int) + Utf8.GetByteCount(value));
+            }
+
+            if (byteCount == 0)
+                return;
+
+            var destination = writer.GetSpan(byteCount);
+            var offset = 0;
+            for (var i = 0; i < stringValues.Length; i++)
+            {
+                var value = stringValues[i]!;
+                var utf8Length = Utf8.GetByteCount(value);
+                BinaryPrimitives.WriteInt32LittleEndian(destination[offset..], utf8Length);
+                offset += sizeof(int);
+                var written = Utf8.GetBytes(value, destination[offset..]);
+                offset += written;
+            }
+
+            writer.Advance(offset);
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Column '{column.Name}' expects '{ParquetPhysicalType.ByteArray}' values, but got '{typeof(T)}'.");
     }
 
     static void WriteInt96Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)

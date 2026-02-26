@@ -11,7 +11,8 @@ static class Encoding
     const int DictionaryDropCheckPeriodRows = 2048;
 
     internal static void Encode<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
-        IPageStrategy strategy, PageList pages, LeafProjectionInfo leafProjectionInfo)
+        IPageStrategy strategy, PageList pages, LeafProjectionInfo leafProjectionInfo,
+        ReusableDictionaryState<T> dictionaryState)
         where T : notnull
     {
         ArgumentNullException.ThrowIfNull(column);
@@ -30,7 +31,7 @@ static class Encoding
 
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
-        var useDictionary = TryWriteDictionaryPage(bufferWriters, column, values, strategy, pages,
+        var useDictionary = TryWriteDictionaryPage(bufferWriters, column, values, strategy, pages, dictionaryState,
             out var dictionaryValueCount, out var dictionaryIndexesBytes);
         var dictionaryIndexes = useDictionary && dictionaryIndexesBytes is not null
             ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBytes.AsSpan(0, checked(values.Length * sizeof(int))))
@@ -52,7 +53,7 @@ static class Encoding
                     pageRowCount++;
                     if (rowsWritten == values.Length)
                         break;
-                    if (strategy.ShouldStartNewDataPage(column, values.Length, rowsWritten, pageRowCount))
+                    if (strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
                         break;
                 }
 
@@ -81,13 +82,14 @@ static class Encoding
     }
 
     static bool TryWriteDictionaryPage<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
-        IPageStrategy strategy, PageList pages, out int dictionaryValueCount, out byte[]? dictionaryIndexesBytes)
+        IPageStrategy strategy, PageList pages, ReusableDictionaryState<T> dictionaryState, out int dictionaryValueCount,
+        out byte[]? dictionaryIndexesBytes)
         where T : notnull
     {
         dictionaryValueCount = 0;
         dictionaryIndexesBytes = null;
 
-        var dictionaryMode = strategy.GetDictionaryMode(column);
+        var dictionaryMode = strategy.GetDictionaryMode();
         if (dictionaryMode == DictionaryMode.Disabled)
         {
             return false;
@@ -98,64 +100,95 @@ static class Encoding
         var initialUniqueCapacity = dictionaryMode == DictionaryMode.Forced
             ? Math.Max(256, values.Length)
             : Math.Clamp(values.Length / 4, 256, 65_536);
-        var dictionary = new Dictionary<T, int>(initialUniqueCapacity, GetDictionaryComparer<T>());
-        var dictionaryValues = new List<T>(initialUniqueCapacity);
+        var comparer = GetDictionaryComparer<T>();
+        var knownSortOrder = strategy.GetDictionarySortOrder();
+        dictionaryState.Reset(initialUniqueCapacity, knownSortOrder == DictionarySortOrder.Unsorted, comparer);
         var indexByteLength = checked(values.Length * sizeof(int));
         byte[]? rentedIndexesBytes = bufferWriters.RentScratch(checked((uint)Math.Max(indexByteLength, sizeof(int))));
         try
         {
             var indexes = MemoryMarshal.Cast<byte, int>(rentedIndexesBytes.AsSpan(0, indexByteLength));
-            if (dictionaryMode == DictionaryMode.Maybe)
+            indexes[0] = dictionaryState.AddFirst(values[0]);
+            var currentSortedIndex = 0;
+            var sortedDirection = knownSortOrder switch
             {
-                var nextDropCheckRow = Math.Min(DictionaryDropCheckPeriodRows, values.Length);
-                for (var i = 0; i < values.Length; i++)
-                {
-                    var value = values[i];
-                    ref var indexRef = ref CollectionsMarshal.GetValueRefOrAddDefault(dictionary, value, out var exists);
-                    if (!exists)
-                    {
-                        indexRef = dictionaryValues.Count;
-                        dictionaryValues.Add(value);
-                    }
-
-                    indexes[i] = indexRef;
-
-                    var rowsSeen = i + 1;
-                    if (rowsSeen != nextDropCheckRow && rowsSeen != values.Length)
-                        continue;
-                    if (strategy.ShouldDropDictionary(column, dictionary, values.Length, rowsSeen))
-                    {
-                        dictionaryPage.Header.Reset();
-                        dictionaryPage.Content.Reset();
-                        pages.RemoveLast();
-                        bufferWriters.ReturnScratch(rentedIndexesBytes);
-                        rentedIndexesBytes = null;
-                        return false;
-                    }
-
-                    nextDropCheckRow = Math.Min(values.Length, rowsSeen + DictionaryDropCheckPeriodRows);
-                }
-            }
-            else
+                DictionarySortOrder.Ascending => 1,
+                DictionarySortOrder.Descending => -1,
+                _ => 0
+            };
+            if (!dictionaryState.IsMapEnabled && values.Length > 1 && sortedDirection == 0
+                && TryCompareForSort(values[0], values[1], out var firstComparison)
+                && firstComparison != 0)
+                sortedDirection = firstComparison < 0 ? 1 : -1;
+            var nextDropCheckRow = dictionaryMode == DictionaryMode.Maybe
+                ? Math.Min(DictionaryDropCheckPeriodRows, values.Length)
+                : 0;
+            for (var i = 1; i < values.Length; i++)
             {
-                for (var i = 0; i < values.Length; i++)
+                var value = values[i];
+                if (!dictionaryState.IsMapEnabled)
                 {
-                    var value = values[i];
-                    ref var indexRef = ref CollectionsMarshal.GetValueRefOrAddDefault(dictionary, value, out var exists);
-                    if (!exists)
+                    var previous = values[i - 1];
+                    if (comparer.Equals(value, previous))
                     {
-                        indexRef = dictionaryValues.Count;
-                        dictionaryValues.Add(value);
+                        indexes[i] = currentSortedIndex;
                     }
-
-                    indexes[i] = indexRef;
+                    else if (TryCompareForSort(previous, value, out var comparison)
+                             && IsSortedStep(comparison, ref sortedDirection))
+                    {
+                        currentSortedIndex = dictionaryState.AddSortedUnique(value);
+                        indexes[i] = currentSortedIndex;
+                    }
+                    else
+                    {
+                        if (knownSortOrder != DictionarySortOrder.Unsorted)
+                        {
+                            strategy.SetDictionarySortOrder(DictionarySortOrder.Unsorted);
+                            knownSortOrder = DictionarySortOrder.Unsorted;
+                        }
+                        dictionaryState.EnableMap();
+                        indexes[i] = dictionaryState.GetOrAddIndex(value);
+                    }
                 }
+                else
+                {
+                    indexes[i] = dictionaryState.GetOrAddIndex(value);
+                }
+
+                if (dictionaryMode != DictionaryMode.Maybe)
+                    continue;
+                var rowsSeen = i + 1;
+                if (rowsSeen != nextDropCheckRow && rowsSeen != values.Length)
+                    continue;
+                if (strategy.ShouldDropDictionary(dictionaryState.Count, values.Length, rowsSeen))
+                {
+                    dictionaryPage.Header.Reset();
+                    dictionaryPage.Content.Reset();
+                    pages.RemoveLast();
+                    bufferWriters.ReturnScratch(rentedIndexesBytes);
+                    rentedIndexesBytes = null;
+                    return false;
+                }
+
+                nextDropCheckRow = Math.Min(values.Length, rowsSeen + DictionaryDropCheckPeriodRows);
             }
 
-            PlainEncoding.WriteValues(column, CollectionsMarshal.AsSpan(dictionaryValues), ref dictionaryPage.Content);
+            if (!dictionaryState.IsMapEnabled)
+            {
+                var discoveredSortOrder = sortedDirection switch
+                {
+                    1 => DictionarySortOrder.Ascending,
+                    -1 => DictionarySortOrder.Descending,
+                    _ => DictionarySortOrder.Unknown
+                };
+                if (discoveredSortOrder != knownSortOrder)
+                    strategy.SetDictionarySortOrder(discoveredSortOrder);
+            }
 
-            dictionaryPage.SetDictionaryPageMetadata(dictionary.Count);
-            dictionaryValueCount = dictionary.Count;
+            PlainEncoding.WriteValues(column, dictionaryState.AsSpan(), ref dictionaryPage.Content);
+
+            dictionaryPage.SetDictionaryPageMetadata(dictionaryState.Count);
+            dictionaryValueCount = dictionaryState.Count;
             dictionaryIndexesBytes = rentedIndexesBytes;
             rentedIndexesBytes = null;
             return true;
@@ -165,6 +198,19 @@ static class Encoding
             if (rentedIndexesBytes is not null)
                 bufferWriters.ReturnScratch(rentedIndexesBytes);
         }
+    }
+
+    static bool IsSortedStep(int comparison, ref int sortedDirection)
+    {
+        if (comparison == 0)
+            return true;
+        if (sortedDirection == 0)
+        {
+            sortedDirection = comparison < 0 ? 1 : -1;
+            return true;
+        }
+
+        return sortedDirection == 1 ? comparison < 0 : comparison > 0;
     }
 
     static void EncodeRepeatedRows<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> rows, PageList pages,
@@ -294,6 +340,16 @@ static class Encoding
                     else
                         EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
                             Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[][]>>(ref rows), ref page, leafProjectionInfo);
+                    return;
+                }
+                if (typeof(T) == typeof(ReadOnlyMemory<byte>[][]))
+                {
+                    if (leafProjectionInfo.ElementOptional)
+                        throw new InvalidOperationException(
+                            $"Column '{column.Name}' has optional list elements; use nullable row element type for this column.");
+
+                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>[]>>(ref rows), ref page, leafProjectionInfo);
                     return;
                 }
                 break;
@@ -804,7 +860,58 @@ static class Encoding
     {
         if (typeof(T) == typeof(byte[]))
             return (IEqualityComparer<T>)(object)ByteArrayComparer.Instance;
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+            return (IEqualityComparer<T>)(object)ReadOnlyMemoryByteComparer.Instance;
 
         return EqualityComparer<T>.Default;
     }
+
+    static bool TryCompareForSort<T>(T left, T right, out int comparison)
+    {
+        if (typeof(T) == typeof(bool))
+        {
+            comparison = Unsafe.As<T, bool>(ref left).CompareTo(Unsafe.As<T, bool>(ref right));
+            return true;
+        }
+        if (typeof(T) == typeof(int))
+        {
+            comparison = Unsafe.As<T, int>(ref left).CompareTo(Unsafe.As<T, int>(ref right));
+            return true;
+        }
+        if (typeof(T) == typeof(long))
+        {
+            comparison = Unsafe.As<T, long>(ref left).CompareTo(Unsafe.As<T, long>(ref right));
+            return true;
+        }
+        if (typeof(T) == typeof(float))
+        {
+            comparison = Unsafe.As<T, float>(ref left).CompareTo(Unsafe.As<T, float>(ref right));
+            return true;
+        }
+        if (typeof(T) == typeof(double))
+        {
+            comparison = Unsafe.As<T, double>(ref left).CompareTo(Unsafe.As<T, double>(ref right));
+            return true;
+        }
+        if (typeof(T) == typeof(string))
+        {
+            comparison = string.CompareOrdinal(Unsafe.As<T, string>(ref left), Unsafe.As<T, string>(ref right));
+            return true;
+        }
+        if (typeof(T) == typeof(byte[]))
+        {
+            comparison = Unsafe.As<T, byte[]>(ref left).AsSpan().SequenceCompareTo(Unsafe.As<T, byte[]>(ref right).AsSpan());
+            return true;
+        }
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+        {
+            comparison = Unsafe.As<T, ReadOnlyMemory<byte>>(ref left).Span.SequenceCompareTo(
+                Unsafe.As<T, ReadOnlyMemory<byte>>(ref right).Span);
+            return true;
+        }
+
+        comparison = 0;
+        return false;
+    }
+
 }

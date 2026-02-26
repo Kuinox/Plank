@@ -1,0 +1,54 @@
+using Plank.Schema;
+using Plank.Writing;
+
+namespace Plank.Tests.Writer;
+
+internal sealed class WriterAllocationTests
+{
+    [Test]
+    public void NonDictionaryWriteChainDoesNotAllocateAfterWarmup()
+    {
+        var column = new Column("value", ParquetPhysicalType.Int32,
+            new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain]));
+        var schema = new ParquetSchema([column]);
+        using var stream = new MemoryStream(capacity: 1024 * 1024);
+        var writer = ParquetWriter.Create(stream, schema, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None
+        });
+        var serialized = writer.CreateSerializedColumn();
+        var values = CreateValues(4096);
+
+        for (var i = 0; i < 8; i++)
+            WriteOneRowGroup(writer, stream, serialized, column, values);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        WriteOneRowGroup(writer, stream, serialized, column, values);
+        var after = GC.GetAllocatedBytesForCurrentThread();
+        var allocated = after - before;
+
+        if (allocated != 0)
+            throw new InvalidOperationException(
+                $"Expected zero allocations for steady-state non-dictionary write chain but saw {allocated} bytes.");
+    }
+
+    static void WriteOneRowGroup(ParquetWriter writer, MemoryStream stream, SerializedColumn serialized,
+        Column column, int[] values)
+    {
+        writer.Reset(stream);
+        serialized.Serialize(column, values);
+        writer.StartRowGroup().Write(serialized);
+    }
+
+    static int[] CreateValues(int count)
+    {
+        var result = new int[count];
+        for (var i = 0; i < result.Length; i++)
+            result[i] = i;
+        return result;
+    }
+}

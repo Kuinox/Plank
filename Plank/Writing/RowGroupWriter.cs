@@ -20,6 +20,11 @@ public sealed class RowGroupWriter
         _compressedContent = default;
         _compressionInput = default;
         _compressedValues = default;
+        ResetForNewRowGroup();
+    }
+
+    internal void ResetForNewRowGroup()
+    {
         _nextColumnOrdinal = 0;
         _rowCount = -1;
     }
