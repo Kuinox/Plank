@@ -116,14 +116,15 @@ static class ByteStreamSplitEncoding
         var lane1 = destination.Slice(intValues.Length, intValues.Length);
         var lane2 = destination.Slice(intValues.Length * 2, intValues.Length);
         var lane3 = destination.Slice(intValues.Length * 3, intValues.Length);
+
         for (var i = 0; i < intValues.Length; i++)
-        {
-            var value = intValues[i];
-            lane0[i] = (byte)value;
-            lane1[i] = (byte)(value >> 8);
-            lane2[i] = (byte)(value >> 16);
-            lane3[i] = (byte)(value >> 24);
-        }
+            lane0[i] = (byte)intValues[i];
+        for (var i = 0; i < intValues.Length; i++)
+            lane1[i] = (byte)(intValues[i] >> 8);
+        for (var i = 0; i < intValues.Length; i++)
+            lane2[i] = (byte)(intValues[i] >> 16);
+        for (var i = 0; i < intValues.Length; i++)
+            lane3[i] = (byte)(intValues[i] >> 24);
 
         writer.Advance(byteCount);
     }
@@ -151,17 +152,21 @@ static class ByteStreamSplitEncoding
         var lane6 = destination.Slice(longValues.Length * 6, longValues.Length);
         var lane7 = destination.Slice(longValues.Length * 7, longValues.Length);
         for (var i = 0; i < longValues.Length; i++)
-        {
-            var value = longValues[i];
-            lane0[i] = (byte)value;
-            lane1[i] = (byte)(value >> 8);
-            lane2[i] = (byte)(value >> 16);
-            lane3[i] = (byte)(value >> 24);
-            lane4[i] = (byte)(value >> 32);
-            lane5[i] = (byte)(value >> 40);
-            lane6[i] = (byte)(value >> 48);
-            lane7[i] = (byte)(value >> 56);
-        }
+            lane0[i] = (byte)longValues[i];
+        for (var i = 0; i < longValues.Length; i++)
+            lane1[i] = (byte)(longValues[i] >> 8);
+        for (var i = 0; i < longValues.Length; i++)
+            lane2[i] = (byte)(longValues[i] >> 16);
+        for (var i = 0; i < longValues.Length; i++)
+            lane3[i] = (byte)(longValues[i] >> 24);
+        for (var i = 0; i < longValues.Length; i++)
+            lane4[i] = (byte)(longValues[i] >> 32);
+        for (var i = 0; i < longValues.Length; i++)
+            lane5[i] = (byte)(longValues[i] >> 40);
+        for (var i = 0; i < longValues.Length; i++)
+            lane6[i] = (byte)(longValues[i] >> 48);
+        for (var i = 0; i < longValues.Length; i++)
+            lane7[i] = (byte)(longValues[i] >> 56);
 
         writer.Advance(byteCount);
     }
