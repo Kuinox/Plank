@@ -18,3 +18,59 @@ Minimal Parquet writer under construction.
 - Run:
   - `dotnet run -c Release --project .\Plank.Benchmarks\Plank.Benchmarks.csproj -- --file-count 3`
   - Optional data directory override: `--data-dir C:\path\to\nyc-data`
+
+
+## TODO:
+
+we have a leak currently in the dict since we dont completly reset the dicts.
+
+  ---                                                                                                                              
+  Why Parquet.NET Is Faster — 4 Cases                                                                                              
+                                                                                                                                   
+  1. bool/dictionary — 10× slower (critical)                                                                                       
+                                                                                                                                   
+  The most dramatic gap. The sorted fast-path kills performance for bools:                                                         
+                                                                                                                                   
+  - Row 0: true → sorted index 0
+  - Row 1: false → sorted, index 1
+  - Row 2: true → order breaks → EnableMap() called → full hash table enabled
+  - Rows 3–1,000,000: all go through GetOrAddIndex() with hash lookups for a 2-valued type
+
+  The fix is a bool-specific fast path that skips the hash table entirely — just emit value ? 1 : 0 directly as the index.
+
+  ---
+  2. float/byte_stream_split and double/byte_stream_split — 1.6–1.7× slower
+
+  The current loop writes bytes in this pattern per iteration:
+  lane0[i]  → offset i          (byte 0 region)
+  lane1[i]  → offset 1M + i     (byte 1 region)
+  lane2[i]  → offset 2M + i     (byte 2 region)
+  lane3[i]  → offset 3M + i     (byte 3 region)
+
+  For 1M floats that's 4 stores 1MB apart per iteration — cache thrash. Every iteration touches 4 different cache lines.
+
+  The fix is to invert the loop nesting: outer loop over the 4 byte lanes, inner loop over values. Then each lane writes
+  sequentially and the CPU can prefetch properly.
+
+  ---
+  3. bool/plain — 10% slower
+
+  The current packing loop does 8 conditional OR-chains per byte. Minor SIMD opportunity, but low priority given only a 10% gap.
+
+  ---
+  Priority Summary
+
+  ┌─────────────────┬──────┬──────────────────────────────┬─────────────────────────────────────────────────┐
+  │      Case       │ Gap  │          Root Cause          │                       Fix                       │
+  ├─────────────────┼──────┼──────────────────────────────┼─────────────────────────────────────────────────┤
+  │ bool/dictionary │ 10×  │ Hash table for 2-valued type │ typeof(T) == bool fast-path, skip hash          │
+  ├─────────────────┼──────┼──────────────────────────────┼─────────────────────────────────────────────────┤
+  │ float/BSS       │ 1.7× │ Cache-hostile lane writes    │ Invert loop nesting (lanes outer, values inner) │
+  ├─────────────────┼──────┼──────────────────────────────┼─────────────────────────────────────────────────┤
+  │ double/BSS      │ 1.6× │ Same, 8 lanes instead of 4   │ Same fix                                        │
+  ├─────────────────┼──────┼──────────────────────────────┼─────────────────────────────────────────────────┤
+  │ bool/plain      │ 1.1× │ No SIMD bool packing         │ Low priority                                    │
+  └─────────────────┴──────┴──────────────────────────────┴─────────────────────────────────────────────────┘
+
+  The bool/dictionary fix would be a few lines. The byte_stream_split fix is a loop restructure. Want me to implement either?
+
