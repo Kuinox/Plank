@@ -97,18 +97,30 @@ static class Encoding
 
         var dictionaryPageIndex = AddDictionaryPage(bufferWriters, pages);
         ref var dictionaryPage = ref pages[dictionaryPageIndex];
-        var initialUniqueCapacity = dictionaryMode == DictionaryMode.Forced
-            ? Math.Max(256, values.Length)
-            : Math.Max(256, values.Length / 2);
-        var comparer = GetDictionaryComparer<T>();
-        var knownSortOrder = strategy.GetDictionarySortOrder();
-        dictionaryState.Reset(initialUniqueCapacity, knownSortOrder == DictionarySortOrder.Unsorted, comparer);
         var indexByteLength = checked(values.Length * sizeof(int));
         byte[]? rentedIndexesBytes = bufferWriters.RentScratch(checked((uint)Math.Max(indexByteLength, sizeof(int))));
         try
         {
             var indexes = MemoryMarshal.Cast<byte, int>(rentedIndexesBytes.AsSpan(0, indexByteLength));
+            if (typeof(T) == typeof(bool))
+            {
+                WriteBooleanDictionaryPage(column, Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool>>(ref values),
+                    ref dictionaryPage, indexes,
+                    out dictionaryValueCount);
+
+                dictionaryIndexesBytes = rentedIndexesBytes;
+                rentedIndexesBytes = null;
+                return true;
+            }
+
+            var initialUniqueCapacity = dictionaryMode == DictionaryMode.Forced
+                ? Math.Max(256, values.Length)
+                : Math.Max(256, values.Length / 2);
+            var comparer = GetDictionaryComparer<T>();
+            var knownSortOrder = strategy.GetDictionarySortOrder();
+            dictionaryState.Reset(initialUniqueCapacity, knownSortOrder == DictionarySortOrder.Unsorted, comparer);
             indexes[0] = dictionaryState.AddFirst(values[0]);
+
             var currentSortedIndex = 0;
             var sortedDirection = knownSortOrder switch
             {
@@ -198,6 +210,21 @@ static class Encoding
             if (rentedIndexesBytes is not null)
                 bufferWriters.ReturnScratch(rentedIndexesBytes);
         }
+    }
+
+    static void WriteBooleanDictionaryPage(Column column, ReadOnlySpan<bool> values, ref Page dictionaryPage,
+        Span<int> indexes, out int dictionaryValueCount)
+    {
+        for (var i = 0; i < values.Length; i++)
+            indexes[i] = values[i] ? 1 : 0;
+
+        Span<bool> dictionaryValues = stackalloc bool[2];
+        dictionaryValues[0] = false;
+        dictionaryValues[1] = true;
+        PlainEncoding.WriteValues(column, dictionaryValues, ref dictionaryPage.Content);
+
+        dictionaryPage.SetDictionaryPageMetadata(2);
+        dictionaryValueCount = 2;
     }
 
     static bool IsSortedStep(int comparison, ref int sortedDirection)
