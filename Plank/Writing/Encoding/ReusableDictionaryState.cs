@@ -1,51 +1,61 @@
 using System.Collections.Generic;
-using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Plank.Writing.Encoding;
 
+/// <summary>
+/// Reusable dictionary that maps T → insertion-order index (0, 1, 2, ...).
+/// Backed by a packed ultra-sparse linear-probing hash table:
+///   - Each slot is a single uint: top 8 bits = fingerprint tag, low 24 bits = (index+1). Zero = empty.
+///   - 25% load factor keeps average probe distance ~1.17 → almost always 1–2 reads per lookup.
+///   - Touched-slot list: Reset only zeroes occupied slots instead of clearing the full table.
+/// Hash function: wyhash (MemoryMarshal raw bytes for string/ROM&lt;byte&gt;/byte[],
+///                         GetHashCode() for value types).
+/// </summary>
 sealed class ReusableDictionaryState<T>
     where T : notnull
 {
-    const float MaxLoadFactor = 0.80f;
-
-    IEqualityComparer<T> _comparer = EqualityComparer<T>.Default;
     T[] _values = [];
-    int[] _hashes = [];
-    long[] _slotEntries = [];
-    int _currentEpoch = 1;
     int _count;
     bool _mapEnabled;
     int _initialUniqueCapacity;
 
-    public bool IsMapEnabled
-        => _mapEnabled;
+    // Packed table: entry = (tag << 24) | (index+1), 0 = empty.
+    // tag = (hash >> 24) | 0x80 so all occupied entries have bit7 of top byte set.
+    uint[] _table = [];
+    int[] _touched = [];   // indices into _table that were written since last clear
+    int _touchedCount;
+    int _threshold;        // grow table when _count reaches this
 
-    public int Count
-        => _count;
+    public bool IsMapEnabled => _mapEnabled;
+    public int Count => _count;
 
     public void Reset(int initialUniqueCapacity, bool useMap, IEqualityComparer<T> comparer)
     {
-        _comparer = comparer;
         _initialUniqueCapacity = initialUniqueCapacity;
-        EnsureValueCapacity(initialUniqueCapacity);
         _count = 0;
         _mapEnabled = useMap;
         if (!_mapEnabled)
+        {
+            EnsureValueCapacity(initialUniqueCapacity);
             return;
+        }
 
-        EnsureSlotCapacity(initialUniqueCapacity);
-        StartNewEpoch();
+        var minimumTableSize = Math.Max(16, checked((int)(initialUniqueCapacity / 0.25f) + 1));
+        if (_table.Length < minimumTableSize)
+            ResizeToEmpty(Pow2(minimumTableSize));
+        else
+            ClearTouched();
     }
 
     public int AddFirst(T value)
     {
         EnsureValueCapacity(1);
         _values[0] = value;
-        _hashes[0] = ComputeHash(value);
         _count = 1;
         if (_mapEnabled)
-            InsertKnownIndex(0, _hashes[0]);
+            InsertKnownNew(value, 0);
         return 0;
     }
 
@@ -54,10 +64,9 @@ sealed class ReusableDictionaryState<T>
         EnsureValueCapacity(_count + 1);
         var index = _count;
         _values[index] = value;
-        _hashes[index] = ComputeHash(value);
         _count++;
         if (_mapEnabled)
-            InsertKnownIndex(index, _hashes[index]);
+            InsertKnownNew(value, index);
         return index;
     }
 
@@ -67,10 +76,15 @@ sealed class ReusableDictionaryState<T>
             return;
 
         var capacity = Math.Max(_initialUniqueCapacity, _count);
-        EnsureSlotCapacity(capacity);
-        StartNewEpoch();
+        var minimumTableSize = Math.Max(16, checked((int)(capacity / 0.25f) + 1));
+        if (_table.Length < minimumTableSize)
+            ResizeToEmpty(Pow2(minimumTableSize));
+        else
+            ClearTouched();
+
         for (var i = 0; i < _count; i++)
-            InsertKnownIndex(i, _hashes[i]);
+            InsertKnownNew(_values[i], i);
+
         _mapEnabled = true;
     }
 
@@ -78,195 +92,168 @@ sealed class ReusableDictionaryState<T>
     {
         if (!_mapEnabled)
             throw new InvalidOperationException("Dictionary map is not enabled.");
-        EnsureMapInsertCapacity();
 
-        var hash = ComputeHash(value);
-        var mask = _slotEntries.Length - 1;
-        var position = hash & mask;
+        if (_count >= _threshold)
+            Resize();
+
+        var table = _table;
+        var hash = HashKey(value);
+        var tag = (uint)((hash >> 24) | 0x80);
+        var mask = table.Length - 1;
+        var slot = hash & mask;
 
         while (true)
         {
-            var entry = _slotEntries[position];
-            if ((int)(entry >> 32) != _currentEpoch)
+            var entry = table[slot];
+            if (entry == 0)
             {
-                var index = AddNewValue(value, hash);
-                _slotEntries[position] = PackEntry(_currentEpoch, index + 1);
+                var index = _count;
+                _values[index] = value;
+                _count++;
+                table[slot] = (tag << 24) | (uint)(index + 1);
+                _touched[_touchedCount++] = slot;
                 return index;
             }
 
-            var existingIndex = ((int)entry) - 1;
-            var existingHash = _hashes[existingIndex];
-            if (existingHash == hash && KeysEqual(_values[existingIndex], value))
-                return existingIndex;
+            if (entry >> 24 == tag)
+            {
+                var existingIndex = (int)(entry & 0x00FFFFFFu) - 1;
+                if (KeysEqual(_values[existingIndex], value))
+                    return existingIndex;
+            }
 
-            position = (position + 1) & mask;
+            slot = (slot + 1) & mask;
         }
     }
 
-    public ReadOnlySpan<T> AsSpan()
-        => _values.AsSpan(0, _count);
+    public ReadOnlySpan<T> AsSpan() => _values.AsSpan(0, _count);
 
-    void EnsureMapInsertCapacity()
+    // Insert a value at a known index without checking for duplicates.
+    // Caller guarantees the table has capacity (threshold not exceeded) and value is new.
+    void InsertKnownNew(T value, int index)
     {
-        if (_slotEntries.Length == 0)
+        var table = _table;
+        var hash = HashKey(value);
+        var tag = (uint)((hash >> 24) | 0x80);
+        var mask = table.Length - 1;
+        var slot = hash & mask;
+
+        while (table[slot] != 0)
+            slot = (slot + 1) & mask;
+
+        table[slot] = (tag << 24) | (uint)(index + 1);
+        _touched[_touchedCount++] = slot;
+    }
+
+    void ClearTouched()
+    {
+        var table = _table;
+        var touched = _touched;
+        for (var i = 0; i < _touchedCount; i++)
+            table[touched[i]] = 0;
+        _touchedCount = 0;
+    }
+
+    void Resize()
+    {
+        var newSize = Math.Max(32, _table.Length << 1);
+        var newTable = new uint[newSize];
+        var newTouched = new int[newSize];
+        if (_values.Length < newSize)
+            Array.Resize(ref _values, newSize);
+
+        _threshold = checked((int)(newSize * 0.25f));
+        var mask = newSize - 1;
+        var touchedCount = 0;
+        for (var i = 0; i < _count; i++)
         {
-            EnsureSlotCapacity(Math.Max(4, _count + 1));
-            StartNewEpoch();
-            return;
+            var hash = HashKey(_values[i]);
+            var tag = (uint)((hash >> 24) | 0x80);
+            var slot = hash & mask;
+            while (newTable[slot] != 0)
+                slot = (slot + 1) & mask;
+            newTable[slot] = (tag << 24) | (uint)(i + 1);
+            newTouched[touchedCount++] = slot;
         }
 
-        var maxCount = (int)(_slotEntries.Length * MaxLoadFactor);
-        if (_count < maxCount)
-            return;
-
-        ResizeSlots(_slotEntries.Length * 2);
+        _table = newTable;
+        _touched = newTouched;
+        _touchedCount = touchedCount;
     }
 
-    void ResizeSlots(int newSize)
+    void ResizeToEmpty(int slotLength)
     {
-        var oldEntries = _slotEntries;
-        var oldEpoch = _currentEpoch;
-        _slotEntries = new long[newSize];
-        _currentEpoch = 1;
-        for (var i = 0; i < oldEntries.Length; i++)
-        {
-            var entry = oldEntries[i];
-            if ((int)(entry >> 32) != oldEpoch)
-                continue;
-            var slot = (int)entry;
-            if (slot == 0)
-                continue;
-            var index = slot - 1;
-            InsertKnownIndex(index, _hashes[index]);
-        }
-    }
-
-    int AddNewValue(T value, int hash)
-    {
-        EnsureValueCapacity(_count + 1);
-        var index = _count;
-        _values[index] = value;
-        _hashes[index] = hash;
-        _count++;
-        return index;
-    }
-
-    void InsertKnownIndex(int index, int hash)
-    {
-        if (_slotEntries.Length == 0)
-            EnsureSlotCapacity(Math.Max(4, _count));
-
-        var mask = _slotEntries.Length - 1;
-        var position = hash & mask;
-        while ((int)(_slotEntries[position] >> 32) == _currentEpoch)
-            position = (position + 1) & mask;
-        _slotEntries[position] = PackEntry(_currentEpoch, index + 1);
-    }
-
-    int ComputeHash(T value)
-    {
-        int hash;
-        if (typeof(T) == typeof(string))
-            hash = Unsafe.As<T, string>(ref value).GetHashCode(StringComparison.Ordinal);
-        else if (typeof(T) == typeof(byte[]))
-            hash = HashBytes(Unsafe.As<T, byte[]>(ref value));
-        else if (typeof(T) == typeof(ReadOnlyMemory<byte>))
-            hash = HashBytes(Unsafe.As<T, ReadOnlyMemory<byte>>(ref value).Span);
-        else
-            hash = _comparer.GetHashCode(value);
-        hash &= int.MaxValue;
-        return hash == 0 ? 1 : hash;
+        _table = new uint[slotLength];
+        _touched = new int[slotLength];
+        if (_values.Length < slotLength)
+            Array.Resize(ref _values, slotLength);
+        _threshold = checked((int)(slotLength * 0.25f));
+        _touchedCount = 0;
     }
 
     void EnsureValueCapacity(int required)
     {
         if (_values.Length >= required)
             return;
-
         var newCapacity = _values.Length == 0 ? 4 : _values.Length;
         while (newCapacity < required)
             newCapacity *= 2;
         Array.Resize(ref _values, newCapacity);
-        Array.Resize(ref _hashes, newCapacity);
     }
 
-    void EnsureSlotCapacity(int requiredItems)
-    {
-        var minimumSize = (int)Math.Ceiling(requiredItems / MaxLoadFactor);
-        var size = 4;
-        while (size < minimumSize)
-            size *= 2;
-        if (_slotEntries.Length >= size)
-            return;
-        _slotEntries = new long[size];
-        _currentEpoch = 1;
-    }
-
-    void StartNewEpoch()
-    {
-        if (_slotEntries.Length == 0)
-            return;
-
-        if (_currentEpoch == int.MaxValue)
-        {
-            Array.Clear(_slotEntries, 0, _slotEntries.Length);
-            _currentEpoch = 1;
-            return;
-        }
-
-        _currentEpoch++;
-    }
-
-    static long PackEntry(int epoch, int slotValue)
-        => ((long)epoch << 32) | (uint)slotValue;
-
-    bool KeysEqual(T left, T right)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static int HashKey(T key)
     {
         if (typeof(T) == typeof(string))
-            return string.Equals(Unsafe.As<T, string>(ref left), Unsafe.As<T, string>(ref right), StringComparison.Ordinal);
-        if (typeof(T) == typeof(byte[]))
-            return Unsafe.As<T, byte[]>(ref left).AsSpan().SequenceEqual(Unsafe.As<T, byte[]>(ref right));
+            return WyHashing.Hash(MemoryMarshal.AsBytes(Unsafe.As<T, string>(ref key).AsSpan())) & int.MaxValue;
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
-            return Unsafe.As<T, ReadOnlyMemory<byte>>(ref left).Span.SequenceEqual(
-                Unsafe.As<T, ReadOnlyMemory<byte>>(ref right).Span);
-        return _comparer.Equals(left, right);
-    }
-
-    static int HashBytes(ReadOnlySpan<byte> bytes)
-    {
-        unchecked
+            return WyHashing.Hash(Unsafe.As<T, ReadOnlyMemory<byte>>(ref key).Span) & int.MaxValue;
+        if (typeof(T) == typeof(byte[]))
+            return WyHashing.Hash(Unsafe.As<T, byte[]>(ref key)) & int.MaxValue;
+        // float.GetHashCode() = raw IEEE 754 bits with no mixing.
+        // For data like (i%10000)/3f, all values share the same lower 16 mantissa bits
+        // (binary 1/3 = repeating 0.010101...) → catastrophic clustering into ~48/65536 slots.
+        // Murmur3 finalizer distributes bits uniformly.
+        if (typeof(T) == typeof(float))
         {
-            var h1 = 0x811C9DC5u;
-            var h2 = 0x9E3779B9u;
-            var i = 0;
-            while (i + 8 <= bytes.Length)
-            {
-                var v = BinaryPrimitives.ReadUInt64LittleEndian(bytes[i..]);
-                h1 = (h1 ^ (uint)v) * 16777619u;
-                h2 = (h2 ^ (uint)(v >> 32)) * 2246822519u;
-                i += 8;
-            }
-
-            while (i < bytes.Length)
-            {
-                var b = bytes[i++];
-                h1 = (h1 ^ b) * 16777619u;
-                h2 = (h2 ^ b) * 2246822519u;
-            }
-
-            var mixed = h1 ^ RotateLeft(h2, 13) ^ (uint)bytes.Length;
-            mixed ^= mixed >> 16;
-            mixed *= 0x7FEB352Du;
-            mixed ^= mixed >> 15;
-            mixed *= 0x846CA68Bu;
-            mixed ^= mixed >> 16;
-            return (int)mixed;
+            uint bits = Unsafe.As<T, uint>(ref key);
+            bits ^= bits >> 16;
+            bits *= 0x45d9f3bu;
+            bits ^= bits >> 16;
+            return (int)(bits & (uint)int.MaxValue);
         }
+        // double.GetHashCode() XORs high/low 32 bits, which is better than float but still
+        // has structure that can cluster. Apply the same finalizer for consistency.
+        if (typeof(T) == typeof(double))
+        {
+            ulong bits64 = Unsafe.As<T, ulong>(ref key);
+            uint bits = (uint)(bits64 ^ (bits64 >> 32));
+            bits ^= bits >> 16;
+            bits *= 0x45d9f3bu;
+            bits ^= bits >> 16;
+            return (int)(bits & (uint)int.MaxValue);
+        }
+        return key.GetHashCode() & int.MaxValue;
     }
 
-    static int HashBytes(byte[] bytes)
-        => HashBytes(bytes.AsSpan());
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static bool KeysEqual(T a, T b)
+    {
+        if (typeof(T) == typeof(string))
+            return Unsafe.As<T, string>(ref a) == Unsafe.As<T, string>(ref b);
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+            return Unsafe.As<T, ReadOnlyMemory<byte>>(ref a).Span.SequenceEqual(
+                Unsafe.As<T, ReadOnlyMemory<byte>>(ref b).Span);
+        if (typeof(T) == typeof(byte[]))
+            return Unsafe.As<T, byte[]>(ref a).AsSpan().SequenceEqual(Unsafe.As<T, byte[]>(ref b).AsSpan());
+        return EqualityComparer<T>.Default.Equals(a, b);
+    }
 
-    static uint RotateLeft(uint value, int offset)
-        => (value << offset) | (value >> (32 - offset));
+    static int Pow2(int value)
+    {
+        var size = 16;
+        while (size < value)
+            size <<= 1;
+        return size;
+    }
 }

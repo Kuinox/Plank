@@ -99,7 +99,7 @@ static class Encoding
         ref var dictionaryPage = ref pages[dictionaryPageIndex];
         var initialUniqueCapacity = dictionaryMode == DictionaryMode.Forced
             ? Math.Max(256, values.Length)
-            : Math.Clamp(values.Length / 4, 256, 65_536);
+            : Math.Max(256, values.Length / 2);
         var comparer = GetDictionaryComparer<T>();
         var knownSortOrder = strategy.GetDictionarySortOrder();
         dictionaryState.Reset(initialUniqueCapacity, knownSortOrder == DictionarySortOrder.Unsorted, comparer);

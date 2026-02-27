@@ -1,0 +1,80 @@
+namespace Plank.DictionaryLab.Nodes;
+
+public sealed class SortedArrayLengthFirstStringDictionary : IExperimentDictionary<string>
+{
+    public static string ExperimentName => "tree.sorted-array.length-first.v1";
+
+    public static Type? ParentExperimentType => typeof(SortedArrayStringDictionary);
+
+    public static string ExperimentDescription => "Sorted array branch with length metadata short-circuiting compare.";
+
+    string[] _sorted = [];
+    int[] _indices = [];
+    int[] _lengths = [];
+
+    public int Count { get; private set; }
+
+    public void Reset(int capacity)
+    {
+        if (_sorted.Length < capacity)
+        {
+            var newCapacity = Math.Max(16, capacity);
+            _sorted = new string[newCapacity];
+            _indices = new int[newCapacity];
+            _lengths = new int[newCapacity];
+        }
+
+        Count = 0;
+    }
+
+    public int GetOrAddIndex(string key)
+    {
+        var keyLength = key.Length;
+        var low = 0;
+        var high = Count - 1;
+
+        while (low <= high)
+        {
+            var mid = low + ((high - low) >> 1);
+            var compare = keyLength.CompareTo(_lengths[mid]);
+            if (compare == 0)
+                compare = string.CompareOrdinal(key, _sorted[mid]);
+            if (compare == 0)
+                return _indices[mid];
+            if (compare < 0)
+                high = mid - 1;
+            else
+                low = mid + 1;
+        }
+
+        EnsureCapacity(Count + 1);
+
+        if (low < Count)
+        {
+            Array.Copy(_sorted, low, _sorted, low + 1, Count - low);
+            Array.Copy(_indices, low, _indices, low + 1, Count - low);
+            Array.Copy(_lengths, low, _lengths, low + 1, Count - low);
+        }
+
+        var index = Count;
+        _sorted[low] = key;
+        _indices[low] = index;
+        _lengths[low] = keyLength;
+        Count++;
+        return index;
+    }
+
+    void EnsureCapacity(int target)
+    {
+        if (_sorted.Length >= target)
+            return;
+
+        var newCapacity = _sorted.Length == 0 ? 16 : _sorted.Length << 1;
+        while (newCapacity < target)
+            newCapacity <<= 1;
+
+        Array.Resize(ref _sorted, newCapacity);
+        Array.Resize(ref _indices, newCapacity);
+        Array.Resize(ref _lengths, newCapacity);
+    }
+}
