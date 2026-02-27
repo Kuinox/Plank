@@ -60,17 +60,5 @@ we have a leak currently in the dict since we dont completly reset the dicts.
   ---
   Priority Summary
 
-  ┌─────────────────┬──────┬──────────────────────────────┬─────────────────────────────────────────────────┐
-  │      Case       │ Gap  │          Root Cause          │                       Fix                       │
-  ├─────────────────┼──────┼──────────────────────────────┼─────────────────────────────────────────────────┤
-  │ bool/dictionary │ 10×  │ Hash table for 2-valued type │ typeof(T) == bool fast-path, skip hash          │
-  ├─────────────────┼──────┼──────────────────────────────┼─────────────────────────────────────────────────┤
-  │ float/BSS       │ 1.7× │ Cache-hostile lane writes    │ Invert loop nesting (lanes outer, values inner) │
-  ├─────────────────┼──────┼──────────────────────────────┼─────────────────────────────────────────────────┤
-  │ double/BSS      │ 1.6× │ Same, 8 lanes instead of 4   │ Same fix                                        │
-  ├─────────────────┼──────┼──────────────────────────────┼─────────────────────────────────────────────────┤
-  │ bool/plain      │ 1.1× │ No SIMD bool packing         │ Low priority                                    │
-  └─────────────────┴──────┴──────────────────────────────┴─────────────────────────────────────────────────┘
 
-  The bool/dictionary fix would be a few lines. The byte_stream_split fix is a loop restructure. Want me to implement either?
-
+delta_binary_packed	 is uninmplemented.

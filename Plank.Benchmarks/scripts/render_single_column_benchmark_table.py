@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import re
 import sys
 from pathlib import Path
@@ -36,6 +37,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional row-count filter when CSV includes multiple Rows values.",
     )
+    parser.add_argument(
+        "--compat-csv",
+        default=None,
+        help="Optional compatibility CSV (library,data_type,encoding,status). Unsupported pairs render as 'NA (unsupported)'.",
+    )
     return parser.parse_args()
 
 
@@ -43,7 +49,8 @@ def main() -> int:
     args = parse_args()
     rows = load_rows(args.csv_path)
     rows = filter_rows(rows, args.rows)
-    table = build_table(rows, args.metric)
+    unsupported = load_unsupported_matrix(args.compat_csv)
+    table = build_table(rows, args.metric, unsupported)
     render_markdown(table)
     return 0
 
@@ -82,7 +89,11 @@ def filter_rows(rows: list[dict[str, str]], rows_filter: str | None) -> list[dic
     return rows
 
 
-def build_table(rows: list[dict[str, str]], metric_column: str) -> dict[tuple[str, str], dict[str, str]]:
+def build_table(
+    rows: list[dict[str, str]],
+    metric_column: str,
+    unsupported: set[tuple[str, str, str]],
+) -> dict[tuple[str, str], dict[str, str]]:
     table: dict[tuple[str, str], dict[str, str]] = {}
     for row in rows:
         library = parse_library(row.get("Method", ""))
@@ -91,6 +102,8 @@ def build_table(rows: list[dict[str, str]], metric_column: str) -> dict[tuple[st
 
         scenario = parse_scenario(row)
         if scenario is None:
+            continue
+        if scenario[0] not in TYPE_ORDER or scenario[1] not in ENCODING_ORDER:
             continue
 
         metric_value = row.get(metric_column)
@@ -102,6 +115,18 @@ def build_table(rows: list[dict[str, str]], metric_column: str) -> dict[tuple[st
 
     if not table:
         raise SystemExit("No benchmark rows matched expected methods/scenarios.")
+
+    scenarios = list(table.keys())
+    for data_type, encoding in scenarios:
+        typed_encoding = table[(data_type, encoding)]
+        for library in LIBRARY_ORDER:
+            if library in typed_encoding:
+                continue
+            if (normalize_library(library), data_type, encoding) in unsupported:
+                typed_encoding[library] = "NA (unsupported)"
+            else:
+                typed_encoding[library] = "n/a"
+
     return table
 
 
@@ -169,6 +194,50 @@ def sort_key(item: tuple[str, str]) -> tuple[int, int, str, str]:
 
 def normalize_rows_value(value: str) -> str:
     return value.replace(",", "").replace("_", "").strip()
+
+
+def load_unsupported_matrix(compat_csv: str | None) -> set[tuple[str, str, str]]:
+    path = resolve_compat_path(compat_csv)
+    if path is None:
+        return set()
+
+    rows = load_rows(path)
+    unsupported: set[tuple[str, str, str]] = set()
+    for row in rows:
+        library = row.get("library", "").strip().lower()
+        data_type = row.get("data_type", "").strip()
+        encoding = row.get("encoding", "").strip()
+        status = row.get("status", "").strip().lower()
+        if not library or not data_type or not encoding:
+            continue
+        if status == "unsupported":
+            unsupported.add((library, data_type, encoding))
+
+    return unsupported
+
+
+def resolve_compat_path(compat_csv: str | None) -> Path | None:
+    if compat_csv:
+        path = Path(compat_csv)
+        if not path.exists():
+            raise SystemExit(f"Compatibility CSV file was not found: {path}")
+        return path
+
+    candidates = sorted(
+        glob.glob("benchmarks/report/compat_matrix_run_*.csv"),
+        reverse=True,
+    )
+    if not candidates:
+        return None
+    return Path(candidates[0])
+
+
+def normalize_library(library: str) -> str:
+    return {
+        "Plank": "plank",
+        "ParquetSharp": "parquetsharp",
+        "Parquet.Net": "parquet.net",
+    }[library]
 
 
 if __name__ == "__main__":

@@ -23,10 +23,7 @@ static class ParquetNetEncodingOptions
                 UseDictionaryEncoding = false,
                 UseDeltaBinaryPackedEncoding = true
             },
-            _ => new ParquetOptions
-            {
-                UseDictionaryEncoding = false,
-                UseDeltaBinaryPackedEncoding = false
-            }
+            _ => throw new NotSupportedException(
+                $"Parquet.Net benchmark path does not support encoding '{encoding}'.")
         };
 }

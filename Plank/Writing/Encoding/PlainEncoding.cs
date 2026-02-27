@@ -2,6 +2,8 @@ using System.Buffers.Binary;
 using System.Text;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using Plank.Schema;
 using TextEncoding = System.Text.Encoding;
 
@@ -58,10 +60,26 @@ static class PlainEncoding
         if (byteCount == 0)
             return;
 
+        var sourceBytes = MemoryMarshal.AsBytes(booleanValues);
         var destination = writer.GetSpan(byteCount);
-        var valueIndex = 0;
         var fullByteCount = booleanValues.Length >> 3;
-        for (var byteIndex = 0; byteIndex < fullByteCount; byteIndex++)
+        var valueIndex = 0;
+        var byteIndex = 0;
+        if (Sse2.IsSupported)
+        {
+            var simdValueCount = sourceBytes.Length & ~15;
+            for (; valueIndex < simdValueCount; valueIndex += 16)
+            {
+                var chunk = MemoryMarshal.Read<Vector128<byte>>(sourceBytes[valueIndex..]);
+                var gtZero = Sse2.CompareGreaterThan(chunk.AsSByte(), Vector128<sbyte>.Zero);
+                var mask = Sse2.MoveMask(gtZero);
+                destination[byteIndex] = (byte)mask;
+                destination[byteIndex + 1] = (byte)(mask >> 8);
+                byteIndex += 2;
+            }
+        }
+
+        for (; byteIndex < fullByteCount; byteIndex++)
         {
             var packed =
                 (booleanValues[valueIndex] ? 1 : 0) |
@@ -82,7 +100,7 @@ static class PlainEncoding
             var packed = 0;
             for (var bit = 0; bit < tailCount; bit++)
                 packed |= (booleanValues[valueIndex + bit] ? 1 : 0) << bit;
-            destination[fullByteCount] = (byte)packed;
+            destination[byteIndex] = (byte)packed;
         }
 
         writer.Advance(byteCount);
