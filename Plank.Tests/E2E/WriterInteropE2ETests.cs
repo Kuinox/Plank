@@ -171,6 +171,28 @@ internal sealed class WriterInteropE2ETests
     }
 
     [Test]
+    public async Task RequiredColumnsWithDeltaBinaryPackedInt64WideDeltasAreReadableByBothImplementations()
+    {
+        var path = NewPath("delta-binary-packed-int64-wide-deltas");
+        var schema = CreateSchema(int64Encoding: EncodingKind.DeltaBinaryPacked);
+        var rowGroups = new[]
+        {
+            CreateGeneratedRowGroupWithWideInt64Deltas(1024)
+        };
+
+        await WriteFileAsync(path, schema, CompressionKind.None, rowGroups).ConfigureAwait(false);
+        try
+        {
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
     public async Task RequiredColumnsWithDeltaLengthByteArrayEncodingAreReadableByBothImplementations()
     {
         var path = NewPath("delta-length-byte-array");
@@ -605,6 +627,24 @@ internal sealed class WriterInteropE2ETests
             int64Values[i] = value * 100L;
             doubleValues[i] = value + 0.25;
             binaryValues[i] = [(byte)value, 0x42];
+        }
+
+        return new ExpectedRowGroup(int32Values, int64Values, doubleValues, binaryValues);
+    }
+
+    static ExpectedRowGroup CreateGeneratedRowGroupWithWideInt64Deltas(int count)
+    {
+        const long high = 1L << 60;
+        var int32Values = new int[count];
+        var int64Values = new long[count];
+        var doubleValues = new double[count];
+        var binaryValues = new byte[count][];
+        for (var i = 0; i < count; i++)
+        {
+            int32Values[i] = i;
+            int64Values[i] = (i & 1) == 0 ? 0 : high;
+            doubleValues[i] = i + 0.75;
+            binaryValues[i] = [(byte)i, (byte)(i >> 1), 0x5A];
         }
 
         return new ExpectedRowGroup(int32Values, int64Values, doubleValues, binaryValues);

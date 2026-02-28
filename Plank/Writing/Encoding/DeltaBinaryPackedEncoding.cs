@@ -168,28 +168,29 @@ static class DeltaBinaryPackedEncoding
 
         var byteCount = checked((values.Length * bitWidth + 7) >> 3);
         var destination = writer.GetSpan(byteCount);
-        var offset = 0;
-        ulong bitBuffer = 0;
-        var bufferedBits = 0;
+        destination[..byteCount].Clear();
+        var bitOffset = 0;
         var mask = bitWidth == 64 ? ulong.MaxValue : (1UL << bitWidth) - 1UL;
         for (var i = 0; i < values.Length; i++)
         {
             var value = (ulong)values[i] & mask;
-            bitBuffer |= value << bufferedBits;
-            bufferedBits += bitWidth;
-
-            while (bufferedBits >= 8)
+            var remainingBits = bitWidth;
+            while (remainingBits > 0)
             {
-                destination[offset++] = (byte)bitBuffer;
-                bitBuffer >>= 8;
-                bufferedBits -= 8;
+                var byteIndex = bitOffset >> 3;
+                var bitIndex = bitOffset & 7;
+                var byteRemainingBits = 8 - bitIndex;
+                var bitsToWrite = Math.Min(byteRemainingBits, remainingBits);
+                var chunkMask = (1UL << bitsToWrite) - 1UL;
+                var chunk = (byte)(value & chunkMask);
+                destination[byteIndex] |= (byte)(chunk << bitIndex);
+                value >>= bitsToWrite;
+                bitOffset += bitsToWrite;
+                remainingBits -= bitsToWrite;
             }
         }
 
-        if (bufferedBits > 0)
-            destination[offset++] = (byte)bitBuffer;
-
-        writer.Advance(offset);
+        writer.Advance(byteCount);
     }
 
     static void WriteUnsignedVarInt(ulong value, ref BufferWriter writer)
