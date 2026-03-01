@@ -1,67 +1,152 @@
-using System.Collections.Generic;
 using System.Buffers;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Plank.Schema;
 using Plank.Writing.Encoding;
 using Plank.Writing.PageStrategy;
 
 namespace Plank.Writing;
 
-public sealed class SerializedColumn
+internal interface ISerializedColumn
+{
+    PageList Pages { get; }
+
+    uint ColumnOrdinal { get; }
+
+    int RowCount { get; }
+
+    bool HasPendingData { get; }
+
+    void Consume();
+}
+
+public sealed class SerializedColumn<T> : ISerializedColumn
 {
     static readonly DateOnly UnixEpochDate = new(1970, 1, 1);
 
     readonly ParquetWriter _owner;
+    readonly Column _column;
     object? _dictionaryState;
-    
-    internal readonly PageList Pages;
-    internal uint ColumnOrdinal;
-    internal int RowCount;
-    internal bool HasPendingData;
 
-    internal SerializedColumn(ParquetWriter owner, uint initialPageCapacity)
+    public SerializedColumn(ParquetWriter owner, Column column, uint initialPageCapacity)
     {
         ArgumentNullException.ThrowIfNull(owner);
-        Pages = new PageList(initialPageCapacity);
+        ArgumentNullException.ThrowIfNull(column);
         _owner = owner;
+        _column = column;
+        Pages = new PageList(initialPageCapacity);
         ColumnOrdinal = 0;
         RowCount = 0;
         HasPendingData = false;
     }
 
-    public void Serialize(Column column, ReadOnlySpan<bool> values)
-        => SerializeTyped(column, values);
+    internal PageList Pages { get; }
 
-    public void Serialize(Column column, ReadOnlySpan<int> values)
-        => SerializeTyped(column, values);
+    internal uint ColumnOrdinal { get; private set; }
 
-    public void Serialize(Column column, ReadOnlySpan<long> values)
-        => SerializeTyped(column, values);
+    internal int RowCount { get; private set; }
 
-    public void Serialize(Column column, ReadOnlySpan<float> values)
-        => SerializeTyped(column, values);
+    internal bool HasPendingData { get; private set; }
 
-    public void Serialize(Column column, ReadOnlySpan<double> values)
-        => SerializeTyped(column, values);
+    PageList ISerializedColumn.Pages => Pages;
 
-    public void Serialize(Column column, ReadOnlySpan<byte[]> values)
-        => SerializeTyped(column, values);
+    uint ISerializedColumn.ColumnOrdinal => ColumnOrdinal;
 
-    public void Serialize(Column column, ReadOnlySpan<ReadOnlyMemory<byte>> values)
-        => SerializeTyped(column, values);
+    int ISerializedColumn.RowCount => RowCount;
 
-    public void Serialize(Column column, ReadOnlySpan<string> values)
-        => SerializeTyped(column, values);
+    bool ISerializedColumn.HasPendingData => HasPendingData;
 
-    public void Serialize(Column column, ReadOnlySpan<DateOnly> values)
+    public void Serialize(ReadOnlySpan<T> values)
     {
-        RequireDateLogicalType(column);
+        if (typeof(T) == typeof(bool))
+        {
+            SerializeTyped(AsSpan<bool>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(int))
+        {
+            SerializeTyped(AsSpan<int>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(long))
+        {
+            SerializeTyped(AsSpan<long>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(float))
+        {
+            SerializeTyped(AsSpan<float>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(double))
+        {
+            SerializeTyped(AsSpan<double>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(byte[]))
+        {
+            SerializeTyped(AsAnySpan<byte[]>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+        {
+            SerializeTyped(AsAnySpan<ReadOnlyMemory<byte>>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(string))
+        {
+            SerializeTyped(AsAnySpan<string>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(DateOnly))
+        {
+            SerializeDateOnly(AsSpan<DateOnly>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(DateTime))
+        {
+            SerializeDateTime(AsSpan<DateTime>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(DateTimeOffset))
+        {
+            SerializeDateTimeOffset(AsSpan<DateTimeOffset>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(TimeOnly))
+        {
+            SerializeTimeOnly(AsSpan<TimeOnly>(values));
+            return;
+        }
+
+        throw new NotSupportedException($"Unsupported serialized column type '{typeof(T)}'.");
+    }
+
+    public void Serialize(T[] values)
+        => Serialize(values.AsSpan());
+
+    void SerializeDateOnly(ReadOnlySpan<DateOnly> values)
+    {
+        RequireDateLogicalType(_column);
         var rented = ArrayPool<int>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i].DayNumber - UnixEpochDate.DayNumber;
-            SerializeTyped(column, converted);
+            SerializeTyped(converted);
         }
         finally
         {
@@ -69,16 +154,16 @@ public sealed class SerializedColumn
         }
     }
 
-    public void Serialize(Column column, ReadOnlySpan<DateTime> values)
+    void SerializeDateTime(ReadOnlySpan<DateTime> values)
     {
-        var timestamp = RequireTimestampLogicalType(column);
+        var timestamp = RequireTimestampLogicalType(_column);
         var rented = ArrayPool<long>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = ToUnixTime(values[i], timestamp.Unit);
-            SerializeTyped(column, converted);
+            SerializeTyped(converted);
         }
         finally
         {
@@ -86,16 +171,16 @@ public sealed class SerializedColumn
         }
     }
 
-    public void Serialize(Column column, ReadOnlySpan<DateTimeOffset> values)
+    void SerializeDateTimeOffset(ReadOnlySpan<DateTimeOffset> values)
     {
-        var timestamp = RequireTimestampLogicalType(column);
+        var timestamp = RequireTimestampLogicalType(_column);
         var rented = ArrayPool<long>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = ToUnixTime(values[i], timestamp.Unit);
-            SerializeTyped(column, converted);
+            SerializeTyped(converted);
         }
         finally
         {
@@ -103,16 +188,16 @@ public sealed class SerializedColumn
         }
     }
 
-    public void Serialize(Column column, ReadOnlySpan<TimeOnly> values)
+    void SerializeTimeOnly(ReadOnlySpan<TimeOnly> values)
     {
-        var time = RequireTimeLogicalType(column);
+        var time = RequireTimeLogicalType(_column);
         var rented = ArrayPool<long>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = ToTimeValue(values[i], time.Unit);
-            SerializeTyped(column, converted);
+            SerializeTyped(converted);
         }
         finally
         {
@@ -120,23 +205,16 @@ public sealed class SerializedColumn
         }
     }
 
-    public void Serialize(Column column, ReadOnlyMemory<byte>[] values)
-        => SerializeTyped(column, values);
-
-    public void Serialize(Column column, string[] values)
-        => SerializeTyped(column, values);
-
-    void SerializeTyped<T>(Column column, ReadOnlySpan<T> values)
-        where T : notnull
+    void SerializeTyped<TValue>(ReadOnlySpan<TValue> values)
+        where TValue : notnull
     {
-        var columnOrdinal = _owner.GetColumnOrdinal(column);
-        SerializeCore(column, values, columnOrdinal, _owner.GetPageStrategy(columnOrdinal));
+        var columnOrdinal = _owner.GetColumnOrdinal(_column);
+        SerializeCore(values, columnOrdinal, _owner.GetPageStrategy(columnOrdinal));
     }
 
-    void SerializeCore<T>(Column column, ReadOnlySpan<T> values, uint columnOrdinal, IPageStrategy strategy)
-        where T : notnull
+    void SerializeCore<TValue>(ReadOnlySpan<TValue> values, uint columnOrdinal, IPageStrategy strategy)
+        where TValue : notnull
     {
-        ArgumentNullException.ThrowIfNull(column);
         ArgumentNullException.ThrowIfNull(strategy);
         if (HasPendingData)
             throw new InvalidOperationException(
@@ -146,36 +224,38 @@ public sealed class SerializedColumn
         RowCount = values.Length;
         HasPendingData = true;
 
-        Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, column, values, strategy, Pages,
-            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<T>());
+        Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategy, Pages,
+            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
     }
 
-    /// <summary>
-    /// Invalidates the current prepared payload to avoid missuses.
-    /// </summary>
+    void ISerializedColumn.Consume()
+        => Consume();
+
     internal void Consume()
-    {
-        HasPendingData = false;
-    }
+        => HasPendingData = false;
 
-    ReusableDictionaryState<T> GetOrCreateDictionaryState<T>()
-        where T : notnull
+    ReusableDictionaryState<TValue> GetOrCreateDictionaryState<TValue>()
+        where TValue : notnull
     {
-        if (_dictionaryState is ReusableDictionaryState<T> state)
+        if (_dictionaryState is ReusableDictionaryState<TValue> state)
             return state;
 
-        state = new ReusableDictionaryState<T>();
+        state = new ReusableDictionaryState<TValue>();
         _dictionaryState = state;
         return state;
     }
 
-    static long ToUnixMicroseconds(DateTime value)
+    static ReadOnlySpan<TTo> AsSpan<TTo>(ReadOnlySpan<T> values)
+        where TTo : struct
     {
-        if (value.Kind != DateTimeKind.Utc)
-            throw new InvalidOperationException(
-                $"DateTime values must have kind '{DateTimeKind.Utc}', got '{value.Kind}'.");
+        ref var first = ref Unsafe.As<T, TTo>(ref MemoryMarshal.GetReference(values));
+        return MemoryMarshal.CreateReadOnlySpan(ref first, values.Length);
+    }
 
-        return ToUnixTimeFromTicks(value.Ticks, TimeUnit.Micros);
+    static ReadOnlySpan<TTo> AsAnySpan<TTo>(ReadOnlySpan<T> values)
+    {
+        ref var first = ref Unsafe.As<T, TTo>(ref MemoryMarshal.GetReference(values));
+        return MemoryMarshal.CreateReadOnlySpan(ref first, values.Length);
     }
 
     static long ToUnixTime(DateTime value, TimeUnit unit)

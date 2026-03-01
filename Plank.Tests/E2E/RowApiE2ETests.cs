@@ -319,7 +319,7 @@ internal sealed class RowApiE2ETests
         int _index;
         readonly int _rowCount;
         readonly int[] _values;
-        readonly SerializedColumn _serialized;
+        readonly SerializedColumn<int> _serialized;
 
         internal TestIntSlot(PlankParquetWriter writer, int rowCount)
         {
@@ -327,7 +327,7 @@ internal sealed class RowApiE2ETests
             _rowCount = rowCount;
             _index = 0;
             _values = rowCount == 0 ? [] : new int[rowCount];
-            _serialized = writer.CreateSerializedColumn();
+            _serialized = writer.CreateSerializedColumn<int>(TestIntPipelineWriter.Schema.Columns[0]);
         }
 
         internal bool IsFull => _index == _rowCount;
@@ -349,7 +349,7 @@ internal sealed class RowApiE2ETests
         }
 
         internal void SerializeColumns()
-            => _serialized.Serialize(TestIntPipelineWriter.Schema.Columns[0], new ReadOnlySpan<int>(_values, 0, _index));
+            => _serialized.Serialize(new ReadOnlySpan<int>(_values, 0, _index));
 
         internal void WriteSerialized(PlankRowGroupWriter rowGroupWriter)
             => rowGroupWriter.Write(_serialized);
@@ -419,7 +419,7 @@ internal sealed class RowApiE2ETests
         int _index;
         readonly int _rowCount;
         readonly int[] _values;
-        readonly SerializedColumn _serialized;
+        readonly SerializedColumn<int> _serialized;
         readonly ManualResetEventSlim _serializeStarted;
         readonly ManualResetEventSlim _releaseSerialize;
 
@@ -428,7 +428,7 @@ internal sealed class RowApiE2ETests
         {
             _rowCount = rowCount;
             _values = rowCount == 0 ? [] : new int[rowCount];
-            _serialized = writer.CreateSerializedColumn();
+            _serialized = writer.CreateSerializedColumn<int>(TestIntPipelineWriter.Schema.Columns[0]);
             _serializeStarted = serializeStarted;
             _releaseSerialize = releaseSerialize;
         }
@@ -447,7 +447,7 @@ internal sealed class RowApiE2ETests
         {
             _serializeStarted.Set();
             _releaseSerialize.Wait(TimeSpan.FromSeconds(5));
-            _serialized.Serialize(TestIntPipelineWriter.Schema.Columns[0], new ReadOnlySpan<int>(_values, 0, _index));
+            _serialized.Serialize(new ReadOnlySpan<int>(_values, 0, _index));
         }
 
         internal void WriteSerialized(PlankRowGroupWriter rowGroupWriter)
@@ -527,11 +527,11 @@ internal sealed class RowApiE2ETests
         readonly int[] _c2;
         readonly int[] _c3;
         readonly int[] _c4;
-        readonly SerializedColumn _s0;
-        readonly SerializedColumn _s1;
-        readonly SerializedColumn _s2;
-        readonly SerializedColumn _s3;
-        readonly SerializedColumn _s4;
+        readonly SerializedColumn<int> _s0;
+        readonly SerializedColumn<int> _s1;
+        readonly SerializedColumn<int> _s2;
+        readonly SerializedColumn<int> _s3;
+        readonly SerializedColumn<int> _s4;
         readonly CountdownEvent _serializeStarted;
         readonly ManualResetEventSlim _releaseSerialize;
 
@@ -544,11 +544,11 @@ internal sealed class RowApiE2ETests
             _c2 = rowCount == 0 ? [] : new int[rowCount];
             _c3 = rowCount == 0 ? [] : new int[rowCount];
             _c4 = rowCount == 0 ? [] : new int[rowCount];
-            _s0 = writer.CreateSerializedColumn();
-            _s1 = writer.CreateSerializedColumn();
-            _s2 = writer.CreateSerializedColumn();
-            _s3 = writer.CreateSerializedColumn();
-            _s4 = writer.CreateSerializedColumn();
+            _s0 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.Columns[0]);
+            _s1 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.Columns[1]);
+            _s2 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.Columns[2]);
+            _s3 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.Columns[3]);
+            _s4 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.Columns[4]);
             _serializeStarted = serializeStarted;
             _releaseSerialize = releaseSerialize;
         }
@@ -579,11 +579,11 @@ internal sealed class RowApiE2ETests
         {
             _serializeStarted.Signal();
             _releaseSerialize.Wait(TimeSpan.FromSeconds(5));
-            _s0.Serialize(BlockingFiveColumnPipelineWriter.Schema.Columns[0], new ReadOnlySpan<int>(_c0, 0, _index));
-            _s1.Serialize(BlockingFiveColumnPipelineWriter.Schema.Columns[1], new ReadOnlySpan<int>(_c1, 0, _index));
-            _s2.Serialize(BlockingFiveColumnPipelineWriter.Schema.Columns[2], new ReadOnlySpan<int>(_c2, 0, _index));
-            _s3.Serialize(BlockingFiveColumnPipelineWriter.Schema.Columns[3], new ReadOnlySpan<int>(_c3, 0, _index));
-            _s4.Serialize(BlockingFiveColumnPipelineWriter.Schema.Columns[4], new ReadOnlySpan<int>(_c4, 0, _index));
+            _s0.Serialize(new ReadOnlySpan<int>(_c0, 0, _index));
+            _s1.Serialize(new ReadOnlySpan<int>(_c1, 0, _index));
+            _s2.Serialize(new ReadOnlySpan<int>(_c2, 0, _index));
+            _s3.Serialize(new ReadOnlySpan<int>(_c3, 0, _index));
+            _s4.Serialize(new ReadOnlySpan<int>(_c4, 0, _index));
         }
 
         internal void WriteSerialized(PlankRowGroupWriter rowGroupWriter)

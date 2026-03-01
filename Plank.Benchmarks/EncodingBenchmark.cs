@@ -42,7 +42,6 @@ public class EncodingBenchmark
     MemoryStream _sharedStream = null!;
     PlankColumn _plankColumn = null!;
     Plank.Writing.ParquetWriter _plankWriter = null!;
-    SerializedColumn _plankSerialized = null!;
     ParquetSharp.Column _parquetSharpColumn = null!;
 
     bool[] _boolValues = [];
@@ -93,7 +92,6 @@ public class EncodingBenchmark
         {
             Compression = CompressionKind.None
         });
-        _plankSerialized = _plankWriter.CreateSerializedColumn();
         _parquetSharpColumn = GetParquetSharpColumn(DataType);
     }
 
@@ -111,28 +109,38 @@ public class EncodingBenchmark
         switch (DataType)
         {
             case "bool":
-                _plankSerialized.Serialize(_plankColumn, _boolValues);
+                var boolSerialized = _plankWriter.CreateSerializedColumn<bool>(_plankColumn);
+                boolSerialized.Serialize(_boolValues);
+                rowGroup.Write(boolSerialized);
                 break;
             case "int32":
-                _plankSerialized.Serialize(_plankColumn, _int32Values);
+                var int32Serialized = _plankWriter.CreateSerializedColumn<int>(_plankColumn);
+                int32Serialized.Serialize(_int32Values);
+                rowGroup.Write(int32Serialized);
                 break;
             case "int64":
-                _plankSerialized.Serialize(_plankColumn, _int64Values);
+                var int64Serialized = _plankWriter.CreateSerializedColumn<long>(_plankColumn);
+                int64Serialized.Serialize(_int64Values);
+                rowGroup.Write(int64Serialized);
                 break;
             case "float":
-                _plankSerialized.Serialize(_plankColumn, _floatValues);
+                var floatSerialized = _plankWriter.CreateSerializedColumn<float>(_plankColumn);
+                floatSerialized.Serialize(_floatValues);
+                rowGroup.Write(floatSerialized);
                 break;
             case "double":
-                _plankSerialized.Serialize(_plankColumn, _doubleValues);
+                var doubleSerialized = _plankWriter.CreateSerializedColumn<double>(_plankColumn);
+                doubleSerialized.Serialize(_doubleValues);
+                rowGroup.Write(doubleSerialized);
                 break;
             case "string":
-                _plankSerialized.Serialize(_plankColumn, _stringByteValues);
+                var stringSerialized = _plankWriter.CreateSerializedColumn<byte[]>(_plankColumn);
+                stringSerialized.Serialize(_stringByteValues);
+                rowGroup.Write(stringSerialized);
                 break;
             default:
                 throw new InvalidOperationException($"Unknown type '{DataType}'.");
         }
-
-        rowGroup.Write(_plankSerialized);
     }
 
     [Benchmark]

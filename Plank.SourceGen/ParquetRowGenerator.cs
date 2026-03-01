@@ -10,8 +10,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 {
     static readonly DiagnosticDescriptor InvalidTarget = new(
         id: "PLANKGEN001",
-        title: "Invalid [GenerateRowApi] target",
-        messageFormat: "Property '{0}' must be static and of type Plank.Schema.RowSchema",
+        title: "Invalid [ParquetSchema] target",
+        messageFormat: "Type '{0}' must be a non-generic class with at least one supported non-static property",
         category: "Plank.SourceGen",
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -19,22 +19,22 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static readonly DiagnosticDescriptor UnsupportedPropertyType = new(
         id: "PLANKGEN002",
         title: "Unsupported schema column mapping",
-        messageFormat: "Column '{0}' on schema property '{1}' has unsupported row mapping for repetition '{2}' and physical type '{3}'",
+        messageFormat: "Column '{0}' on schema '{1}' has unsupported row mapping for repetition '{2}' and physical type '{3}'",
         category: "Plank.SourceGen",
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
-    static readonly DiagnosticDescriptor UnsupportedSchemaInitializer = new(
+    static readonly DiagnosticDescriptor UnsupportedSchemaDeclaration = new(
         id: "PLANKGEN003",
-        title: "Unsupported schema initializer",
-        messageFormat: "Schema property '{0}' must use an inline analyzable RowSchema.Create(RowSchema.Column<T>(...)) initializer",
+        title: "Unsupported schema declaration",
+        messageFormat: "{0}",
         category: "Plank.SourceGen",
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
     static readonly DiagnosticDescriptor InvalidTypeHint = new(
         id: "PLANKGEN004",
-        title: "Invalid RowSchema column mapping",
+        title: "Invalid schema column mapping",
         messageFormat: "{0}",
         category: "Plank.SourceGen",
         defaultSeverity: DiagnosticSeverity.Error,
@@ -130,34 +130,39 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        var schemaProperties = context.SyntaxProvider.ForAttributeWithMetadataName(
-            fullyQualifiedMetadataName: "Plank.Schema.GenerateRowApiAttribute",
-            predicate: static (node, _) => node is PropertyDeclarationSyntax,
-            transform: static (ctx, _) => (IPropertySymbol)ctx.TargetSymbol);
+        var schemaTypes = context.SyntaxProvider.ForAttributeWithMetadataName(
+            fullyQualifiedMetadataName: "Plank.Schema.ParquetSchemaAttribute",
+            predicate: static (node, _) => node is ClassDeclarationSyntax,
+            transform: static (ctx, _) => (INamedTypeSymbol)ctx.TargetSymbol);
 
-        context.RegisterSourceOutput(schemaProperties, static (sourceContext, propertySymbol) => Emit(sourceContext, propertySymbol));
+        context.RegisterSourceOutput(schemaTypes, static (sourceContext, typeSymbol) => Emit(sourceContext, typeSymbol));
     }
 
-    static void Emit(SourceProductionContext context, IPropertySymbol schemaProperty)
+    static void Emit(SourceProductionContext context, INamedTypeSymbol schemaType)
     {
-        if (!schemaProperty.IsStatic || schemaProperty.Type.ToDisplayString() != "Plank.Schema.RowSchema")
+        if (schemaType.TypeKind != TypeKind.Class || schemaType.Arity != 0)
         {
-            context.ReportDiagnostic(Diagnostic.Create(InvalidTarget, schemaProperty.Locations.FirstOrDefault(), schemaProperty.Name));
+            context.ReportDiagnostic(Diagnostic.Create(InvalidTarget, schemaType.Locations.FirstOrDefault(), schemaType.Name));
             return;
         }
 
-        if (!TryExtractColumns(schemaProperty, out var columns, out var extractError))
+        if (!TryExtractColumns(schemaType, out var columns, out var extractError))
         {
-            var descriptor = extractError.Length == 0 ? UnsupportedSchemaInitializer : InvalidTypeHint;
-            var arg = extractError.Length == 0 ? schemaProperty.Name : extractError;
-            context.ReportDiagnostic(Diagnostic.Create(descriptor, schemaProperty.Locations.FirstOrDefault(), arg));
+            if (extractError.Length == 0)
+            {
+                context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration, schemaType.Locations.FirstOrDefault(),
+                    $"Schema type '{schemaType.Name}' does not declare any supported non-static properties."));
+                return;
+            }
+
+            context.ReportDiagnostic(Diagnostic.Create(InvalidTypeHint, schemaType.Locations.FirstOrDefault(), extractError));
             return;
         }
 
         var schemaDiagnostics = ValidateSchemaColumns(columns);
         for (var i = 0; i < schemaDiagnostics.Length; i++)
             context.ReportDiagnostic(Diagnostic.Create(schemaDiagnostics[i].Descriptor,
-                schemaProperty.Locations.FirstOrDefault(), schemaDiagnostics[i].Message));
+                schemaType.Locations.FirstOrDefault(), schemaDiagnostics[i].Message));
         if (schemaDiagnostics.Length > 0)
             return;
 
@@ -168,9 +173,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             {
                 context.ReportDiagnostic(Diagnostic.Create(
                     UnsupportedPropertyType,
-                    schemaProperty.Locations.FirstOrDefault(),
+                    schemaType.Locations.FirstOrDefault(),
                     column.Name,
-                    schemaProperty.Name,
+                    schemaType.Name,
                     column.Repetition,
                     column.PhysicalType));
                 return;
@@ -178,18 +183,17 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             mappedColumns.Add(mapped);
         }
 
-        var source = BuildSource(schemaProperty, mappedColumns.ToImmutable());
-        var containingName = schemaProperty.ContainingType.Name;
-        context.AddSource($"{containingName}.{schemaProperty.Name}.PlankRow.g.cs", source);
+        var source = BuildSource(schemaType, columns, mappedColumns.ToImmutable());
+        context.AddSource($"{schemaType.Name}.PlankRow.g.cs", source);
     }
 
-    static string BuildSource(IPropertySymbol schemaProperty, ImmutableArray<MappedColumn> columns)
+    static string BuildSource(INamedTypeSymbol schemaType, ImmutableArray<SchemaColumn> schemaColumns,
+        ImmutableArray<MappedColumn> columns)
     {
-        var namespaceName = schemaProperty.ContainingNamespace is { IsGlobalNamespace: false }
-            ? schemaProperty.ContainingNamespace.ToDisplayString()
+        var namespaceName = schemaType.ContainingNamespace is { IsGlobalNamespace: false }
+            ? schemaType.ContainingNamespace.ToDisplayString()
             : null;
-        var generatedTypeName = $"{schemaProperty.ContainingType.Name}_{schemaProperty.Name}PlankRow";
-        var schemaAccess = $"{schemaProperty.ContainingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}.{schemaProperty.Name}";
+        var generatedTypeName = $"{schemaType.Name}PlankRow";
 
         var builder = new StringBuilder();
         builder.AppendLine("// <auto-generated />");
@@ -201,7 +205,19 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         builder.Append("public static class ").Append(generatedTypeName).AppendLine();
         builder.AppendLine("{");
-        builder.Append("    public static global::Plank.Schema.ParquetSchema Schema => ").Append(schemaAccess).AppendLine(".ParquetSchema;");
+        builder.AppendLine("    public static global::Plank.Schema.ParquetSchema Schema { get; } = new([");
+        for (var i = 0; i < schemaColumns.Length; i++)
+        {
+            var schemaColumn = schemaColumns[i];
+            builder.Append("        new global::Plank.Schema.Column(\"").Append(Escape(schemaColumn.Name))
+                .Append("\", global::Plank.Schema.ParquetPhysicalType.").Append(schemaColumn.PhysicalType)
+                .Append(", new global::Plank.Schema.ColumnOptions(global::Plank.Schema.ParquetRepetition.")
+                .Append(schemaColumn.Repetition).Append(')');
+            if (schemaColumn.LogicalType is { } logicalType)
+                builder.Append(", ").Append(GetLogicalTypeExpression(logicalType));
+            builder.AppendLine("),");
+        }
+        builder.AppendLine("    ]);");
         builder.AppendLine();
         builder.AppendLine("    public static Writer CreateWriter(global::Plank.Writing.RowGroupWriter rowGroupWriter, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(rowGroupWriter, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
@@ -211,6 +227,56 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("    public static PipelineWriter CreatePipelineWriter(global::System.IO.Stream stream, uint maxParallelism, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(stream, maxParallelism, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
+        builder.AppendLine();
+        builder.AppendLine("    public static SchemaWriter CreateSchemaWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions? options = null)");
+        builder.AppendLine("        => new(stream, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
+        builder.AppendLine();
+        builder.AppendLine("    public sealed class SchemaWriter");
+        builder.AppendLine("    {");
+        builder.AppendLine("        readonly global::Plank.Writing.ParquetWriter _writer;");
+        builder.AppendLine();
+        builder.AppendLine("        internal SchemaWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions options)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            _ = stream ?? throw new global::System.ArgumentNullException(nameof(stream));");
+        builder.AppendLine("            _ = options ?? throw new global::System.ArgumentNullException(nameof(options));");
+        builder.AppendLine("            _writer = global::Plank.Writing.ParquetWriter.Create(stream, Schema, options);");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        public RowGroup StartRowGroup()");
+        builder.AppendLine("            => new(_writer.StartRowGroup());");
+        builder.AppendLine();
+        builder.AppendLine("        public void Reset(global::System.IO.Stream stream)");
+        builder.AppendLine("            => _writer.Reset(stream);");
+        builder.AppendLine();
+        builder.AppendLine("        public void CloseFile()");
+        builder.AppendLine("            => _writer.CloseFile();");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    public sealed class RowGroup");
+        builder.AppendLine("    {");
+        builder.AppendLine("        readonly global::Plank.Writing.RowGroupWriter _rowGroupWriter;");
+        for (var i = 0; i < columns.Length; i++)
+            builder.Append("        readonly global::Plank.Writing.SerializedColumn<")
+                .Append(columns[i].ClrTypeName).Append("> _")
+                .Append(columns[i].PropertyName).AppendLine(";");
+        builder.AppendLine();
+        builder.AppendLine("        internal RowGroup(global::Plank.Writing.RowGroupWriter rowGroupWriter)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            _rowGroupWriter = rowGroupWriter ?? throw new global::System.ArgumentNullException(nameof(rowGroupWriter));");
+        for (var i = 0; i < columns.Length; i++)
+            builder.Append("            _").Append(columns[i].PropertyName).Append(" = rowGroupWriter.CreateSerializedColumn<")
+                .Append(columns[i].ClrTypeName).Append(">(Schema.Columns[").Append(i).Append("]);").AppendLine();
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        for (var i = 0; i < columns.Length; i++)
+        {
+            builder.Append("        public global::Plank.Writing.SerializedColumn<")
+                .Append(columns[i].ClrTypeName).Append("> ")
+                .Append(columns[i].PropertyName).Append(" => _").Append(columns[i].PropertyName).AppendLine(";");
+            if (i < columns.Length - 1)
+                builder.AppendLine();
+        }
+        builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    public struct Writer");
         builder.AppendLine("    {");
@@ -327,7 +393,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         for (var i = 0; i < columns.Length; i++)
             builder.Append("        readonly ").Append(GetBufferType(columns[i].ClrTypeName)).Append(" _").Append(columns[i].PropertyName).AppendLine(";");
         for (var i = 0; i < columns.Length; i++)
-            builder.Append("        readonly global::Plank.Writing.SerializedColumn _serialized").Append(columns[i].PropertyName).AppendLine(";");
+            builder.Append("        readonly global::Plank.Writing.SerializedColumn<").Append(columns[i].ClrTypeName).Append("> _serialized").Append(columns[i].PropertyName).AppendLine(";");
         builder.AppendLine();
         builder.AppendLine("        internal BufferSlot(global::Plank.Writing.RowGroupWriter rowGroupWriter, int rowCount)");
         builder.AppendLine("        {");
@@ -340,7 +406,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         for (var i = 0; i < columns.Length; i++)
             builder.Append("            _").Append(columns[i].PropertyName).Append(" = rowCount == 0 ? global::System.Array.Empty<").Append(columns[i].ClrTypeName).Append(">() : ").Append(GetBufferAllocation(columns[i].ClrTypeName)).AppendLine(";");
         for (var i = 0; i < columns.Length; i++)
-            builder.Append("            _serialized").Append(columns[i].PropertyName).Append(" = rowGroupWriter.CreateSerializedColumn();").AppendLine();
+            builder.Append("            _serialized").Append(columns[i].PropertyName).Append(" = rowGroupWriter.CreateSerializedColumn<").Append(columns[i].ClrTypeName).Append(">(Schema.Columns[").Append(i).Append("]);").AppendLine();
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        internal BufferSlot(global::Plank.Writing.ParquetWriter writer, int rowCount)");
@@ -354,7 +420,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         for (var i = 0; i < columns.Length; i++)
             builder.Append("            _").Append(columns[i].PropertyName).Append(" = rowCount == 0 ? global::System.Array.Empty<").Append(columns[i].ClrTypeName).Append(">() : ").Append(GetBufferAllocation(columns[i].ClrTypeName)).AppendLine(";");
         for (var i = 0; i < columns.Length; i++)
-            builder.Append("            _serialized").Append(columns[i].PropertyName).Append(" = writer.CreateSerializedColumn();").AppendLine();
+            builder.Append("            _serialized").Append(columns[i].PropertyName).Append(" = writer.CreateSerializedColumn<").Append(columns[i].ClrTypeName).Append(">(Schema.Columns[").Append(i).Append("]);").AppendLine();
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        internal bool IsFull => _index == _rowCount;");
@@ -382,7 +448,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        internal void SerializeColumns()");
         builder.AppendLine("        {");
         for (var i = 0; i < columns.Length; i++)
-            builder.Append("            _serialized").Append(columns[i].PropertyName).Append(".Serialize(Schema.Columns[").Append(i).Append("], new global::System.ReadOnlySpan<").Append(columns[i].ClrTypeName).Append(">(_").Append(columns[i].PropertyName).Append(", 0, _index));").AppendLine();
+            builder.Append("            _serialized").Append(columns[i].PropertyName).Append(".Serialize(new global::System.ReadOnlySpan<").Append(columns[i].ClrTypeName).Append(">(_").Append(columns[i].PropertyName).Append(", 0, _index));").AppendLine();
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        internal void WriteSerialized(global::Plank.Writing.RowGroupWriter rowGroupWriter)");
@@ -440,7 +506,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             return false;
         }
 
-        mapped = new MappedColumn(column.Name, ToIdentifier(column.Name), column.ClrTypeName);
+        mapped = new MappedColumn(column.Name, ToIdentifier(column.RowPropertyName), column.ClrTypeName);
         return true;
     }
 
@@ -523,23 +589,30 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return $"new {clrTypeName}[rowCount]";
     }
 
-    static bool TryExtractColumns(IPropertySymbol schemaProperty, out ImmutableArray<SchemaColumn> columns, out string error)
+    static bool TryExtractColumns(INamedTypeSymbol schemaType, out ImmutableArray<SchemaColumn> columns, out string error)
     {
-        columns = default;
         error = string.Empty;
+        var properties = schemaType.GetMembers()
+            .OfType<IPropertySymbol>()
+            .Where(static p => !p.IsStatic && !p.IsIndexer)
+            .OrderBy(static p => p.Locations.FirstOrDefault()?.SourceSpan.Start ?? int.MaxValue)
+            .ToImmutableArray();
 
-        var declaration = schemaProperty.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as PropertyDeclarationSyntax;
-        if (declaration?.Initializer?.Value is null)
-            return false;
-
-        if (!TryExtractColumnExpressions(declaration.Initializer.Value, out var columnExpressions))
-            return false;
-
-        var builder = ImmutableArray.CreateBuilder<SchemaColumn>(columnExpressions.Count);
-        foreach (var expression in columnExpressions)
+        if (properties.IsDefaultOrEmpty)
         {
-            if (!TryParseColumnExpression(expression, out var column, out error))
+            columns = default;
+            return false;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<SchemaColumn>(properties.Length);
+        foreach (var property in properties)
+        {
+            if (!TryExtractColumn(property, out var column, out error))
+            {
+                columns = default;
                 return false;
+            }
+
             builder.Add(column);
         }
 
@@ -547,184 +620,154 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return true;
     }
 
-    static bool TryExtractColumnExpressions(ExpressionSyntax expression, out SeparatedSyntaxList<ExpressionSyntax> expressions)
+    static bool TryExtractColumn(IPropertySymbol property, out SchemaColumn column, out string error)
     {
-        expressions = default;
-
-        switch (expression)
-        {
-            case InvocationExpressionSyntax { ArgumentList.Arguments.Count: > 0 } invocation when IsCreateInvocation(invocation.Expression):
-                expressions = invocation.ArgumentList.Arguments.Select(static a => a.Expression).ToSeparatedSyntaxList();
-                return true;
-            case ObjectCreationExpressionSyntax { ArgumentList.Arguments.Count: > 0 } created:
-                return TryExtractColumnExpressionsFromArgument(created.ArgumentList.Arguments[0].Expression, out expressions);
-            case ImplicitObjectCreationExpressionSyntax { ArgumentList.Arguments.Count: > 0 } created:
-                return TryExtractColumnExpressionsFromArgument(created.ArgumentList.Arguments[0].Expression, out expressions);
-            default:
-                return false;
-        }
-    }
-
-    static bool TryExtractColumnExpressionsFromArgument(ExpressionSyntax expression, out SeparatedSyntaxList<ExpressionSyntax> expressions)
-    {
-        expressions = default;
-        switch (expression)
-        {
-            case CollectionExpressionSyntax collection:
-                expressions = collection.Elements
-                    .OfType<ExpressionElementSyntax>()
-                    .Select(static e => e.Expression)
-                    .ToSeparatedSyntaxList();
-                return expressions.Count > 0;
-            case InvocationExpressionSyntax invocation when invocation.Expression.ToString().Contains("ImmutableArray.Create", StringComparison.Ordinal):
-                expressions = invocation.ArgumentList.Arguments.Select(static a => a.Expression).ToSeparatedSyntaxList();
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    static bool IsCreateInvocation(ExpressionSyntax expression)
-        => expression.ToString().EndsWith(".Create", StringComparison.Ordinal) ||
-           expression.ToString() == "Create";
-
-    static bool TryParseColumnExpression(ExpressionSyntax expression, out SchemaColumn column, out string error)
-    {
-        column = default;
         error = string.Empty;
+        column = default;
 
-        if (!TryExtractColumnInvocation(expression, out var genericName, out var arguments))
-            return false;
-        if (genericName.TypeArgumentList.Arguments.Count != 1 || arguments.Count < 2)
-            return false;
-
-        if (arguments[0].Expression is not LiteralExpressionSyntax { Token.ValueText: { } columnName })
-            return false;
-
-        if (!TryParseEnumMember(arguments[1].Expression, out var physicalType))
-            return false;
-
-        if (!TryNormalizeClrType(genericName.TypeArgumentList.Arguments[0], out var clrTypeName))
+        if (!TryNormalizeClrType(property.Type, property.NullableAnnotation, out var clrTypeName))
         {
-            error = $"Unsupported CLR type '{genericName.TypeArgumentList.Arguments[0]}' for schema property column '{columnName}'.";
+            error = $"Unsupported CLR type '{property.Type.ToDisplayString()}' for schema property '{property.Name}'.";
             return false;
         }
 
-        var repetition = "Unspecified";
-        ExpressionSyntax? optionsExpression = null;
-        ExpressionSyntax? logicalTypeExpression = null;
-        for (var i = 2; i < arguments.Count; i++)
+        if (!TryInferDefaults(clrTypeName, out var inferredPhysicalType, out var inferredLogicalType))
         {
-            var argument = arguments[i];
-            var name = argument.NameColon?.Name.Identifier.ValueText;
-            if (string.Equals(name, "options", StringComparison.Ordinal))
-            {
-                optionsExpression = argument.Expression;
-                continue;
-            }
-            if (string.Equals(name, "logicalType", StringComparison.Ordinal))
-            {
-                logicalTypeExpression = argument.Expression;
-                continue;
-            }
-
-            if (optionsExpression is null && TryExtractColumnOptionsArguments(argument.Expression, out _))
-                optionsExpression = argument.Expression;
-            else if (logicalTypeExpression is null)
-                logicalTypeExpression = argument.Expression;
+            error = $"Could not infer parquet mapping for CLR type '{property.Type.ToDisplayString()}' on property '{property.Name}'.";
+            return false;
         }
 
-        if (optionsExpression is not null &&
-            TryExtractColumnOptionsArguments(optionsExpression, out var optionArguments) &&
-            optionArguments.Count > 0 &&
-            TryParseEnumMember(optionArguments[0].Expression, out var repetitionValue))
-            repetition = repetitionValue;
-
-        LogicalTypeSpec? logicalType = null;
-        if (logicalTypeExpression is not null && !TryParseLogicalType(logicalTypeExpression, out logicalType, out error))
+        var columnName = property.Name;
+        var physicalType = inferredPhysicalType;
+        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, out error))
             return false;
+        if (columnName.Length == 0)
+        {
+            error = $"Property '{property.Name}' has an empty parquet column name.";
+            return false;
+        }
 
-        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType);
+        var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
+        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, inferredLogicalType, property.Name);
         return true;
     }
 
-    static bool TryParseLogicalType(ExpressionSyntax expression, out LogicalTypeSpec? logicalType, out string error)
+    static bool TryReadColumnOverrides(IPropertySymbol property, ref string columnName, ref string physicalType,
+        out string error)
     {
-        logicalType = null;
         error = string.Empty;
+        var attributes = property.GetAttributes()
+            .Where(static a => a.AttributeClass?.ToDisplayString() == "Plank.Schema.ParquetColumnAttribute")
+            .ToImmutableArray();
 
-        if (expression is LiteralExpressionSyntax { RawKind: (int)Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression })
+        if (attributes.IsDefaultOrEmpty)
             return true;
-
-        if (expression is not ObjectCreationExpressionSyntax { Type: { } typeSyntax, ArgumentList: { } arguments })
+        if (attributes.Length > 1)
         {
-            error = $"Unsupported logical type expression '{expression}'.";
+            error = $"Property '{property.Name}' has multiple [ParquetColumn] attributes.";
             return false;
         }
 
-        var typeName = typeSyntax.ToString();
-        var lastDot = typeName.LastIndexOf('.');
-        var shortName = lastDot >= 0 ? typeName.Substring(lastDot + 1) : typeName;
-        if (shortName.Length == 0)
-            shortName = typeName;
-
-        switch (shortName)
+        var attribute = attributes[0];
+        for (var i = 0; i < attribute.ConstructorArguments.Length; i++)
         {
-            case "Date":
-            case "String":
-            case "Json":
-            case "Uuid":
-                logicalType = new LogicalTypeSpec(shortName);
-                return true;
-            case "Time":
-            case "Timestamp":
+            var parameter = attribute.AttributeConstructor?.Parameters[i];
+            var argument = attribute.ConstructorArguments[i];
+            if (parameter?.Type.SpecialType == SpecialType.System_String)
             {
-                if (arguments.Arguments.Count != 2)
-                {
-                    error = $"Logical type '{shortName}' requires (TimeUnit unit, bool isAdjustedToUtc).";
-                    return false;
-                }
-                if (!TryParseEnumMember(arguments.Arguments[0].Expression, out var unit))
-                {
-                    error = $"Logical type '{shortName}' has invalid time unit expression '{arguments.Arguments[0].Expression}'.";
-                    return false;
-                }
-                if (arguments.Arguments[1].Expression is not LiteralExpressionSyntax { Token.Value: bool isAdjustedToUtc })
-                {
-                    error = $"Logical type '{shortName}' requires a bool isAdjustedToUtc argument.";
-                    return false;
-                }
-
-                logicalType = new LogicalTypeSpec(shortName, unit, isAdjustedToUtc);
-                return true;
+                if (argument.Value is string name)
+                    columnName = name;
+                continue;
             }
-            case "Decimal":
+
+            if (parameter?.Type.TypeKind == TypeKind.Enum &&
+                parameter.Type.ToDisplayString() == "Plank.Schema.ParquetPhysicalType")
             {
-                if (arguments.Arguments.Count != 2)
+                if (!TryGetPhysicalTypeName(argument, out physicalType))
                 {
-                    error = "Logical type 'Decimal' requires (int precision, int scale).";
+                    error = $"Property '{property.Name}' declares an invalid ParquetPhysicalType override.";
                     return false;
                 }
-
-                if (arguments.Arguments[0].Expression is not LiteralExpressionSyntax { Token.Value: int precision })
-                {
-                    error = "Logical type 'Decimal' precision must be an int literal.";
-                    return false;
-                }
-                if (arguments.Arguments[1].Expression is not LiteralExpressionSyntax { Token.Value: int scale })
-                {
-                    error = "Logical type 'Decimal' scale must be an int literal.";
-                    return false;
-                }
-
-                logicalType = new LogicalTypeSpec(shortName, precision: precision, scale: scale);
-                return true;
             }
-            default:
-                error = $"Unsupported logical type '{typeName}'.";
-                return false;
         }
+
+        return true;
     }
+
+    static bool TryGetPhysicalTypeName(TypedConstant constant, out string physicalType)
+    {
+        physicalType = string.Empty;
+        if (constant.Value is not int enumValue)
+            return false;
+
+        physicalType = enumValue switch
+        {
+            0 => "Boolean",
+            1 => "Int32",
+            2 => "Int64",
+            3 => "Int96",
+            4 => "Float",
+            5 => "Double",
+            6 => "ByteArray",
+            7 => "FixedLenByteArray",
+            _ => string.Empty
+        };
+
+        return physicalType.Length > 0;
+    }
+
+    static bool TryInferDefaults(string clrTypeName, out string physicalType, out LogicalTypeSpec? logicalType)
+    {
+        logicalType = null;
+        var nonNullableType = clrTypeName.TrimEnd('?');
+        physicalType = nonNullableType switch
+        {
+            "bool" => "Boolean",
+            "int" => "Int32",
+            "long" => "Int64",
+            "float" => "Float",
+            "double" => "Double",
+            "string" => "ByteArray",
+            "byte[]" => "ByteArray",
+            "global::System.DateOnly" => "Int32",
+            "global::System.DateTime" => "Int64",
+            "global::System.DateTimeOffset" => "Int64",
+            "global::System.TimeOnly" => "Int64",
+            _ => string.Empty
+        };
+
+        if (physicalType.Length == 0)
+            return false;
+
+        logicalType = nonNullableType switch
+        {
+            "global::System.DateOnly" => new LogicalTypeSpec("Date"),
+            "global::System.TimeOnly" => new LogicalTypeSpec("Time", unit: "Micros", isAdjustedToUtc: false),
+            "global::System.DateTime" => new LogicalTypeSpec("Timestamp", unit: "Micros", isAdjustedToUtc: true),
+            "global::System.DateTimeOffset" => new LogicalTypeSpec("Timestamp", unit: "Micros", isAdjustedToUtc: true),
+            _ => null
+        };
+        return true;
+    }
+
+    static string GetLogicalTypeExpression(LogicalTypeSpec logicalType)
+        => logicalType.Kind switch
+        {
+            "Date" => "new global::Plank.Schema.LogicalType.Date()",
+            "Time" => $"new global::Plank.Schema.LogicalType.Time(global::Plank.Schema.TimeUnit.{logicalType.Unit}, {ToBoolLiteral(logicalType.IsAdjustedToUtc)})",
+            "Timestamp" => $"new global::Plank.Schema.LogicalType.Timestamp(global::Plank.Schema.TimeUnit.{logicalType.Unit}, {ToBoolLiteral(logicalType.IsAdjustedToUtc)})",
+            "String" => "new global::Plank.Schema.LogicalType.String()",
+            "Json" => "new global::Plank.Schema.LogicalType.Json()",
+            "Uuid" => "new global::Plank.Schema.LogicalType.Uuid()",
+            "Decimal" => $"new global::Plank.Schema.LogicalType.Decimal({logicalType.Precision.GetValueOrDefault()}, {logicalType.Scale.GetValueOrDefault()})",
+            _ => "null!"
+        };
+
+    static string ToBoolLiteral(bool? value)
+        => value == true ? "true" : "false";
+
+    static bool IsNullableClrType(string clrTypeName)
+        => clrTypeName.EndsWith("?", StringComparison.Ordinal);
 
     static ImmutableArray<SchemaDiagnostic> ValidateSchemaColumns(ImmutableArray<SchemaColumn> columns)
     {
@@ -854,119 +897,58 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static bool IsTimeUnit(string unit)
         => unit is "Millis" or "Micros" or "Nanos";
 
-    static bool TryExtractColumnInvocation(ExpressionSyntax expression, out GenericNameSyntax genericName, out SeparatedSyntaxList<ArgumentSyntax> arguments)
+    static bool TryNormalizeClrType(ITypeSymbol typeSymbol, NullableAnnotation nullableAnnotation, out string clrTypeName)
     {
-        genericName = null!;
-        arguments = default;
-
-        if (expression is not InvocationExpressionSyntax { Expression: { } invoked, ArgumentList: { } argList })
-            return false;
-
-        genericName = invoked switch
+        var isNullable = false;
+        if (typeSymbol is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullableType)
         {
-            GenericNameSyntax direct => direct,
-            MemberAccessExpressionSyntax { Name: GenericNameSyntax memberGeneric } => memberGeneric,
-            _ => null!
+            isNullable = true;
+            typeSymbol = nullableType.TypeArguments[0];
+        }
+
+        clrTypeName = typeSymbol.SpecialType switch
+        {
+            SpecialType.System_Boolean => isNullable ? "bool?" : "bool",
+            SpecialType.System_Int32 => isNullable ? "int?" : "int",
+            SpecialType.System_Int64 => isNullable ? "long?" : "long",
+            SpecialType.System_Single => isNullable ? "float?" : "float",
+            SpecialType.System_Double => isNullable ? "double?" : "double",
+            SpecialType.System_String => nullableAnnotation == NullableAnnotation.Annotated ? "string?" : "string",
+            _ => string.Empty
         };
-        if (genericName is null || genericName.Identifier.ValueText != "Column")
-            return false;
+        if (clrTypeName.Length > 0)
+            return IsSupportedClrType(clrTypeName);
 
-        arguments = argList.Arguments;
-        return true;
-    }
-
-    static bool TryNormalizeClrType(TypeSyntax clrTypeSyntax, out string clrTypeName)
-    {
-        var text = clrTypeSyntax.ToString().Replace(" ", string.Empty);
-        clrTypeName = text switch
+        if (typeSymbol is IArrayTypeSymbol { ElementType.SpecialType: SpecialType.System_Byte, Rank: 1 })
         {
-            "bool" => "bool",
-            "bool?" => "bool?",
-            "int" => "int",
-            "int?" => "int?",
-            "long" => "long",
-            "long?" => "long?",
-            "float" => "float",
-            "float?" => "float?",
-            "double" => "double",
-            "double?" => "double?",
-            "string" => "string",
-            "string?" => "string?",
-            "byte[]" => "byte[]",
-            "byte[]?" => "byte[]?",
-            "DateOnly" => "global::System.DateOnly",
-            "DateOnly?" => "global::System.DateOnly?",
-            "DateTime" => "global::System.DateTime",
-            "DateTime?" => "global::System.DateTime?",
-            "DateTimeOffset" => "global::System.DateTimeOffset",
-            "DateTimeOffset?" => "global::System.DateTimeOffset?",
-            "TimeOnly" => "global::System.TimeOnly",
-            "TimeOnly?" => "global::System.TimeOnly?",
-            "System.DateOnly" => "global::System.DateOnly",
-            "System.DateOnly?" => "global::System.DateOnly?",
-            "System.DateTime" => "global::System.DateTime",
-            "System.DateTime?" => "global::System.DateTime?",
-            "System.DateTimeOffset" => "global::System.DateTimeOffset",
-            "System.DateTimeOffset?" => "global::System.DateTimeOffset?",
-            "System.TimeOnly" => "global::System.TimeOnly",
-            "System.TimeOnly?" => "global::System.TimeOnly?",
-            "global::System.DateOnly" => "global::System.DateOnly",
-            "global::System.DateOnly?" => "global::System.DateOnly?",
-            "global::System.DateTime" => "global::System.DateTime",
-            "global::System.DateTime?" => "global::System.DateTime?",
-            "global::System.DateTimeOffset" => "global::System.DateTimeOffset",
-            "global::System.DateTimeOffset?" => "global::System.DateTimeOffset?",
-            "global::System.TimeOnly" => "global::System.TimeOnly",
-            "global::System.TimeOnly?" => "global::System.TimeOnly?",
+            clrTypeName = nullableAnnotation == NullableAnnotation.Annotated ? "byte[]?" : "byte[]";
+            return IsSupportedClrType(clrTypeName);
+        }
+
+        var displayName = typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        clrTypeName = displayName switch
+        {
+            "global::System.DateOnly" => isNullable ? "global::System.DateOnly?" : "global::System.DateOnly",
+            "global::System.DateTime" => isNullable ? "global::System.DateTime?" : "global::System.DateTime",
+            "global::System.DateTimeOffset" => isNullable ? "global::System.DateTimeOffset?" : "global::System.DateTimeOffset",
+            "global::System.TimeOnly" => isNullable ? "global::System.TimeOnly?" : "global::System.TimeOnly",
             _ => string.Empty
         };
 
         return clrTypeName.Length > 0 && IsSupportedClrType(clrTypeName);
     }
 
-    static bool TryExtractColumnOptionsArguments(ExpressionSyntax expression, out SeparatedSyntaxList<ArgumentSyntax> arguments)
-    {
-        arguments = default;
-        switch (expression)
-        {
-            case ObjectCreationExpressionSyntax { ArgumentList: { } argList }:
-                arguments = argList.Arguments;
-                return true;
-            case ImplicitObjectCreationExpressionSyntax { ArgumentList: { } argList }:
-                arguments = argList.Arguments;
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    static bool TryParseEnumMember(ExpressionSyntax expression, out string memberName)
-    {
-        memberName = string.Empty;
-        if (expression is MemberAccessExpressionSyntax memberAccess)
-        {
-            memberName = memberAccess.Name.Identifier.ValueText;
-            return memberName.Length > 0;
-        }
-
-        var text = expression.ToString();
-        var lastDot = text.LastIndexOf('.');
-        if (lastDot < 0 || lastDot == text.Length - 1)
-            return false;
-        memberName = text.Substring(lastDot + 1);
-        return memberName.Length > 0;
-    }
-
     readonly struct SchemaColumn
     {
         public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName,
-            LogicalTypeSpec? logicalType)
+            LogicalTypeSpec? logicalType, string rowPropertyName)
         {
             Name = name;
             PhysicalType = physicalType;
             Repetition = repetition;
             ClrTypeName = clrTypeName;
             LogicalType = logicalType;
+            RowPropertyName = rowPropertyName;
         }
 
         public string Name { get; }
@@ -978,6 +960,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public string ClrTypeName { get; }
 
         public LogicalTypeSpec? LogicalType { get; }
+
+        public string RowPropertyName { get; }
     }
 
     readonly struct LogicalTypeSpec

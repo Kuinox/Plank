@@ -29,33 +29,34 @@ public sealed class RowGroupWriter
         _rowCount = -1;
     }
 
-    public SerializedColumn CreateSerializedColumn()
-        => _writer.CreateSerializedColumn();
+    public SerializedColumn<T> CreateSerializedColumn<T>(Column column)
+        => _writer.CreateSerializedColumn<T>(column);
 
-    public void Write(SerializedColumn serialized)
+    public void Write<T>(SerializedColumn<T> serialized)
     {
         ArgumentNullException.ThrowIfNull(serialized);
-        if (!serialized.HasPendingData)
+        ISerializedColumn state = serialized;
+        if (!state.HasPendingData)
             throw new InvalidOperationException(
-                "SerializedColumn has no serialized data. Call serialized.Serialize(column, values) before Write(...).");
+                "SerializedColumn has no serialized data. Call serialized.Serialize(values) before Write(...).");
 
-        if (serialized.ColumnOrdinal != _nextColumnOrdinal)
+        if (state.ColumnOrdinal != _nextColumnOrdinal)
         {
             var expectedColumn = _writer.ColumnsByOrdinal[(int)_nextColumnOrdinal];
-            var actualColumn = _writer.ColumnsByOrdinal[(int)serialized.ColumnOrdinal];
+            var actualColumn = _writer.ColumnsByOrdinal[(int)state.ColumnOrdinal];
             throw new InvalidOperationException(
-                $"Invalid column order for this row group. Expected '{expectedColumn.Name}' (ordinal {_nextColumnOrdinal}) next, but got '{actualColumn.Name}' (ordinal {serialized.ColumnOrdinal}). Write columns in schema order.");
+                $"Invalid column order for this row group. Expected '{expectedColumn.Name}' (ordinal {_nextColumnOrdinal}) next, but got '{actualColumn.Name}' (ordinal {state.ColumnOrdinal}). Write columns in schema order.");
         }
 
         if (_nextColumnOrdinal == 0)
-            _rowCount = serialized.RowCount;
-        else if (serialized.RowCount != _rowCount)
+            _rowCount = state.RowCount;
+        else if (state.RowCount != _rowCount)
             throw new InvalidOperationException(
-                $"Row count mismatch for row group. Expected {_rowCount}, got {serialized.RowCount}.");
+                $"Row count mismatch for row group. Expected {_rowCount}, got {state.RowCount}.");
 
-        var columnOrdinal = (int)serialized.ColumnOrdinal;
+        var columnOrdinal = (int)state.ColumnOrdinal;
         var column = _writer.ColumnsByOrdinal[columnOrdinal];
-        var pages = serialized.Pages;
+        var pages = state.Pages;
         var compression = _writer.Compression;
         if (compression != CompressionKind.None && !_compressedContent.IsInitialized)
             _compressedContent = _writer.BufferWriters.CreatePageBufferWriter();
@@ -185,14 +186,14 @@ public sealed class RowGroupWriter
         ref var columnMetadata = ref _writer.OpenRowGroupColumnMetadata[columnOrdinal];
         columnMetadata.DataPageOffset = dataPageOffset;
         columnMetadata.DictionaryPageOffset = dictionaryPageOffset;
-        columnMetadata.ValueCount = serialized.RowCount;
+        columnMetadata.ValueCount = state.RowCount;
         columnMetadata.TotalUncompressedSize = totalUncompressedSize;
         columnMetadata.TotalCompressedSize = totalCompressedSize;
         columnMetadata.DataEncoding = dataEncoding;
         columnMetadata.Compression = compression;
         columnMetadata.HasDictionaryPage = hasDictionaryPage;
 
-        serialized.Consume();
+        state.Consume();
         _nextColumnOrdinal++;
         if (_nextColumnOrdinal != (uint)_writer.ColumnCount)
             return;

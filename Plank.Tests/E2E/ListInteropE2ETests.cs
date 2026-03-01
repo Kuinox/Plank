@@ -35,8 +35,8 @@ internal sealed class ListInteropE2ETests
                     Compression = CompressionKind.None
                 });
                 var rowGroup = writer.StartRowGroup();
-                var serialized = rowGroup.CreateSerializedColumn();
-                serialized.Serialize(schema.Columns[0], rows);
+                var serialized = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                serialized.Serialize(rows);
                 rowGroup.Write(serialized);
                 writer.CloseFile();
             }
@@ -77,8 +77,8 @@ internal sealed class ListInteropE2ETests
                     Compression = CompressionKind.None
                 });
                 var rowGroup = writer.StartRowGroup();
-                var serialized = rowGroup.CreateSerializedColumn();
-                serialized.Serialize(schema.Columns[0], rows);
+                var serialized = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                serialized.Serialize(rows);
                 rowGroup.Write(serialized);
                 writer.CloseFile();
             }
@@ -119,8 +119,8 @@ internal sealed class ListInteropE2ETests
                     Compression = CompressionKind.None
                 });
                 var rowGroup = writer.StartRowGroup();
-                var serialized = rowGroup.CreateSerializedColumn();
-                serialized.Serialize(schema.Columns[0], rows);
+                var serialized = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                serialized.Serialize(rows);
                 rowGroup.Write(serialized);
                 writer.CloseFile();
             }
@@ -161,8 +161,8 @@ internal sealed class ListInteropE2ETests
                     Compression = CompressionKind.None
                 });
                 var rowGroup = writer.StartRowGroup();
-                var serialized = rowGroup.CreateSerializedColumn();
-                serialized.Serialize(schema.Columns[0], rows);
+                var serialized = rowGroup.CreateSerializedColumn<int?[]>(schema.Columns[0]);
+                serialized.Serialize(rows);
                 rowGroup.Write(serialized);
                 writer.CloseFile();
             }
@@ -203,8 +203,8 @@ internal sealed class ListInteropE2ETests
                     Compression = CompressionKind.Snappy
                 });
                 var rowGroup = writer.StartRowGroup();
-                var serialized = rowGroup.CreateSerializedColumn();
-                serialized.Serialize(schema.Columns[0], rows);
+                var serialized = rowGroup.CreateSerializedColumn<int?[]>(schema.Columns[0]);
+                serialized.Serialize(rows);
                 rowGroup.Write(serialized);
                 writer.CloseFile();
             }

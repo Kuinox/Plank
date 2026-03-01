@@ -469,10 +469,10 @@ internal sealed class WriterInteropE2ETests
             Compression = compression
         });
         var columns = schema.Columns;
-        var int32Column = writer.CreateSerializedColumn();
-        var int64Column = writer.CreateSerializedColumn();
-        var doubleColumn = writer.CreateSerializedColumn();
-        var binaryColumn = writer.CreateSerializedColumn();
+        var int32Column = writer.CreateSerializedColumn<int>(columns[0]);
+        var int64Column = writer.CreateSerializedColumn<long>(columns[1]);
+        var doubleColumn = writer.CreateSerializedColumn<double>(columns[2]);
+        var binaryColumn = writer.CreateSerializedColumn<byte[]>(columns[3]);
 
         for (var rowGroupIndex = 0; rowGroupIndex < rowGroups.Count; rowGroupIndex++)
         {
@@ -480,10 +480,10 @@ internal sealed class WriterInteropE2ETests
             ValidateRowGroupInput(rowGroupInput);
             var rowGroup = writer.StartRowGroup();
 
-            int32Column.Serialize(columns[0], rowGroupInput.Int32Values);
-            int64Column.Serialize(columns[1], rowGroupInput.Int64Values);
-            doubleColumn.Serialize(columns[2], rowGroupInput.DoubleValues);
-            binaryColumn.Serialize(columns[3], rowGroupInput.BinaryValues);
+            int32Column.Serialize(rowGroupInput.Int32Values);
+            int64Column.Serialize(rowGroupInput.Int64Values);
+            doubleColumn.Serialize(rowGroupInput.DoubleValues);
+            binaryColumn.Serialize(rowGroupInput.BinaryValues);
 
             rowGroup.Write(int32Column);
             rowGroup.Write(int64Column);

@@ -42,12 +42,12 @@ internal sealed class NestedInteropE2ETests
                 });
                 var rowGroup = writer.StartRowGroup();
 
-                var serializedA = rowGroup.CreateSerializedColumn();
-                serializedA.Serialize(schema.Columns[0], aRows);
+                var serializedA = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                serializedA.Serialize(aRows);
                 rowGroup.Write(serializedA);
 
-                var serializedB = rowGroup.CreateSerializedColumn();
-                serializedB.Serialize(schema.Columns[1], bRows);
+                var serializedB = rowGroup.CreateSerializedColumn<long[]>(schema.Columns[1]);
+                serializedB.Serialize(bRows);
                 rowGroup.Write(serializedB);
 
                 writer.CloseFile();
@@ -95,12 +95,12 @@ internal sealed class NestedInteropE2ETests
                 });
                 var rowGroup = writer.StartRowGroup();
 
-                var serializedKeys = rowGroup.CreateSerializedColumn();
-                serializedKeys.Serialize(schema.Columns[0], keyRows);
+                var serializedKeys = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                serializedKeys.Serialize(keyRows);
                 rowGroup.Write(serializedKeys);
 
-                var serializedValues = rowGroup.CreateSerializedColumn();
-                serializedValues.Serialize(schema.Columns[1], valueRows);
+                var serializedValues = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[1]);
+                serializedValues.Serialize(valueRows);
                 rowGroup.Write(serializedValues);
 
                 writer.CloseFile();
@@ -148,12 +148,12 @@ internal sealed class NestedInteropE2ETests
                 });
                 var rowGroup = writer.StartRowGroup();
 
-                var serializedKeys = rowGroup.CreateSerializedColumn();
-                serializedKeys.Serialize(schema.Columns[0], keyRows);
+                var serializedKeys = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                serializedKeys.Serialize(keyRows);
                 rowGroup.Write(serializedKeys);
 
-                var serializedValues = rowGroup.CreateSerializedColumn();
-                serializedValues.Serialize(schema.Columns[1], valueRows);
+                var serializedValues = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[1]);
+                serializedValues.Serialize(valueRows);
                 rowGroup.Write(serializedValues);
 
                 writer.CloseFile();
@@ -205,12 +205,12 @@ internal sealed class NestedInteropE2ETests
                 });
                 var rowGroup = writer.StartRowGroup();
 
-                var serializedKeys = rowGroup.CreateSerializedColumn();
-                serializedKeys.Serialize(schema.Columns[0], keyRows);
+                var serializedKeys = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                serializedKeys.Serialize(keyRows);
                 rowGroup.Write(serializedKeys);
 
-                var serializedValues = rowGroup.CreateSerializedColumn();
-                serializedValues.Serialize(schema.Columns[1], valueRows);
+                var serializedValues = rowGroup.CreateSerializedColumn<int?[]>(schema.Columns[1]);
+                serializedValues.Serialize(valueRows);
                 rowGroup.Write(serializedValues);
 
                 writer.CloseFile();
@@ -254,8 +254,8 @@ internal sealed class NestedInteropE2ETests
                 });
                 var rowGroup = writer.StartRowGroup();
 
-                var serialized = rowGroup.CreateSerializedColumn();
-                serialized.Serialize(schema.Columns[0], rows);
+                var serialized = rowGroup.CreateSerializedColumn<int[][]>(schema.Columns[0]);
+                serialized.Serialize(rows);
                 rowGroup.Write(serialized);
 
                 writer.CloseFile();

@@ -73,8 +73,8 @@ public sealed class ParquetWriter
     public uint RowApiMaxParallelism
         => _options.RowApiMaxParallelism;
 
-    public SerializedColumn CreateSerializedColumn()
-        => new(this, _options.InitialPageCapacity);
+    public SerializedColumn<T> CreateSerializedColumn<T>(Column column)
+        => new(this, column, _options.InitialPageCapacity);
 
     public void Reset(Stream stream)
     {

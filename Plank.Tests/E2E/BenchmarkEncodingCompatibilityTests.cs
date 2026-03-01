@@ -112,33 +112,42 @@ internal sealed class BenchmarkEncodingCompatibilityTests
 
         using var stream = File.Create(path);
         var writer = PlankWriter.Create(stream, schema, new ParquetWriterOptions { Compression = CompressionKind.None });
-        var serialized = writer.CreateSerializedColumn();
         var rowGroup = writer.StartRowGroup();
         switch (dataType)
         {
             case "bool":
-                serialized.Serialize(column, CreateBooleanValues(RowCount));
+                var boolSerialized = writer.CreateSerializedColumn<bool>(column);
+                boolSerialized.Serialize(CreateBooleanValues(RowCount));
+                rowGroup.Write(boolSerialized);
                 break;
             case "int32":
-                serialized.Serialize(column, CreateInt32Values(RowCount));
+                var int32Serialized = writer.CreateSerializedColumn<int>(column);
+                int32Serialized.Serialize(CreateInt32Values(RowCount));
+                rowGroup.Write(int32Serialized);
                 break;
             case "int64":
-                serialized.Serialize(column, CreateInt64Values(RowCount));
+                var int64Serialized = writer.CreateSerializedColumn<long>(column);
+                int64Serialized.Serialize(CreateInt64Values(RowCount));
+                rowGroup.Write(int64Serialized);
                 break;
             case "float":
-                serialized.Serialize(column, CreateFloatValues(RowCount));
+                var floatSerialized = writer.CreateSerializedColumn<float>(column);
+                floatSerialized.Serialize(CreateFloatValues(RowCount));
+                rowGroup.Write(floatSerialized);
                 break;
             case "double":
-                serialized.Serialize(column, CreateDoubleValues(RowCount));
+                var doubleSerialized = writer.CreateSerializedColumn<double>(column);
+                doubleSerialized.Serialize(CreateDoubleValues(RowCount));
+                rowGroup.Write(doubleSerialized);
                 break;
             case "string":
-                serialized.Serialize(column, CreateStringBytes(RowCount));
+                var stringSerialized = writer.CreateSerializedColumn<byte[]>(column);
+                stringSerialized.Serialize(CreateStringBytes(RowCount));
+                rowGroup.Write(stringSerialized);
                 break;
             default:
                 throw new InvalidOperationException($"Unknown data type '{dataType}'.");
         }
-
-        rowGroup.Write(serialized);
         writer.CloseFile();
     }
 

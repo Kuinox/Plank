@@ -16,18 +16,18 @@ internal sealed class WriterAllocationTests
         {
             Compression = CompressionKind.None
         });
-        var serialized = writer.CreateSerializedColumn();
+        var serialized = writer.CreateSerializedColumn<int>(column);
         var values = CreateValues(4096);
 
         for (var i = 0; i < 8; i++)
-            WriteOneRowGroup(writer, stream, serialized, column, values);
+            WriteOneRowGroup(writer, stream, serialized, values);
 
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
         var before = GC.GetAllocatedBytesForCurrentThread();
-        WriteOneRowGroup(writer, stream, serialized, column, values);
+        WriteOneRowGroup(writer, stream, serialized, values);
         var after = GC.GetAllocatedBytesForCurrentThread();
         var allocated = after - before;
 
@@ -36,11 +36,10 @@ internal sealed class WriterAllocationTests
                 $"Expected zero allocations for steady-state non-dictionary write chain but saw {allocated} bytes.");
     }
 
-    static void WriteOneRowGroup(ParquetWriter writer, MemoryStream stream, SerializedColumn serialized,
-        Column column, int[] values)
+    static void WriteOneRowGroup(ParquetWriter writer, MemoryStream stream, SerializedColumn<int> serialized, int[] values)
     {
         writer.Reset(stream);
-        serialized.Serialize(column, values);
+        serialized.Serialize(values);
         writer.StartRowGroup().Write(serialized);
     }
 

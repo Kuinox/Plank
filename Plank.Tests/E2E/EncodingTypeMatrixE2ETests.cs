@@ -98,10 +98,8 @@ internal sealed class EncodingTypeMatrixE2ETests
                 {
                     Compression = CompressionKind.None
                 });
-                var serialized = writer.CreateSerializedColumn();
                 var rowGroup = writer.StartRowGroup();
-                SerializeValues(serialized, schema.Columns[0], testCase.PhysicalType);
-                rowGroup.Write(serialized);
+                WriteValues(writer, rowGroup, schema.Columns[0], testCase.PhysicalType);
                 writer.CloseFile();
             }
 
@@ -126,14 +124,12 @@ internal sealed class EncodingTypeMatrixE2ETests
             {
                 Compression = CompressionKind.None
             });
-            var serialized = writer.CreateSerializedColumn();
             var rowGroup = writer.StartRowGroup();
 
             Exception? failure = null;
             try
             {
-                SerializeValues(serialized, schema.Columns[0], testCase.PhysicalType);
-                rowGroup.Write(serialized);
+                WriteValues(writer, rowGroup, schema.Columns[0], testCase.PhysicalType);
                 writer.CloseFile();
             }
             catch (NotSupportedException ex)
@@ -278,34 +274,67 @@ internal sealed class EncodingTypeMatrixE2ETests
         }
     }
 
-    static void SerializeValues(SerializedColumn serialized, PlankColumn column, ParquetPhysicalType physicalType)
+    static void WriteValues(PlankWriter writer, Plank.Writing.RowGroupWriter rowGroup, PlankColumn column,
+        ParquetPhysicalType physicalType)
     {
         switch (physicalType)
         {
             case ParquetPhysicalType.Boolean:
-                serialized.Serialize(column, CreateBooleanValues(RowCount));
+            {
+                var serialized = writer.CreateSerializedColumn<bool>(column);
+                serialized.Serialize(CreateBooleanValues(RowCount));
+                rowGroup.Write(serialized);
                 return;
+            }
             case ParquetPhysicalType.Int32:
-                serialized.Serialize(column, CreateInt32Values(RowCount));
+            {
+                var serialized = writer.CreateSerializedColumn<int>(column);
+                serialized.Serialize(CreateInt32Values(RowCount));
+                rowGroup.Write(serialized);
                 return;
+            }
             case ParquetPhysicalType.Int64:
-                serialized.Serialize(column, CreateInt64Values(RowCount));
+            {
+                var serialized = writer.CreateSerializedColumn<long>(column);
+                serialized.Serialize(CreateInt64Values(RowCount));
+                rowGroup.Write(serialized);
                 return;
+            }
             case ParquetPhysicalType.Int96:
-                serialized.Serialize(column, CreateInt96Values(RowCount));
+            {
+                var serialized = writer.CreateSerializedColumn<byte[]>(column);
+                serialized.Serialize(CreateInt96Values(RowCount));
+                rowGroup.Write(serialized);
                 return;
+            }
             case ParquetPhysicalType.Float:
-                serialized.Serialize(column, CreateFloatValues(RowCount));
+            {
+                var serialized = writer.CreateSerializedColumn<float>(column);
+                serialized.Serialize(CreateFloatValues(RowCount));
+                rowGroup.Write(serialized);
                 return;
+            }
             case ParquetPhysicalType.Double:
-                serialized.Serialize(column, CreateDoubleValues(RowCount));
+            {
+                var serialized = writer.CreateSerializedColumn<double>(column);
+                serialized.Serialize(CreateDoubleValues(RowCount));
+                rowGroup.Write(serialized);
                 return;
+            }
             case ParquetPhysicalType.ByteArray:
-                serialized.Serialize(column, CreateByteArrayValues(RowCount));
+            {
+                var serialized = writer.CreateSerializedColumn<byte[]>(column);
+                serialized.Serialize(CreateByteArrayValues(RowCount));
+                rowGroup.Write(serialized);
                 return;
+            }
             case ParquetPhysicalType.FixedLenByteArray:
-                serialized.Serialize(column, CreateFixedLengthByteArrayValues(RowCount, 6));
+            {
+                var serialized = writer.CreateSerializedColumn<byte[]>(column);
+                serialized.Serialize(CreateFixedLengthByteArrayValues(RowCount, 6));
+                rowGroup.Write(serialized);
                 return;
+            }
             default:
                 throw new ArgumentOutOfRangeException(nameof(physicalType), physicalType, "Unexpected physical type.");
         }

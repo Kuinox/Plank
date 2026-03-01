@@ -17,11 +17,11 @@ internal sealed class RowGroupWriterContractTests
         ]);
         var writer = ParquetWriter.Create(stream, schema);
         var rowGroup = writer.StartRowGroup();
-        var first = writer.CreateSerializedColumn();
-        var second = writer.CreateSerializedColumn();
+        var first = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+        var second = writer.CreateSerializedColumn<int>(schema.Columns[1]);
 
-        second.Serialize(schema.Columns[1], [1, 2]);
-        first.Serialize(schema.Columns[0], [3, 4]);
+        second.Serialize([1, 2]);
+        first.Serialize([3, 4]);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await Task.Run(() => rowGroup.Write(second)).ConfigureAwait(false));
@@ -37,11 +37,11 @@ internal sealed class RowGroupWriterContractTests
         ]);
         var writer = ParquetWriter.Create(stream, schema);
         var rowGroup = writer.StartRowGroup();
-        var first = writer.CreateSerializedColumn();
-        var second = writer.CreateSerializedColumn();
+        var first = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+        var second = writer.CreateSerializedColumn<int>(schema.Columns[1]);
 
-        first.Serialize(schema.Columns[0], [1, 2, 3]);
-        second.Serialize(schema.Columns[1], [4, 5]);
+        first.Serialize([1, 2, 3]);
+        second.Serialize([4, 5]);
 
         rowGroup.Write(first);
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
@@ -57,10 +57,10 @@ internal sealed class RowGroupWriterContractTests
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Rle)))
         ]);
         var writer = ParquetWriter.Create(stream, schema);
-        var serialized = writer.CreateSerializedColumn();
+        var serialized = writer.CreateSerializedColumn<int>(schema.Columns[0]);
 
         await Assert.ThrowsAsync<NotSupportedException>(async () =>
-            await Task.Run(() => serialized.Serialize(schema.Columns[0], [1, 2, 3])).ConfigureAwait(false));
+            await Task.Run(() => serialized.Serialize([1, 2, 3])).ConfigureAwait(false));
     }
 
     [Test]
@@ -72,9 +72,9 @@ internal sealed class RowGroupWriterContractTests
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.BitPacked)))
         ]);
         var writer = ParquetWriter.Create(stream, schema);
-        var serialized = writer.CreateSerializedColumn();
+        var serialized = writer.CreateSerializedColumn<int>(schema.Columns[0]);
 
         await Assert.ThrowsAsync<NotSupportedException>(async () =>
-            await Task.Run(() => serialized.Serialize(schema.Columns[0], [1, 2, 3])).ConfigureAwait(false));
+            await Task.Run(() => serialized.Serialize([1, 2, 3])).ConfigureAwait(false));
     }
 }
