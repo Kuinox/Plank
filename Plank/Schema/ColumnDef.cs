@@ -10,11 +10,13 @@ public static class ColumnDef
     public static ColumnDefinition OptionalGroup(string name, params ColumnDefinition[] children)
         => Group(name, ParquetRepetition.Optional, children);
 
-    public static ColumnDefinition RequiredLeaf(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null)
-        => Leaf(name, ParquetRepetition.Required, physicalType, options);
+    public static ColumnDefinition RequiredLeaf(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null,
+        LogicalType? logicalType = null)
+        => Leaf(name, ParquetRepetition.Required, physicalType, options, logicalType);
 
-    public static ColumnDefinition OptionalLeaf(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null)
-        => Leaf(name, ParquetRepetition.Optional, physicalType, options);
+    public static ColumnDefinition OptionalLeaf(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null,
+        LogicalType? logicalType = null)
+        => Leaf(name, ParquetRepetition.Optional, physicalType, options, logicalType);
 
     public static ColumnDefinition List(string name, ColumnDefinition element,
         ParquetRepetition repetition = ParquetRepetition.Required)
@@ -48,13 +50,14 @@ public static class ColumnDef
         };
 
     static ColumnDefinition Leaf(string name, ParquetRepetition repetition, ParquetPhysicalType physicalType,
-        ColumnOptions? options)
+        ColumnOptions? options, LogicalType? logicalType)
         => new()
         {
             Name = name,
             Kind = NodeKind.Leaf,
             Repetition = repetition,
             PhysicalType = physicalType,
+            LogicalType = logicalType,
             Options = options ?? ColumnOptions.Default,
             Children = []
         };

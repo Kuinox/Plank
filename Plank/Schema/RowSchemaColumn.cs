@@ -2,12 +2,14 @@ namespace Plank.Schema;
 
 public sealed record RowSchemaColumn
 {
-    public RowSchemaColumn(string name, ParquetPhysicalType physicalType, Type clrType, ColumnOptions? options = null)
+    public RowSchemaColumn(string name, ParquetPhysicalType physicalType, Type clrType, ColumnOptions? options = null,
+        LogicalType? logicalType = null)
     {
         Name = name;
         PhysicalType = physicalType;
         ClrType = clrType;
         Options = options ?? ColumnOptions.Default;
+        LogicalType = logicalType;
     }
 
     public string Name { get; }
@@ -18,25 +20,9 @@ public sealed record RowSchemaColumn
 
     public ColumnOptions Options { get; }
 
+    public LogicalType? LogicalType { get; }
+
     internal Column ToColumn()
-        => new(Name, PhysicalType, Options);
+        => new(Name, PhysicalType, Options, LogicalType);
 
-    public void Validate()
-    {
-        ArgumentNullException.ThrowIfNull(Name);
-        if (string.IsNullOrWhiteSpace(Name))
-            throw new ArgumentException("Column name must not be empty or whitespace.", nameof(Name));
-        if (!Enum.IsDefined(PhysicalType))
-            throw new ArgumentOutOfRangeException(nameof(PhysicalType), PhysicalType, "PhysicalType must be a defined ParquetPhysicalType value.");
-        ArgumentNullException.ThrowIfNull(ClrType);
-
-        var resolution = ParquetTypeMap.ResolvePhysicalType(ClrType);
-        if (!resolution.IsSuccess)
-            throw new NotSupportedException(resolution.ErrorMessage);
-        if (resolution.PhysicalType != PhysicalType)
-            throw new InvalidOperationException(
-                $"Column '{Name}' maps CLR type '{ClrType}' to physical type '{resolution.PhysicalType}', but column physical type is '{PhysicalType}'.");
-
-        Options.Validate();
-    }
 }

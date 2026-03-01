@@ -33,6 +33,10 @@ sealed class ReusableDictionaryState<T>
 
     public void Reset(int initialUniqueCapacity, bool useMap, IEqualityComparer<T> comparer)
     {
+        var previousCount = _count;
+        if (previousCount > 0 && RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+            Array.Clear(_values, 0, previousCount);
+
         _initialUniqueCapacity = initialUniqueCapacity;
         _count = 0;
         _mapEnabled = useMap;

@@ -40,6 +40,94 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    static readonly DiagnosticDescriptor DuplicateSchemaColumn = new(
+        id: "PLANKGEN005",
+        title: "Duplicate schema column",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor InvalidSchemaPhysicalType = new(
+        id: "PLANKGEN006",
+        title: "Invalid schema physical type",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor InvalidSchemaRepetition = new(
+        id: "PLANKGEN007",
+        title: "Invalid schema repetition",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor MissingDateLogicalType = new(
+        id: "PLANKGEN008",
+        title: "Missing date logical type",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor MissingTimeLogicalType = new(
+        id: "PLANKGEN009",
+        title: "Missing time logical type",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor MissingTimestampLogicalType = new(
+        id: "PLANKGEN010",
+        title: "Missing timestamp logical type",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor LogicalPhysicalMismatch = new(
+        id: "PLANKGEN011",
+        title: "Logical and physical type mismatch",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor LogicalClrMismatch = new(
+        id: "PLANKGEN012",
+        title: "Logical and CLR type mismatch",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor InvalidLogicalTimeUnit = new(
+        id: "PLANKGEN013",
+        title: "Invalid logical time unit",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor InvalidDecimalDefinition = new(
+        id: "PLANKGEN014",
+        title: "Invalid decimal definition",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor DecimalPhysicalMismatch = new(
+        id: "PLANKGEN015",
+        title: "Decimal physical type mismatch",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var schemaProperties = context.SyntaxProvider.ForAttributeWithMetadataName(
@@ -65,6 +153,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             context.ReportDiagnostic(Diagnostic.Create(descriptor, schemaProperty.Locations.FirstOrDefault(), arg));
             return;
         }
+
+        var schemaDiagnostics = ValidateSchemaColumns(columns);
+        for (var i = 0; i < schemaDiagnostics.Length; i++)
+            context.ReportDiagnostic(Diagnostic.Create(schemaDiagnostics[i].Descriptor,
+                schemaProperty.Locations.FirstOrDefault(), schemaDiagnostics[i].Message));
+        if (schemaDiagnostics.Length > 0)
+            return;
 
         var mappedColumns = ImmutableArray.CreateBuilder<MappedColumn>(columns.Length);
         foreach (var column in columns)
@@ -354,8 +449,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         if (column.Repetition == "Optional")
             return column.PhysicalType switch
             {
-                "Int32" => clrType is "int" or "int?",
-                "Int64" => clrType is "long" or "long?" or "global::System.DateTime" or "global::System.DateTime?",
+                "Int32" => clrType is "int" or "int?" or "global::System.DateOnly" or "global::System.DateOnly?",
+                "Int64" => clrType is
+                    "long" or "long?"
+                    or "global::System.DateTime" or "global::System.DateTime?"
+                    or "global::System.DateTimeOffset" or "global::System.DateTimeOffset?"
+                    or "global::System.TimeOnly" or "global::System.TimeOnly?",
                 "Double" => clrType is "double" or "double?",
                 "ByteArray" => clrType is "string" or "string?" or "byte[]" or "byte[]?",
                 _ => false
@@ -512,15 +611,248 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
 
         var repetition = "Unspecified";
-        if (arguments.Count > 2 &&
-            TryExtractColumnOptionsArguments(arguments[2].Expression, out var optionArguments) &&
+        ExpressionSyntax? optionsExpression = null;
+        ExpressionSyntax? logicalTypeExpression = null;
+        for (var i = 2; i < arguments.Count; i++)
+        {
+            var argument = arguments[i];
+            var name = argument.NameColon?.Name.Identifier.ValueText;
+            if (string.Equals(name, "options", StringComparison.Ordinal))
+            {
+                optionsExpression = argument.Expression;
+                continue;
+            }
+            if (string.Equals(name, "logicalType", StringComparison.Ordinal))
+            {
+                logicalTypeExpression = argument.Expression;
+                continue;
+            }
+
+            if (optionsExpression is null && TryExtractColumnOptionsArguments(argument.Expression, out _))
+                optionsExpression = argument.Expression;
+            else if (logicalTypeExpression is null)
+                logicalTypeExpression = argument.Expression;
+        }
+
+        if (optionsExpression is not null &&
+            TryExtractColumnOptionsArguments(optionsExpression, out var optionArguments) &&
             optionArguments.Count > 0 &&
             TryParseEnumMember(optionArguments[0].Expression, out var repetitionValue))
             repetition = repetitionValue;
 
-        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName);
+        LogicalTypeSpec? logicalType = null;
+        if (logicalTypeExpression is not null && !TryParseLogicalType(logicalTypeExpression, out logicalType, out error))
+            return false;
+
+        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType);
         return true;
     }
+
+    static bool TryParseLogicalType(ExpressionSyntax expression, out LogicalTypeSpec? logicalType, out string error)
+    {
+        logicalType = null;
+        error = string.Empty;
+
+        if (expression is LiteralExpressionSyntax { RawKind: (int)Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression })
+            return true;
+
+        if (expression is not ObjectCreationExpressionSyntax { Type: { } typeSyntax, ArgumentList: { } arguments })
+        {
+            error = $"Unsupported logical type expression '{expression}'.";
+            return false;
+        }
+
+        var typeName = typeSyntax.ToString();
+        var lastDot = typeName.LastIndexOf('.');
+        var shortName = lastDot >= 0 ? typeName.Substring(lastDot + 1) : typeName;
+        if (shortName.Length == 0)
+            shortName = typeName;
+
+        switch (shortName)
+        {
+            case "Date":
+            case "String":
+            case "Json":
+            case "Uuid":
+                logicalType = new LogicalTypeSpec(shortName);
+                return true;
+            case "Time":
+            case "Timestamp":
+            {
+                if (arguments.Arguments.Count != 2)
+                {
+                    error = $"Logical type '{shortName}' requires (TimeUnit unit, bool isAdjustedToUtc).";
+                    return false;
+                }
+                if (!TryParseEnumMember(arguments.Arguments[0].Expression, out var unit))
+                {
+                    error = $"Logical type '{shortName}' has invalid time unit expression '{arguments.Arguments[0].Expression}'.";
+                    return false;
+                }
+                if (arguments.Arguments[1].Expression is not LiteralExpressionSyntax { Token.Value: bool isAdjustedToUtc })
+                {
+                    error = $"Logical type '{shortName}' requires a bool isAdjustedToUtc argument.";
+                    return false;
+                }
+
+                logicalType = new LogicalTypeSpec(shortName, unit, isAdjustedToUtc);
+                return true;
+            }
+            case "Decimal":
+            {
+                if (arguments.Arguments.Count != 2)
+                {
+                    error = "Logical type 'Decimal' requires (int precision, int scale).";
+                    return false;
+                }
+
+                if (arguments.Arguments[0].Expression is not LiteralExpressionSyntax { Token.Value: int precision })
+                {
+                    error = "Logical type 'Decimal' precision must be an int literal.";
+                    return false;
+                }
+                if (arguments.Arguments[1].Expression is not LiteralExpressionSyntax { Token.Value: int scale })
+                {
+                    error = "Logical type 'Decimal' scale must be an int literal.";
+                    return false;
+                }
+
+                logicalType = new LogicalTypeSpec(shortName, precision: precision, scale: scale);
+                return true;
+            }
+            default:
+                error = $"Unsupported logical type '{typeName}'.";
+                return false;
+        }
+    }
+
+    static ImmutableArray<SchemaDiagnostic> ValidateSchemaColumns(ImmutableArray<SchemaColumn> columns)
+    {
+        var diagnostics = ImmutableArray.CreateBuilder<SchemaDiagnostic>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < columns.Length; i++)
+        {
+            var column = columns[i];
+            if (!seen.Add(column.Name))
+                diagnostics.Add(new SchemaDiagnostic(DuplicateSchemaColumn,
+                    $"Duplicate column name '{column.Name}' is not allowed."));
+
+            if (!IsSupportedPhysicalType(column.PhysicalType))
+                diagnostics.Add(new SchemaDiagnostic(InvalidSchemaPhysicalType,
+                    $"Column '{column.Name}' has unsupported physical type '{column.PhysicalType}'."));
+
+            if (!IsSupportedRepetition(column.Repetition))
+                diagnostics.Add(new SchemaDiagnostic(InvalidSchemaRepetition,
+                    $"Column '{column.Name}' has unsupported repetition '{column.Repetition}'."));
+
+            ValidateLogicalType(column, diagnostics);
+        }
+
+        return diagnostics.ToImmutable();
+    }
+
+    static bool IsSupportedPhysicalType(string physicalType)
+        => physicalType is "Boolean" or "Int32" or "Int64" or "Float" or "Double" or "ByteArray" or "Int96" or "FixedLenByteArray";
+
+    static bool IsSupportedRepetition(string repetition)
+        => repetition is "Unspecified" or "Required" or "Optional" or "Repeated";
+
+    static void ValidateLogicalType(SchemaColumn column, ImmutableArray<SchemaDiagnostic>.Builder diagnostics)
+    {
+        var logicalType = column.LogicalType;
+        if (logicalType is null)
+        {
+            if (IsDateOnly(column.ClrTypeName))
+                diagnostics.Add(new SchemaDiagnostic(MissingDateLogicalType,
+                    $"Column '{column.Name}' uses DateOnly and must declare logical type 'Date'."));
+            if (IsTimeOnly(column.ClrTypeName))
+                diagnostics.Add(new SchemaDiagnostic(MissingTimeLogicalType,
+                    $"Column '{column.Name}' uses TimeOnly and must declare logical type 'Time'."));
+            if (IsTimestampClr(column.ClrTypeName))
+                diagnostics.Add(new SchemaDiagnostic(MissingTimestampLogicalType,
+                    $"Column '{column.Name}' uses DateTime/DateTimeOffset and must declare logical type 'Timestamp'."));
+            return;
+        }
+
+        switch (logicalType.Value.Kind)
+        {
+            case "Date":
+                if (column.PhysicalType != "Int32")
+                    diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
+                        $"Column '{column.Name}' logical type 'Date' requires physical type 'Int32'."));
+                if (!IsDateOnly(column.ClrTypeName))
+                    diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
+                        $"Column '{column.Name}' logical type 'Date' requires CLR type DateOnly/DateOnly?."));
+                break;
+            case "Time":
+                if (logicalType.Value.Unit is null || !IsTimeUnit(logicalType.Value.Unit))
+                    diagnostics.Add(new SchemaDiagnostic(InvalidLogicalTimeUnit,
+                        $"Column '{column.Name}' logical type 'Time' requires a valid unit (Millis/Micros/Nanos)."));
+                if (logicalType.Value.Unit == "Millis")
+                {
+                    if (column.PhysicalType != "Int32")
+                        diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
+                            $"Column '{column.Name}' logical type 'Time(Millis)' requires physical type 'Int32'."));
+                }
+                else if (column.PhysicalType != "Int64")
+                    diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
+                        $"Column '{column.Name}' logical type 'Time({logicalType.Value.Unit})' requires physical type 'Int64'."));
+                if (!IsTimeOnly(column.ClrTypeName))
+                    diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
+                        $"Column '{column.Name}' logical type 'Time' requires CLR type TimeOnly/TimeOnly?."));
+                break;
+            case "Timestamp":
+                if (logicalType.Value.Unit is null || !IsTimeUnit(logicalType.Value.Unit))
+                    diagnostics.Add(new SchemaDiagnostic(InvalidLogicalTimeUnit,
+                        $"Column '{column.Name}' logical type 'Timestamp' requires a valid unit (Millis/Micros/Nanos)."));
+                if (column.PhysicalType != "Int64")
+                    diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
+                        $"Column '{column.Name}' logical type 'Timestamp' requires physical type 'Int64'."));
+                if (!IsTimestampClr(column.ClrTypeName))
+                    diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
+                        $"Column '{column.Name}' logical type 'Timestamp' requires CLR type DateTime/DateTimeOffset (nullable allowed)."));
+                break;
+            case "String":
+            case "Json":
+                if (column.PhysicalType != "ByteArray")
+                    diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
+                        $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires physical type 'ByteArray'."));
+                break;
+            case "Uuid":
+                if (column.PhysicalType != "FixedLenByteArray")
+                    diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
+                        $"Column '{column.Name}' logical type 'Uuid' requires physical type 'FixedLenByteArray'."));
+                break;
+            case "Decimal":
+                if (logicalType.Value.Precision is not int precision || precision <= 0)
+                    diagnostics.Add(new SchemaDiagnostic(InvalidDecimalDefinition,
+                        $"Column '{column.Name}' decimal precision must be positive."));
+                if (logicalType.Value.Scale is not int scale || scale < 0)
+                    diagnostics.Add(new SchemaDiagnostic(InvalidDecimalDefinition,
+                        $"Column '{column.Name}' decimal scale must be non-negative."));
+                if (logicalType.Value.Precision is int p && logicalType.Value.Scale is int s && s > p)
+                    diagnostics.Add(new SchemaDiagnostic(InvalidDecimalDefinition,
+                        $"Column '{column.Name}' decimal scale ({s}) must be <= precision ({p})."));
+                if (column.PhysicalType is not ("Int32" or "Int64" or "FixedLenByteArray" or "ByteArray"))
+                    diagnostics.Add(new SchemaDiagnostic(DecimalPhysicalMismatch,
+                        $"Column '{column.Name}' logical type 'Decimal' is incompatible with physical type '{column.PhysicalType}'."));
+                break;
+        }
+    }
+
+    static bool IsDateOnly(string clrType)
+        => clrType is "global::System.DateOnly" or "global::System.DateOnly?";
+
+    static bool IsTimeOnly(string clrType)
+        => clrType is "global::System.TimeOnly" or "global::System.TimeOnly?";
+
+    static bool IsTimestampClr(string clrType)
+        => clrType is
+            "global::System.DateTime" or "global::System.DateTime?"
+            or "global::System.DateTimeOffset" or "global::System.DateTimeOffset?";
+
+    static bool IsTimeUnit(string unit)
+        => unit is "Millis" or "Micros" or "Nanos";
 
     static bool TryExtractColumnInvocation(ExpressionSyntax expression, out GenericNameSyntax genericName, out SeparatedSyntaxList<ArgumentSyntax> arguments)
     {
@@ -627,12 +959,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     readonly struct SchemaColumn
     {
-        public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName)
+        public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName,
+            LogicalTypeSpec? logicalType)
         {
             Name = name;
             PhysicalType = physicalType;
             Repetition = repetition;
             ClrTypeName = clrTypeName;
+            LogicalType = logicalType;
         }
 
         public string Name { get; }
@@ -642,6 +976,44 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public string Repetition { get; }
 
         public string ClrTypeName { get; }
+
+        public LogicalTypeSpec? LogicalType { get; }
+    }
+
+    readonly struct LogicalTypeSpec
+    {
+        public LogicalTypeSpec(string kind, string? unit = null, bool? isAdjustedToUtc = null, int? precision = null,
+            int? scale = null)
+        {
+            Kind = kind;
+            Unit = unit;
+            IsAdjustedToUtc = isAdjustedToUtc;
+            Precision = precision;
+            Scale = scale;
+        }
+
+        public string Kind { get; }
+
+        public string? Unit { get; }
+
+        public bool? IsAdjustedToUtc { get; }
+
+        public int? Precision { get; }
+
+        public int? Scale { get; }
+    }
+
+    readonly struct SchemaDiagnostic
+    {
+        public SchemaDiagnostic(DiagnosticDescriptor descriptor, string message)
+        {
+            Descriptor = descriptor;
+            Message = message;
+        }
+
+        public DiagnosticDescriptor Descriptor { get; }
+
+        public string Message { get; }
     }
 
     readonly struct MappedColumn

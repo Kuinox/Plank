@@ -39,7 +39,6 @@ public sealed class ParquetWriter
         _schema = schema;
         _options = options;
         _options.Validate();
-        _schema.Validate();
         ColumnsByOrdinal = _schema.Columns.IsDefault ? [] : _schema.Columns.ToArray();
         ColumnPathsByOrdinal = _schema.LeafPaths.IsDefault || _schema.LeafPaths.Length == 0
             ? ColumnsByOrdinal.Select(static c => new[] { c.Name }).ToArray()

@@ -20,20 +20,8 @@ public sealed record RowSchema
     public static RowSchema Create(ImmutableArray<RowSchemaColumn> columns)
         => new(columns);
 
-    public static RowSchemaColumn Column<TClr>(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null)
-        => new(name, physicalType, typeof(TClr), options);
+    public static RowSchemaColumn Column<TClr>(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null,
+        LogicalType? logicalType = null)
+        => new(name, physicalType, typeof(TClr), options, logicalType);
 
-    public void Validate()
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var column in Columns)
-        {
-            ArgumentNullException.ThrowIfNull(column);
-            column.Validate();
-            if (!seen.Add(column.Name))
-                throw new InvalidOperationException($"Duplicate column name '{column.Name}' is not allowed.");
-        }
-
-        ParquetSchema.Validate();
-    }
 }

@@ -51,24 +51,4 @@ public sealed record ColumnOptions
         return hash.ToHashCode();
     }
 
-    public void Validate()
-    {
-        if (!Enum.IsDefined(Repetition))
-            throw new ArgumentOutOfRangeException(nameof(Repetition), Repetition, "Repetition must be a defined ParquetRepetition value.");
-
-        if (Encodings.IsDefault)
-            throw new InvalidOperationException("Encodings must not be a default ImmutableArray.");
-
-        if (Encodings.Length == 0)
-            return;
-
-        var seen = new HashSet<EncodingKind>();
-        foreach (var encoding in Encodings)
-        {
-            if (!Enum.IsDefined(encoding))
-                throw new ArgumentOutOfRangeException(nameof(Encodings), encoding, "Encoding must be a defined EncodingKind value.");
-            if (!seen.Add(encoding))
-                throw new InvalidOperationException($"Duplicate encoding '{encoding}' is not allowed.");
-        }
-    }
 }

@@ -43,42 +43,6 @@ public sealed record ParquetSchema
 
     internal ImmutableArray<LeafProjectionInfo> LeafProjectionInfos { get; }
 
-    public void Validate()
-    {
-        ArgumentNullException.ThrowIfNull(PageStrategiesByColumnName);
-        foreach (var pair in PageStrategiesByColumnName)
-            ArgumentNullException.ThrowIfNull(pair.Value);
-        ValidateDefinitions();
-
-        if (Columns.IsDefaultOrEmpty)
-            return;
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var column in Columns)
-        {
-            ArgumentNullException.ThrowIfNull(column);
-            column.Validate();
-            if (!seen.Add(column.Name))
-                throw new InvalidOperationException($"Duplicate column name '{column.Name}' is not allowed.");
-        }
-    }
-
-    void ValidateDefinitions()
-    {
-        if (Definitions.IsDefaultOrEmpty)
-            return;
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        for (var i = 0; i < Definitions.Length; i++)
-        {
-            var definition = Definitions[i];
-            ArgumentNullException.ThrowIfNull(definition);
-            definition.Validate();
-            if (!seen.Add(definition.Name))
-                throw new InvalidOperationException($"Duplicate root node name '{definition.Name}' is not allowed.");
-        }
-    }
-
     static ImmutableArray<ColumnDefinition> NormalizeDefinitions(ImmutableArray<Column> columns)
     {
         if (columns.IsDefaultOrEmpty)
@@ -96,6 +60,7 @@ public sealed record ParquetSchema
                     ? ParquetRepetition.Required
                     : column.Options.Repetition,
                 PhysicalType = column.PhysicalType,
+                LogicalType = column.LogicalType,
                 Options = column.Options
             });
         }
@@ -183,7 +148,7 @@ public sealed record ParquetSchema
                         options = new ColumnOptions(repetition, options.Encodings, options.TypeLength);
                     var path = pathBuffer.ToArray().ToImmutableArray();
                     var columnName = string.Join(".", path);
-                    columnsBuilder.Add(new Column(columnName, node.PhysicalType.Value, options));
+                    columnsBuilder.Add(new Column(columnName, node.PhysicalType.Value, options, node.LogicalType));
                     pathsBuilder.Add(path);
                     infosBuilder.Add(new LeafProjectionInfo(isListLeaf, listOptional, elementOptional,
                         MaxRepetitionLevel: nextRepeatedLevel, MaxDefinitionLevel: nextDefinitionLevel));
