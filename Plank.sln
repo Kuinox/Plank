@@ -14,6 +14,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.IO.ZeroAlloc.Tests", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Snappy", "Plank.Snappy\Plank.Snappy.csproj", "{3BA1C641-F017-4F9D-B06F-02EFB95D400B}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Samples", "Samples", "{5D20AA90-6969-D8BD-9DCD-8634F4692FDA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Sample", "Samples\Plank.Sample\Plank.Sample.csproj", "{D5A1F197-5CA2-4982-B9A3-A0A98715699F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -108,8 +112,23 @@ Global
 		{3BA1C641-F017-4F9D-B06F-02EFB95D400B}.Release|x64.Build.0 = Release|Any CPU
 		{3BA1C641-F017-4F9D-B06F-02EFB95D400B}.Release|x86.ActiveCfg = Release|Any CPU
 		{3BA1C641-F017-4F9D-B06F-02EFB95D400B}.Release|x86.Build.0 = Release|Any CPU
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F}.Debug|x64.Build.0 = Debug|Any CPU
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F}.Debug|x86.Build.0 = Debug|Any CPU
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F}.Release|x64.ActiveCfg = Release|Any CPU
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F}.Release|x64.Build.0 = Release|Any CPU
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F}.Release|x86.ActiveCfg = Release|Any CPU
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{D5A1F197-5CA2-4982-B9A3-A0A98715699F} = {5D20AA90-6969-D8BD-9DCD-8634F4692FDA}
 	EndGlobalSection
 EndGlobal
