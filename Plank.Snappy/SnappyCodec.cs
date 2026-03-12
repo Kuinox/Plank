@@ -61,4 +61,58 @@ public static class SnappyCodec
 
         throw new InvalidOperationException("Snappy compression failed with an unknown status code.");
     }
+
+    public static int GetUncompressedLength(ReadOnlySpan<byte> source)
+    {
+        unsafe
+        {
+            nuint result = 0;
+            fixed (byte* sourcePointer = source)
+            {
+                var status = SnappyNative.GetUncompressedLength(sourcePointer, (nuint)source.Length, ref result);
+                if (status == SnappyStatus.Ok)
+                {
+                    if (result > int.MaxValue)
+                        throw new InvalidOperationException("Snappy uncompressed length exceeds Int32.MaxValue.");
+
+                    return (int)result;
+                }
+
+                if (status == SnappyStatus.InvalidInput)
+                    throw new InvalidDataException("Snappy payload is invalid.");
+            }
+        }
+
+        throw new InvalidOperationException("Snappy uncompressed length query failed with an unknown status code.");
+    }
+
+    public static int Decompress(ReadOnlySpan<byte> source, Span<byte> destination)
+    {
+        var expectedLength = GetUncompressedLength(source);
+        if (destination.Length < expectedLength)
+            throw new ArgumentException("Destination buffer is too small for the uncompressed payload.", nameof(destination));
+
+        unsafe
+        {
+            var uncompressedLength = (nuint)destination.Length;
+            fixed (byte* sourcePointer = source)
+            fixed (byte* destinationPointer = destination)
+            {
+                var status = SnappyNative.Uncompress(sourcePointer, (nuint)source.Length, destinationPointer,
+                    ref uncompressedLength);
+                if (status == SnappyStatus.Ok)
+                {
+                    if (uncompressedLength > int.MaxValue)
+                        throw new InvalidOperationException("Snappy uncompressed length exceeds Int32.MaxValue.");
+
+                    return (int)uncompressedLength;
+                }
+
+                if (status == SnappyStatus.InvalidInput)
+                    throw new InvalidDataException("Snappy payload is invalid.");
+            }
+        }
+
+        throw new InvalidOperationException("Snappy decompression failed with an unknown status code.");
+    }
 }

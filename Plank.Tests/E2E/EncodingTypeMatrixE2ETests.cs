@@ -94,7 +94,7 @@ internal sealed class EncodingTypeMatrixE2ETests
             using (var stream = File.Create(path))
             {
                 var schema = CreateSchema(testCase.Encoding, testCase.PhysicalType);
-                var writer = PlankWriter.Create(stream, schema, new ParquetWriterOptions
+                var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
                     Compression = CompressionKind.None
                 });
@@ -120,7 +120,7 @@ internal sealed class EncodingTypeMatrixE2ETests
         {
             using var stream = File.Create(path);
             var schema = CreateSchema(testCase.Encoding, testCase.PhysicalType);
-            var writer = PlankWriter.Create(stream, schema, new ParquetWriterOptions
+            var writer = schema.CreateWriter(stream, new ParquetWriterOptions
             {
                 Compression = CompressionKind.None
             });

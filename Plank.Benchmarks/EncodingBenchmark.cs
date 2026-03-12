@@ -88,7 +88,7 @@ public class EncodingBenchmark
             MapPlankPhysicalType(DataType),
             new ColumnOptions(ParquetRepetition.Required, [MapPlankEncoding(EncodingName)]));
         var plankSchema = CreatePlankSchema(_plankColumn, EncodingName);
-        _plankWriter = Plank.Writing.ParquetWriter.Create(_sharedStream, plankSchema, new ParquetWriterOptions
+        _plankWriter = plankSchema.CreateWriter(_sharedStream, new ParquetWriterOptions
         {
             Compression = CompressionKind.None
         });

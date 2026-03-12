@@ -58,8 +58,8 @@ public class StringDictionaryStrategyBenchmark
 
         _streamA = new MemoryStream(capacity: Rows * 16);
         _streamB = new MemoryStream(capacity: Rows * 16);
-        _writerA = ParquetWriter.Create(_streamA, schema, options);
-        _writerB = ParquetWriter.Create(_streamB, schema, options);
+        _writerA = schema.CreateWriter(_streamA, options);
+        _writerB = schema.CreateWriter(_streamB, options);
     }
 
     [GlobalCleanup]

@@ -12,7 +12,7 @@ internal sealed class WriterAllocationTests
             new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain]));
         var schema = new ParquetSchema([column]);
         using var stream = new MemoryStream(capacity: 1024 * 1024);
-        var writer = ParquetWriter.Create(stream, schema, new ParquetWriterOptions
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
             Compression = CompressionKind.None
         });

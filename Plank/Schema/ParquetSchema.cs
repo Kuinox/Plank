@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using Plank.Reading;
+using Plank.Writing;
 using Plank.Writing.PageStrategy;
 
 namespace Plank.Schema;
@@ -38,6 +40,12 @@ public sealed record ParquetSchema
     public ImmutableArray<ColumnDefinition> Definitions { get; }
 
     public ImmutableDictionary<string, IPageStrategy> PageStrategiesByColumnName { get; init; } = EmptyPageStrategies;
+
+    public ParquetReader CreateReader(Stream stream, ParquetReaderOptions? options = null)
+        => new(stream, this, options ?? ParquetReaderOptions.Default);
+
+    public ParquetWriter CreateWriter(Stream stream, ParquetWriterOptions? options = null)
+        => new(stream, this, options ?? ParquetWriterOptions.Default);
 
     internal ImmutableArray<ImmutableArray<string>> LeafPaths { get; }
 

@@ -65,9 +65,21 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
         }
 
+        if (typeof(T) == typeof(bool?))
+        {
+            SerializeOptionalTyped(AsNullableSpan<bool>(values));
+            return;
+        }
+
         if (typeof(T) == typeof(bool))
         {
             SerializeTyped(AsSpan<bool>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(int?))
+        {
+            SerializeOptionalTyped(AsNullableSpan<int>(values));
             return;
         }
 
@@ -77,9 +89,21 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
         }
 
+        if (typeof(T) == typeof(byte?))
+        {
+            SerializeNullableByte(AsNullableSpan<byte>(values));
+            return;
+        }
+
         if (typeof(T) == typeof(byte))
         {
             SerializeByte(AsSpan<byte>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(ushort?))
+        {
+            SerializeNullableUInt16(AsNullableSpan<ushort>(values));
             return;
         }
 
@@ -89,9 +113,21 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
         }
 
+        if (typeof(T) == typeof(uint?))
+        {
+            SerializeNullableUInt32(AsNullableSpan<uint>(values));
+            return;
+        }
+
         if (typeof(T) == typeof(uint))
         {
             SerializeUInt32(AsSpan<uint>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(long?))
+        {
+            SerializeOptionalTyped(AsNullableSpan<long>(values));
             return;
         }
 
@@ -101,15 +137,33 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
         }
 
+        if (typeof(T) == typeof(ulong?))
+        {
+            SerializeNullableUInt64(AsNullableSpan<ulong>(values));
+            return;
+        }
+
         if (typeof(T) == typeof(ulong))
         {
             SerializeUInt64(AsSpan<ulong>(values));
             return;
         }
 
+        if (typeof(T) == typeof(float?))
+        {
+            SerializeOptionalTyped(AsNullableSpan<float>(values));
+            return;
+        }
+
         if (typeof(T) == typeof(float))
         {
             SerializeTyped(AsSpan<float>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(double?))
+        {
+            SerializeOptionalTyped(AsNullableSpan<double>(values));
             return;
         }
 
@@ -121,7 +175,16 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         if (typeof(T) == typeof(byte[]))
         {
-            SerializeTyped(AsAnySpan<byte[]>(values));
+            if (_column.Options.Repetition == ParquetRepetition.Optional)
+                SerializeOptionalReference(AsAnySpan<byte[]>(values));
+            else
+                SerializeTyped(AsAnySpan<byte[]>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>?))
+        {
+            SerializeOptionalTyped(AsNullableSpan<ReadOnlyMemory<byte>>(values));
             return;
         }
 
@@ -133,7 +196,16 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         if (typeof(T) == typeof(string))
         {
-            SerializeTyped(AsAnySpan<string>(values));
+            if (_column.Options.Repetition == ParquetRepetition.Optional)
+                SerializeOptionalReference(AsAnySpan<string>(values));
+            else
+                SerializeTyped(AsAnySpan<string>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(DateOnly?))
+        {
+            SerializeNullableDateOnly(AsNullableSpan<DateOnly>(values));
             return;
         }
 
@@ -143,15 +215,33 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
         }
 
+        if (typeof(T) == typeof(DateTime?))
+        {
+            SerializeNullableDateTime(AsNullableSpan<DateTime>(values));
+            return;
+        }
+
         if (typeof(T) == typeof(DateTime))
         {
             SerializeDateTime(AsSpan<DateTime>(values));
             return;
         }
 
+        if (typeof(T) == typeof(DateTimeOffset?))
+        {
+            SerializeNullableDateTimeOffset(AsNullableSpan<DateTimeOffset>(values));
+            return;
+        }
+
         if (typeof(T) == typeof(DateTimeOffset))
         {
             SerializeDateTimeOffset(AsSpan<DateTimeOffset>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(TimeOnly?))
+        {
+            SerializeNullableTimeOnly(AsNullableSpan<TimeOnly>(values));
             return;
         }
 
@@ -184,6 +274,23 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
     }
 
+    void SerializeNullableDateOnly(ReadOnlySpan<DateOnly?> values)
+    {
+        RequireDateLogicalType(_column);
+        var rented = ArrayPool<int?>.Shared.Rent(values.Length);
+        try
+        {
+            var converted = rented.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = values[i] is { } value ? value.DayNumber - UnixEpochDate.DayNumber : null;
+            SerializeOptionalTyped(converted);
+        }
+        finally
+        {
+            ArrayPool<int?>.Shared.Return(rented);
+        }
+    }
+
     void SerializeByte(ReadOnlySpan<byte> values)
     {
         var rented = ArrayPool<int>.Shared.Rent(values.Length);
@@ -197,6 +304,22 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         finally
         {
             ArrayPool<int>.Shared.Return(rented);
+        }
+    }
+
+    void SerializeNullableByte(ReadOnlySpan<byte?> values)
+    {
+        var rented = ArrayPool<int?>.Shared.Rent(values.Length);
+        try
+        {
+            var converted = rented.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = values[i];
+            SerializeOptionalTyped(converted);
+        }
+        finally
+        {
+            ArrayPool<int?>.Shared.Return(rented);
         }
     }
 
@@ -216,6 +339,22 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
     }
 
+    void SerializeNullableUInt16(ReadOnlySpan<ushort?> values)
+    {
+        var rented = ArrayPool<int?>.Shared.Rent(values.Length);
+        try
+        {
+            var converted = rented.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = values[i];
+            SerializeOptionalTyped(converted);
+        }
+        finally
+        {
+            ArrayPool<int?>.Shared.Return(rented);
+        }
+    }
+
     void SerializeUInt32(ReadOnlySpan<uint> values)
     {
         var rented = ArrayPool<int>.Shared.Rent(values.Length);
@@ -229,6 +368,22 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         finally
         {
             ArrayPool<int>.Shared.Return(rented);
+        }
+    }
+
+    void SerializeNullableUInt32(ReadOnlySpan<uint?> values)
+    {
+        var rented = ArrayPool<int?>.Shared.Rent(values.Length);
+        try
+        {
+            var converted = rented.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = values[i] is { } value ? unchecked((int)value) : null;
+            SerializeOptionalTyped(converted);
+        }
+        finally
+        {
+            ArrayPool<int?>.Shared.Return(rented);
         }
     }
 
@@ -249,6 +404,23 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
     }
 
+    void SerializeNullableDateTime(ReadOnlySpan<DateTime?> values)
+    {
+        var timestamp = RequireTimestampLogicalType(_column);
+        var rented = ArrayPool<long?>.Shared.Rent(values.Length);
+        try
+        {
+            var converted = rented.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = values[i] is { } value ? ToUnixTime(value, timestamp.Unit) : null;
+            SerializeOptionalTyped(converted);
+        }
+        finally
+        {
+            ArrayPool<long?>.Shared.Return(rented);
+        }
+    }
+
     void SerializeUInt64(ReadOnlySpan<ulong> values)
     {
         var rented = ArrayPool<long>.Shared.Rent(values.Length);
@@ -262,6 +434,22 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         finally
         {
             ArrayPool<long>.Shared.Return(rented);
+        }
+    }
+
+    void SerializeNullableUInt64(ReadOnlySpan<ulong?> values)
+    {
+        var rented = ArrayPool<long?>.Shared.Rent(values.Length);
+        try
+        {
+            var converted = rented.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = values[i] is { } value ? unchecked((long)value) : null;
+            SerializeOptionalTyped(converted);
+        }
+        finally
+        {
+            ArrayPool<long?>.Shared.Return(rented);
         }
     }
 
@@ -282,6 +470,23 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
     }
 
+    void SerializeNullableDateTimeOffset(ReadOnlySpan<DateTimeOffset?> values)
+    {
+        var timestamp = RequireTimestampLogicalType(_column);
+        var rented = ArrayPool<long?>.Shared.Rent(values.Length);
+        try
+        {
+            var converted = rented.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = values[i] is { } value ? ToUnixTime(value, timestamp.Unit) : null;
+            SerializeOptionalTyped(converted);
+        }
+        finally
+        {
+            ArrayPool<long?>.Shared.Return(rented);
+        }
+    }
+
     void SerializeTimeOnly(ReadOnlySpan<TimeOnly> values)
     {
         var time = RequireTimeLogicalType(_column);
@@ -299,11 +504,42 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
     }
 
+    void SerializeNullableTimeOnly(ReadOnlySpan<TimeOnly?> values)
+    {
+        var time = RequireTimeLogicalType(_column);
+        var rented = ArrayPool<long?>.Shared.Rent(values.Length);
+        try
+        {
+            var converted = rented.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = values[i] is { } value ? ToTimeValue(value, time.Unit) : null;
+            SerializeOptionalTyped(converted);
+        }
+        finally
+        {
+            ArrayPool<long?>.Shared.Return(rented);
+        }
+    }
+
     void SerializeTyped<TValue>(ReadOnlySpan<TValue> values)
         where TValue : notnull
     {
         var columnOrdinal = _owner.GetColumnOrdinal(_column);
         SerializeCore(values, columnOrdinal, _owner.GetPageStrategy(columnOrdinal));
+    }
+
+    void SerializeOptionalTyped<TValue>(ReadOnlySpan<TValue?> values)
+        where TValue : struct
+    {
+        var columnOrdinal = _owner.GetColumnOrdinal(_column);
+        SerializeOptionalCore(values, columnOrdinal, _owner.GetPageStrategy(columnOrdinal));
+    }
+
+    void SerializeOptionalReference<TValue>(ReadOnlySpan<TValue> values)
+        where TValue : class
+    {
+        var columnOrdinal = _owner.GetColumnOrdinal(_column);
+        SerializeOptionalCore(values, columnOrdinal, _owner.GetPageStrategy(columnOrdinal));
     }
 
     void SerializeRepeated(ReadOnlySpan<T> values)
@@ -327,6 +563,38 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategy, Pages,
+            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+    }
+
+    void SerializeOptionalCore<TValue>(ReadOnlySpan<TValue?> values, uint columnOrdinal, IPageStrategy strategy)
+        where TValue : struct
+    {
+        ArgumentNullException.ThrowIfNull(strategy);
+        if (HasPendingData)
+            throw new InvalidOperationException(
+                "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
+        Pages.Clear();
+        ColumnOrdinal = columnOrdinal;
+        RowCount = values.Length;
+        HasPendingData = true;
+
+        Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategy, Pages,
+            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+    }
+
+    void SerializeOptionalCore<TValue>(ReadOnlySpan<TValue> values, uint columnOrdinal, IPageStrategy strategy)
+        where TValue : class
+    {
+        ArgumentNullException.ThrowIfNull(strategy);
+        if (HasPendingData)
+            throw new InvalidOperationException(
+                "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
+        Pages.Clear();
+        ColumnOrdinal = columnOrdinal;
+        RowCount = values.Length;
+        HasPendingData = true;
+
+        Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategy, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
     }
 
@@ -357,6 +625,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     static ReadOnlySpan<TTo> AsAnySpan<TTo>(ReadOnlySpan<T> values)
     {
         ref var first = ref Unsafe.As<T, TTo>(ref MemoryMarshal.GetReference(values));
+        return MemoryMarshal.CreateReadOnlySpan(ref first, values.Length);
+    }
+
+    static ReadOnlySpan<TTo?> AsNullableSpan<TTo>(ReadOnlySpan<T> values)
+        where TTo : struct
+    {
+        ref var first = ref Unsafe.As<T, TTo?>(ref MemoryMarshal.GetReference(values));
         return MemoryMarshal.CreateReadOnlySpan(ref first, values.Length);
     }
 

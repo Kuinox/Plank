@@ -11,4 +11,12 @@ static partial class SnappyNative
 
     [LibraryImport(LibraryName, EntryPoint = "snappy_compress")]
     internal static unsafe partial SnappyStatus Compress(byte* input, nuint inputLength, byte* compressed, ref nuint compressedLength);
+
+    [LibraryImport(LibraryName, EntryPoint = "snappy_uncompressed_length")]
+    internal static unsafe partial SnappyStatus GetUncompressedLength(byte* compressed, nuint compressedLength,
+        ref nuint result);
+
+    [LibraryImport(LibraryName, EntryPoint = "snappy_uncompress")]
+    internal static unsafe partial SnappyStatus Uncompress(byte* compressed, nuint compressedLength, byte* uncompressed,
+        ref nuint uncompressedLength);
 }

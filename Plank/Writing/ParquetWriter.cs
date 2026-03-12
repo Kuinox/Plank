@@ -30,7 +30,7 @@ public sealed class ParquetWriter
     bool _rowGroupOpen;
     bool _streamDisposed;
 
-    ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options)
+    internal ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(schema);
@@ -65,10 +65,6 @@ public sealed class ParquetWriter
         FileOffset = 0;
         OpenFile(stream);
     }
-
-    public static ParquetWriter Create(Stream stream, ParquetSchema schema,
-        ParquetWriterOptions? options = null)
-        => new(stream, schema, options ?? ParquetWriterOptions.Default);
 
     public uint RowApiMaxParallelism
         => _options.RowApiMaxParallelism;

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -78,6 +79,95 @@ static class Encoding
         {
             if (dictionaryIndexesBytes is not null)
                 bufferWriters.ReturnScratch(dictionaryIndexesBytes);
+        }
+    }
+
+    internal static void EncodeOptional<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T?> values,
+        IPageStrategy strategy, PageList pages, LeafProjectionInfo leafProjectionInfo,
+        ReusableDictionaryState<T> dictionaryState)
+        where T : struct
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(pages);
+        if (column.Options.Repetition != ParquetRepetition.Optional)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' does not support null values.");
+        if (leafProjectionInfo.MaxDefinitionLevel != 1 || leafProjectionInfo.MaxRepetitionLevel != 0)
+            throw new NotSupportedException(
+                $"Column '{column.Name}' optional flat encoding requires a single optional leaf.");
+
+        pages.Clear();
+        if (values.Length == 0)
+            return;
+
+        var presentCount = CountPresentValues(values);
+        if (presentCount == values.Length)
+        {
+            var rented = ArrayPool<T>.Shared.Rent(values.Length);
+            try
+            {
+                var denseValues = rented.AsSpan(0, values.Length);
+                CopyPresentValues(values, denseValues);
+                Encode(bufferWriters, column, denseValues, strategy, pages, leafProjectionInfo, dictionaryState);
+            }
+            finally
+            {
+                ArrayPool<T>.Shared.Return(rented);
+            }
+
+            return;
+        }
+
+        var rentedValues = ArrayPool<T>.Shared.Rent(presentCount);
+        var densePresentValues = rentedValues.AsSpan(0, presentCount);
+        CopyPresentValues(values, densePresentValues);
+        try
+        {
+            EncodeOptionalFlatValues(bufferWriters, column, values, strategy, pages, densePresentValues, dictionaryState);
+        }
+        finally
+        {
+            ArrayPool<T>.Shared.Return(rentedValues);
+        }
+    }
+
+    internal static void EncodeOptional<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
+        IPageStrategy strategy, PageList pages, LeafProjectionInfo leafProjectionInfo,
+        ReusableDictionaryState<T> dictionaryState)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(pages);
+        if (column.Options.Repetition != ParquetRepetition.Optional)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' does not support null values.");
+        if (leafProjectionInfo.MaxDefinitionLevel != 1 || leafProjectionInfo.MaxRepetitionLevel != 0)
+            throw new NotSupportedException(
+                $"Column '{column.Name}' optional flat encoding requires a single optional leaf.");
+
+        pages.Clear();
+        if (values.Length == 0)
+            return;
+
+        var presentCount = CountPresentValues(values);
+        if (presentCount == values.Length)
+        {
+            Encode(bufferWriters, column, values, strategy, pages, leafProjectionInfo, dictionaryState);
+            return;
+        }
+
+        var rentedValues = ArrayPool<T>.Shared.Rent(presentCount);
+        var densePresentValues = rentedValues.AsSpan(0, presentCount);
+        CopyPresentValues(values, densePresentValues);
+        try
+        {
+            EncodeOptionalFlatReferences(bufferWriters, column, values, strategy, pages, densePresentValues, dictionaryState);
+        }
+        finally
+        {
+            ArrayPool<T>.Shared.Return(rentedValues, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
         }
     }
 
@@ -210,6 +300,244 @@ static class Encoding
             if (rentedIndexesBytes is not null)
                 bufferWriters.ReturnScratch(rentedIndexesBytes);
         }
+    }
+
+    static void EncodeOptionalFlatValues<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T?> values,
+        IPageStrategy strategy, PageList pages, ReadOnlySpan<T> denseValues, ReusableDictionaryState<T> dictionaryState)
+        where T : struct
+    {
+        var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
+        var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
+        var useDictionary = TryWriteDictionaryPage(bufferWriters, column, denseValues, strategy, pages, dictionaryState,
+            out var dictionaryValueCount, out var dictionaryIndexesBytes);
+        var dictionaryIndexes = useDictionary && dictionaryIndexesBytes is not null
+            ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBytes.AsSpan(0, checked(denseValues.Length * sizeof(int))))
+            : default;
+        var dictionaryBitWidth = useDictionary
+            ? RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
+            : 0;
+
+        var rowsWritten = 0;
+        var denseOffset = 0;
+        try
+        {
+            while (rowsWritten < values.Length)
+            {
+                var pageStart = rowsWritten;
+                var pageRowCount = 0;
+                while (rowsWritten < values.Length)
+                {
+                    rowsWritten++;
+                    pageRowCount++;
+                    if (rowsWritten == values.Length)
+                        break;
+                    if (strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
+                        break;
+                }
+
+                var pageIndex = AddNewDataPage(bufferWriters, pages);
+                ref var page = ref pages[pageIndex];
+                var pageRows = values.Slice(pageStart, pageRowCount);
+                var nullCount = 0;
+                var presentRows = 0;
+                var definitionLength = WriteOptionalDefinitionLevels(pageRows, ref nullCount, ref presentRows, ref page.Content);
+                var pageDenseValues = denseValues.Slice(denseOffset, presentRows);
+                if (useDictionary)
+                {
+                    if (dictionaryIndexes.IsEmpty)
+                        throw new InvalidOperationException("Dictionary index buffer is missing for dictionary-encoded page.");
+                    DictionaryIndexEncodingDispatcher.WriteIndexes(dictionaryEncoding,
+                        dictionaryIndexes.Slice(denseOffset, presentRows), dictionaryBitWidth, ref page.Content);
+                }
+                else if (presentRows > 0)
+                    ValueEncodingDispatcher.WriteValues(dataEncoding, column, pageDenseValues, bufferWriters, ref page.Content);
+
+                WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
+                    useDictionary ? dictionaryEncoding : dataEncoding);
+                denseOffset += presentRows;
+            }
+        }
+        finally
+        {
+            if (dictionaryIndexesBytes is not null)
+                bufferWriters.ReturnScratch(dictionaryIndexesBytes);
+        }
+    }
+
+    static void EncodeOptionalFlatReferences<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
+        IPageStrategy strategy, PageList pages, ReadOnlySpan<T> denseValues, ReusableDictionaryState<T> dictionaryState)
+        where T : class
+    {
+        var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
+        var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
+        var useDictionary = TryWriteDictionaryPage(bufferWriters, column, denseValues, strategy, pages, dictionaryState,
+            out var dictionaryValueCount, out var dictionaryIndexesBytes);
+        var dictionaryIndexes = useDictionary && dictionaryIndexesBytes is not null
+            ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBytes.AsSpan(0, checked(denseValues.Length * sizeof(int))))
+            : default;
+        var dictionaryBitWidth = useDictionary
+            ? RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
+            : 0;
+
+        var rowsWritten = 0;
+        var denseOffset = 0;
+        try
+        {
+            while (rowsWritten < values.Length)
+            {
+                var pageStart = rowsWritten;
+                var pageRowCount = 0;
+                while (rowsWritten < values.Length)
+                {
+                    rowsWritten++;
+                    pageRowCount++;
+                    if (rowsWritten == values.Length)
+                        break;
+                    if (strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
+                        break;
+                }
+
+                var pageIndex = AddNewDataPage(bufferWriters, pages);
+                ref var page = ref pages[pageIndex];
+                var pageRows = values.Slice(pageStart, pageRowCount);
+                var nullCount = 0;
+                var presentRows = 0;
+                var definitionLength = WriteOptionalDefinitionLevels(pageRows, ref nullCount, ref presentRows, ref page.Content);
+                var pageDenseValues = denseValues.Slice(denseOffset, presentRows);
+                if (useDictionary)
+                {
+                    if (dictionaryIndexes.IsEmpty)
+                        throw new InvalidOperationException("Dictionary index buffer is missing for dictionary-encoded page.");
+                    DictionaryIndexEncodingDispatcher.WriteIndexes(dictionaryEncoding,
+                        dictionaryIndexes.Slice(denseOffset, presentRows), dictionaryBitWidth, ref page.Content);
+                }
+                else if (presentRows > 0)
+                    ValueEncodingDispatcher.WriteValues(dataEncoding, column, pageDenseValues, bufferWriters, ref page.Content);
+
+                WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
+                    useDictionary ? dictionaryEncoding : dataEncoding);
+                denseOffset += presentRows;
+            }
+        }
+        finally
+        {
+            if (dictionaryIndexesBytes is not null)
+                bufferWriters.ReturnScratch(dictionaryIndexesBytes);
+        }
+    }
+
+    static int WriteOptionalDefinitionLevels<T>(ReadOnlySpan<T?> values, ref int nullCount, ref int presentRows,
+        ref BufferWriter writer)
+        where T : struct
+    {
+        var definitionBitWidth = 1;
+        var currentLevel = -1;
+        var currentRunLength = 0;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var level = values[i].HasValue ? 1 : 0;
+            if (level == 0)
+                nullCount++;
+            else
+                presentRows++;
+
+            if (currentRunLength == 0)
+            {
+                currentLevel = level;
+                currentRunLength = 1;
+                continue;
+            }
+
+            if (currentLevel == level)
+            {
+                currentRunLength++;
+                continue;
+            }
+
+            WriteLevelRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
+            currentLevel = level;
+            currentRunLength = 1;
+        }
+
+        if (currentRunLength > 0)
+            WriteLevelRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
+        return writer.WrittenLength;
+    }
+
+    static int WriteOptionalDefinitionLevels<T>(ReadOnlySpan<T> values, ref int nullCount, ref int presentRows,
+        ref BufferWriter writer)
+        where T : class
+    {
+        var definitionBitWidth = 1;
+        var currentLevel = -1;
+        var currentRunLength = 0;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var level = values[i] is null ? 0 : 1;
+            if (level == 0)
+                nullCount++;
+            else
+                presentRows++;
+
+            if (currentRunLength == 0)
+            {
+                currentLevel = level;
+                currentRunLength = 1;
+                continue;
+            }
+
+            if (currentLevel == level)
+            {
+                currentRunLength++;
+                continue;
+            }
+
+            WriteLevelRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
+            currentLevel = level;
+            currentRunLength = 1;
+        }
+
+        if (currentRunLength > 0)
+            WriteLevelRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
+        return writer.WrittenLength;
+    }
+
+    static int CountPresentValues<T>(ReadOnlySpan<T?> values)
+        where T : struct
+    {
+        var count = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i].HasValue)
+                count++;
+        return count;
+    }
+
+    static int CountPresentValues<T>(ReadOnlySpan<T> values)
+        where T : class
+    {
+        var count = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i] is not null)
+                count++;
+        return count;
+    }
+
+    static void CopyPresentValues<T>(ReadOnlySpan<T?> values, Span<T> destination)
+        where T : struct
+    {
+        var index = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i].HasValue)
+                destination[index++] = values[i]!.Value;
+    }
+
+    static void CopyPresentValues<T>(ReadOnlySpan<T> values, Span<T> destination)
+        where T : class
+    {
+        var index = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i] is not null)
+                destination[index++] = values[i];
     }
 
     static void WriteBooleanDictionaryPage(Column column, ReadOnlySpan<bool> values, ref Page dictionaryPage,

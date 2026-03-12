@@ -111,7 +111,7 @@ internal sealed class BenchmarkEncodingCompatibilityTests
             : new PlankSchema([column]);
 
         using var stream = File.Create(path);
-        var writer = PlankWriter.Create(stream, schema, new ParquetWriterOptions { Compression = CompressionKind.None });
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions { Compression = CompressionKind.None });
         var rowGroup = writer.StartRowGroup();
         switch (dataType)
         {

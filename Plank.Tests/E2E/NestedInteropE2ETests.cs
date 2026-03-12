@@ -2,7 +2,6 @@ using Parquet;
 using ParquetSharp;
 using Plank.Schema;
 using Plank.Writing;
-using PlankParquetWriter = Plank.Writing.ParquetWriter;
 using PlankSchema = Plank.Schema.ParquetSchema;
 
 namespace Plank.Tests.E2E;
@@ -36,7 +35,7 @@ internal sealed class NestedInteropE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = PlankParquetWriter.Create(stream, schema, new ParquetWriterOptions
+                var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
                     Compression = CompressionKind.None
                 });
@@ -89,7 +88,7 @@ internal sealed class NestedInteropE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = PlankParquetWriter.Create(stream, schema, new ParquetWriterOptions
+                var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
                     Compression = CompressionKind.None
                 });
@@ -142,7 +141,7 @@ internal sealed class NestedInteropE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = PlankParquetWriter.Create(stream, schema, new ParquetWriterOptions
+                var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
                     Compression = CompressionKind.Snappy
                 });
@@ -199,7 +198,7 @@ internal sealed class NestedInteropE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = PlankParquetWriter.Create(stream, schema, new ParquetWriterOptions
+                var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
                     Compression = CompressionKind.Snappy
                 });
@@ -248,7 +247,7 @@ internal sealed class NestedInteropE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = PlankParquetWriter.Create(stream, schema, new ParquetWriterOptions
+                var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
                     Compression = CompressionKind.Snappy
                 });

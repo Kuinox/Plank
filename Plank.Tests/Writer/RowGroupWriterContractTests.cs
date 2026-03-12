@@ -15,7 +15,7 @@ internal sealed class RowGroupWriterContractTests
             new PlankColumn("A", ParquetPhysicalType.Int32, ColumnOptions.Default),
             new PlankColumn("B", ParquetPhysicalType.Int32, ColumnOptions.Default)
         ]);
-        var writer = ParquetWriter.Create(stream, schema);
+        var writer = schema.CreateWriter(stream);
         var rowGroup = writer.StartRowGroup();
         var first = writer.CreateSerializedColumn<int>(schema.Columns[0]);
         var second = writer.CreateSerializedColumn<int>(schema.Columns[1]);
@@ -35,7 +35,7 @@ internal sealed class RowGroupWriterContractTests
             new PlankColumn("A", ParquetPhysicalType.Int32, ColumnOptions.Default),
             new PlankColumn("B", ParquetPhysicalType.Int32, ColumnOptions.Default)
         ]);
-        var writer = ParquetWriter.Create(stream, schema);
+        var writer = schema.CreateWriter(stream);
         var rowGroup = writer.StartRowGroup();
         var first = writer.CreateSerializedColumn<int>(schema.Columns[0]);
         var second = writer.CreateSerializedColumn<int>(schema.Columns[1]);
@@ -56,7 +56,7 @@ internal sealed class RowGroupWriterContractTests
             new PlankColumn("A", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Rle)))
         ]);
-        var writer = ParquetWriter.Create(stream, schema);
+        var writer = schema.CreateWriter(stream);
         var serialized = writer.CreateSerializedColumn<int>(schema.Columns[0]);
 
         await Assert.ThrowsAsync<NotSupportedException>(async () =>
@@ -71,10 +71,36 @@ internal sealed class RowGroupWriterContractTests
             new PlankColumn("A", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.BitPacked)))
         ]);
-        var writer = ParquetWriter.Create(stream, schema);
+        var writer = schema.CreateWriter(stream);
         var serialized = writer.CreateSerializedColumn<int>(schema.Columns[0]);
 
         await Assert.ThrowsAsync<NotSupportedException>(async () =>
             await Task.Run(() => serialized.Serialize([1, 2, 3])).ConfigureAwait(false));
+    }
+
+    [Test]
+    public async Task WritesOptionalFlatStringColumnWithNulls()
+    {
+        using var stream = new NonClosingMemoryStream();
+        var schema = new ParquetSchema([
+            new PlankColumn("A", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(repetition: ParquetRepetition.Optional))
+        ]);
+        var writer = schema.CreateWriter(stream);
+        var rowGroup = writer.StartRowGroup();
+        var serialized = writer.CreateSerializedColumn<string>(schema.Columns[0]);
+
+        serialized.Serialize(["a", null!, "bbb"]);
+        rowGroup.Write(serialized);
+        writer.CloseFile();
+
+        await Assert.That(stream.Length).IsGreaterThan(0);
+    }
+
+    sealed class NonClosingMemoryStream : MemoryStream
+    {
+        protected override void Dispose(bool disposing)
+        {
+        }
     }
 }

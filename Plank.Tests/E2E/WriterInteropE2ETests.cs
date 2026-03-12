@@ -464,7 +464,7 @@ internal sealed class WriterInteropE2ETests
         IReadOnlyList<ExpectedRowGroup> rowGroups)
     {
         using var stream = File.Create(path);
-        var writer = ParquetWriter.Create(stream, schema, new ParquetWriterOptions
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
             Compression = compression
         });

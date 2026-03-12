@@ -32,7 +32,7 @@ public abstract class RowWriterBase<TSlot>
             throw new ArgumentOutOfRangeException(nameof(maxParallelism), maxParallelism,
                 $"Max parallelism must be <= {int.MaxValue}.");
 
-        _writer = ParquetWriter.Create(stream, schema, options);
+        _writer = schema.CreateWriter(stream, options);
         var workerCount = checked((int)maxParallelism);
         _readySlots = new Queue<QueuedSlot>(workerCount);
         _freeSlots = new Queue<TSlot>(workerCount);
