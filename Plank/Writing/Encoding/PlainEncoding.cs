@@ -109,45 +109,85 @@ static class PlainEncoding
     static void WriteInt32Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
-        if (typeof(T) != typeof(int))
-            throw new InvalidOperationException(
-                $"Column '{column.Name}' expects '{ParquetPhysicalType.Int32}' values, but got '{typeof(T)}'.");
-
-        var intValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values);
-        var byteCount = checked(intValues.Length * sizeof(int));
+        var byteCount = checked(values.Length * sizeof(int));
         if (byteCount == 0)
             return;
 
         var destination = writer.GetSpan(byteCount);
-        if (BitConverter.IsLittleEndian)
-            MemoryMarshal.AsBytes(intValues).CopyTo(destination);
-        else
-            for (var i = 0; i < intValues.Length; i++)
-                BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..], intValues[i]);
+        if (typeof(T) == typeof(int))
+        {
+            var intValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values);
+            if (BitConverter.IsLittleEndian)
+                MemoryMarshal.AsBytes(intValues).CopyTo(destination);
+            else
+                for (var i = 0; i < intValues.Length; i++)
+                    BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..], intValues[i]);
+            writer.Advance(byteCount);
+            return;
+        }
 
-        writer.Advance(byteCount);
+        if (typeof(T) == typeof(byte))
+        {
+            var byteValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte>>(ref values);
+            for (var i = 0; i < byteValues.Length; i++)
+                BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..], byteValues[i]);
+            writer.Advance(byteCount);
+            return;
+        }
+
+        if (typeof(T) == typeof(ushort))
+        {
+            var ushortValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ushort>>(ref values);
+            for (var i = 0; i < ushortValues.Length; i++)
+                BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..], ushortValues[i]);
+            writer.Advance(byteCount);
+            return;
+        }
+
+        if (typeof(T) == typeof(uint))
+        {
+            var uintValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<uint>>(ref values);
+            for (var i = 0; i < uintValues.Length; i++)
+                BinaryPrimitives.WriteUInt32LittleEndian(destination[(i * sizeof(int))..], uintValues[i]);
+            writer.Advance(byteCount);
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Column '{column.Name}' expects '{ParquetPhysicalType.Int32}' values, but got '{typeof(T)}'.");
     }
 
     static void WriteInt64Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
-        if (typeof(T) != typeof(long))
-            throw new InvalidOperationException(
-                $"Column '{column.Name}' expects '{ParquetPhysicalType.Int64}' values, but got '{typeof(T)}'.");
-
-        var longValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values);
-        var byteCount = checked(longValues.Length * sizeof(long));
+        var byteCount = checked(values.Length * sizeof(long));
         if (byteCount == 0)
             return;
 
         var destination = writer.GetSpan(byteCount);
-        if (BitConverter.IsLittleEndian)
-            MemoryMarshal.AsBytes(longValues).CopyTo(destination);
-        else
-            for (var i = 0; i < longValues.Length; i++)
-                BinaryPrimitives.WriteInt64LittleEndian(destination[(i * sizeof(long))..], longValues[i]);
+        if (typeof(T) == typeof(long))
+        {
+            var longValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values);
+            if (BitConverter.IsLittleEndian)
+                MemoryMarshal.AsBytes(longValues).CopyTo(destination);
+            else
+                for (var i = 0; i < longValues.Length; i++)
+                    BinaryPrimitives.WriteInt64LittleEndian(destination[(i * sizeof(long))..], longValues[i]);
+            writer.Advance(byteCount);
+            return;
+        }
 
-        writer.Advance(byteCount);
+        if (typeof(T) == typeof(ulong))
+        {
+            var ulongValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ulong>>(ref values);
+            for (var i = 0; i < ulongValues.Length; i++)
+                BinaryPrimitives.WriteUInt64LittleEndian(destination[(i * sizeof(long))..], ulongValues[i]);
+            writer.Advance(byteCount);
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Column '{column.Name}' expects '{ParquetPhysicalType.Int64}' values, but got '{typeof(T)}'.");
     }
 
     static void WriteFloatValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)

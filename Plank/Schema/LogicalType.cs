@@ -4,6 +4,22 @@ public abstract record LogicalType
 {
     private protected LogicalType() { }
 
+    public sealed record Int : LogicalType
+    {
+        public Int(byte bitWidth, bool isSigned)
+        {
+            if (bitWidth is not 8 and not 16 and not 32 and not 64)
+                throw new ArgumentOutOfRangeException(nameof(bitWidth), bitWidth, "Integer logical type bit width must be 8, 16, 32, or 64.");
+
+            BitWidth = bitWidth;
+            IsSigned = isSigned;
+        }
+
+        public byte BitWidth { get; }
+
+        public bool IsSigned { get; }
+    }
+
     public sealed record Date : LogicalType;
 
     public sealed record Time(TimeUnit Unit, bool IsAdjustedToUtc) : LogicalType;

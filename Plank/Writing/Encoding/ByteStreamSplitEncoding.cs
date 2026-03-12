@@ -35,28 +35,12 @@ static class ByteStreamSplitEncoding
     static void WriteInt32Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
-        if (typeof(T) != typeof(int))
-            throw new InvalidOperationException(
-                $"Column '{column.Name}' expects '{ParquetPhysicalType.Int32}' values, but got '{typeof(T)}'.");
-
-        var intValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values);
-        var byteCount = checked(intValues.Length * sizeof(int));
+        var byteCount = checked(values.Length * sizeof(int));
         if (byteCount == 0)
             return;
 
         var destination = writer.GetSpan(byteCount);
-        var lane0 = destination[..intValues.Length];
-        var lane1 = destination.Slice(intValues.Length, intValues.Length);
-        var lane2 = destination.Slice(intValues.Length * 2, intValues.Length);
-        var lane3 = destination.Slice(intValues.Length * 3, intValues.Length);
-        for (var i = 0; i < intValues.Length; i++)
-        {
-            var value = intValues[i];
-            lane0[i] = (byte)value;
-            lane1[i] = (byte)(value >> 8);
-            lane2[i] = (byte)(value >> 16);
-            lane3[i] = (byte)(value >> 24);
-        }
+        WriteInt32Lanes(column, values, destination);
 
         writer.Advance(byteCount);
     }
@@ -64,36 +48,12 @@ static class ByteStreamSplitEncoding
     static void WriteInt64Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
-        if (typeof(T) != typeof(long))
-            throw new InvalidOperationException(
-                $"Column '{column.Name}' expects '{ParquetPhysicalType.Int64}' values, but got '{typeof(T)}'.");
-
-        var longValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values);
-        var byteCount = checked(longValues.Length * sizeof(long));
+        var byteCount = checked(values.Length * sizeof(long));
         if (byteCount == 0)
             return;
 
         var destination = writer.GetSpan(byteCount);
-        var lane0 = destination[..longValues.Length];
-        var lane1 = destination.Slice(longValues.Length, longValues.Length);
-        var lane2 = destination.Slice(longValues.Length * 2, longValues.Length);
-        var lane3 = destination.Slice(longValues.Length * 3, longValues.Length);
-        var lane4 = destination.Slice(longValues.Length * 4, longValues.Length);
-        var lane5 = destination.Slice(longValues.Length * 5, longValues.Length);
-        var lane6 = destination.Slice(longValues.Length * 6, longValues.Length);
-        var lane7 = destination.Slice(longValues.Length * 7, longValues.Length);
-        for (var i = 0; i < longValues.Length; i++)
-        {
-            var value = longValues[i];
-            lane0[i] = (byte)value;
-            lane1[i] = (byte)(value >> 8);
-            lane2[i] = (byte)(value >> 16);
-            lane3[i] = (byte)(value >> 24);
-            lane4[i] = (byte)(value >> 32);
-            lane5[i] = (byte)(value >> 40);
-            lane6[i] = (byte)(value >> 48);
-            lane7[i] = (byte)(value >> 56);
-        }
+        WriteInt64Lanes(column, values, destination);
 
         writer.Advance(byteCount);
     }
@@ -215,6 +175,126 @@ static class ByteStreamSplitEncoding
                 $"Column '{column.Name}' fixed length ({valueLength}) exceeds supported maximum of {int.MaxValue}.");
 
         return checked((int)valueLength);
+    }
+
+    static void WriteInt32Lanes<T>(Column column, ReadOnlySpan<T> values, Span<byte> destination)
+        where T : notnull
+    {
+        var lane0 = destination[..values.Length];
+        var lane1 = destination.Slice(values.Length, values.Length);
+        var lane2 = destination.Slice(values.Length * 2, values.Length);
+        var lane3 = destination.Slice(values.Length * 3, values.Length);
+
+        if (typeof(T) == typeof(int))
+        {
+            var intValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values);
+            for (var i = 0; i < intValues.Length; i++)
+            {
+                var value = intValues[i];
+                lane0[i] = (byte)value;
+                lane1[i] = (byte)(value >> 8);
+                lane2[i] = (byte)(value >> 16);
+                lane3[i] = (byte)(value >> 24);
+            }
+            return;
+        }
+
+        if (typeof(T) == typeof(byte))
+        {
+            var byteValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte>>(ref values);
+            for (var i = 0; i < byteValues.Length; i++)
+            {
+                var value = byteValues[i];
+                lane0[i] = value;
+                lane1[i] = 0;
+                lane2[i] = 0;
+                lane3[i] = 0;
+            }
+            return;
+        }
+
+        if (typeof(T) == typeof(ushort))
+        {
+            var ushortValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ushort>>(ref values);
+            for (var i = 0; i < ushortValues.Length; i++)
+            {
+                var value = ushortValues[i];
+                lane0[i] = (byte)value;
+                lane1[i] = (byte)(value >> 8);
+                lane2[i] = 0;
+                lane3[i] = 0;
+            }
+            return;
+        }
+
+        if (typeof(T) == typeof(uint))
+        {
+            var uintValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<uint>>(ref values);
+            for (var i = 0; i < uintValues.Length; i++)
+            {
+                var value = uintValues[i];
+                lane0[i] = (byte)value;
+                lane1[i] = (byte)(value >> 8);
+                lane2[i] = (byte)(value >> 16);
+                lane3[i] = (byte)(value >> 24);
+            }
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Column '{column.Name}' expects '{ParquetPhysicalType.Int32}' values, but got '{typeof(T)}'.");
+    }
+
+    static void WriteInt64Lanes<T>(Column column, ReadOnlySpan<T> values, Span<byte> destination)
+        where T : notnull
+    {
+        var lane0 = destination[..values.Length];
+        var lane1 = destination.Slice(values.Length, values.Length);
+        var lane2 = destination.Slice(values.Length * 2, values.Length);
+        var lane3 = destination.Slice(values.Length * 3, values.Length);
+        var lane4 = destination.Slice(values.Length * 4, values.Length);
+        var lane5 = destination.Slice(values.Length * 5, values.Length);
+        var lane6 = destination.Slice(values.Length * 6, values.Length);
+        var lane7 = destination.Slice(values.Length * 7, values.Length);
+
+        if (typeof(T) == typeof(long))
+        {
+            var longValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values);
+            for (var i = 0; i < longValues.Length; i++)
+            {
+                var value = longValues[i];
+                lane0[i] = (byte)value;
+                lane1[i] = (byte)(value >> 8);
+                lane2[i] = (byte)(value >> 16);
+                lane3[i] = (byte)(value >> 24);
+                lane4[i] = (byte)(value >> 32);
+                lane5[i] = (byte)(value >> 40);
+                lane6[i] = (byte)(value >> 48);
+                lane7[i] = (byte)(value >> 56);
+            }
+            return;
+        }
+
+        if (typeof(T) == typeof(ulong))
+        {
+            var ulongValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ulong>>(ref values);
+            for (var i = 0; i < ulongValues.Length; i++)
+            {
+                var value = ulongValues[i];
+                lane0[i] = (byte)value;
+                lane1[i] = (byte)(value >> 8);
+                lane2[i] = (byte)(value >> 16);
+                lane3[i] = (byte)(value >> 24);
+                lane4[i] = (byte)(value >> 32);
+                lane5[i] = (byte)(value >> 40);
+                lane6[i] = (byte)(value >> 48);
+                lane7[i] = (byte)(value >> 56);
+            }
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Column '{column.Name}' expects '{ParquetPhysicalType.Int64}' values, but got '{typeof(T)}'.");
     }
 
 }

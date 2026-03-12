@@ -286,6 +286,11 @@ static class ParquetMetadataThriftWriter
                 writer.WriteFieldHeader(10, CompactType.Struct);
                 WriteTimestampLogicalType(ref writer, timestamp.IsAdjustedToUtc, timestamp.Unit);
                 return;
+            case LogicalType.Int integer:
+                writer.WriteFieldI32(6, GetConvertedType(integer));
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteIntegerLogicalType(ref writer, integer.BitWidth, integer.IsSigned);
+                return;
             case LogicalType.String:
                 writer.WriteFieldI32(6, (int)ConvertedType.Utf8);
                 writer.WriteFieldHeader(10, CompactType.Struct);
@@ -380,6 +385,17 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI32(1, scale);
         writer.WriteFieldI32(2, precision);
         writer.EndStruct(previousDecimal);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteIntegerLogicalType(ref CompactWriter writer, byte bitWidth, bool isSigned)
+    {
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(10, CompactType.Struct);
+        var previousInteger = writer.BeginStruct();
+        writer.WriteFieldByte(1, bitWidth);
+        writer.WriteFieldBool(2, isSigned);
+        writer.EndStruct(previousInteger);
         writer.EndStruct(previous);
     }
 
@@ -514,6 +530,17 @@ static class ParquetMetadataThriftWriter
             _ => throw new NotSupportedException($"Compression '{compression}' is not supported.")
         };
 
+    static int GetConvertedType(LogicalType.Int integer)
+        => (integer.BitWidth, integer.IsSigned) switch
+        {
+            (8, false) => (int)ConvertedType.Uint8,
+            (16, false) => (int)ConvertedType.Uint16,
+            (32, false) => (int)ConvertedType.Uint32,
+            (64, false) => (int)ConvertedType.Uint64,
+            _ => throw new NotSupportedException(
+                $"Integer logical type with bit width '{integer.BitWidth}' and signed='{integer.IsSigned}' is not supported.")
+        };
+
     enum ParquetType
     {
         Boolean = 0,
@@ -575,6 +602,10 @@ static class ParquetMetadataThriftWriter
         TimeMicros = 8,
         TimestampMillis = 9,
         TimestampMicros = 10,
+        Uint8 = 11,
+        Uint16 = 12,
+        Uint32 = 13,
+        Uint64 = 14,
         Json = 19
     }
 
@@ -653,6 +684,12 @@ static class ParquetMetadataThriftWriter
 
         internal void WriteFieldBool(int fieldId, bool value)
             => WriteFieldHeader(fieldId, value ? CompactType.BooleanTrue : CompactType.BooleanFalse);
+
+        internal void WriteFieldByte(int fieldId, byte value)
+        {
+            WriteFieldHeader(fieldId, CompactType.Byte);
+            WriteByte(value);
+        }
 
         internal void WriteListHeader(int count, CompactType elementType)
         {

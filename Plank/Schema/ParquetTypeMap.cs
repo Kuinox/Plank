@@ -56,14 +56,18 @@ static class ParquetTypeMap
             case var t when t == typeof(bool):
                 physicalType = ParquetPhysicalType.Boolean;
                 return true;
-            case var t when t == typeof(int):
-            case var t2 when t2 == typeof(DateOnly):
+            case var byteType when byteType == typeof(byte):
+            case var ushortType when ushortType == typeof(ushort):
+            case var intType when intType == typeof(int):
+            case var uintType when uintType == typeof(uint):
+            case var dateOnlyType when dateOnlyType == typeof(DateOnly):
                 physicalType = ParquetPhysicalType.Int32;
                 return true;
-            case var t when t == typeof(long):
-            case var t2 when t2 == typeof(DateTime):
-            case var t3 when t3 == typeof(DateTimeOffset):
-            case var t4 when t4 == typeof(TimeOnly):
+            case var ulongType when ulongType == typeof(ulong):
+            case var longType when longType == typeof(long):
+            case var dateTimeType when dateTimeType == typeof(DateTime):
+            case var dateTimeOffsetType when dateTimeOffsetType == typeof(DateTimeOffset):
+            case var timeOnlyType when timeOnlyType == typeof(TimeOnly):
                 physicalType = ParquetPhysicalType.Int64;
                 return true;
             case var t when t == typeof(float):

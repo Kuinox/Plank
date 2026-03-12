@@ -111,23 +111,67 @@ static class DeltaBinaryPackedEncoding
     static void WriteInt32Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
-        if (typeof(T) != typeof(int))
-            throw new InvalidOperationException(
-                $"Column '{column.Name}' expects '{ParquetPhysicalType.Int32}' values, but got '{typeof(T)}'.");
+        if (typeof(T) == typeof(int))
+        {
+            var intValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values);
+            WriteInt32(intValues, ref writer);
+            return;
+        }
 
-        var intValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values);
-        WriteInt32(intValues, ref writer);
+        Span<int> converted = values.Length <= 256 ? stackalloc int[values.Length] : new int[values.Length];
+        if (typeof(T) == typeof(byte))
+        {
+            var byteValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte>>(ref values);
+            for (var i = 0; i < byteValues.Length; i++)
+                converted[i] = byteValues[i];
+            WriteInt32(converted, ref writer);
+            return;
+        }
+
+        if (typeof(T) == typeof(ushort))
+        {
+            var ushortValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ushort>>(ref values);
+            for (var i = 0; i < ushortValues.Length; i++)
+                converted[i] = ushortValues[i];
+            WriteInt32(converted, ref writer);
+            return;
+        }
+
+        if (typeof(T) == typeof(uint))
+        {
+            var uintValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<uint>>(ref values);
+            for (var i = 0; i < uintValues.Length; i++)
+                converted[i] = unchecked((int)uintValues[i]);
+            WriteInt32(converted, ref writer);
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Column '{column.Name}' expects '{ParquetPhysicalType.Int32}' values, but got '{typeof(T)}'.");
     }
 
     static void WriteInt64Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
-        if (typeof(T) != typeof(long))
-            throw new InvalidOperationException(
-                $"Column '{column.Name}' expects '{ParquetPhysicalType.Int64}' values, but got '{typeof(T)}'.");
+        if (typeof(T) == typeof(long))
+        {
+            var longValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values);
+            WriteInt64(longValues, ref writer);
+            return;
+        }
 
-        var longValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values);
-        WriteInt64(longValues, ref writer);
+        Span<long> converted = values.Length <= 256 ? stackalloc long[values.Length] : new long[values.Length];
+        if (typeof(T) == typeof(ulong))
+        {
+            var ulongValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ulong>>(ref values);
+            for (var i = 0; i < ulongValues.Length; i++)
+                converted[i] = unchecked((long)ulongValues[i]);
+            WriteInt64(converted, ref writer);
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Column '{column.Name}' expects '{ParquetPhysicalType.Int64}' values, but got '{typeof(T)}'.");
     }
 
     static void WriteDeltaBlock(Span<long> deltas, long minDelta, ref BufferWriter writer)

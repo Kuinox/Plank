@@ -905,9 +905,29 @@ static class Encoding
             comparison = Unsafe.As<T, int>(ref left).CompareTo(Unsafe.As<T, int>(ref right));
             return true;
         }
+        if (typeof(T) == typeof(byte))
+        {
+            comparison = Unsafe.As<T, byte>(ref left).CompareTo(Unsafe.As<T, byte>(ref right));
+            return true;
+        }
+        if (typeof(T) == typeof(ushort))
+        {
+            comparison = Unsafe.As<T, ushort>(ref left).CompareTo(Unsafe.As<T, ushort>(ref right));
+            return true;
+        }
+        if (typeof(T) == typeof(uint))
+        {
+            comparison = Unsafe.As<T, uint>(ref left).CompareTo(Unsafe.As<T, uint>(ref right));
+            return true;
+        }
         if (typeof(T) == typeof(long))
         {
             comparison = Unsafe.As<T, long>(ref left).CompareTo(Unsafe.As<T, long>(ref right));
+            return true;
+        }
+        if (typeof(T) == typeof(ulong))
+        {
+            comparison = Unsafe.As<T, ulong>(ref left).CompareTo(Unsafe.As<T, ulong>(ref right));
             return true;
         }
         if (typeof(T) == typeof(float))

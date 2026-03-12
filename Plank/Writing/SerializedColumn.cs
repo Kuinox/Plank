@@ -59,6 +59,12 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     public void Serialize(ReadOnlySpan<T> values)
     {
+        if (_column.Options.Repetition == ParquetRepetition.Repeated)
+        {
+            SerializeRepeated(values);
+            return;
+        }
+
         if (typeof(T) == typeof(bool))
         {
             SerializeTyped(AsSpan<bool>(values));
@@ -71,9 +77,33 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
         }
 
+        if (typeof(T) == typeof(byte))
+        {
+            SerializeByte(AsSpan<byte>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(ushort))
+        {
+            SerializeUInt16(AsSpan<ushort>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(uint))
+        {
+            SerializeUInt32(AsSpan<uint>(values));
+            return;
+        }
+
         if (typeof(T) == typeof(long))
         {
             SerializeTyped(AsSpan<long>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(ulong))
+        {
+            SerializeUInt64(AsSpan<ulong>(values));
             return;
         }
 
@@ -154,6 +184,54 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
     }
 
+    void SerializeByte(ReadOnlySpan<byte> values)
+    {
+        var rented = ArrayPool<int>.Shared.Rent(values.Length);
+        try
+        {
+            var converted = rented.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = values[i];
+            SerializeTyped(converted);
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(rented);
+        }
+    }
+
+    void SerializeUInt16(ReadOnlySpan<ushort> values)
+    {
+        var rented = ArrayPool<int>.Shared.Rent(values.Length);
+        try
+        {
+            var converted = rented.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = values[i];
+            SerializeTyped(converted);
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(rented);
+        }
+    }
+
+    void SerializeUInt32(ReadOnlySpan<uint> values)
+    {
+        var rented = ArrayPool<int>.Shared.Rent(values.Length);
+        try
+        {
+            var converted = rented.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = unchecked((int)values[i]);
+            SerializeTyped(converted);
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(rented);
+        }
+    }
+
     void SerializeDateTime(ReadOnlySpan<DateTime> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
@@ -163,6 +241,22 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = rented.AsSpan(0, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = ToUnixTime(values[i], timestamp.Unit);
+            SerializeTyped(converted);
+        }
+        finally
+        {
+            ArrayPool<long>.Shared.Return(rented);
+        }
+    }
+
+    void SerializeUInt64(ReadOnlySpan<ulong> values)
+    {
+        var rented = ArrayPool<long>.Shared.Rent(values.Length);
+        try
+        {
+            var converted = rented.AsSpan(0, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = unchecked((long)values[i]);
             SerializeTyped(converted);
         }
         finally
@@ -210,6 +304,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     {
         var columnOrdinal = _owner.GetColumnOrdinal(_column);
         SerializeCore(values, columnOrdinal, _owner.GetPageStrategy(columnOrdinal));
+    }
+
+    void SerializeRepeated(ReadOnlySpan<T> values)
+    {
+        var columnOrdinal = _owner.GetColumnOrdinal(_column);
+#pragma warning disable CS8714
+        SerializeCore(values, columnOrdinal, _owner.GetPageStrategy(columnOrdinal));
+#pragma warning restore CS8714
     }
 
     void SerializeCore<TValue>(ReadOnlySpan<TValue> values, uint columnOrdinal, IPageStrategy strategy)

@@ -518,7 +518,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         if (column.Repetition == "Optional")
             return column.PhysicalType switch
             {
-                "Int32" => clrType is "int" or "int?" or "global::System.DateOnly" or "global::System.DateOnly?",
+                "Boolean" => clrType is "bool" or "bool?",
+                "Int32" => clrType is
+                    "byte" or "byte?"
+                    or "ushort" or "ushort?"
+                    or "int" or "int?"
+                    or "uint" or "uint?"
+                    or "global::System.DateOnly" or "global::System.DateOnly?",
                 "Int64" => clrType is
                     "long" or "long?"
                     or "global::System.DateTime" or "global::System.DateTime?"
@@ -532,8 +538,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return column.PhysicalType switch
         {
             "Boolean" => clrType == "bool",
-            "Int32" => clrType is "int" or "global::System.DateOnly",
-            "Int64" => clrType is "long" or "global::System.DateTime" or "global::System.DateTimeOffset" or "global::System.TimeOnly",
+            "Int32" => clrType is "byte" or "ushort" or "int" or "uint" or "global::System.DateOnly",
+            "Int64" => clrType is
+                "long" or "ulong"
+                or "global::System.DateTime" or "global::System.DateTimeOffset" or "global::System.TimeOnly",
             "Float" => clrType == "float",
             "Double" => clrType == "double",
             "ByteArray" => clrType is "string" or "byte[]",
@@ -611,9 +619,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             .OfType<IPropertySymbol>()
             .Where(static p => !p.IsStatic && !p.IsIndexer)
             .OrderBy(static p => p.Locations.FirstOrDefault()?.SourceSpan.Start ?? int.MaxValue)
+                    or "ulong" or "ulong?"
             .ToImmutableArray();
 
         if (properties.IsDefaultOrEmpty)
+                "Float" => clrType is "float" or "float?",
         {
             columns = default;
             return false;
@@ -634,8 +644,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         columns = builder.ToImmutable();
         return true;
     }
+            "byte" or "byte?" or
+            "ushort" or "ushort?" or
 
+            "uint" or "uint?" or
     static bool TryExtractColumn(IPropertySymbol property, out SchemaColumn column, out string error)
+            "ulong" or "ulong?" or
     {
         error = string.Empty;
         column = default;
@@ -828,8 +842,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     $"Column '{column.Name}' uses TimeOnly and must declare logical type 'Time'."));
             if (IsTimestampClr(column.ClrTypeName))
                 diagnostics.Add(new SchemaDiagnostic(MissingTimestampLogicalType,
+            "byte" => "Int32",
+            "ushort" => "Int32",
                     $"Column '{column.Name}' uses DateTime/DateTimeOffset and must declare logical type 'Timestamp'."));
+            "uint" => "Int32",
             return;
+            "ulong" => "Int64",
         }
 
         switch (logicalType.Value.Kind)
@@ -846,6 +864,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (logicalType.Value.Unit is null || !IsTimeUnit(logicalType.Value.Unit))
                     diagnostics.Add(new SchemaDiagnostic(InvalidLogicalTimeUnit,
                         $"Column '{column.Name}' logical type 'Time' requires a valid unit (Millis/Micros/Nanos)."));
+            "byte" => new LogicalTypeSpec("Int", bitWidth: 8, isSigned: false),
+            "ushort" => new LogicalTypeSpec("Int", bitWidth: 16, isSigned: false),
+            "uint" => new LogicalTypeSpec("Int", bitWidth: 32, isSigned: false),
+            "ulong" => new LogicalTypeSpec("Int", bitWidth: 64, isSigned: false),
                 if (logicalType.Value.Unit == "Millis")
                 {
                     if (column.PhysicalType != "Int32")
@@ -858,6 +880,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (!IsTimeOnly(column.ClrTypeName))
                     diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
                         $"Column '{column.Name}' logical type 'Time' requires CLR type TimeOnly/TimeOnly?."));
+            "Int" => $"new global::Plank.Schema.LogicalType.Int({logicalType.BitWidth.GetValueOrDefault()}, {ToBoolLiteral(logicalType.IsSigned)})",
                 break;
             case "Timestamp":
                 if (logicalType.Value.Unit is null || !IsTimeUnit(logicalType.Value.Unit))
@@ -910,6 +933,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             or "global::System.DateTimeOffset" or "global::System.DateTimeOffset?";
 
     static bool IsTimeUnit(string unit)
+            if (IsUnsignedIntClr(column.ClrTypeName, GetUnsignedBitWidth(column.ClrTypeName)))
+                diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
+                    $"Column '{column.Name}' uses an unsigned CLR integer and must declare logical type 'Int' with IsSigned=false."));
         => unit is "Millis" or "Micros" or "Nanos";
 
     static bool TryNormalizeClrType(ITypeSymbol typeSymbol, NullableAnnotation nullableAnnotation, out string clrTypeName)
@@ -924,6 +950,26 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         clrTypeName = typeSymbol.SpecialType switch
         {
             SpecialType.System_Boolean => isNullable ? "bool?" : "bool",
+            case "Int":
+                if (logicalType.Value.BitWidth is not (8 or 16 or 32 or 64))
+                    diagnostics.Add(new SchemaDiagnostic(InvalidTypeHint,
+                        $"Column '{column.Name}' logical type 'Int' requires bit width 8, 16, 32, or 64."));
+                if (logicalType.Value.IsSigned != false)
+                    diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
+                        $"Column '{column.Name}' unsigned CLR type requires logical type 'Int' with IsSigned=false."));
+                if (logicalType.Value.BitWidth is 8 or 16 or 32)
+                {
+                    if (column.PhysicalType != "Int32")
+                        diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
+                            $"Column '{column.Name}' logical type 'Int({logicalType.Value.BitWidth},false)' requires physical type 'Int32'."));
+                }
+                else if (column.PhysicalType != "Int64")
+                    diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
+                        $"Column '{column.Name}' logical type 'Int(64,false)' requires physical type 'Int64'."));
+                if (!IsUnsignedIntClr(column.ClrTypeName, logicalType.Value.BitWidth))
+                    diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
+                        $"Column '{column.Name}' logical type 'Int({logicalType.Value.BitWidth},false)' requires matching unsigned CLR type."));
+                break;
             SpecialType.System_Int32 => isNullable ? "int?" : "int",
             SpecialType.System_Int64 => isNullable ? "long?" : "long",
             SpecialType.System_Single => isNullable ? "float?" : "float",
@@ -982,7 +1028,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     readonly struct LogicalTypeSpec
     {
         public LogicalTypeSpec(string kind, string? unit = null, bool? isAdjustedToUtc = null, int? precision = null,
-            int? scale = null)
+            int? scale = null, int? bitWidth = null, bool? isSigned = null)
         {
             Kind = kind;
             Unit = unit;
@@ -994,6 +1040,26 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public string Kind { get; }
 
         public string? Unit { get; }
+    static bool IsUnsignedIntClr(string clrType, int? bitWidth)
+        => (clrType, bitWidth) switch
+        {
+            ("byte", 8) or ("byte?", 8) => true,
+            ("ushort", 16) or ("ushort?", 16) => true,
+            ("uint", 32) or ("uint?", 32) => true,
+            ("ulong", 64) or ("ulong?", 64) => true,
+            _ => false
+        };
+
+    static int? GetUnsignedBitWidth(string clrType)
+        => clrType switch
+        {
+            "byte" or "byte?" => 8,
+            "ushort" or "ushort?" => 16,
+            "uint" or "uint?" => 32,
+            "ulong" or "ulong?" => 64,
+            _ => null
+        };
+
 
         public bool? IsAdjustedToUtc { get; }
 
@@ -1014,8 +1080,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         public string Message { get; }
     }
+            SpecialType.System_Byte => isNullable ? "byte?" : "byte",
+            SpecialType.System_UInt16 => isNullable ? "ushort?" : "ushort",
 
+            SpecialType.System_UInt32 => isNullable ? "uint?" : "uint",
     readonly struct MappedColumn
+            SpecialType.System_UInt64 => isNullable ? "ulong?" : "ulong",
     {
         public MappedColumn(string name, string propertyName, string clrTypeName)
         {
@@ -1031,3 +1101,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public string ClrTypeName { get; }
     }
 }
+            BitWidth = bitWidth;
+            IsSigned = isSigned;
+
+        public int? BitWidth { get; }
+
+        public bool? IsSigned { get; }
