@@ -5,7 +5,8 @@ namespace Plank.Reading;
 readonly struct PageHeader
 {
     internal PageHeader(PageHeaderType type, int uncompressedPageSize, int compressedPageSize, int valueCount,
-        EncodingKind encoding, int headerLength)
+        EncodingKind encoding, int headerLength, int repetitionLevelsByteLength, int definitionLevelsByteLength,
+        int nullCount, bool isCompressed)
     {
         Type = type;
         UncompressedPageSize = uncompressedPageSize;
@@ -13,6 +14,10 @@ readonly struct PageHeader
         ValueCount = valueCount;
         Encoding = encoding;
         HeaderLength = headerLength;
+        RepetitionLevelsByteLength = repetitionLevelsByteLength;
+        DefinitionLevelsByteLength = definitionLevelsByteLength;
+        NullCount = nullCount;
+        IsCompressed = isCompressed;
     }
 
     internal PageHeaderType Type { get; }
@@ -26,4 +31,13 @@ readonly struct PageHeader
     internal EncodingKind Encoding { get; }
 
     internal int HeaderLength { get; }
+
+    internal int RepetitionLevelsByteLength { get; }
+
+    internal int DefinitionLevelsByteLength { get; }
+
+    internal int NullCount { get; }
+
+    // DataPageV2 only: whether the values portion (after levels) is compressed.
+    internal bool IsCompressed { get; }
 }

@@ -47,24 +47,76 @@ static class ColumnChunkReader
             switch (header.Type)
             {
                 case PageHeaderType.DictionaryPage:
-                    dictionary = DecodeValues(payload, column, header, columnChunk.Compression, typeof(T));
+                    dictionary = DecodeValues(payload, column, header, columnChunk.Compression, GetPhysicalDecodeType<T>());
                     break;
                 case PageHeaderType.DataPageV2:
+                {
+                    var repLen = header.RepetitionLevelsByteLength;
+                    var defLen = header.DefinitionLevelsByteLength;
+                    var levelBytes = repLen + defLen;
+                    var physicalValueCount = header.ValueCount - header.NullCount;
+
+                    // In DataPageV2, levels are always uncompressed; only the values portion may be compressed.
+                    var definitionPayload = defLen > 0 ? payload.Slice(repLen, defLen) : default;
+                    var dataPayload = payload[levelBytes..];
+
+                    ReadOnlySpan<byte> effectiveData;
+                    if (header.IsCompressed && dataPayload.Length > 0)
+                    {
+                        var expectedUncompressedDataSize = header.UncompressedPageSize - levelBytes;
+                        effectiveData = Decompress(dataPayload, expectedUncompressedDataSize, columnChunk.Compression);
+                    }
+                    else
+                    {
+                        effectiveData = dataPayload;
+                    }
+
+                    var physicalDecodeType = GetPhysicalDecodeType<T>();
+                    // Nullable value types (int?, long?, …) always need expansion since the physical type differs.
+                    // Reference types (string, byte[]) need expansion when there are actual nulls.
+                    var isNullableValueType = physicalDecodeType != typeof(T);
+                    var needsNullExpansion = isNullableValueType
+                        || (!typeof(T).IsValueType && header.NullCount > 0 && defLen > 0);
+
                     if (dictionary is null)
                     {
-                        if (columnChunk.Compression == CompressionKind.None &&
-                            TryDecodeValuesIntoBuffer(payload, column, header, ref valuesBuffer, out values))
+                        if (needsNullExpansion)
+                        {
+                            values = DecodeValuesWithNullExpansion<T>(effectiveData, definitionPayload, column,
+                                header.ValueCount, physicalValueCount, header.Encoding, header.NullCount > 0);
+                        }
+                        else if (header.NullCount > 0 && defLen > 0)
+                        {
+                            // Non-nullable value type with actual nulls — decode physical values only.
+                            values = (T[])DecodeValues(effectiveData, column, physicalValueCount, header.Encoding, typeof(T));
+                        }
+                        else if (TryDecodeValuesIntoBuffer(effectiveData, column, physicalValueCount, header.Encoding,
+                                     ref valuesBuffer, out values))
                         {
                             encoding = header.Encoding;
                             return true;
                         }
-
-                        values = (T[])DecodeValues(payload, column, header, columnChunk.Compression, typeof(T));
+                        else
+                        {
+                            values = (T[])DecodeValues(effectiveData, column, physicalValueCount, header.Encoding, typeof(T));
+                        }
                     }
                     else
-                        values = DecodeDictionaryIndexes<T>(payload, header, dictionary);
+                    {
+                        if (header.NullCount > 0 && defLen > 0)
+                        {
+                            values = DecodeDictionaryIndexesWithNulls<T>(effectiveData, header.ValueCount, physicalValueCount,
+                                dictionary, definitionPayload);
+                        }
+                        else
+                        {
+                            values = DecodeDictionaryIndexes<T>(effectiveData, physicalValueCount, dictionary);
+                        }
+                    }
+
                     encoding = header.Encoding;
                     return true;
+                }
                 default:
                     throw new NotSupportedException($"Page type '{header.Type}' is not supported.");
             }
@@ -75,17 +127,17 @@ static class ColumnChunkReader
         return false;
     }
 
-    static bool TryDecodeValuesIntoBuffer<T>(ReadOnlySpan<byte> payload, Column column, PageHeader header, ref T[]? valuesBuffer,
-        out ReadOnlyMemory<T> values)
+    static bool TryDecodeValuesIntoBuffer<T>(ReadOnlySpan<byte> payload, Column column, int valueCount,
+        EncodingKind encoding, ref T[]? valuesBuffer, out ReadOnlyMemory<T> values)
     {
-        switch (header.Encoding)
+        switch (encoding)
         {
             case EncodingKind.Plain:
-                return TryDecodePlainIntoBuffer(payload, column, header.ValueCount, ref valuesBuffer, out values);
+                return TryDecodePlainIntoBuffer(payload, column, valueCount, ref valuesBuffer, out values);
             case EncodingKind.Rle:
-                return TryDecodeBooleanRleIntoBuffer(payload, header.ValueCount, ref valuesBuffer, out values);
+                return TryDecodeBooleanRleIntoBuffer(payload, valueCount, ref valuesBuffer, out values);
             case EncodingKind.ByteStreamSplit:
-                return TryDecodeByteStreamSplitIntoBuffer(payload, column, header.ValueCount, ref valuesBuffer, out values);
+                return TryDecodeByteStreamSplitIntoBuffer(payload, column, valueCount, ref valuesBuffer, out values);
             default:
                 values = default;
                 return false;
@@ -365,13 +417,29 @@ static class ColumnChunkReader
         return buffer;
     }
 
-    static T[] DecodeDictionaryIndexes<T>(ReadOnlySpan<byte> payload, PageHeader header, Array dictionary)
+    static T[] DecodeDictionaryIndexes<T>(ReadOnlySpan<byte> payload, int valueCount, Array dictionary)
     {
-        var bytes = header.CompressedPageSize == 0 ? [] : payload.ToArray();
-        var indexes = ReadRleBitPackedHybrid(bytes, header.ValueCount, hasBitWidthPrefix: true);
+        var bytes = valueCount == 0 ? [] : payload.ToArray();
+        var indexes = ReadRleBitPackedHybrid(bytes, valueCount, hasBitWidthPrefix: true);
         var result = new T[indexes.Length];
         for (var i = 0; i < indexes.Length; i++)
             result[i] = (T)dictionary.GetValue(indexes[i])!;
+        return result;
+    }
+
+    static T[] DecodeDictionaryIndexesWithNulls<T>(ReadOnlySpan<byte> dataPayload, int totalValueCount,
+        int physicalValueCount, Array dictionary, ReadOnlySpan<byte> definitionPayload)
+    {
+        var bytes = physicalValueCount == 0 ? [] : dataPayload.ToArray();
+        var indexes = ReadRleBitPackedHybrid(bytes, physicalValueCount, hasBitWidthPrefix: true);
+        var definitionLevels = ReadRleBitPackedHybrid(definitionPayload, totalValueCount, bitWidth: 1);
+        var result = new T[totalValueCount];
+        var valueIndex = 0;
+        for (var i = 0; i < totalValueCount; i++)
+        {
+            if (definitionLevels[i] != 0)
+                result[i] = (T)dictionary.GetValue(indexes[valueIndex++])!;
+        }
         return result;
     }
 
@@ -381,23 +449,28 @@ static class ColumnChunkReader
         var bytes = compression == CompressionKind.None || header.CompressedPageSize == 0
             ? payload.ToArray()
             : Decompress(payload, header.UncompressedPageSize, compression);
+        return DecodeValues(bytes, column, header.ValueCount, header.Encoding, targetType);
+    }
 
-        switch (header.Encoding)
+    static Array DecodeValues(ReadOnlySpan<byte> payload, Column column, int valueCount, EncodingKind encoding,
+        Type targetType)
+    {
+        switch (encoding)
         {
             case EncodingKind.Plain:
-                return DecodePlain(bytes, column, header.ValueCount, targetType);
+                return DecodePlain(payload, column, valueCount, targetType);
             case EncodingKind.Rle:
-                return DecodeBooleanRle(bytes, header.ValueCount, targetType);
+                return DecodeBooleanRle(payload, valueCount, targetType);
             case EncodingKind.ByteStreamSplit:
-                return DecodeByteStreamSplit(bytes, column, header.ValueCount, targetType);
+                return DecodeByteStreamSplit(payload, column, valueCount, targetType);
             case EncodingKind.DeltaBinaryPacked:
-                return DecodeDeltaBinaryPacked(bytes, column, targetType);
+                return DecodeDeltaBinaryPacked(payload, column, targetType);
             case EncodingKind.DeltaLengthByteArray:
-                return DecodeDeltaLengthByteArray(bytes, targetType);
+                return DecodeDeltaLengthByteArray(payload, targetType);
             case EncodingKind.DeltaByteArray:
-                return DecodeDeltaByteArray(bytes, targetType);
+                return DecodeDeltaByteArray(payload, targetType);
             default:
-                throw new NotSupportedException($"Encoding '{header.Encoding}' is not supported.");
+                throw new NotSupportedException($"Encoding '{encoding}' is not supported.");
         }
     }
 
@@ -810,6 +883,250 @@ static class ColumnChunkReader
             offset += values[i].Length;
         }
         return buffer;
+    }
+
+    static Type GetPhysicalDecodeType<T>()
+    {
+        if (typeof(T) == typeof(int?)) return typeof(int);
+        if (typeof(T) == typeof(long?)) return typeof(long);
+        if (typeof(T) == typeof(bool?)) return typeof(bool);
+        if (typeof(T) == typeof(float?)) return typeof(float);
+        if (typeof(T) == typeof(double?)) return typeof(double);
+        if (typeof(T) == typeof(byte?)) return typeof(byte);
+        if (typeof(T) == typeof(ushort?)) return typeof(ushort);
+        if (typeof(T) == typeof(uint?)) return typeof(uint);
+        if (typeof(T) == typeof(ulong?)) return typeof(ulong);
+        if (typeof(T) == typeof(DateOnly?)) return typeof(DateOnly);
+        if (typeof(T) == typeof(DateTime?)) return typeof(DateTime);
+        if (typeof(T) == typeof(DateTimeOffset?)) return typeof(DateTimeOffset);
+        if (typeof(T) == typeof(TimeOnly?)) return typeof(TimeOnly);
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>?)) return typeof(ReadOnlyMemory<byte>);
+        return typeof(T);
+    }
+
+    static ReadOnlyMemory<T> DecodeValuesWithNullExpansion<T>(ReadOnlySpan<byte> dataPayload,
+        ReadOnlySpan<byte> definitionPayload, Column column, int totalValueCount, int physicalValueCount,
+        EncodingKind encoding, bool hasNulls)
+    {
+        var physicalDecodeType = GetPhysicalDecodeType<T>();
+        var physicalValues = physicalValueCount > 0
+            ? DecodeValues(dataPayload, column, physicalValueCount, encoding, physicalDecodeType)
+            : Array.CreateInstance(physicalDecodeType, 0);
+
+        if (!hasNulls)
+            return ExpandAllPresent<T>(physicalValues, totalValueCount);
+
+        var definitionLevels = ReadRleBitPackedHybrid(definitionPayload, totalValueCount, bitWidth: 1);
+        return ExpandWithDefinitionLevels<T>(physicalValues, definitionLevels, totalValueCount);
+    }
+
+    static ReadOnlyMemory<T> ExpandAllPresent<T>(Array physicalValues, int valueCount)
+    {
+        var result = new T[valueCount];
+        if (typeof(T) == typeof(int?))
+        {
+            var src = (int[])physicalValues;
+            var dst = (int?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(long?))
+        {
+            var src = (long[])physicalValues;
+            var dst = (long?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(bool?))
+        {
+            var src = (bool[])physicalValues;
+            var dst = (bool?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(float?))
+        {
+            var src = (float[])physicalValues;
+            var dst = (float?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(double?))
+        {
+            var src = (double[])physicalValues;
+            var dst = (double?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(byte?))
+        {
+            var src = (byte[])physicalValues;
+            var dst = (byte?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(ushort?))
+        {
+            var src = (ushort[])physicalValues;
+            var dst = (ushort?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(uint?))
+        {
+            var src = (uint[])physicalValues;
+            var dst = (uint?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(ulong?))
+        {
+            var src = (ulong[])physicalValues;
+            var dst = (ulong?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(DateOnly?))
+        {
+            var src = (DateOnly[])physicalValues;
+            var dst = (DateOnly?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(DateTime?))
+        {
+            var src = (DateTime[])physicalValues;
+            var dst = (DateTime?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(DateTimeOffset?))
+        {
+            var src = (DateTimeOffset[])physicalValues;
+            var dst = (DateTimeOffset?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(TimeOnly?))
+        {
+            var src = (TimeOnly[])physicalValues;
+            var dst = (TimeOnly?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(ReadOnlyMemory<byte>?))
+        {
+            var src = (ReadOnlyMemory<byte>[])physicalValues;
+            var dst = (ReadOnlyMemory<byte>?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else
+        {
+            for (var i = 0; i < valueCount; i++)
+                result[i] = (T)physicalValues.GetValue(i)!;
+        }
+        return new ReadOnlyMemory<T>(result, 0, valueCount);
+    }
+
+    static ReadOnlyMemory<T> ExpandWithDefinitionLevels<T>(Array physicalValues, int[] definitionLevels, int totalValueCount)
+    {
+        var result = new T[totalValueCount];
+        var valueIndex = 0;
+        if (typeof(T) == typeof(int?))
+        {
+            var src = (int[])physicalValues;
+            var dst = (int?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(long?))
+        {
+            var src = (long[])physicalValues;
+            var dst = (long?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(bool?))
+        {
+            var src = (bool[])physicalValues;
+            var dst = (bool?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(float?))
+        {
+            var src = (float[])physicalValues;
+            var dst = (float?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(double?))
+        {
+            var src = (double[])physicalValues;
+            var dst = (double?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(byte?))
+        {
+            var src = (byte[])physicalValues;
+            var dst = (byte?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(ushort?))
+        {
+            var src = (ushort[])physicalValues;
+            var dst = (ushort?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(uint?))
+        {
+            var src = (uint[])physicalValues;
+            var dst = (uint?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(ulong?))
+        {
+            var src = (ulong[])physicalValues;
+            var dst = (ulong?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(DateOnly?))
+        {
+            var src = (DateOnly[])physicalValues;
+            var dst = (DateOnly?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(DateTime?))
+        {
+            var src = (DateTime[])physicalValues;
+            var dst = (DateTime?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(DateTimeOffset?))
+        {
+            var src = (DateTimeOffset[])physicalValues;
+            var dst = (DateTimeOffset?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(TimeOnly?))
+        {
+            var src = (TimeOnly[])physicalValues;
+            var dst = (TimeOnly?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(ReadOnlyMemory<byte>?))
+        {
+            var src = (ReadOnlyMemory<byte>[])physicalValues;
+            var dst = (ReadOnlyMemory<byte>?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else
+        {
+            // Reference types (string, byte[], etc.): default(T) is null, works for nullable semantics.
+            for (var i = 0; i < totalValueCount; i++)
+            {
+                if (definitionLevels[i] != 0)
+                    result[i] = (T)physicalValues.GetValue(valueIndex++)!;
+            }
+        }
+        return new ReadOnlyMemory<T>(result, 0, totalValueCount);
     }
 
     static int[] ReadRleBitPackedHybrid(ReadOnlySpan<byte> payload, int valueCount, bool hasBitWidthPrefix)

@@ -11,3 +11,4 @@ riderModule.iml
 /Plank.Benchmarks/nyc-data/
 /Plank.Benchmarks/throughput-output/
 .dotnet
+/.claude
