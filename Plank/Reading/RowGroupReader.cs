@@ -35,6 +35,9 @@ public sealed class RowGroupReader : IDisposable
         return new RowGroupColumn<T>(this, column, _reader.GetColumnOrdinal(column));
     }
 
+    public ColumnReader<T> CreateColumnReader<T>(Column column)
+        => new(Column<T>(column));
+
     public void Dispose()
         => _disposed = true;
 
