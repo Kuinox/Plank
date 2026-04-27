@@ -52,6 +52,9 @@ public abstract class RowWriterBase<TSlot>
     protected abstract void SerializeSlot(TSlot slot);
     protected abstract void WriteSerializedSlot(TSlot slot, RowGroupWriter rowGroupWriter);
     protected abstract void ResetSlotForReuse(TSlot slot);
+    protected virtual void OnSlotWritten(TSlot slot)
+    {
+    }
 
     protected void InitializeSlots()
     {
@@ -198,6 +201,7 @@ public abstract class RowWriterBase<TSlot>
                     ThrowIfFaulted();
                     var rowGroupWriter = _writer.StartRowGroup();
                     WriteSerializedSlot(queuedSlot.Slot, rowGroupWriter);
+                    OnSlotWritten(queuedSlot.Slot);
                     _nextWriteSequence++;
                     Monitor.PulseAll(_writeGate);
                 }
