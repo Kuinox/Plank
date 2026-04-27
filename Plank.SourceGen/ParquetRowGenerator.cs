@@ -211,8 +211,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             var schemaColumn = schemaColumns[i];
             builder.Append("        new global::Plank.Schema.Column(\"").Append(Escape(schemaColumn.Name))
                 .Append("\", global::Plank.Schema.ParquetPhysicalType.").Append(schemaColumn.PhysicalType)
-                .Append(", new global::Plank.Schema.ColumnOptions(global::Plank.Schema.ParquetRepetition.")
-                .Append(schemaColumn.Repetition).Append(')');
+                .Append(", ").Append(GetColumnOptionsExpression(schemaColumn));
             if (schemaColumn.LogicalType is { } logicalType)
                 builder.Append(", ").Append(GetLogicalTypeExpression(logicalType));
             builder.AppendLine("),");
@@ -691,7 +690,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         var columnName = property.Name;
         var physicalType = inferredPhysicalType;
-        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, out error))
+        ImmutableArray<string> encodings = [];
+        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref encodings, out error))
             return false;
         if (columnName.Length == 0)
         {
@@ -700,12 +700,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
 
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
-        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, inferredLogicalType, property.Name);
+        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, inferredLogicalType, property.Name, encodings);
         return true;
     }
 
     static bool TryReadColumnOverrides(IPropertySymbol property, ref string columnName, ref string physicalType,
-        out string error)
+        ref ImmutableArray<string> encodings, out string error)
     {
         error = string.Empty;
         var attributes = property.GetAttributes()
@@ -743,7 +743,65 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             }
         }
 
+        foreach (var namedArgument in attribute.NamedArguments)
+        {
+            if (namedArgument.Key != "Encodings")
+                continue;
+
+            if (!TryGetEncodingNames(namedArgument.Value, out encodings))
+            {
+                error = $"Property '{property.Name}' declares an invalid EncodingKind override.";
+                return false;
+            }
+        }
+
         return true;
+    }
+
+    static bool TryGetEncodingNames(TypedConstant constant, out ImmutableArray<string> encodings)
+    {
+        if (constant.Kind != TypedConstantKind.Array)
+        {
+            encodings = [];
+            return false;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<string>(constant.Values.Length);
+        for (var i = 0; i < constant.Values.Length; i++)
+        {
+            if (!TryGetEncodingName(constant.Values[i], out var encoding))
+            {
+                encodings = [];
+                return false;
+            }
+
+            builder.Add(encoding);
+        }
+
+        encodings = builder.ToImmutable();
+        return true;
+    }
+
+    static bool TryGetEncodingName(TypedConstant constant, out string encoding)
+    {
+        encoding = string.Empty;
+        if (constant.Value is not int enumValue)
+            return false;
+
+        encoding = enumValue switch
+        {
+            0 => "Plain",
+            1 => "PlainDictionary",
+            2 => "RleDictionary",
+            3 => "Rle",
+            4 => "BitPacked",
+            5 => "DeltaBinaryPacked",
+            6 => "DeltaLengthByteArray",
+            7 => "DeltaByteArray",
+            8 => "ByteStreamSplit",
+            _ => string.Empty
+        };
+        return encoding.Length > 0;
     }
 
     static bool TryGetPhysicalTypeName(TypedConstant constant, out string physicalType)
@@ -1046,10 +1104,34 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return clrTypeName.Length > 0 && IsSupportedClrType(clrTypeName);
     }
 
+    static string GetColumnOptionsExpression(SchemaColumn column)
+    {
+        var builder = new StringBuilder();
+        builder.Append("new global::Plank.Schema.ColumnOptions(global::Plank.Schema.ParquetRepetition.")
+            .Append(column.Repetition);
+        if (!column.Encodings.IsDefaultOrEmpty)
+        {
+            builder.Append(", global::System.Collections.Immutable.ImmutableArray.Create(");
+            for (var i = 0; i < column.Encodings.Length; i++)
+            {
+                if (i > 0)
+                    builder.Append(", ");
+
+                builder.Append("global::Plank.Schema.EncodingKind.")
+                    .Append(column.Encodings[i]);
+            }
+
+            builder.Append(')');
+        }
+
+        builder.Append(')');
+        return builder.ToString();
+    }
+
     readonly struct SchemaColumn
     {
         public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName,
-            LogicalTypeSpec? logicalType, string rowPropertyName)
+            LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings)
         {
             Name = name;
             PhysicalType = physicalType;
@@ -1057,6 +1139,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             ClrTypeName = clrTypeName;
             LogicalType = logicalType;
             RowPropertyName = rowPropertyName;
+            Encodings = encodings;
         }
 
         public string Name { get; }
@@ -1070,6 +1153,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public LogicalTypeSpec? LogicalType { get; }
 
         public string RowPropertyName { get; }
+
+        public ImmutableArray<string> Encodings { get; }
     }
 
     readonly struct LogicalTypeSpec
