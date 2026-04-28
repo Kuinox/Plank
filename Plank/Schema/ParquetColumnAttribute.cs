@@ -28,4 +28,6 @@ public sealed class ParquetColumnAttribute : Attribute
     public bool HasPhysicalType { get; }
 
     public EncodingKind[]? Encodings { get; set; }
+
+    public LogicalTypeKind LogicalType { get; set; }
 }

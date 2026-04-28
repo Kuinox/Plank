@@ -414,6 +414,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("    {");
         builder.AppendLine("        int _index;");
         builder.AppendLine("        readonly int _rowCount;");
+        builder.AppendLine("        global::System.Collections.Generic.List<global::System.IDisposable>? _ownedBuffers;");
         for (var i = 0; i < columns.Length; i++)
             builder.Append("        readonly ").Append(GetBufferType(columns[i].ClrTypeName)).Append(" _").Append(columns[i].PropertyName).AppendLine(";");
         for (var i = 0; i < columns.Length; i++)
@@ -458,7 +459,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            if (_index >= _rowCount)");
         builder.AppendLine("                throw new global::System.InvalidOperationException(\"No more row slots are available.\");");
         builder.AppendLine();
-        builder.Append("            return new Row(_index");
+        builder.Append("            return new Row(_index, this");
         for (var i = 0; i < columns.Length; i++)
             builder.Append(", _").Append(columns[i].PropertyName);
         builder.AppendLine(");");
@@ -483,8 +484,23 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append("            rowGroupWriter.Write(_serialized").Append(columns[i].PropertyName).Append(");").AppendLine();
         builder.AppendLine("        }");
         builder.AppendLine();
+        builder.AppendLine("        internal void RegisterOwner(global::System.IDisposable owner)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            global::System.ArgumentNullException.ThrowIfNull(owner);");
+        builder.AppendLine("            (_ownedBuffers ??= new global::System.Collections.Generic.List<global::System.IDisposable>()).Add(owner);");
+        builder.AppendLine("        }");
+        builder.AppendLine();
         builder.AppendLine("        internal void ResetForReuse()");
         builder.AppendLine("        {");
+        builder.AppendLine("            if (_ownedBuffers is not null)");
+        builder.AppendLine("            {");
+        builder.AppendLine("                for (var i = 0; i < _ownedBuffers.Count; i++)");
+        builder.AppendLine("                    _ownedBuffers[i].Dispose();");
+        builder.AppendLine("                _ownedBuffers.Clear();");
+        builder.AppendLine("            }");
+        for (var i = 0; i < columns.Length; i++)
+            if (RequiresClearOnReset(columns[i].ClrTypeName))
+                builder.Append("            global::System.Array.Clear(_").Append(columns[i].PropertyName).Append(", 0, _index);").AppendLine();
         builder.AppendLine("            _index = 0;");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
@@ -492,15 +508,17 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("    public readonly ref struct Row");
         builder.AppendLine("    {");
         builder.AppendLine("        readonly int _index;");
+        builder.AppendLine("        readonly BufferSlot _ownerSlot;");
         for (var i = 0; i < columns.Length; i++)
             builder.Append("        readonly ").Append(GetBufferType(columns[i].ClrTypeName)).Append(" _").Append(columns[i].PropertyName).AppendLine(";");
         builder.AppendLine();
-        builder.Append("        internal Row(int index");
+        builder.Append("        internal Row(int index, BufferSlot ownerSlot");
         for (var i = 0; i < columns.Length; i++)
             builder.Append(", ").Append(GetBufferType(columns[i].ClrTypeName)).Append(' ').Append(ToParameterName(columns[i].PropertyName));
         builder.AppendLine(")");
         builder.AppendLine("        {");
         builder.AppendLine("            _index = index;");
+        builder.AppendLine("            _ownerSlot = ownerSlot;");
         for (var i = 0; i < columns.Length; i++)
             builder.Append("            _").Append(columns[i].PropertyName).Append(" = ").Append(ToParameterName(columns[i].PropertyName)).AppendLine(";");
         builder.AppendLine("        }");
@@ -508,6 +526,31 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         for (var i = 0; i < columns.Length; i++)
         {
             builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ').Append(columns[i].PropertyName).Append(" => ref _").Append(columns[i].PropertyName).AppendLine("[_index];");
+            if (SupportsOwnerSetter(columns[i].ClrTypeName))
+            {
+                builder.AppendLine();
+                if (columns[i].ClrTypeName.EndsWith("?", StringComparison.Ordinal))
+                {
+                    builder.Append("        public void Set").Append(columns[i].PropertyName)
+                        .Append("(global::System.Buffers.IMemoryOwner<byte>? owner)").AppendLine();
+                    builder.AppendLine("        {");
+                    builder.Append("            _").Append(columns[i].PropertyName).Append("[_index] = owner is null ? default(")
+                        .Append(columns[i].ClrTypeName).Append(") : owner.Memory;").AppendLine();
+                    builder.AppendLine("            if (owner is not null)");
+                    builder.AppendLine("                _ownerSlot.RegisterOwner(owner);");
+                    builder.AppendLine("        }");
+                }
+                else
+                {
+                    builder.Append("        public void Set").Append(columns[i].PropertyName)
+                        .Append("(global::System.Buffers.IMemoryOwner<byte> owner)").AppendLine();
+                    builder.AppendLine("        {");
+                    builder.AppendLine("            global::System.ArgumentNullException.ThrowIfNull(owner);");
+                    builder.Append("            _").Append(columns[i].PropertyName).Append("[_index] = owner.Memory;").AppendLine();
+                    builder.AppendLine("            _ownerSlot.RegisterOwner(owner);");
+                    builder.AppendLine("        }");
+                }
+            }
             if (i < columns.Length - 1)
                 builder.AppendLine();
         }
@@ -555,7 +598,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     or "global::System.TimeOnly" or "global::System.TimeOnly?",
                 "Float" => clrType is "float" or "float?",
                 "Double" => clrType is "double" or "double?",
-                "ByteArray" => clrType is "string" or "string?" or "byte[]" or "byte[]?",
+                "ByteArray" => clrType is "string" or "string?" or "byte[]" or "byte[]?" or "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?",
                 _ => false
             };
 
@@ -568,7 +611,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 or "global::System.DateTime" or "global::System.DateTimeOffset" or "global::System.TimeOnly",
             "Float" => clrType == "float",
             "Double" => clrType == "double",
-            "ByteArray" => clrType is "string" or "byte[]",
+            "ByteArray" => clrType is "string" or "byte[]" or "global::System.ReadOnlyMemory<byte>",
             _ => false
         };
     }
@@ -586,6 +629,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "double" or "double?" or
             "string" or "string?" or
             "byte[]" or "byte[]?" or
+            "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?" or
             "global::System.DateOnly" or "global::System.DateOnly?" or
             "global::System.DateTime" or "global::System.DateTime?" or
             "global::System.DateTimeOffset" or "global::System.DateTimeOffset?" or
@@ -640,6 +684,15 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return $"new {clrTypeName}[rowCount]";
     }
 
+    static bool SupportsOwnerSetter(string clrTypeName)
+        => clrTypeName is "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?";
+
+    static bool RequiresClearOnReset(string clrTypeName)
+        => clrTypeName is
+            "string" or "string?" or
+            "byte[]" or "byte[]?" or
+            "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?";
+
     static bool TryExtractColumns(INamedTypeSymbol schemaType, out ImmutableArray<SchemaColumn> columns, out string error)
     {
         error = string.Empty;
@@ -690,8 +743,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         var columnName = property.Name;
         var physicalType = inferredPhysicalType;
+        var logicalType = inferredLogicalType;
         ImmutableArray<string> encodings = [];
-        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref encodings, out error))
+        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref encodings, out error))
             return false;
         if (columnName.Length == 0)
         {
@@ -700,12 +754,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
 
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
-        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, inferredLogicalType, property.Name, encodings);
+        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType, property.Name, encodings);
         return true;
     }
 
     static bool TryReadColumnOverrides(IPropertySymbol property, ref string columnName, ref string physicalType,
-        ref ImmutableArray<string> encodings, out string error)
+        ref LogicalTypeSpec? logicalType, ref ImmutableArray<string> encodings, out string error)
     {
         error = string.Empty;
         var attributes = property.GetAttributes()
@@ -745,13 +799,23 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         foreach (var namedArgument in attribute.NamedArguments)
         {
-            if (namedArgument.Key != "Encodings")
-                continue;
-
-            if (!TryGetEncodingNames(namedArgument.Value, out encodings))
+            if (namedArgument.Key == "Encodings")
             {
-                error = $"Property '{property.Name}' declares an invalid EncodingKind override.";
-                return false;
+                if (!TryGetEncodingNames(namedArgument.Value, out encodings))
+                {
+                    error = $"Property '{property.Name}' declares an invalid EncodingKind override.";
+                    return false;
+                }
+                continue;
+            }
+
+            if (namedArgument.Key == "LogicalType")
+            {
+                if (!TryGetLogicalTypeSpec(namedArgument.Value, out logicalType))
+                {
+                    error = $"Property '{property.Name}' declares an invalid LogicalTypeKind override.";
+                    return false;
+                }
             }
         }
 
@@ -826,6 +890,24 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return physicalType.Length > 0;
     }
 
+    static bool TryGetLogicalTypeSpec(TypedConstant constant, out LogicalTypeSpec? logicalType)
+    {
+        logicalType = null;
+        if (constant.Value is not int enumValue)
+            return false;
+
+        logicalType = enumValue switch
+        {
+            0 => null,
+            1 => new LogicalTypeSpec("String"),
+            2 => new LogicalTypeSpec("Json"),
+            3 => new LogicalTypeSpec("Uuid"),
+            _ => null
+        };
+
+        return enumValue is >= 0 and <= 3;
+    }
+
     static bool TryInferDefaults(string clrTypeName, out string physicalType, out LogicalTypeSpec? logicalType)
     {
         logicalType = null;
@@ -843,6 +925,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "double" => "Double",
             "string" => "ByteArray",
             "byte[]" => "ByteArray",
+            "global::System.ReadOnlyMemory<byte>" => "ByteArray",
             "global::System.DateOnly" => "Int32",
             "global::System.DateTime" => "Int64",
             "global::System.DateTimeOffset" => "Int64",
@@ -1002,11 +1085,17 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (column.PhysicalType != "ByteArray")
                     diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
                         $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires physical type 'ByteArray'."));
+                if (!IsUtf8ByteArrayClr(column.ClrTypeName) && !IsStringClr(column.ClrTypeName))
+                    diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
+                        $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires CLR type string/string? or ReadOnlyMemory<byte>/ReadOnlyMemory<byte>?/byte[]/byte[]?."));
                 break;
             case "Uuid":
                 if (column.PhysicalType != "FixedLenByteArray")
                     diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
                         $"Column '{column.Name}' logical type 'Uuid' requires physical type 'FixedLenByteArray'."));
+                if (!IsUtf8ByteArrayClr(column.ClrTypeName))
+                    diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
+                        $"Column '{column.Name}' logical type 'Uuid' requires CLR type ReadOnlyMemory<byte>/ReadOnlyMemory<byte>?/byte[]/byte[]?."));
                 break;
             case "Decimal":
                 if (logicalType.Value.Precision is not int precision || precision <= 0)
@@ -1056,6 +1145,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "global::System.DateTime" or "global::System.DateTime?"
             or "global::System.DateTimeOffset" or "global::System.DateTimeOffset?";
 
+    static bool IsStringClr(string clrType)
+        => clrType is "string" or "string?";
+
+    static bool IsUtf8ByteArrayClr(string clrType)
+        => clrType is
+            "byte[]" or "byte[]?" or
+            "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?";
+
     static bool IsTimeUnit(string unit)
         => unit is "Millis" or "Micros" or "Nanos";
 
@@ -1088,6 +1185,16 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         if (typeSymbol is IArrayTypeSymbol { ElementType.SpecialType: SpecialType.System_Byte, Rank: 1 })
         {
             clrTypeName = nullableAnnotation == NullableAnnotation.Annotated ? "byte[]?" : "byte[]";
+            return IsSupportedClrType(clrTypeName);
+        }
+
+        if (typeSymbol is INamedTypeSymbol namedType &&
+            namedType.ContainingNamespace.ToDisplayString() == "System" &&
+            namedType.Name == "ReadOnlyMemory" &&
+            namedType.TypeArguments.Length == 1 &&
+            namedType.TypeArguments[0].SpecialType == SpecialType.System_Byte)
+        {
+            clrTypeName = isNullable ? "global::System.ReadOnlyMemory<byte>?" : "global::System.ReadOnlyMemory<byte>";
             return IsSupportedClrType(clrTypeName);
         }
 
