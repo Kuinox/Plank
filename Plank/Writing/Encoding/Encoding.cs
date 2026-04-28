@@ -179,6 +179,9 @@ static class Encoding
         dictionaryValueCount = 0;
         dictionaryIndexesBytes = null;
 
+        if (values.IsEmpty)
+            return false;
+
         var dictionaryMode = strategy.GetDictionaryMode();
         if (dictionaryMode == DictionaryMode.Disabled)
         {
