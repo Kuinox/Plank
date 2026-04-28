@@ -6,13 +6,13 @@ namespace Plank.Tests.E2E;
 [ParquetSchema]
 public sealed partial class EncodedRowSchema
 {
-    [ParquetColumn("id", Encodings = [EncodingKind.DeltaBinaryPacked])]
+    [ParquetColumn("id", Encodings = new[] { EncodingKind.DeltaBinaryPacked })]
     public ulong Id { get; set; }
 
-    [ParquetColumn("tag", Encodings = [EncodingKind.RleDictionary])]
+    [ParquetColumn("tag", Encodings = new[] { EncodingKind.RleDictionary })]
     public string? Tag { get; set; }
 
-    [ParquetColumn("payload", Encodings = [EncodingKind.Plain])]
+    [ParquetColumn("payload", Encodings = new[] { EncodingKind.Plain })]
     public byte[] Payload { get; set; } = [];
 
     [ParquetColumn("defaultValue")]

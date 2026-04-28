@@ -8,14 +8,14 @@ namespace Plank.Tests.E2E;
 [ParquetSchema]
 public sealed partial class OwnedBufferRowSchema
 {
-    [ParquetColumn("payload", Encodings = [EncodingKind.Plain])]
+    [ParquetColumn("payload", Encodings = new[] { EncodingKind.Plain })]
     public ReadOnlyMemory<byte> Payload { get; set; }
 }
 
 [ParquetSchema]
 public sealed partial class OwnedUtf8StringRowSchema
 {
-    [ParquetColumn("value", LogicalType = LogicalTypeKind.String, Encodings = [EncodingKind.Plain])]
+    [ParquetColumn("value", LogicalType = LogicalTypeKind.String, Encodings = new[] { EncodingKind.Plain })]
     public ReadOnlyMemory<byte> Value { get; set; }
 }
 
