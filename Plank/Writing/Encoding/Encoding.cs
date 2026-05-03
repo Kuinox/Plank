@@ -102,23 +102,6 @@ static class Encoding
             return;
 
         var presentCount = CountPresentValues(values);
-        if (presentCount == values.Length)
-        {
-            var rented = ArrayPool<T>.Shared.Rent(values.Length);
-            try
-            {
-                var denseValues = rented.AsSpan(0, values.Length);
-                CopyPresentValues(values, denseValues);
-                Encode(bufferWriters, column, denseValues, strategy, pages, leafProjectionInfo, dictionaryState);
-            }
-            finally
-            {
-                ArrayPool<T>.Shared.Return(rented);
-            }
-
-            return;
-        }
-
         var rentedValues = ArrayPool<T>.Shared.Rent(presentCount);
         var densePresentValues = rentedValues.AsSpan(0, presentCount);
         CopyPresentValues(values, densePresentValues);
@@ -154,7 +137,7 @@ static class Encoding
         var presentCount = CountPresentValues(values);
         if (presentCount == values.Length)
         {
-            Encode(bufferWriters, column, values, strategy, pages, leafProjectionInfo, dictionaryState);
+            EncodeOptionalFlatReferences(bufferWriters, column, values, strategy, pages, values, dictionaryState);
             return;
         }
 

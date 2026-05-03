@@ -11,5 +11,6 @@ internal struct ColumnChunkMetadata
     internal long TotalCompressedSize;
     internal EncodingKind DataEncoding;
     internal CompressionKind Compression;
+    internal ColumnStatistics Statistics;
     internal bool HasDictionaryPage;
 }

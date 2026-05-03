@@ -16,6 +16,8 @@ internal interface ISerializedColumn
 
     int RowCount { get; }
 
+    ColumnStatistics Statistics { get; }
+
     bool HasPendingData { get; }
 
     void Consume();
@@ -47,6 +49,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     internal int RowCount { get; private set; }
 
+    internal ColumnStatistics Statistics { get; private set; }
+
     internal bool HasPendingData { get; private set; }
 
     PageList ISerializedColumn.Pages => Pages;
@@ -54,6 +58,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     uint ISerializedColumn.ColumnOrdinal => ColumnOrdinal;
 
     int ISerializedColumn.RowCount => RowCount;
+
+    ColumnStatistics ISerializedColumn.Statistics => Statistics;
 
     bool ISerializedColumn.HasPendingData => HasPendingData;
 
@@ -300,6 +306,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i];
             SerializeTyped(converted);
+            Statistics = ColumnStatistics.CreateByte(values, 0);
         }
         finally
         {
@@ -316,6 +323,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i];
             SerializeOptionalTyped(converted);
+            Statistics = ColumnStatistics.CreateNullableByte(values);
         }
         finally
         {
@@ -332,6 +340,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i];
             SerializeTyped(converted);
+            Statistics = ColumnStatistics.CreateUInt16(values, 0);
         }
         finally
         {
@@ -348,6 +357,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i];
             SerializeOptionalTyped(converted);
+            Statistics = ColumnStatistics.CreateNullableUInt16(values);
         }
         finally
         {
@@ -364,6 +374,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             for (var i = 0; i < values.Length; i++)
                 converted[i] = unchecked((int)values[i]);
             SerializeTyped(converted);
+            Statistics = ColumnStatistics.CreateUInt32(values, 0);
         }
         finally
         {
@@ -380,6 +391,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? unchecked((int)value) : null;
             SerializeOptionalTyped(converted);
+            Statistics = ColumnStatistics.CreateNullableUInt32(values);
         }
         finally
         {
@@ -430,6 +442,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             for (var i = 0; i < values.Length; i++)
                 converted[i] = unchecked((long)values[i]);
             SerializeTyped(converted);
+            Statistics = ColumnStatistics.CreateUInt64(values, 0);
         }
         finally
         {
@@ -446,6 +459,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? unchecked((long)value) : null;
             SerializeOptionalTyped(converted);
+            Statistics = ColumnStatistics.CreateNullableUInt64(values);
         }
         finally
         {
@@ -560,6 +574,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = values.Length;
+        Statistics = ColumnStatistics.Create(_column, values, 0);
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategy, Pages,
@@ -576,6 +591,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = values.Length;
+        Statistics = ColumnStatistics.CreateOptional(_column, values);
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategy, Pages,
@@ -592,6 +608,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = values.Length;
+        Statistics = ColumnStatistics.CreateOptional(_column, values);
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategy, Pages,

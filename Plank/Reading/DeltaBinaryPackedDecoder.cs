@@ -55,14 +55,17 @@ static class DeltaBinaryPackedDecoder
             for (var i = 0; i < MiniBlockCount; i++)
                 bitWidths[i] = reader.ReadByte();
 
-            for (var miniBlock = 0; miniBlock < MiniBlockCount && index < valueCount; miniBlock++)
+            for (var miniBlock = 0; miniBlock < MiniBlockCount; miniBlock++)
             {
                 var bitWidth = bitWidths[miniBlock];
-                for (var i = 0; i < miniBlockSize && index < valueCount; i++)
+                for (var i = 0; i < miniBlockSize; i++)
                 {
                     var delta = bitWidth == 0 ? 0UL : reader.ReadPackedUnsigned(bitWidth);
-                    previous = unchecked(previous + minDelta + (long)delta);
-                    values[index++] = previous;
+                    if (index < valueCount)
+                    {
+                        previous = unchecked(previous + minDelta + (long)delta);
+                        values[index++] = previous;
+                    }
                 }
             }
         }

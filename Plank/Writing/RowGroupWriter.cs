@@ -69,6 +69,7 @@ public sealed class RowGroupWriter
         var dataPageOffset = -1L;
         var dictionaryPageOffset = 0L;
         var hasDictionaryPage = false;
+        var nullCount = 0L;
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         for (var i = 0; i < pages.Count; i++)
         {
@@ -112,6 +113,7 @@ public sealed class RowGroupWriter
                     var dataPageRowCount = page.RowCount;
                     var dataPageValueCount = page.ValueCount;
                     var dataPageNullCount = page.NullCount;
+                    nullCount = checked(nullCount + dataPageNullCount);
                     var repetitionLevelsByteLength = page.RepetitionLevelsByteLength;
                     var definitionLevelsByteLength = page.DefinitionLevelsByteLength;
                     var pageEncoding = page.Encoding;
@@ -191,6 +193,9 @@ public sealed class RowGroupWriter
         columnMetadata.TotalCompressedSize = totalCompressedSize;
         columnMetadata.DataEncoding = dataEncoding;
         columnMetadata.Compression = compression;
+        columnMetadata.Statistics = state.Statistics.HasStatistics
+            ? state.Statistics.WithNullCount(nullCount)
+            : ColumnStatistics.Empty(nullCount);
         columnMetadata.HasDictionaryPage = hasDictionaryPage;
 
         state.Consume();

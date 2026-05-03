@@ -2,13 +2,12 @@ namespace Plank.Writing.Compression;
 
 unsafe sealed class GzipDeflater
 {
-    readonly ZlibNative.StreamState* _stream;
+    readonly void* _stream;
     bool _initialized;
 
     internal GzipDeflater()
     {
-        _stream = (ZlibNative.StreamState*)System.Runtime.InteropServices.NativeMemory.AllocZeroed(
-            (nuint)sizeof(ZlibNative.StreamState));
+        _stream = System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)ZlibNative.StreamStateSize);
         if (_stream is null)
             throw new OutOfMemoryException("Failed to allocate zlib stream state.");
     }
@@ -50,26 +49,24 @@ unsafe sealed class GzipDeflater
         var version = ZlibNative.GetVersion();
         var initCode = ZlibNative.DeflateInit2(_stream, ZlibNative.CompressionLevelFast, ZlibNative.CompressionMethodDeflate,
             ZlibNative.WindowBitsGzip, ZlibNative.MemoryLevelDefault, ZlibNative.CompressionStrategyDefault, (byte*)version,
-            sizeof(ZlibNative.StreamState));
+            ZlibNative.StreamStateSize);
         if (initCode != ZlibNative.ResultOk)
             throw new InvalidOperationException($"zlib deflateInit2_ failed with code {initCode}.");
 
         _initialized = true;
     }
 
-    static void DeflateInput(ZlibNative.StreamState* stream, byte* input, int inputLength, byte* output, byte[] outputBuffer,
+    static void DeflateInput(void* stream, byte* input, int inputLength, byte* output, byte[] outputBuffer,
         ref BufferWriter destination)
     {
-        stream->NextInput = input;
-        stream->AvailableInput = checked((uint)inputLength);
+        ZlibNative.SetInput(stream, input, inputLength);
 
         while (true)
         {
-            stream->NextOutput = output;
-            stream->AvailableOutput = checked((uint)outputBuffer.Length);
+            ZlibNative.SetOutput(stream, output, outputBuffer.Length);
 
             var resultCode = ZlibNative.Deflate(stream, ZlibNative.FlushFinish);
-            var written = outputBuffer.Length - checked((int)stream->AvailableOutput);
+            var written = outputBuffer.Length - checked((int)ZlibNative.GetAvailableOutput(stream));
             if (written > 0)
                 destination.Write(outputBuffer.AsSpan(0, written));
 
