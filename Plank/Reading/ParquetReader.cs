@@ -68,7 +68,7 @@ public sealed class ParquetReader : IDisposable
         stream.Position = footerOffset;
         stream.ReadExactly(footerBytes);
 
-        _footer = ParquetMetadataThriftReader.Read(footerBytes, footerOffset);
+        _footer = ParquetMetadataThriftReader.Read(footerBytes, footerOffset, _footer);
         _metadata = new ParquetFileMetadata(_schema, footerOffset, footerLength, _footer.Version);
     }
 

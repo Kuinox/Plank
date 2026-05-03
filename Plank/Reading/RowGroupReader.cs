@@ -8,6 +8,7 @@ public sealed class RowGroupReader : IDisposable
     readonly Stream _stream;
     readonly InternalRowGroupMetadata _rowGroup;
     readonly RowGroupToken _token;
+    readonly object?[] _columnPageStates;
     bool _disposed;
 
     internal RowGroupReader(ParquetReader reader, Stream stream, InternalRowGroupMetadata rowGroup)
@@ -19,6 +20,7 @@ public sealed class RowGroupReader : IDisposable
         _stream = stream;
         _rowGroup = rowGroup;
         _token = new RowGroupToken(rowGroup.RowGroupOrdinal, rowGroup.MetadataOffset, rowGroup.ColumnChunkOffset);
+        _columnPageStates = new object?[rowGroup.Columns.Length];
         _disposed = false;
     }
 
@@ -45,5 +47,16 @@ public sealed class RowGroupReader : IDisposable
     }
 
     internal ColumnPageEnumerable<T> EnumeratePages<T>(Column column, int columnOrdinal)
-        => new(_stream, column, _reader.GetColumnChunk(_rowGroup.RowGroupOrdinal, columnOrdinal));
+        => new(_stream, column, _reader.GetColumnChunk(_rowGroup.RowGroupOrdinal, columnOrdinal),
+            GetPageReadState<T>(columnOrdinal));
+
+    ColumnPageReadState<T> GetPageReadState<T>(int columnOrdinal)
+    {
+        if (_columnPageStates[columnOrdinal] is ColumnPageReadState<T> state)
+            return state;
+
+        state = new ColumnPageReadState<T>();
+        _columnPageStates[columnOrdinal] = state;
+        return state;
+    }
 }

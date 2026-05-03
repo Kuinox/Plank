@@ -6,6 +6,9 @@ namespace Plank.Reading;
 static class ParquetMetadataThriftReader
 {
     internal static InternalParquetFooter Read(ReadOnlySpan<byte> buffer, long footerOffset)
+        => Read(buffer, footerOffset, InternalParquetFooter.Empty);
+
+    internal static InternalParquetFooter Read(ReadOnlySpan<byte> buffer, long footerOffset, InternalParquetFooter previous)
     {
         var reader = new CompactProtocolReader(buffer);
         var previousFieldId = 0;
@@ -20,7 +23,7 @@ static class ParquetMetadataThriftReader
                     version = reader.ReadI32();
                     break;
                 case 4:
-                    rowGroups = ReadRowGroups(ref reader, footerOffset);
+                    rowGroups = ReadRowGroups(ref reader, footerOffset, previous.RowGroups);
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -58,19 +61,24 @@ static class ParquetMetadataThriftReader
             _ => throw new NotSupportedException($"Encoding '{encoding}' is not supported.")
         };
 
-    static InternalRowGroupMetadata[] ReadRowGroups(ref CompactProtocolReader reader, long footerOffset)
+    static InternalRowGroupMetadata[] ReadRowGroups(ref CompactProtocolReader reader, long footerOffset,
+        InternalRowGroupMetadata[] previous)
     {
         var (count, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.Struct)
             throw new InvalidDataException("Expected row_groups to be encoded as a list of structs.");
 
-        var rowGroups = new InternalRowGroupMetadata[count];
+        var rowGroups = previous.Length == count ? previous : new InternalRowGroupMetadata[count];
         for (var i = 0; i < count; i++)
-            rowGroups[i] = ReadRowGroup(ref reader, i, footerOffset + reader.Offset);
+        {
+            var previousColumns = rowGroups[i].Columns ?? [];
+            rowGroups[i] = ReadRowGroup(ref reader, i, footerOffset + reader.Offset, previousColumns);
+        }
         return rowGroups;
     }
 
-    static InternalRowGroupMetadata ReadRowGroup(ref CompactProtocolReader reader, int rowGroupOrdinal, long metadataOffset)
+    static InternalRowGroupMetadata ReadRowGroup(ref CompactProtocolReader reader, int rowGroupOrdinal, long metadataOffset,
+        InternalColumnChunkMetadata[] previousColumns)
     {
         var previousFieldId = 0;
         var columnChunkOffset = 0L;
@@ -81,7 +89,7 @@ static class ParquetMetadataThriftReader
             switch (fieldId)
             {
                 case 1:
-                    columns = ReadColumns(ref reader);
+                    columns = ReadColumns(ref reader, previousColumns);
                     break;
                 case 5:
                     columnChunkOffset = reader.ReadI64();
@@ -98,19 +106,22 @@ static class ParquetMetadataThriftReader
         return new InternalRowGroupMetadata(rowGroupOrdinal, metadataOffset, columnChunkOffset, columns);
     }
 
-    static InternalColumnChunkMetadata[] ReadColumns(ref CompactProtocolReader reader)
+    static InternalColumnChunkMetadata[] ReadColumns(ref CompactProtocolReader reader, InternalColumnChunkMetadata[] previous)
     {
         var (count, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.Struct)
             throw new InvalidDataException("Expected row group columns to be encoded as a list of structs.");
 
-        var columns = new InternalColumnChunkMetadata[count];
+        var columns = previous.Length == count ? previous : new InternalColumnChunkMetadata[count];
         for (var i = 0; i < count; i++)
-            columns[i] = ReadColumn(ref reader);
+        {
+            var previousEncodings = columns[i].Encodings ?? [];
+            columns[i] = ReadColumn(ref reader, previousEncodings);
+        }
         return columns;
     }
 
-    static InternalColumnChunkMetadata ReadColumn(ref CompactProtocolReader reader)
+    static InternalColumnChunkMetadata ReadColumn(ref CompactProtocolReader reader, EncodingKind[] previousEncodings)
     {
         var previousFieldId = 0;
         var dataPageOffset = 0L;
@@ -128,7 +139,7 @@ static class ParquetMetadataThriftReader
                     break;
                 case 3:
                     ReadColumnMetadata(ref reader, ref dictionaryPageOffset, ref totalCompressedSize, ref compression,
-                        ref encodings);
+                        ref encodings, previousEncodings);
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -141,7 +152,8 @@ static class ParquetMetadataThriftReader
     }
 
     static void ReadColumnMetadata(ref CompactProtocolReader reader, ref long dictionaryPageOffset,
-        ref long totalCompressedSize, ref CompressionKind compression, ref EncodingKind[] encodings)
+        ref long totalCompressedSize, ref CompressionKind compression, ref EncodingKind[] encodings,
+        EncodingKind[] previousEncodings)
     {
         var previousFieldId = 0;
         while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
@@ -149,7 +161,7 @@ static class ParquetMetadataThriftReader
             switch (fieldId)
             {
                 case 2:
-                    encodings = ReadEncodings(ref reader);
+                    encodings = ReadEncodings(ref reader, previousEncodings);
                     break;
                 case 4:
                     compression = ReadCompression(reader.ReadI32());
@@ -167,13 +179,13 @@ static class ParquetMetadataThriftReader
         }
     }
 
-    static EncodingKind[] ReadEncodings(ref CompactProtocolReader reader)
+    static EncodingKind[] ReadEncodings(ref CompactProtocolReader reader, EncodingKind[] previous)
     {
         var (count, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.I32)
             throw new InvalidDataException("Expected encoding ids to be encoded as I32 list elements.");
 
-        var encodings = new EncodingKind[count];
+        var encodings = previous.Length == count ? previous : new EncodingKind[count];
         for (var i = 0; i < count; i++)
             encodings[i] = ReadEncoding(reader.ReadI32());
         return encodings;
