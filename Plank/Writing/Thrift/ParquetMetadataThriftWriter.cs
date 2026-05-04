@@ -52,6 +52,51 @@ static class ParquetMetadataThriftWriter
         writer.EndStruct(previous);
     }
 
+    internal static void WriteColumnIndex(ref BufferWriter destination, ReadOnlySpan<ColumnStatistics> statistics)
+    {
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.List);
+        writer.WriteListHeader(statistics.Length, CompactType.BooleanTrue);
+        for (var i = 0; i < statistics.Length; i++)
+            writer.WriteBool(statistics[i].ValueKind == ColumnStatistics.ColumnStatisticsValueKind.None);
+
+        writer.WriteFieldHeader(2, CompactType.List);
+        writer.WriteListHeader(statistics.Length, CompactType.Binary);
+        for (var i = 0; i < statistics.Length; i++)
+            WriteStatisticsBinaryValue(ref writer, statistics[i], writeMax: false);
+
+        writer.WriteFieldHeader(3, CompactType.List);
+        writer.WriteListHeader(statistics.Length, CompactType.Binary);
+        for (var i = 0; i < statistics.Length; i++)
+            WriteStatisticsBinaryValue(ref writer, statistics[i], writeMax: true);
+
+        writer.WriteFieldI32(4, (int)BoundaryOrder.Unordered);
+        writer.WriteFieldHeader(5, CompactType.List);
+        writer.WriteListHeader(statistics.Length, CompactType.I64);
+        for (var i = 0; i < statistics.Length; i++)
+            writer.WriteI64(statistics[i].NullCount);
+
+        writer.EndStruct(previous);
+    }
+
+    internal static void WriteOffsetIndex(ref BufferWriter destination, ReadOnlySpan<PageLocation> locations)
+    {
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.List);
+        writer.WriteListHeader(locations.Length, CompactType.Struct);
+        for (var i = 0; i < locations.Length; i++)
+        {
+            var previousLocation = writer.BeginStruct();
+            writer.WriteFieldI64(1, locations[i].Offset);
+            writer.WriteFieldI32(2, locations[i].CompressedPageSize);
+            writer.WriteFieldI64(3, locations[i].FirstRowIndex);
+            writer.EndStruct(previousLocation);
+        }
+        writer.EndStruct(previous);
+    }
+
     internal static void WriteFileMetaData(ref BufferWriter destination, ParquetSchema schema, int rowGroupCount,
         long totalRowCount, ref BufferWriter serializedRowGroups)
     {
@@ -443,6 +488,16 @@ static class ParquetMetadataThriftWriter
         WriteStatistics(ref writer, metadata.Statistics);
         writer.EndStruct(previousMetadata);
 
+        if (metadata.OffsetIndexLength > 0)
+        {
+            writer.WriteFieldI64(4, metadata.OffsetIndexOffset);
+            writer.WriteFieldI32(5, metadata.OffsetIndexLength);
+        }
+        if (metadata.ColumnIndexLength > 0)
+        {
+            writer.WriteFieldI64(6, metadata.ColumnIndexOffset);
+            writer.WriteFieldI32(7, metadata.ColumnIndexLength);
+        }
         writer.EndStruct(previousChunk);
     }
 
@@ -473,63 +528,72 @@ static class ParquetMetadataThriftWriter
 
     static void WriteStatisticsValue(ref CompactWriter writer, int fieldId, in ColumnStatistics statistics, bool writeMax)
     {
+        writer.WriteFieldHeader(fieldId, CompactType.Binary);
+        WriteStatisticsBinaryValue(ref writer, statistics, writeMax);
+    }
+
+    static void WriteStatisticsBinaryValue(ref CompactWriter writer, in ColumnStatistics statistics, bool writeMax)
+    {
         var bits = writeMax ? statistics.MaxBits : statistics.MinBits;
         switch (statistics.ValueKind)
         {
             case ColumnStatistics.ColumnStatisticsValueKind.Boolean:
             {
                 Span<byte> value = [(byte)(bits == 0 ? 0 : 1)];
-                writer.WriteFieldBinary(fieldId, value);
+                writer.WriteBinary(value);
                 return;
             }
             case ColumnStatistics.ColumnStatisticsValueKind.Int32:
             {
                 Span<byte> value = stackalloc byte[sizeof(int)];
                 BinaryPrimitives.WriteInt32LittleEndian(value, checked((int)bits));
-                writer.WriteFieldBinary(fieldId, value);
+                writer.WriteBinary(value);
                 return;
             }
             case ColumnStatistics.ColumnStatisticsValueKind.UInt32:
             {
                 Span<byte> value = stackalloc byte[sizeof(uint)];
                 BinaryPrimitives.WriteUInt32LittleEndian(value, checked((uint)bits));
-                writer.WriteFieldBinary(fieldId, value);
+                writer.WriteBinary(value);
                 return;
             }
             case ColumnStatistics.ColumnStatisticsValueKind.Int64:
             {
                 Span<byte> value = stackalloc byte[sizeof(long)];
                 BinaryPrimitives.WriteInt64LittleEndian(value, bits);
-                writer.WriteFieldBinary(fieldId, value);
+                writer.WriteBinary(value);
                 return;
             }
             case ColumnStatistics.ColumnStatisticsValueKind.UInt64:
             {
                 Span<byte> value = stackalloc byte[sizeof(ulong)];
                 BinaryPrimitives.WriteUInt64LittleEndian(value, unchecked((ulong)bits));
-                writer.WriteFieldBinary(fieldId, value);
+                writer.WriteBinary(value);
                 return;
             }
             case ColumnStatistics.ColumnStatisticsValueKind.Float:
             {
                 Span<byte> value = stackalloc byte[sizeof(float)];
                 BinaryPrimitives.WriteInt32LittleEndian(value, checked((int)bits));
-                writer.WriteFieldBinary(fieldId, value);
+                writer.WriteBinary(value);
                 return;
             }
             case ColumnStatistics.ColumnStatisticsValueKind.Double:
             {
                 Span<byte> value = stackalloc byte[sizeof(double)];
                 BinaryPrimitives.WriteInt64LittleEndian(value, bits);
-                writer.WriteFieldBinary(fieldId, value);
+                writer.WriteBinary(value);
                 return;
             }
             case ColumnStatistics.ColumnStatisticsValueKind.Binary:
             {
                 var value = writeMax ? statistics.MaxValue : statistics.MinValue;
-                writer.WriteFieldBinary(fieldId, value ?? []);
+                writer.WriteBinary(value ?? []);
                 return;
             }
+            case ColumnStatistics.ColumnStatisticsValueKind.None:
+                writer.WriteBinary([]);
+                return;
             default:
                 throw new InvalidOperationException($"Unknown statistics value kind '{statistics.ValueKind}'.");
         }
@@ -682,6 +746,11 @@ static class ParquetMetadataThriftWriter
         DataPageV2 = 3
     }
 
+    enum BoundaryOrder
+    {
+        Unordered = 0
+    }
+
     enum ConvertedType
     {
         Utf8 = 0,
@@ -802,14 +871,14 @@ static class ParquetMetadataThriftWriter
         internal void WriteI32(int value)
             => WriteVarInt32(EncodeZigZag32(value));
 
+        internal void WriteI64(long value)
+            => WriteVarInt64(EncodeZigZag64(value));
+
         internal void WriteRaw(ref BufferWriter source)
             => _buffer.CopyFrom(ref source);
 
         void WriteI16(int value)
             => WriteVarInt32(EncodeZigZag32(value));
-
-        void WriteI64(long value)
-            => WriteVarInt64(EncodeZigZag64(value));
 
         internal void WriteBinary(string value)
         {
@@ -823,11 +892,14 @@ static class ParquetMetadataThriftWriter
             _buffer.Advance(byteCount);
         }
 
-        void WriteBinary(scoped ReadOnlySpan<byte> value)
+        internal void WriteBinary(scoped ReadOnlySpan<byte> value)
         {
             WriteVarInt32((uint)value.Length);
             _buffer.Write(value);
         }
+
+        internal void WriteBool(bool value)
+            => WriteByte(value ? (byte)CompactType.BooleanTrue : (byte)CompactType.BooleanFalse);
 
         void WriteByte(byte value)
         {

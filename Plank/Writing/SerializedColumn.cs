@@ -27,6 +27,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 {
     static readonly DateOnly UnixEpochDate = new(1970, 1, 1);
 
+    delegate ColumnStatistics PageStatisticsFactory<TValue>(ReadOnlySpan<TValue> values, long nullCount);
+
     readonly ParquetWriter _owner;
     readonly Column _column;
     object? _dictionaryState;
@@ -307,6 +309,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 converted[i] = values[i];
             SerializeTyped(converted);
             Statistics = ColumnStatistics.CreateByte(values, 0);
+            AssignBytePageStatistics(values);
         }
         finally
         {
@@ -324,6 +327,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 converted[i] = values[i];
             SerializeOptionalTyped(converted);
             Statistics = ColumnStatistics.CreateNullableByte(values);
+            AssignNullableBytePageStatistics(values);
         }
         finally
         {
@@ -341,6 +345,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 converted[i] = values[i];
             SerializeTyped(converted);
             Statistics = ColumnStatistics.CreateUInt16(values, 0);
+            AssignUInt16PageStatistics(values);
         }
         finally
         {
@@ -358,6 +363,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 converted[i] = values[i];
             SerializeOptionalTyped(converted);
             Statistics = ColumnStatistics.CreateNullableUInt16(values);
+            AssignNullableUInt16PageStatistics(values);
         }
         finally
         {
@@ -375,6 +381,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 converted[i] = unchecked((int)values[i]);
             SerializeTyped(converted);
             Statistics = ColumnStatistics.CreateUInt32(values, 0);
+            AssignUInt32PageStatistics(values);
         }
         finally
         {
@@ -392,6 +399,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 converted[i] = values[i] is { } value ? unchecked((int)value) : null;
             SerializeOptionalTyped(converted);
             Statistics = ColumnStatistics.CreateNullableUInt32(values);
+            AssignNullableUInt32PageStatistics(values);
         }
         finally
         {
@@ -443,6 +451,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 converted[i] = unchecked((long)values[i]);
             SerializeTyped(converted);
             Statistics = ColumnStatistics.CreateUInt64(values, 0);
+            AssignUInt64PageStatistics(values);
         }
         finally
         {
@@ -460,6 +469,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 converted[i] = values[i] is { } value ? unchecked((long)value) : null;
             SerializeOptionalTyped(converted);
             Statistics = ColumnStatistics.CreateNullableUInt64(values);
+            AssignNullableUInt64PageStatistics(values);
         }
         finally
         {
@@ -579,6 +589,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategy, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+        AssignPageStatistics(values);
     }
 
     void SerializeOptionalCore<TValue>(ReadOnlySpan<TValue?> values, uint columnOrdinal, IPageStrategy strategy)
@@ -596,6 +607,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategy, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+        AssignOptionalPageStatistics(values);
     }
 
     void SerializeOptionalCore<TValue>(ReadOnlySpan<TValue> values, uint columnOrdinal, IPageStrategy strategy)
@@ -613,6 +625,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategy, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+        AssignOptionalPageStatistics(values);
     }
 
     void ISerializedColumn.Consume()
@@ -630,6 +643,98 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         state = new ReusableDictionaryState<TValue>();
         _dictionaryState = state;
         return state;
+    }
+
+    void AssignPageStatistics<TValue>(ReadOnlySpan<TValue> values)
+        where TValue : notnull
+    {
+        var rowOffset = 0;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var page = ref Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            var pageRows = values.Slice(rowOffset, page.RowCount);
+            page.Statistics = ColumnStatistics.Create(_column, pageRows, page.NullCount);
+            rowOffset += page.RowCount;
+        }
+    }
+
+    void AssignOptionalPageStatistics<TValue>(ReadOnlySpan<TValue?> values)
+        where TValue : struct
+    {
+        var rowOffset = 0;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var page = ref Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            var pageRows = values.Slice(rowOffset, page.RowCount);
+            page.Statistics = ColumnStatistics.CreateOptional(_column, pageRows);
+            rowOffset += page.RowCount;
+        }
+    }
+
+    void AssignOptionalPageStatistics<TValue>(ReadOnlySpan<TValue> values)
+        where TValue : class
+    {
+        var rowOffset = 0;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var page = ref Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            var pageRows = values.Slice(rowOffset, page.RowCount);
+            page.Statistics = ColumnStatistics.CreateOptional(_column, pageRows);
+            rowOffset += page.RowCount;
+        }
+    }
+
+    void AssignBytePageStatistics(ReadOnlySpan<byte> values)
+        => AssignConvertedPageStatistics(values, static (pageValues, nullCount) =>
+            ColumnStatistics.CreateByte(pageValues, nullCount));
+
+    void AssignNullableBytePageStatistics(ReadOnlySpan<byte?> values)
+        => AssignConvertedPageStatistics(values, static (pageValues, _) =>
+            ColumnStatistics.CreateNullableByte(pageValues));
+
+    void AssignUInt16PageStatistics(ReadOnlySpan<ushort> values)
+        => AssignConvertedPageStatistics(values, static (pageValues, nullCount) =>
+            ColumnStatistics.CreateUInt16(pageValues, nullCount));
+
+    void AssignNullableUInt16PageStatistics(ReadOnlySpan<ushort?> values)
+        => AssignConvertedPageStatistics(values, static (pageValues, _) =>
+            ColumnStatistics.CreateNullableUInt16(pageValues));
+
+    void AssignUInt32PageStatistics(ReadOnlySpan<uint> values)
+        => AssignConvertedPageStatistics(values, static (pageValues, nullCount) =>
+            ColumnStatistics.CreateUInt32(pageValues, nullCount));
+
+    void AssignNullableUInt32PageStatistics(ReadOnlySpan<uint?> values)
+        => AssignConvertedPageStatistics(values, static (pageValues, _) =>
+            ColumnStatistics.CreateNullableUInt32(pageValues));
+
+    void AssignUInt64PageStatistics(ReadOnlySpan<ulong> values)
+        => AssignConvertedPageStatistics(values, static (pageValues, nullCount) =>
+            ColumnStatistics.CreateUInt64(pageValues, nullCount));
+
+    void AssignNullableUInt64PageStatistics(ReadOnlySpan<ulong?> values)
+        => AssignConvertedPageStatistics(values, static (pageValues, _) =>
+            ColumnStatistics.CreateNullableUInt64(pageValues));
+
+    void AssignConvertedPageStatistics<TValue>(ReadOnlySpan<TValue> values,
+        PageStatisticsFactory<TValue> createStatistics)
+    {
+        var rowOffset = 0;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var page = ref Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            var pageRows = values.Slice(rowOffset, page.RowCount);
+            page.Statistics = createStatistics(pageRows, page.NullCount);
+            rowOffset += page.RowCount;
+        }
     }
 
     static ReadOnlySpan<TTo> AsSpan<TTo>(ReadOnlySpan<T> values)

@@ -24,6 +24,8 @@ internal struct Page
 
     public int DictionaryValueCount;
 
+    internal ColumnStatistics Statistics;
+
     public void ResetMetadata()
     {
         Kind = PageKind.DataV2;
@@ -34,6 +36,7 @@ internal struct Page
         RepetitionLevelsByteLength = 0;
         DefinitionLevelsByteLength = 0;
         DictionaryValueCount = 0;
+        Statistics = default;
     }
 
     public void SetDataPageMetadata(int rowCount, int valueCount, int nullCount, int repetitionLevelsByteLength,
@@ -47,6 +50,7 @@ internal struct Page
         DefinitionLevelsByteLength = definitionLevelsByteLength;
         Encoding = encoding;
         DictionaryValueCount = 0;
+        Statistics = default;
     }
 
     public void SetDictionaryPageMetadata(int dictionaryValueCount)
@@ -59,5 +63,6 @@ internal struct Page
         RepetitionLevelsByteLength = 0;
         DefinitionLevelsByteLength = 0;
         Encoding = EncodingKind.Plain;
+        Statistics = default;
     }
 }

@@ -55,7 +55,13 @@ ref struct CompactProtocolReader
             return inlineBool.Value;
 
         EnsureAvailable(1);
-        return _buffer[_offset++] != 0;
+        var value = _buffer[_offset++];
+        return value switch
+        {
+            (byte)CompactProtocolType.BooleanTrue => true,
+            (byte)CompactProtocolType.BooleanFalse => false,
+            _ => throw new InvalidDataException($"Invalid compact protocol boolean value '{value}'.")
+        };
     }
 
     internal (int Count, CompactProtocolType ElementType) ReadListHeader()

@@ -13,4 +13,9 @@ internal struct ColumnChunkMetadata
     internal CompressionKind Compression;
     internal ColumnStatistics Statistics;
     internal bool HasDictionaryPage;
+    internal long ColumnIndexOffset;
+    internal int ColumnIndexLength;
+    internal long OffsetIndexOffset;
+    internal int OffsetIndexLength;
+    internal PageIndex PageIndex;
 }

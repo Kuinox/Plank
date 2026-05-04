@@ -127,6 +127,10 @@ static class ParquetMetadataThriftReader
         var dataPageOffset = 0L;
         var dictionaryPageOffset = 0L;
         var totalCompressedSize = 0L;
+        var columnIndexOffset = 0L;
+        var columnIndexLength = 0;
+        var offsetIndexOffset = 0L;
+        var offsetIndexLength = 0;
         var compression = CompressionKind.None;
         EncodingKind[] encodings = [];
 
@@ -141,6 +145,18 @@ static class ParquetMetadataThriftReader
                     ReadColumnMetadata(ref reader, ref dictionaryPageOffset, ref totalCompressedSize, ref compression,
                         ref encodings, previousEncodings);
                     break;
+                case 4:
+                    offsetIndexOffset = reader.ReadI64();
+                    break;
+                case 5:
+                    offsetIndexLength = reader.ReadI32();
+                    break;
+                case 6:
+                    columnIndexOffset = reader.ReadI64();
+                    break;
+                case 7:
+                    columnIndexLength = reader.ReadI32();
+                    break;
                 default:
                     reader.Skip(type, inlineBool);
                     break;
@@ -148,7 +164,7 @@ static class ParquetMetadataThriftReader
         }
 
         return new InternalColumnChunkMetadata(dataPageOffset, dictionaryPageOffset, totalCompressedSize, compression,
-            encodings);
+            encodings, columnIndexOffset, columnIndexLength, offsetIndexOffset, offsetIndexLength);
     }
 
     static void ReadColumnMetadata(ref CompactProtocolReader reader, ref long dictionaryPageOffset,
