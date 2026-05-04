@@ -25,6 +25,8 @@ public class StringDictionaryStrategyBenchmark
     MemoryStream _streamB = null!;
     ParquetWriter _writerA = null!;
     ParquetWriter _writerB = null!;
+    SerializedColumn<ReadOnlyMemory<byte>> _serializedUtf8Views = null!;
+    SerializedColumn<string> _serializedStrings = null!;
 
     [Params(500_000)]
     public int Rows { get; set; }
@@ -60,6 +62,8 @@ public class StringDictionaryStrategyBenchmark
         _streamB = new MemoryStream(capacity: Rows * 16);
         _writerA = schema.CreateWriter(_streamA, options);
         _writerB = schema.CreateWriter(_streamB, options);
+        _serializedUtf8Views = _writerA.CreateSerializedColumn<ReadOnlyMemory<byte>>(_column);
+        _serializedStrings = _writerB.CreateSerializedColumn<string>(_column);
     }
 
     [GlobalCleanup]
@@ -74,18 +78,16 @@ public class StringDictionaryStrategyBenchmark
     {
         EncodeAllStringsToUtf8Views();
         _writerA.Reset(_streamA);
-        var serialized = _writerA.CreateSerializedColumn<ReadOnlyMemory<byte>>(_column);
-        serialized.Serialize(_utf8Views);
-        _writerA.StartRowGroup().Write(serialized);
+        _serializedUtf8Views.Serialize(_utf8Views);
+        _writerA.StartRowGroup().Write(_serializedUtf8Views);
     }
 
     [Benchmark]
     public void DictionaryOnStringThenEncodeUnique()
     {
         _writerB.Reset(_streamB);
-        var serialized = _writerB.CreateSerializedColumn<string>(_column);
-        serialized.Serialize(_strings);
-        _writerB.StartRowGroup().Write(serialized);
+        _serializedStrings.Serialize(_strings);
+        _writerB.StartRowGroup().Write(_serializedStrings);
     }
 
     void EncodeAllStringsToUtf8Views()

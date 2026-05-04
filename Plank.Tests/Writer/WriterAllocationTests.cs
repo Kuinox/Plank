@@ -36,6 +36,37 @@ internal sealed class WriterAllocationTests
                 $"Expected zero allocations for steady-state non-dictionary write chain but saw {allocated} bytes.");
     }
 
+    [Test]
+    public void LargeNonDictionaryWriteChainDoesNotAllocateAfterWarmup()
+    {
+        var column = new Column("value", ParquetPhysicalType.Int32,
+            new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain]));
+        var schema = new ParquetSchema([column]);
+        using var stream = new MemoryStream(capacity: 8 * 1024 * 1024);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None
+        });
+        var serialized = writer.CreateSerializedColumn<int>(column);
+        var values = CreateValues(1_000_000);
+
+        for (var i = 0; i < 8; i++)
+            WriteOneRowGroup(writer, stream, serialized, values);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        WriteOneRowGroup(writer, stream, serialized, values);
+        var after = GC.GetAllocatedBytesForCurrentThread();
+        var allocated = after - before;
+
+        if (allocated != 0)
+            throw new InvalidOperationException(
+                $"Expected zero allocations for steady-state large non-dictionary write chain but saw {allocated} bytes.");
+    }
+
     static void WriteOneRowGroup(ParquetWriter writer, MemoryStream stream, SerializedColumn<int> serialized, int[] values)
     {
         writer.Reset(stream);
