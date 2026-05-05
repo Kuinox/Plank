@@ -41,44 +41,124 @@ static class Encoding
             ? RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
             : 0;
 
-        var rowsWritten = 0;
         try
         {
-            while (rowsWritten < values.Length)
+            if (useDictionary)
             {
-                var pageStart = rowsWritten;
-                var pageRowCount = 0;
-                while (rowsWritten < values.Length)
-                {
-                    rowsWritten++;
-                    pageRowCount++;
-                    if (rowsWritten == values.Length)
-                        break;
-                    if (strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
-                        break;
-                }
-
-                var pageIndex = AddNewDataPage(bufferWriters, pages);
-                ref var page = ref pages[pageIndex];
-                var pageValues = values.Slice(pageStart, pageRowCount);
-                if (useDictionary)
-                {
-                    if (dictionaryIndexes.IsEmpty)
-                        throw new InvalidOperationException("Dictionary index buffer is missing for dictionary-encoded page.");
-                    DictionaryIndexEncodingDispatcher.WriteIndexes(dictionaryEncoding,
-                        dictionaryIndexes.Slice(pageStart, pageRowCount), dictionaryBitWidth, ref page.Content);
-                }
-                else
-                    ValueEncodingDispatcher.WriteValues(dataEncoding, column, pageValues, bufferWriters, ref page.Content);
-
-                WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0,
-                    useDictionary ? dictionaryEncoding : dataEncoding);
+                WriteDictionaryDataPages(bufferWriters, values, dictionaryEncoding, pages, dictionaryIndexes,
+                    dictionaryBitWidth, strategy);
+                return;
             }
+
+            if (TryWriteFixedWidthDataPages(bufferWriters, column, values, dataEncoding, strategy, pages))
+                return;
+
+            WriteStrategyDataPages(bufferWriters, column, values, dataEncoding, strategy, pages);
         }
         finally
         {
             if (dictionaryIndexesBytes is not null)
                 bufferWriters.ReturnScratch(dictionaryIndexesBytes);
+        }
+    }
+
+    static void WriteStrategyDataPages<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
+        EncodingKind dataEncoding, IPageStrategy strategy, PageList pages)
+        where T : notnull
+    {
+        var rowsWritten = 0;
+        while (rowsWritten < values.Length)
+        {
+            var pageStart = rowsWritten;
+            var pageRowCount = 0;
+            while (rowsWritten < values.Length)
+            {
+                rowsWritten++;
+                pageRowCount++;
+                if (rowsWritten == values.Length)
+                    break;
+                if (strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
+                    break;
+            }
+
+            WriteDataPage(bufferWriters, column, values.Slice(pageStart, pageRowCount), dataEncoding, pages);
+        }
+    }
+
+    static bool TryWriteFixedWidthDataPages<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
+        EncodingKind dataEncoding, IPageStrategy strategy, PageList pages)
+        where T : notnull
+    {
+        if (!strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytes))
+            return false;
+        if (!TryGetFixedWidthByteCount(column, dataEncoding, out var valueByteCount))
+            return false;
+
+        var rowsPerPage = Math.Max(1, targetPageBytes / valueByteCount);
+        for (var pageStart = 0; pageStart < values.Length; pageStart += rowsPerPage)
+        {
+            var pageRowCount = Math.Min(rowsPerPage, values.Length - pageStart);
+            WriteDataPage(bufferWriters, column, values.Slice(pageStart, pageRowCount), dataEncoding, pages);
+        }
+
+        return true;
+    }
+
+    static void WriteDataPage<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
+        EncodingKind dataEncoding, PageList pages)
+        where T : notnull
+    {
+        var pageIndex = AddNewDataPage(bufferWriters, pages);
+        ref var page = ref pages[pageIndex];
+        ValueEncodingDispatcher.WriteValues(dataEncoding, column, values, bufferWriters, ref page.Content);
+        WriteDataPageHeader(ref page, values.Length, values.Length, 0, 0, 0, dataEncoding);
+    }
+
+    static bool TryGetFixedWidthByteCount(Column column, EncodingKind encoding, out int valueByteCount)
+    {
+        valueByteCount = 0;
+        if (encoding != EncodingKind.Plain)
+            return false;
+
+        valueByteCount = column.PhysicalType switch
+        {
+            ParquetPhysicalType.Int32 or ParquetPhysicalType.Float => sizeof(int),
+            ParquetPhysicalType.Int64 or ParquetPhysicalType.Double => sizeof(long),
+            ParquetPhysicalType.Int96 => 12,
+            ParquetPhysicalType.FixedLenByteArray when column.Options.TypeLength is > 0 and <= int.MaxValue
+                => checked((int)column.Options.TypeLength),
+            _ => 0
+        };
+        return valueByteCount > 0;
+    }
+
+    static void WriteDictionaryDataPages<T>(BufferWriterFactory bufferWriters, ReadOnlySpan<T> values,
+        EncodingKind dictionaryEncoding, PageList pages, ReadOnlySpan<int> dictionaryIndexes, int dictionaryBitWidth,
+        IPageStrategy strategy)
+        where T : notnull
+    {
+        var rowsWritten = 0;
+        while (rowsWritten < values.Length)
+        {
+            var pageStart = rowsWritten;
+            var pageRowCount = 0;
+            while (rowsWritten < values.Length)
+            {
+                rowsWritten++;
+                pageRowCount++;
+                if (rowsWritten == values.Length)
+                    break;
+                if (strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
+                    break;
+            }
+
+            var pageIndex = AddNewDataPage(bufferWriters, pages);
+            ref var page = ref pages[pageIndex];
+            if (dictionaryIndexes.IsEmpty)
+                throw new InvalidOperationException("Dictionary index buffer is missing for dictionary-encoded page.");
+            DictionaryIndexEncodingDispatcher.WriteIndexes(dictionaryEncoding,
+                dictionaryIndexes.Slice(pageStart, pageRowCount), dictionaryBitWidth, ref page.Content);
+            WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0, dictionaryEncoding);
         }
     }
 

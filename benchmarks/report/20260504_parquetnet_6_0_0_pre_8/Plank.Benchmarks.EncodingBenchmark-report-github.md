@@ -1,0 +1,207 @@
+```
+
+BenchmarkDotNet v0.15.6, Windows 11 (10.0.22631.6199/23H2/2023Update/SunValley3)
+AMD Ryzen 5 7640U w/ Radeon 760M Graphics 3.50GHz, 1 CPU, 12 logical and 6 physical cores
+.NET SDK 10.0.200-preview.0.26103.119
+  [Host]     : .NET 10.0.2 (10.0.2, 10.0.225.61305), X64 RyuJIT x86-64-v4
+  DefaultJob : .NET 10.0.2 (10.0.2, 10.0.225.61305), X64 RyuJIT x86-64-v4
+
+
+```
+| Method               | Rows    | DataType | EncodingName         | Mean        | Error       | StdDev      | Median      | Ratio | RatioSD | Gen0      | Gen1     | Gen2    | Allocated  | Alloc Ratio |
+|--------------------- |-------- |--------- |--------------------- |------------:|------------:|------------:|------------:|------:|--------:|----------:|---------:|--------:|-----------:|------------:|
+| **WritePlank**           | **1000000** | **bool**     | **byte_stream_split**    |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | bool     | byte_stream_split    |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | bool     | byte_stream_split    |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **bool**     | **delta_binary_packed**  |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | bool     | delta_binary_packed  |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | bool     | delta_binary_packed  |    143.8 μs |     2.34 μs |     2.40 μs |    142.4 μs |     ? |       ? |    0.4883 |        - |       - |     5432 B |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **bool**     | **delta_byte_array**     |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | bool     | delta_byte_array     |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | bool     | delta_byte_array     |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **bool**     | **delta(...)array [23]** |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | bool     | delta(...)array [23] |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | bool     | delta(...)array [23] |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **bool**     | **dictionary**           |  **3,089.6 μs** |    **31.36 μs** |    **26.19 μs** |  **3,084.2 μs** |  **1.00** |    **0.01** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | bool     | dictionary           |  6,018.1 μs |   402.56 μs | 1,186.95 μs |  5,377.5 μs |  1.95 |    0.38 |         - |        - |       - |   167752 B |          NA |
+| WriteParquetNetAsync | 1000000 | bool     | dictionary           |    145.5 μs |     1.24 μs |     0.97 μs |    145.4 μs |  0.05 |    0.00 |    0.4883 |        - |       - |     5432 B |          NA |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **bool**     | **plain**                |  **1,146.7 μs** |    **11.17 μs** |     **9.90 μs** |  **1,146.7 μs** |  **1.00** |    **0.01** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | bool     | plain                |  5,219.4 μs |   102.36 μs |   213.67 μs |  5,212.6 μs |  4.55 |    0.19 |         - |        - |       - |   167752 B |          NA |
+| WriteParquetNetAsync | 1000000 | bool     | plain                |    143.4 μs |     2.15 μs |     1.79 μs |    142.9 μs |  0.13 |    0.00 |    0.4883 |        - |       - |     5432 B |          NA |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **double**   | **byte_stream_split**    |  **4,619.9 μs** |    **85.21 μs** |    **83.69 μs** |  **4,591.8 μs** |  **1.00** |    **0.02** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | double   | byte_stream_split    |  9,987.9 μs |   193.32 μs |   289.35 μs |  9,944.5 μs |  2.16 |    0.07 |         - |        - |       - |  8072272 B |          NA |
+| WriteParquetNetAsync | 1000000 | double   | byte_stream_split    |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **double**   | **delta_binary_packed**  |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | double   | delta_binary_packed  |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | double   | delta_binary_packed  |  2,272.6 μs |    53.60 μs |   157.21 μs |  2,199.9 μs |     ? |       ? |         - |        - |       - |     8080 B |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **double**   | **delta_byte_array**     |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | double   | delta_byte_array     |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | double   | delta_byte_array     |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **double**   | **delta(...)array [23]** |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | double   | delta(...)array [23] |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | double   | delta(...)array [23] |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **double**   | **dictionary**           | **10,003.7 μs** |   **224.39 μs** |   **614.26 μs** | **10,089.2 μs** |  **1.00** |    **0.09** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | double   | dictionary           | 11,879.9 μs |   168.54 μs |   140.73 μs | 11,850.5 μs |  1.19 |    0.07 |   15.6250 |        - |       - |  1903656 B |          NA |
+| WriteParquetNetAsync | 1000000 | double   | dictionary           |  2,023.5 μs |    40.17 μs |    44.65 μs |  2,005.7 μs |  0.20 |    0.01 |         - |        - |       - |     8080 B |          NA |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **double**   | **plain**                |  **2,510.3 μs** |    **48.54 μs** |    **59.61 μs** |  **2,490.6 μs** |  **1.00** |    **0.03** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | double   | plain                |  7,108.6 μs |   137.15 μs |   152.45 μs |  7,136.8 μs |  2.83 |    0.09 |   31.2500 |  31.2500 | 31.2500 |  8072387 B |          NA |
+| WriteParquetNetAsync | 1000000 | double   | plain                |  2,080.7 μs |    44.25 μs |   130.47 μs |  2,011.1 μs |  0.83 |    0.06 |         - |        - |       - |     8080 B |          NA |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **float**    | **byte_stream_split**    |  **2,845.0 μs** |    **53.54 μs** |    **52.59 μs** |  **2,816.2 μs** |  **1.00** |    **0.03** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | float    | byte_stream_split    |  5,412.9 μs |    95.09 μs |   153.56 μs |  5,383.3 μs |  1.90 |    0.06 |         - |        - |       - |  4055384 B |          NA |
+| WriteParquetNetAsync | 1000000 | float    | byte_stream_split    |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **float**    | **delta_binary_packed**  |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | float    | delta_binary_packed  |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | float    | delta_binary_packed  |    952.2 μs |    18.55 μs |    25.39 μs |    943.3 μs |     ? |       ? |         - |        - |       - |     6840 B |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **float**    | **delta_byte_array**     |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | float    | delta_byte_array     |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | float    | delta_byte_array     |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **float**    | **delta(...)array [23]** |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | float    | delta(...)array [23] |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | float    | delta(...)array [23] |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **float**    | **dictionary**           |  **9,106.5 μs** |   **171.01 μs** |   **151.60 μs** |  **9,071.9 μs** |  **1.00** |    **0.02** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | float    | dictionary           | 10,715.9 μs |   193.51 μs |   171.54 μs | 10,731.1 μs |  1.18 |    0.03 |         - |        - |       - |  1847240 B |          NA |
+| WriteParquetNetAsync | 1000000 | float    | dictionary           |    859.8 μs |    15.51 μs |    12.95 μs |    858.8 μs |  0.09 |    0.00 |         - |        - |       - |     6840 B |          NA |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **float**    | **plain**                |  **2,122.1 μs** |    **29.11 μs** |    **24.31 μs** |  **2,117.6 μs** |  **1.00** |    **0.02** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | float    | plain                |  4,758.6 μs |    94.41 μs |   135.41 μs |  4,737.1 μs |  2.24 |    0.07 |   15.6250 |  15.6250 | 15.6250 |  4055473 B |          NA |
+| WriteParquetNetAsync | 1000000 | float    | plain                |    921.6 μs |    11.62 μs |     9.07 μs |    921.5 μs |  0.43 |    0.01 |         - |        - |       - |     6840 B |          NA |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **int32**    | **byte_stream_split**    |  **2,182.9 μs** |    **38.91 μs** |    **36.40 μs** |  **2,171.0 μs** |  **1.00** |    **0.02** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | int32    | byte_stream_split    |  4,187.8 μs |    74.54 μs |   102.03 μs |  4,175.2 μs |  1.92 |    0.06 |   15.6250 |  15.6250 | 15.6250 |  4055904 B |          NA |
+| WriteParquetNetAsync | 1000000 | int32    | byte_stream_split    |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **int32**    | **delta_binary_packed**  |  **2,206.1 μs** |    **12.28 μs** |    **10.89 μs** |  **2,204.5 μs** |  **1.00** |    **0.01** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | int32    | delta_binary_packed  |  3,456.2 μs |    41.43 μs |    38.76 μs |  3,450.8 μs |  1.57 |    0.02 |    7.8125 |        - |       - |    97056 B |          NA |
+| WriteParquetNetAsync | 1000000 | int32    | delta_binary_packed  |  3,128.2 μs |    34.96 μs |    29.19 μs |  3,124.4 μs |  1.42 |    0.01 |   89.8438 |        - |       - |   763032 B |          NA |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **int32**    | **delta_byte_array**     |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | int32    | delta_byte_array     |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | int32    | delta_byte_array     |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **int32**    | **delta(...)array [23]** |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | int32    | delta(...)array [23] |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | int32    | delta(...)array [23] |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **int32**    | **dictionary**           |  **6,449.0 μs** |   **106.99 μs** |    **89.34 μs** |  **6,430.5 μs** |  **1.00** |    **0.02** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | int32    | dictionary           | 10,572.2 μs |   211.20 μs |   225.98 μs | 10,581.7 μs |  1.64 |    0.04 |         - |        - |       - |  2582800 B |          NA |
+| WriteParquetNetAsync | 1000000 | int32    | dictionary           |    779.6 μs |    14.34 μs |    11.19 μs |    777.5 μs |  0.12 |    0.00 |         - |        - |       - |     7016 B |          NA |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **int32**    | **plain**                |  **1,820.4 μs** |    **11.73 μs** |    **11.52 μs** |  **1,820.7 μs** |  **1.00** |    **0.01** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | int32    | plain                |  3,035.7 μs |    58.02 μs |    93.69 μs |  3,013.2 μs |  1.67 |    0.05 |   15.6250 |  15.6250 | 15.6250 |  4055954 B |          NA |
+| WriteParquetNetAsync | 1000000 | int32    | plain                |    709.5 μs |    13.68 μs |    13.44 μs |    704.4 μs |  0.39 |    0.01 |         - |        - |       - |     7016 B |          NA |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **int64**    | **byte_stream_split**    |  **3,353.3 μs** |    **57.93 μs** |    **51.36 μs** |  **3,340.0 μs** |  **1.00** |    **0.02** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | int64    | byte_stream_split    |  8,503.2 μs |   148.24 μs |   164.77 μs |  8,456.0 μs |  2.54 |    0.06 |   31.2500 |  31.2500 | 31.2500 |  8072925 B |          NA |
+| WriteParquetNetAsync | 1000000 | int64    | byte_stream_split    |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **int64**    | **delta_binary_packed**  |  **1,931.6 μs** |    **15.34 μs** |    **12.81 μs** |  **1,929.7 μs** |  **1.00** |    **0.01** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | int64    | delta_binary_packed  |  3,685.5 μs |    34.20 μs |    26.70 μs |  3,682.7 μs |  1.91 |    0.02 |    7.8125 |        - |       - |    91400 B |          NA |
+| WriteParquetNetAsync | 1000000 | int64    | delta_binary_packed  |  2,997.8 μs |    38.33 μs |    32.01 μs |  2,992.1 μs |  1.55 |    0.02 |   89.8438 |        - |       - |   756120 B |          NA |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **int64**    | **delta_byte_array**     |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | int64    | delta_byte_array     |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | int64    | delta_byte_array     |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **int64**    | **delta(...)array [23]** |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | int64    | delta(...)array [23] |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | int64    | delta(...)array [23] |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **int64**    | **dictionary**           |  **6,655.5 μs** |    **79.34 μs** |    **70.33 μs** |  **6,632.0 μs** |  **1.00** |    **0.01** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | int64    | dictionary           | 72,533.7 μs | 1,070.84 μs |   894.20 μs | 72,551.3 μs | 10.90 |    0.17 |         - |        - |       - | 10521680 B |          NA |
+| WriteParquetNetAsync | 1000000 | int64    | dictionary           |  2,250.4 μs |    40.34 μs |    49.54 μs |  2,240.7 μs |  0.34 |    0.01 |         - |        - |       - |     8256 B |          NA |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **int64**    | **plain**                |  **1,765.1 μs** |    **28.03 μs** |    **21.89 μs** |  **1,754.7 μs** |  **1.00** |    **0.02** |         **-** |        **-** |       **-** |          **-** |          **NA** |
+| WriteParquetSharp    | 1000000 | int64    | plain                |  5,571.1 μs |   172.92 μs |   473.35 μs |  5,368.5 μs |  3.16 |    0.27 |   31.2500 |  31.2500 | 31.2500 |  8072824 B |          NA |
+| WriteParquetNetAsync | 1000000 | int64    | plain                |  1,996.5 μs |    27.24 μs |    22.75 μs |  1,995.5 μs |  1.13 |    0.02 |         - |        - |       - |     8256 B |          NA |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **string**   | **byte_stream_split**    |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | string   | byte_stream_split    |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | string   | byte_stream_split    |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **string**   | **delta_binary_packed**  |          **NA** |          **NA** |          **NA** |          **NA** |     **?** |       **?** |        **NA** |       **NA** |      **NA** |         **NA** |           **?** |
+| WriteParquetSharp    | 1000000 | string   | delta_binary_packed  |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+| WriteParquetNetAsync | 1000000 | string   | delta_binary_packed  | 32,676.9 μs |   618.84 μs |   759.99 μs | 32,666.0 μs |     ? |       ? | 3812.5000 |        - |       - | 32042000 B |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **string**   | **delta_byte_array**     | **21,318.2 μs** |   **423.19 μs** |   **415.63 μs** | **21,285.0 μs** |  **1.00** |    **0.03** |         **-** |        **-** |       **-** |      **128 B** |        **1.00** |
+| WriteParquetSharp    | 1000000 | string   | delta_byte_array     | 45,327.4 μs |   872.09 μs |   856.51 μs | 45,113.1 μs |  2.13 |    0.06 |  909.0909 | 181.8182 |       - | 10080400 B |   78,753.12 |
+| WriteParquetNetAsync | 1000000 | string   | delta_byte_array     |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **string**   | **delta(...)array [23]** | **17,088.0 μs** |   **329.40 μs** |   **308.12 μs** | **16,933.1 μs** |  **1.00** |    **0.02** |         **-** |        **-** |       **-** |      **128 B** |        **1.00** |
+| WriteParquetSharp    | 1000000 | string   | delta(...)array [23] | 37,329.0 μs |   695.37 μs |   997.29 μs | 36,981.5 μs |  2.19 |    0.07 |  909.0909 | 181.8182 |       - | 15818976 B |  123,585.75 |
+| WriteParquetNetAsync | 1000000 | string   | delta(...)array [23] |          NA |          NA |          NA |          NA |     ? |       ? |        NA |       NA |      NA |         NA |           ? |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **string**   | **dictionary**           | **22,610.9 μs** |   **445.70 μs** |   **732.30 μs** | **22,283.5 μs** |  **1.00** |    **0.04** |         **-** |        **-** |       **-** |      **128 B** |        **1.00** |
+| WriteParquetSharp    | 1000000 | string   | dictionary           | 41,711.8 μs |   801.18 μs | 1,096.66 μs | 41,386.4 μs |  1.85 |    0.07 |  916.6667 | 166.6667 |       - |  9700600 B |   75,785.94 |
+| WriteParquetNetAsync | 1000000 | string   | dictionary           | 28,140.7 μs |   543.34 μs |   581.36 μs | 27,992.7 μs |  1.25 |    0.05 |         - |        - |       - | 41962920 B |  327,835.31 |
+|                      |         |          |                      |             |             |             |             |       |         |           |          |         |            |             |
+| **WritePlank**           | **1000000** | **string**   | **plain**                | **16,929.1 μs** |   **321.19 μs** |   **315.45 μs** | **16,895.5 μs** |  **1.00** |    **0.03** |         **-** |        **-** |       **-** |      **128 B** |        **1.00** |
+| WriteParquetSharp    | 1000000 | string   | plain                | 37,289.2 μs |   610.95 μs |   510.17 μs | 37,155.2 μs |  2.20 |    0.05 |  928.5714 | 142.8571 |       - | 19758896 B |  154,366.38 |
+| WriteParquetNetAsync | 1000000 | string   | plain                | 32,099.8 μs |   498.65 μs |   533.55 μs | 31,981.7 μs |  1.90 |    0.05 | 3812.5000 |        - |       - | 32042000 B |  250,328.12 |
+
+Benchmarks with issues:
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=bool, EncodingName=byte_stream_split]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=bool, EncodingName=byte_stream_split]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=bool, EncodingName=byte_stream_split]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=bool, EncodingName=delta_binary_packed]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=bool, EncodingName=delta_binary_packed]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=bool, EncodingName=delta_byte_array]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=bool, EncodingName=delta_byte_array]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=bool, EncodingName=delta_byte_array]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=bool, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=bool, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=bool, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=double, EncodingName=byte_stream_split]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=double, EncodingName=delta_binary_packed]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=double, EncodingName=delta_binary_packed]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=double, EncodingName=delta_byte_array]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=double, EncodingName=delta_byte_array]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=double, EncodingName=delta_byte_array]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=double, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=double, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=double, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=float, EncodingName=byte_stream_split]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=float, EncodingName=delta_binary_packed]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=float, EncodingName=delta_binary_packed]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=float, EncodingName=delta_byte_array]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=float, EncodingName=delta_byte_array]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=float, EncodingName=delta_byte_array]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=float, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=float, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=float, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=int32, EncodingName=byte_stream_split]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=int32, EncodingName=delta_byte_array]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=int32, EncodingName=delta_byte_array]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=int32, EncodingName=delta_byte_array]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=int32, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=int32, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=int32, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=int64, EncodingName=byte_stream_split]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=int64, EncodingName=delta_byte_array]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=int64, EncodingName=delta_byte_array]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=int64, EncodingName=delta_byte_array]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=int64, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=int64, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=int64, EncodingName=delta(...)array [23]]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=string, EncodingName=byte_stream_split]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=string, EncodingName=byte_stream_split]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=string, EncodingName=byte_stream_split]
+  EncodingBenchmark.WritePlank: DefaultJob [Rows=1000000, DataType=string, EncodingName=delta_binary_packed]
+  EncodingBenchmark.WriteParquetSharp: DefaultJob [Rows=1000000, DataType=string, EncodingName=delta_binary_packed]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=string, EncodingName=delta_byte_array]
+  EncodingBenchmark.WriteParquetNetAsync: DefaultJob [Rows=1000000, DataType=string, EncodingName=delta(...)array [23]]

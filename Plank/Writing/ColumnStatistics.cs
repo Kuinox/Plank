@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Numerics;
 using System.Text;
 using Plank.Schema;
 using TextEncoding = System.Text.Encoding;
@@ -325,8 +326,11 @@ internal readonly struct ColumnStatistics
         var max = false;
         for (var i = 0; i < values.Length; i++)
         {
-            min &= values[i];
-            max |= values[i];
+            var value = values[i];
+            min &= value;
+            max |= value;
+            if (!min && max)
+                break;
         }
 
         return new ColumnStatistics(ColumnStatisticsValueKind.Boolean, min ? 1 : 0, max ? 1 : 0, nullCount, true);
@@ -666,6 +670,160 @@ internal readonly struct ColumnStatistics
     {
         min = 0;
         max = 0;
+        if (values.Length == 0)
+            return false;
+        if (Vector.IsHardwareAccelerated && values.Length >= Vector<float>.Count)
+            return TryGetFloatMinMaxVectorized(values, out min, out max);
+
+        var first = values[0];
+        if (float.IsNaN(first))
+            return TryGetFloatMinMaxScalar(values, out min, out max);
+
+        min = first;
+        max = first;
+
+        for (var i = 1; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (float.IsNaN(value))
+                continue;
+
+            if (value < min)
+                min = value;
+            if (value > max)
+                max = value;
+        }
+
+        return true;
+    }
+
+    static bool TryGetDoubleMinMax(ReadOnlySpan<double> values, out double min, out double max)
+    {
+        min = 0;
+        max = 0;
+        if (values.Length == 0)
+            return false;
+        if (Vector.IsHardwareAccelerated && values.Length >= Vector<double>.Count)
+            return TryGetDoubleMinMaxVectorized(values, out min, out max);
+
+        var first = values[0];
+        if (double.IsNaN(first))
+            return TryGetDoubleMinMaxScalar(values, out min, out max);
+
+        min = first;
+        max = first;
+
+        for (var i = 1; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (double.IsNaN(value))
+                continue;
+
+            if (value < min)
+                min = value;
+            if (value > max)
+                max = value;
+        }
+
+        return true;
+    }
+
+    static bool TryGetFloatMinMaxVectorized(ReadOnlySpan<float> values, out float min, out float max)
+    {
+        var width = Vector<float>.Count;
+        var first = new Vector<float>(values);
+        if (!Vector.EqualsAll(first, first))
+            return TryGetFloatMinMaxScalar(values, out min, out max);
+
+        var minVector = first;
+        var maxVector = first;
+        var i = width;
+        for (; i <= values.Length - width; i += width)
+        {
+            var current = new Vector<float>(values[i..]);
+            if (!Vector.EqualsAll(current, current))
+                return TryGetFloatMinMaxScalar(values, out min, out max);
+
+            minVector = Vector.Min(minVector, current);
+            maxVector = Vector.Max(maxVector, current);
+        }
+
+        min = minVector[0];
+        max = maxVector[0];
+        for (var lane = 1; lane < width; lane++)
+        {
+            var minCandidate = minVector[lane];
+            var maxCandidate = maxVector[lane];
+            if (minCandidate < min)
+                min = minCandidate;
+            if (maxCandidate > max)
+                max = maxCandidate;
+        }
+
+        for (; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (float.IsNaN(value))
+                return TryGetFloatMinMaxScalar(values, out min, out max);
+            if (value < min)
+                min = value;
+            if (value > max)
+                max = value;
+        }
+
+        return true;
+    }
+
+    static bool TryGetDoubleMinMaxVectorized(ReadOnlySpan<double> values, out double min, out double max)
+    {
+        var width = Vector<double>.Count;
+        var first = new Vector<double>(values);
+        if (!Vector.EqualsAll(first, first))
+            return TryGetDoubleMinMaxScalar(values, out min, out max);
+
+        var minVector = first;
+        var maxVector = first;
+        var i = width;
+        for (; i <= values.Length - width; i += width)
+        {
+            var current = new Vector<double>(values[i..]);
+            if (!Vector.EqualsAll(current, current))
+                return TryGetDoubleMinMaxScalar(values, out min, out max);
+
+            minVector = Vector.Min(minVector, current);
+            maxVector = Vector.Max(maxVector, current);
+        }
+
+        min = minVector[0];
+        max = maxVector[0];
+        for (var lane = 1; lane < width; lane++)
+        {
+            var minCandidate = minVector[lane];
+            var maxCandidate = maxVector[lane];
+            if (minCandidate < min)
+                min = minCandidate;
+            if (maxCandidate > max)
+                max = maxCandidate;
+        }
+
+        for (; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (double.IsNaN(value))
+                return TryGetDoubleMinMaxScalar(values, out min, out max);
+            if (value < min)
+                min = value;
+            if (value > max)
+                max = value;
+        }
+
+        return true;
+    }
+
+    static bool TryGetFloatMinMaxScalar(ReadOnlySpan<float> values, out float min, out float max)
+    {
+        min = 0;
+        max = 0;
         var hasValue = false;
         for (var i = 0; i < values.Length; i++)
         {
@@ -690,7 +848,7 @@ internal readonly struct ColumnStatistics
         return hasValue;
     }
 
-    static bool TryGetDoubleMinMax(ReadOnlySpan<double> values, out double min, out double max)
+    static bool TryGetDoubleMinMaxScalar(ReadOnlySpan<double> values, out double min, out double max)
     {
         min = 0;
         max = 0;

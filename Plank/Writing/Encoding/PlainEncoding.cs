@@ -65,7 +65,37 @@ static class PlainEncoding
         var fullByteCount = booleanValues.Length >> 3;
         var valueIndex = 0;
         var byteIndex = 0;
-        if (Sse2.IsSupported)
+        if (BitConverter.IsLittleEndian && Vector512.IsHardwareAccelerated && Vector512<byte>.IsSupported)
+        {
+            var vectorValueCount = sourceBytes.Length / Vector512<byte>.Count;
+            ref var source = ref MemoryMarshal.GetReference(sourceBytes);
+            for (var i = 0; i < vectorValueCount; i++)
+            {
+                var isFalse = Vector512.Equals(Vector512.LoadUnsafe(ref source), Vector512<byte>.Zero);
+                var mask = (ulong)~isFalse.ExtractMostSignificantBits();
+                Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
+                byteIndex += sizeof(ulong);
+                source = ref Unsafe.Add(ref source, Vector512<byte>.Count);
+            }
+
+            valueIndex = vectorValueCount * Vector512<byte>.Count;
+        }
+        else if (BitConverter.IsLittleEndian && Vector256.IsHardwareAccelerated && Vector256<byte>.IsSupported)
+        {
+            var vectorValueCount = sourceBytes.Length / Vector256<byte>.Count;
+            ref var source = ref MemoryMarshal.GetReference(sourceBytes);
+            for (var i = 0; i < vectorValueCount; i++)
+            {
+                var isFalse = Vector256.Equals(Vector256.LoadUnsafe(ref source), Vector256<byte>.Zero);
+                var mask = (uint)~isFalse.ExtractMostSignificantBits();
+                Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
+                byteIndex += sizeof(uint);
+                source = ref Unsafe.Add(ref source, Vector256<byte>.Count);
+            }
+
+            valueIndex = vectorValueCount * Vector256<byte>.Count;
+        }
+        else if (Sse2.IsSupported)
         {
             var simdValueCount = sourceBytes.Length & ~15;
             for (; valueIndex < simdValueCount; valueIndex += 16)

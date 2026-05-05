@@ -1,0 +1,109 @@
+library,data_type,requested_encoding,status,actual_encoding,raw_encodings,error
+plank,bool,plain,used_requested,plain,Plain,
+plank,bool,dictionary,used_requested,dictionary,Plain|PlainDictionary,
+plank,bool,delta_binary_packed,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,bool,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,bool,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,bool,byte_stream_split,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,int32,plain,used_requested,plain,Plain,
+plank,int32,dictionary,used_requested,dictionary,Plain|PlainDictionary,
+plank,int32,delta_binary_packed,used_requested,delta_binary_packed,DeltaBinaryPacked,
+plank,int32,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,int32,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,int32,byte_stream_split,used_requested,byte_stream_split,ByteStreamSplit,
+plank,int64,plain,used_requested,plain,Plain,
+plank,int64,dictionary,used_requested,dictionary,Plain|PlainDictionary,
+plank,int64,delta_binary_packed,used_requested,delta_binary_packed,DeltaBinaryPacked,
+plank,int64,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,int64,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,int64,byte_stream_split,used_requested,byte_stream_split,ByteStreamSplit,
+plank,float,plain,used_requested,plain,Plain,
+plank,float,dictionary,used_requested,dictionary,Plain|PlainDictionary,
+plank,float,delta_binary_packed,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,float,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,float,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,float,byte_stream_split,used_requested,byte_stream_split,ByteStreamSplit,
+plank,double,plain,used_requested,plain,Plain,
+plank,double,dictionary,used_requested,dictionary,Plain|PlainDictionary,
+plank,double,delta_binary_packed,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,double,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,double,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,double,byte_stream_split,used_requested,byte_stream_split,ByteStreamSplit,
+plank,string,plain,used_requested,plain,Plain,
+plank,string,dictionary,used_requested,dictionary,Plain|PlainDictionary,
+plank,string,delta_binary_packed,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+plank,string,delta_length_byte_array,used_requested,delta_length_byte_array,DeltaLengthByteArray,
+plank,string,delta_byte_array,used_requested,delta_byte_array,DeltaByteArray,
+plank,string,byte_stream_split,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,bool,plain,used_requested,plain,Plain|Rle,
+parquetsharp,bool,dictionary,gave_up,plain,Plain|Rle,
+parquetsharp,bool,delta_binary_packed,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,bool,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,bool,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,bool,byte_stream_split,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,int32,plain,used_requested,plain,Plain|Rle,
+parquetsharp,int32,dictionary,used_requested,dictionary,Plain|Rle|RleDictionary,
+parquetsharp,int32,delta_binary_packed,used_requested,delta_binary_packed,DeltaBinaryPacked|Rle,
+parquetsharp,int32,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,int32,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,int32,byte_stream_split,used_requested,byte_stream_split,ByteStreamSplit|Rle,
+parquetsharp,int64,plain,used_requested,plain,Plain|Rle,
+parquetsharp,int64,dictionary,used_requested,dictionary,Plain|Rle|RleDictionary,
+parquetsharp,int64,delta_binary_packed,used_requested,delta_binary_packed,DeltaBinaryPacked|Rle,
+parquetsharp,int64,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,int64,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,int64,byte_stream_split,used_requested,byte_stream_split,ByteStreamSplit|Rle,
+parquetsharp,float,plain,used_requested,plain,Plain|Rle,
+parquetsharp,float,dictionary,used_requested,dictionary,Plain|Rle|RleDictionary,
+parquetsharp,float,delta_binary_packed,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,float,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,float,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,float,byte_stream_split,used_requested,byte_stream_split,ByteStreamSplit|Rle,
+parquetsharp,double,plain,used_requested,plain,Plain|Rle,
+parquetsharp,double,dictionary,used_requested,dictionary,Plain|Rle|RleDictionary,
+parquetsharp,double,delta_binary_packed,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,double,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,double,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,double,byte_stream_split,used_requested,byte_stream_split,ByteStreamSplit|Rle,
+parquetsharp,string,plain,used_requested,plain,Plain|Rle,
+parquetsharp,string,dictionary,used_requested,dictionary,Plain|Rle|RleDictionary,
+parquetsharp,string,delta_binary_packed,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquetsharp,string,delta_length_byte_array,used_requested,delta_length_byte_array,DeltaLengthByteArray|Rle,
+parquetsharp,string,delta_byte_array,used_requested,delta_byte_array,DeltaByteArray|Rle,
+parquetsharp,string,byte_stream_split,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,bool,plain,used_requested,plain,Plain|Rle,
+parquet.net,bool,dictionary,gave_up,plain,Plain|Rle,
+parquet.net,bool,delta_binary_packed,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,bool,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,bool,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,bool,byte_stream_split,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,int32,plain,used_requested,plain,Plain|Rle,
+parquet.net,int32,dictionary,gave_up,plain,Plain|Rle,
+parquet.net,int32,delta_binary_packed,used_requested,delta_binary_packed,DeltaBinaryPacked|Rle,
+parquet.net,int32,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,int32,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,int32,byte_stream_split,unsupported,,,Parquet.Net benchmark path does not support encoding 'byte_stream_split'.
+parquet.net,int64,plain,used_requested,plain,Plain|Rle,
+parquet.net,int64,dictionary,gave_up,plain,Plain|Rle,
+parquet.net,int64,delta_binary_packed,used_requested,delta_binary_packed,DeltaBinaryPacked|Rle,
+parquet.net,int64,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,int64,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,int64,byte_stream_split,unsupported,,,Parquet.Net benchmark path does not support encoding 'byte_stream_split'.
+parquet.net,float,plain,used_requested,plain,Plain|Rle,
+parquet.net,float,dictionary,gave_up,plain,Plain|Rle,
+parquet.net,float,delta_binary_packed,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,float,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,float,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,float,byte_stream_split,unsupported,,,Parquet.Net benchmark path does not support encoding 'byte_stream_split'.
+parquet.net,double,plain,used_requested,plain,Plain|Rle,
+parquet.net,double,dictionary,gave_up,plain,Plain|Rle,
+parquet.net,double,delta_binary_packed,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,double,delta_length_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,double,delta_byte_array,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,double,byte_stream_split,unsupported,,,Parquet.Net benchmark path does not support encoding 'byte_stream_split'.
+parquet.net,string,plain,used_requested,plain,Plain|Rle,
+parquet.net,string,dictionary,used_requested,dictionary,PlainDictionary|Rle,
+parquet.net,string,delta_binary_packed,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.
+parquet.net,string,delta_length_byte_array,unsupported,,,Parquet.Net benchmark path does not support encoding 'delta_length_byte_array'.
+parquet.net,string,delta_byte_array,unsupported,,,Parquet.Net benchmark path does not support encoding 'delta_byte_array'.
+parquet.net,string,byte_stream_split,not_parquet_supported,,,The Parquet format does not support this encoding for this physical type.

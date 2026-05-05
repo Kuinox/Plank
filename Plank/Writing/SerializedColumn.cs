@@ -589,7 +589,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategy, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
-        AssignPageStatistics(values);
+        if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
+            AssignPageStatistics(values);
     }
 
     void SerializeOptionalCore<TValue>(ReadOnlySpan<TValue?> values, uint columnOrdinal, IPageStrategy strategy)
@@ -607,7 +608,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategy, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
-        AssignOptionalPageStatistics(values);
+        if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
+            AssignOptionalPageStatistics(values);
     }
 
     void SerializeOptionalCore<TValue>(ReadOnlySpan<TValue> values, uint columnOrdinal, IPageStrategy strategy)
@@ -625,7 +627,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategy, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
-        AssignOptionalPageStatistics(values);
+        if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
+            AssignOptionalPageStatistics(values);
     }
 
     void ISerializedColumn.Consume()
@@ -633,6 +636,30 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     internal void Consume()
         => HasPendingData = false;
+
+    bool TryAssignSingleDataPageStatistics(ColumnStatistics statistics)
+    {
+        var dataPageIndex = -1;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var candidate = ref Pages[i];
+            if (candidate.Kind != PageKind.DataV2)
+                continue;
+            if (dataPageIndex >= 0)
+                return false;
+            dataPageIndex = i;
+        }
+
+        if (dataPageIndex < 0)
+            return false;
+
+        ref var page = ref Pages[dataPageIndex];
+        if (page.RowCount != RowCount)
+            return false;
+
+        page.Statistics = statistics;
+        return true;
+    }
 
     ReusableDictionaryState<TValue> GetOrCreateDictionaryState<TValue>()
         where TValue : notnull

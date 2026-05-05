@@ -6,10 +6,12 @@ namespace Plank.Writing.PageStrategy;
 sealed class DefaultStrategy : IPageStrategy
 {
     readonly DictionaryMode _dictionaryMode;
+    readonly int _targetDataPageSizeBytes;
     int _dictionarySortOrder = (int)DictionarySortOrder.Unknown;
 
-    public DefaultStrategy(Column column)
+    public DefaultStrategy(Column column, int targetDataPageSizeBytes)
     {
+        _targetDataPageSizeBytes = targetDataPageSizeBytes;
         var encodings = column.Options.Encodings;
         for (var i = 0; i < encodings.Length; i++)
             if (encodings[i] is EncodingKind.PlainDictionary or EncodingKind.RleDictionary)
@@ -53,6 +55,12 @@ sealed class DefaultStrategy : IPageStrategy
             ((long)uniqueCount * totalRowCount + rowsSeen - 1) / rowsSeen);
         return (long)projectedUniqueCount * 4 >= (long)totalRowCount * 3
                && (long)uniqueCount * 100 >= (long)rowsSeen * 85;
+    }
+
+    public bool TryGetTargetDataPageSizeBytes(out int sizeBytes)
+    {
+        sizeBytes = _targetDataPageSizeBytes;
+        return true;
     }
 
     public bool ShouldStartNewDataPage(int totalRowCount, int rowsWritten, int currentPageRowCount)

@@ -1,15 +1,10 @@
 using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Engines;
 using System.Collections.Immutable;
 using Parquet;
 using Parquet.Schema;
-using ParquetSharp;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
-using CompressionMethod = Parquet.CompressionMethod;
-using DataColumn = Parquet.Data.DataColumn;
-using Encoding = ParquetSharp.Encoding;
 using ParquetSchema = Parquet.Schema.ParquetSchema;
 using PlankColumn = Plank.Schema.Column;
 using PlankSchema = Plank.Schema.ParquetSchema;
@@ -20,12 +15,6 @@ namespace Plank.Benchmarks;
 [SimpleJob]
 public class EncodingBenchmark
 {
-    static readonly ParquetSharp.Column<bool> _parquetSharpBoolColumn = new("value");
-    static readonly ParquetSharp.Column<int> _parquetSharpInt32Column = new("value");
-    static readonly ParquetSharp.Column<long> _parquetSharpInt64Column = new("value");
-    static readonly ParquetSharp.Column<float> _parquetSharpFloatColumn = new("value");
-    static readonly ParquetSharp.Column<double> _parquetSharpDoubleColumn = new("value");
-    static readonly ParquetSharp.Column<string> _parquetSharpStringColumn = new("value");
     static readonly DataField<bool> _parquetNetBoolField = new("value");
     static readonly DataField<int> _parquetNetInt32Field = new("value");
     static readonly DataField<long> _parquetNetInt64Field = new("value");
@@ -42,7 +31,6 @@ public class EncodingBenchmark
     MemoryStream _sharedStream = null!;
     PlankColumn _plankColumn = null!;
     Plank.Writing.ParquetWriter _plankWriter = null!;
-    ParquetSharp.Column _parquetSharpColumn = null!;
     SerializedColumn<bool>? _plankBoolColumn;
     SerializedColumn<int>? _plankInt32Column;
     SerializedColumn<long>? _plankInt64Column;
@@ -61,11 +49,17 @@ public class EncodingBenchmark
     [Params(1_000_000)]
     public int Rows { get; set; }
 
-    [Params("bool", "int32", "int64", "float", "double", "string")]
-    public string DataType { get; set; } = "bool";
+    public static IEnumerable<EncodingBenchmarkCase> Cases
+        => EncodingSupportMatrix.GetSelectedCases();
 
-    [Params("plain", "dictionary", "delta_binary_packed", "delta_length_byte_array", "delta_byte_array", "byte_stream_split")]
-    public string EncodingName { get; set; } = "plain";
+    [ParamsSource(nameof(Cases))]
+    public EncodingBenchmarkCase Case { get; set; } = new("bool", "plain");
+
+    string DataType
+        => Case.DataType;
+
+    string EncodingName
+        => Case.EncodingName;
 
     [GlobalSetup]
     public void GlobalSetup()
@@ -99,7 +93,6 @@ public class EncodingBenchmark
             Compression = CompressionKind.None
         });
         InitializePlankSerializedColumn();
-        _parquetSharpColumn = GetParquetSharpColumn(DataType);
     }
 
     [GlobalCleanup]
@@ -151,49 +144,12 @@ public class EncodingBenchmark
     }
 
     [Benchmark]
-    public void WriteParquetSharp()
-    {
-        ResetSharedStream();
-        using var writerProperties = BuildParquetSharpWriterProperties(EncodingName, DataType, Rows);
-        using var writer = new ParquetFileWriter(_sharedStream, [_parquetSharpColumn], null,
-            writerProperties, null, true);
-        using var rowGroupWriter = writer.AppendRowGroup();
-        switch (DataType)
-        {
-            case "bool":
-                using (var col = rowGroupWriter.NextColumn().LogicalWriter<bool>())
-                    col.WriteBatch(_boolValues);
-                break;
-            case "int32":
-                using (var col = rowGroupWriter.NextColumn().LogicalWriter<int>())
-                    col.WriteBatch(_int32Values);
-                break;
-            case "int64":
-                using (var col = rowGroupWriter.NextColumn().LogicalWriter<long>())
-                    col.WriteBatch(_int64Values);
-                break;
-            case "float":
-                using (var col = rowGroupWriter.NextColumn().LogicalWriter<float>())
-                    col.WriteBatch(_floatValues);
-                break;
-            case "double":
-                using (var col = rowGroupWriter.NextColumn().LogicalWriter<double>())
-                    col.WriteBatch(_doubleValues);
-                break;
-            case "string":
-                using (var col = rowGroupWriter.NextColumn().LogicalWriter<string>())
-                    col.WriteBatch(_stringValues);
-                break;
-            default:
-                throw new InvalidOperationException($"Unknown type '{DataType}'.");
-        }
-
-        writer.Close();
-    }
-
-    [Benchmark]
     public async Task WriteParquetNetAsync()
     {
+        if (!EncodingSupportMatrix.IsParquetNetSupported(DataType, EncodingName))
+            throw new NotSupportedException(
+                $"Parquet.Net does not produce requested encoding '{EncodingName}' for data type '{DataType}'.");
+
         ResetSharedStream();
         var options = BuildParquetNetOptions(EncodingName);
 
@@ -220,7 +176,7 @@ public class EncodingBenchmark
                     .ConfigureAwait(false);
                 break;
             case "string":
-                await WriteParquetNetColumnAsync(_parquetNetStringSchema, _parquetNetStringField, _stringValues)
+                await WriteParquetNetStringColumnAsync(_parquetNetStringSchema, _parquetNetStringField, _stringValues)
                     .ConfigureAwait(false);
                 break;
             default:
@@ -228,12 +184,20 @@ public class EncodingBenchmark
         }
 
         async Task WriteParquetNetColumnAsync<T>(ParquetSchema schema, DataField<T> field, T[] values)
+            where T : struct
         {
             await using var writer = await Parquet.ParquetWriter.CreateAsync(schema, _sharedStream, options, false)
                 .ConfigureAwait(false);
-            writer.CompressionMethod = CompressionMethod.None;
             using var rowGroupWriter = writer.CreateRowGroup();
-            await rowGroupWriter.WriteColumnAsync(new DataColumn(field, values)).ConfigureAwait(false);
+            await rowGroupWriter.WriteAsync<T>(field, values.AsMemory(), null, null, default).ConfigureAwait(false);
+        }
+
+        async Task WriteParquetNetStringColumnAsync(ParquetSchema schema, DataField<string> field, string[] values)
+        {
+            await using var writer = await Parquet.ParquetWriter.CreateAsync(schema, _sharedStream, options, false)
+                .ConfigureAwait(false);
+            using var rowGroupWriter = writer.CreateRowGroup();
+            await rowGroupWriter.WriteAsync(field, values).ConfigureAwait(false);
         }
     }
 
@@ -291,51 +255,6 @@ public class EncodingBenchmark
                     .Add(column.Name, ForceDictionaryPageStrategy.Shared)
             }
             : new PlankSchema([column]);
-
-    static ParquetSharp.Column GetParquetSharpColumn(string dataType)
-        => dataType switch
-        {
-            "bool" => _parquetSharpBoolColumn,
-            "int32" => _parquetSharpInt32Column,
-            "int64" => _parquetSharpInt64Column,
-            "float" => _parquetSharpFloatColumn,
-            "double" => _parquetSharpDoubleColumn,
-            "string" => _parquetSharpStringColumn,
-            _ => throw new InvalidOperationException($"Unknown type '{dataType}'.")
-        };
-
-    static WriterProperties BuildParquetSharpWriterProperties(string encoding, string dataType, int rows)
-    {
-        var builder = new WriterPropertiesBuilder().Compression(Compression.Uncompressed);
-        if (encoding == "dictionary")
-            return builder.EnableDictionary().DictionaryPagesizeLimit(GetForcedDictionaryPageSizeLimitBytes(
-                dataType, rows)).Build();
-
-        var mapped = encoding switch
-        {
-            "plain" => Encoding.Plain,
-            "delta_binary_packed" => Encoding.DeltaBinaryPacked,
-            "delta_length_byte_array" => Encoding.DeltaLengthByteArray,
-            "delta_byte_array" => Encoding.DeltaByteArray,
-            "byte_stream_split" => Encoding.ByteStreamSplit,
-            _ => Encoding.Plain
-        };
-        return builder.DisableDictionary().Encoding(mapped).Build();
-    }
-
-    static long GetForcedDictionaryPageSizeLimitBytes(string dataType, int rows)
-    {
-        var estimatedValueSizeBytes = dataType switch
-        {
-            "int32" => 4L,
-            "int64" => 8L,
-            "float" => 4L,
-            "double" => 8L,
-            "string" => 32L,
-            _ => 8L
-        };
-        return checked(rows * estimatedValueSizeBytes * 4L);
-    }
 
     static ParquetOptions BuildParquetNetOptions(string encoding)
         => ParquetNetEncodingOptions.ForEncoding(encoding);

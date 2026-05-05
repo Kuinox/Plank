@@ -19,6 +19,7 @@ public sealed class ParquetWriter
     internal readonly int ColumnCount;
     internal readonly BufferWriterFactory BufferWriters;
     internal readonly CompressionKind Compression;
+    internal readonly bool WritePageIndexes;
     internal readonly CompressionContext CompressionContext;
     internal readonly ColumnChunkMetadata[] OpenRowGroupColumnMetadata;
     readonly RowGroupWriter _rowGroupWriter;
@@ -53,10 +54,12 @@ public sealed class ParquetWriter
         if (ColumnProjectionInfosByOrdinal.Length != ColumnsByOrdinal.Length)
             throw new InvalidOperationException("Leaf projection metadata did not match projected column count.");
         ColumnCount = ColumnsByOrdinal.Length;
-        _pageStrategiesByOrdinal = CreateColumnPageStrategies(ColumnsByOrdinal, _schema.PageStrategiesByColumnName);
+        _pageStrategiesByOrdinal = CreateColumnPageStrategies(ColumnsByOrdinal, _schema.PageStrategiesByColumnName,
+            checked((int)_options.TargetDataPageSizeBytes));
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
             _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
         Compression = _options.Compression;
+        WritePageIndexes = _options.WritePageIndexes;
         CompressionContext = new CompressionContext(BufferWriters);
         OpenRowGroupColumnMetadata = ColumnCount == 0 ? [] : new ColumnChunkMetadata[ColumnCount];
         _rowGroupWriter = new RowGroupWriter(this);
@@ -150,7 +153,7 @@ public sealed class ParquetWriter
         => _pageStrategiesByOrdinal[columnOrdinal];
 
     static IPageStrategy[] CreateColumnPageStrategies(Column[] columns,
-        IReadOnlyDictionary<string, IPageStrategy> pageStrategiesByColumnName)
+        IReadOnlyDictionary<string, IPageStrategy> pageStrategiesByColumnName, int targetDataPageSizeBytes)
     {
         if (columns.Length == 0)
             return [];
@@ -161,7 +164,7 @@ public sealed class ParquetWriter
             if (pageStrategiesByColumnName.TryGetValue(columns[i].Name, out var overrideStrategy))
                 result[i] = overrideStrategy;
             else
-                result[i] = new DefaultStrategy(columns[i]);
+                result[i] = new DefaultStrategy(columns[i], targetDataPageSizeBytes);
         }
         return result;
     }

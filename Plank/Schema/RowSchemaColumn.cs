@@ -10,6 +10,7 @@ public sealed record RowSchemaColumn
         ClrType = clrType;
         Options = options ?? ColumnOptions.Default;
         LogicalType = logicalType;
+        EncodingCompatibility.Validate(Name, PhysicalType, Options);
     }
 
     public string Name { get; }

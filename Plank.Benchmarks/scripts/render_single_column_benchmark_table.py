@@ -9,7 +9,7 @@ import re
 import sys
 from pathlib import Path
 
-LIBRARY_ORDER = ["Plank", "ParquetSharp", "Parquet.Net"]
+LIBRARY_ORDER = ["Plank", "Parquet.Net"]
 TYPE_ORDER = ["bool", "int32", "int64", "float", "double", "string"]
 ENCODING_ORDER = [
     "plain",
@@ -134,8 +134,6 @@ def parse_library(method_name: str) -> str | None:
     method_name = method_name.strip()
     if method_name.startswith("WritePlank"):
         return "Plank"
-    if method_name.startswith("WriteParquetSharp"):
-        return "ParquetSharp"
     if method_name.startswith("WriteParquetNet"):
         return "Parquet.Net"
     return None
@@ -167,14 +165,13 @@ def parse_scenario(row: dict[str, str]) -> tuple[str, str] | None:
 
 
 def render_markdown(table: dict[tuple[str, str], dict[str, str]]) -> None:
-    print("| Type | Encoding | Plank | ParquetSharp | Parquet.Net |")
-    print("| --- | --- | --- | --- | --- |")
+    print("| Type | Encoding | Plank | Parquet.Net |")
+    print("| --- | --- | --- | --- |")
     for data_type, encoding in sorted(table.keys(), key=sort_key):
         values = table[(data_type, encoding)]
         plank = values.get("Plank", "n/a")
-        parquet_sharp = values.get("ParquetSharp", "n/a")
         parquet_net = values.get("Parquet.Net", "n/a")
-        print(f"| {data_type} | {encoding} | {plank} | {parquet_sharp} | {parquet_net} |")
+        print(f"| {data_type} | {encoding} | {plank} | {parquet_net} |")
 
 
 def sort_key(item: tuple[str, str]) -> tuple[int, int, str, str]:
@@ -235,7 +232,6 @@ def resolve_compat_path(compat_csv: str | None) -> Path | None:
 def normalize_library(library: str) -> str:
     return {
         "Plank": "plank",
-        "ParquetSharp": "parquetsharp",
         "Parquet.Net": "parquet.net",
     }[library]
 

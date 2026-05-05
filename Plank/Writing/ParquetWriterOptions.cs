@@ -14,7 +14,11 @@ public sealed class ParquetWriterOptions
 
     public uint InitialPageCapacity { get; init; } = 4;
 
+    public uint TargetDataPageSizeBytes { get; init; } = 1024 * 1024;
+
     public CompressionKind Compression { get; init; } = CompressionKind.None;
+
+    public bool WritePageIndexes { get; init; } = true;
 
     public uint RowApiMaxParallelism { get; init; } = checked((uint)Environment.ProcessorCount);
 
@@ -30,6 +34,12 @@ public sealed class ParquetWriterOptions
         if (InitialColumnBufferBytes == 0)
             throw new ArgumentOutOfRangeException(nameof(InitialColumnBufferBytes), InitialColumnBufferBytes,
                 "Initial column buffer size must be greater than zero.");
+        if (TargetDataPageSizeBytes == 0)
+            throw new ArgumentOutOfRangeException(nameof(TargetDataPageSizeBytes), TargetDataPageSizeBytes,
+                "Target data page size must be greater than zero.");
+        if (TargetDataPageSizeBytes > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(TargetDataPageSizeBytes), TargetDataPageSizeBytes,
+                $"Target data page size must be <= {int.MaxValue}.");
         if (RowApiMaxParallelism == 0)
             throw new ArgumentOutOfRangeException(nameof(RowApiMaxParallelism), RowApiMaxParallelism,
                 "Row API max parallelism must be greater than zero.");

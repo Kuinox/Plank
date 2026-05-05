@@ -118,8 +118,17 @@ internal sealed class EncodingTypeMatrixE2ETests
         var path = NewPath($"unsupported-{testCase.Encoding}-{testCase.PhysicalType}");
         try
         {
+            PlankParquetSchema schema;
+            try
+            {
+                schema = CreateSchema(testCase.Encoding, testCase.PhysicalType);
+            }
+            catch (NotSupportedException)
+            {
+                return;
+            }
+
             using var stream = File.Create(path);
-            var schema = CreateSchema(testCase.Encoding, testCase.PhysicalType);
             var writer = schema.CreateWriter(stream, new ParquetWriterOptions
             {
                 Compression = CompressionKind.None

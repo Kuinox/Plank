@@ -51,31 +51,17 @@ internal sealed class RowGroupWriterContractTests
     [Test]
     public async Task ThrowsWhenRleEncodingIsUsedForNonBooleanColumn()
     {
-        using var stream = new MemoryStream();
-        var schema = new ParquetSchema([
-            new PlankColumn("A", ParquetPhysicalType.Int32,
-                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Rle)))
-        ]);
-        var writer = schema.CreateWriter(stream);
-        var serialized = writer.CreateSerializedColumn<int>(schema.Columns[0]);
-
         await Assert.ThrowsAsync<NotSupportedException>(async () =>
-            await Task.Run(() => serialized.Serialize([1, 2, 3])).ConfigureAwait(false));
+            await Task.Run(() => new PlankColumn("A", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Rle)))).ConfigureAwait(false));
     }
 
     [Test]
     public async Task ThrowsWhenBitPackedEncodingIsUsedForDataColumn()
     {
-        using var stream = new MemoryStream();
-        var schema = new ParquetSchema([
-            new PlankColumn("A", ParquetPhysicalType.Int32,
-                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.BitPacked)))
-        ]);
-        var writer = schema.CreateWriter(stream);
-        var serialized = writer.CreateSerializedColumn<int>(schema.Columns[0]);
-
         await Assert.ThrowsAsync<NotSupportedException>(async () =>
-            await Task.Run(() => serialized.Serialize([1, 2, 3])).ConfigureAwait(false));
+            await Task.Run(() => new PlankColumn("A", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.BitPacked)))).ConfigureAwait(false));
     }
 
     [Test]

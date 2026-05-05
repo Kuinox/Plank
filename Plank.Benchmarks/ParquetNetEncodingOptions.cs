@@ -9,19 +9,21 @@ static class ParquetNetEncodingOptions
         {
             "plain" => new ParquetOptions
             {
-                UseDictionaryEncoding = false,
-                UseDeltaBinaryPackedEncoding = false
+                CompressionMethod = CompressionMethod.None,
+                DictionaryEncodingThreshold = 0,
+                ColumnEncodingHints = { ["value"] = EncodingHint.Default }
             },
             "dictionary" => new ParquetOptions
             {
-                UseDictionaryEncoding = true,
+                CompressionMethod = CompressionMethod.None,
                 DictionaryEncodingThreshold = 1.0,
-                UseDeltaBinaryPackedEncoding = false
+                ColumnEncodingHints = { ["value"] = EncodingHint.Dictionary }
             },
             "delta_binary_packed" => new ParquetOptions
             {
-                UseDictionaryEncoding = false,
-                UseDeltaBinaryPackedEncoding = true
+                CompressionMethod = CompressionMethod.None,
+                DictionaryEncodingThreshold = 0,
+                ColumnEncodingHints = { ["value"] = EncodingHint.DeltaBinaryPacked }
             },
             _ => throw new NotSupportedException(
                 $"Parquet.Net benchmark path does not support encoding '{encoding}'.")

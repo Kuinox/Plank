@@ -76,9 +76,11 @@ public sealed class RowGroupWriter
         var dictionaryPageOffset = 0L;
         var hasDictionaryPage = false;
         var nullCount = 0L;
-        EnsurePageIndexCapacity(columnOrdinal, pages.Count);
-        var pageStatistics = _pageStatisticsByColumn[columnOrdinal];
-        var pageLocations = _pageLocationsByColumn[columnOrdinal];
+        var writePageIndexes = _writer.WritePageIndexes;
+        if (writePageIndexes)
+            EnsurePageIndexCapacity(columnOrdinal, pages.Count);
+        var pageStatistics = writePageIndexes ? _pageStatisticsByColumn[columnOrdinal] : [];
+        var pageLocations = writePageIndexes ? _pageLocationsByColumn[columnOrdinal] : [];
         var dataPageCount = 0;
         var firstRowIndex = 0L;
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
@@ -193,11 +195,14 @@ public sealed class RowGroupWriter
             totalCompressedSize += checked((long)headerSize + storedContentSize);
             if (pageKind != PageKind.DataV2)
                 continue;
-            pageStatistics[dataPageCount] = page.Statistics.HasStatistics
-                ? page.Statistics.WithNullCount(page.NullCount)
-                : ColumnStatistics.Empty(page.NullCount);
-            pageLocations[dataPageCount] = new PageLocation(pageOffset, checked(headerSize + storedContentSize),
-                firstRowIndex);
+            if (writePageIndexes)
+            {
+                pageStatistics[dataPageCount] = page.Statistics.HasStatistics
+                    ? page.Statistics.WithNullCount(page.NullCount)
+                    : ColumnStatistics.Empty(page.NullCount);
+                pageLocations[dataPageCount] = new PageLocation(pageOffset, checked(headerSize + storedContentSize),
+                    firstRowIndex);
+            }
             dataPageCount++;
             firstRowIndex = checked(firstRowIndex + page.RowCount);
         }
@@ -221,14 +226,17 @@ public sealed class RowGroupWriter
         columnMetadata.ColumnIndexLength = 0;
         columnMetadata.OffsetIndexOffset = 0;
         columnMetadata.OffsetIndexLength = 0;
-        columnMetadata.PageIndex = new PageIndex(pageStatistics, pageLocations, dataPageCount);
+        columnMetadata.PageIndex = writePageIndexes
+            ? new PageIndex(pageStatistics, pageLocations, dataPageCount)
+            : default;
 
         state.Consume();
         _nextColumnOrdinal++;
         if (_nextColumnOrdinal != (uint)_writer.ColumnCount)
             return;
 
-        WritePageIndexes(_writer.OpenRowGroupColumnMetadata);
+        if (writePageIndexes)
+            WritePageIndexes(_writer.OpenRowGroupColumnMetadata);
         ParquetMetadataThriftWriter.WriteRowGroup(ref _writer.SerializedRowGroupsMetadata, _writer.ColumnsByOrdinal,
             _writer.ColumnPathsByOrdinal, _writer.OpenRowGroupColumnMetadata, _rowCount);
         _writer.CompleteOpenRowGroup(_rowCount);

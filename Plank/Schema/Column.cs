@@ -9,6 +9,7 @@ public sealed record Column
         PhysicalType = physicalType;
         Options = options ?? ColumnOptions.Default;
         LogicalType = logicalType;
+        EncodingCompatibility.Validate(this);
     }
 
     public string Name { get; }
