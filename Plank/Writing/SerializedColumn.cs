@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -268,7 +267,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeDateOnly(ReadOnlySpan<DateOnly> values)
     {
         RequireDateLogicalType(_column);
-        var rented = ArrayPool<int>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<int>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -278,14 +277,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<int>.Shared.Return(rented);
+            ArrayRenter<int>.Shared.Return(rented);
         }
     }
 
     void SerializeNullableDateOnly(ReadOnlySpan<DateOnly?> values)
     {
         RequireDateLogicalType(_column);
-        var rented = ArrayPool<int?>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<int?>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -295,13 +294,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<int?>.Shared.Return(rented);
+            ArrayRenter<int?>.Shared.Return(rented);
         }
     }
 
     void SerializeByte(ReadOnlySpan<byte> values)
     {
-        var rented = ArrayPool<int>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<int>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -313,13 +312,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<int>.Shared.Return(rented);
+            ArrayRenter<int>.Shared.Return(rented);
         }
     }
 
     void SerializeNullableByte(ReadOnlySpan<byte?> values)
     {
-        var rented = ArrayPool<int?>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<int?>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -331,13 +330,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<int?>.Shared.Return(rented);
+            ArrayRenter<int?>.Shared.Return(rented);
         }
     }
 
     void SerializeUInt16(ReadOnlySpan<ushort> values)
     {
-        var rented = ArrayPool<int>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<int>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -349,13 +348,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<int>.Shared.Return(rented);
+            ArrayRenter<int>.Shared.Return(rented);
         }
     }
 
     void SerializeNullableUInt16(ReadOnlySpan<ushort?> values)
     {
-        var rented = ArrayPool<int?>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<int?>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -367,13 +366,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<int?>.Shared.Return(rented);
+            ArrayRenter<int?>.Shared.Return(rented);
         }
     }
 
     void SerializeUInt32(ReadOnlySpan<uint> values)
     {
-        var rented = ArrayPool<int>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<int>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -385,13 +384,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<int>.Shared.Return(rented);
+            ArrayRenter<int>.Shared.Return(rented);
         }
     }
 
     void SerializeNullableUInt32(ReadOnlySpan<uint?> values)
     {
-        var rented = ArrayPool<int?>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<int?>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -403,14 +402,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<int?>.Shared.Return(rented);
+            ArrayRenter<int?>.Shared.Return(rented);
         }
     }
 
     void SerializeDateTime(ReadOnlySpan<DateTime> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
-        var rented = ArrayPool<long>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<long>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -420,14 +419,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<long>.Shared.Return(rented);
+            ArrayRenter<long>.Shared.Return(rented);
         }
     }
 
     void SerializeNullableDateTime(ReadOnlySpan<DateTime?> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
-        var rented = ArrayPool<long?>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<long?>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -437,13 +436,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<long?>.Shared.Return(rented);
+            ArrayRenter<long?>.Shared.Return(rented);
         }
     }
 
     void SerializeUInt64(ReadOnlySpan<ulong> values)
     {
-        var rented = ArrayPool<long>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<long>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -455,13 +454,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<long>.Shared.Return(rented);
+            ArrayRenter<long>.Shared.Return(rented);
         }
     }
 
     void SerializeNullableUInt64(ReadOnlySpan<ulong?> values)
     {
-        var rented = ArrayPool<long?>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<long?>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -473,14 +472,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<long?>.Shared.Return(rented);
+            ArrayRenter<long?>.Shared.Return(rented);
         }
     }
 
     void SerializeDateTimeOffset(ReadOnlySpan<DateTimeOffset> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
-        var rented = ArrayPool<long>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<long>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -490,14 +489,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<long>.Shared.Return(rented);
+            ArrayRenter<long>.Shared.Return(rented);
         }
     }
 
     void SerializeNullableDateTimeOffset(ReadOnlySpan<DateTimeOffset?> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
-        var rented = ArrayPool<long?>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<long?>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -507,14 +506,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<long?>.Shared.Return(rented);
+            ArrayRenter<long?>.Shared.Return(rented);
         }
     }
 
     void SerializeTimeOnly(ReadOnlySpan<TimeOnly> values)
     {
         var time = RequireTimeLogicalType(_column);
-        var rented = ArrayPool<long>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<long>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -524,14 +523,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<long>.Shared.Return(rented);
+            ArrayRenter<long>.Shared.Return(rented);
         }
     }
 
     void SerializeNullableTimeOnly(ReadOnlySpan<TimeOnly?> values)
     {
         var time = RequireTimeLogicalType(_column);
-        var rented = ArrayPool<long?>.Shared.Rent(values.Length);
+        var rented = ArrayRenter<long?>.Shared.Rent(values.Length);
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -541,7 +540,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayPool<long?>.Shared.Return(rented);
+            ArrayRenter<long?>.Shared.Return(rented);
         }
     }
 

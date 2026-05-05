@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Numerics;
@@ -785,8 +784,8 @@ internal readonly struct ColumnStatistics
     {
         var leftByteCount = Utf8.GetByteCount(left);
         var rightByteCount = Utf8.GetByteCount(right);
-        var leftBytes = ArrayPool<byte>.Shared.Rent(Math.Max(1, leftByteCount));
-        var rightBytes = ArrayPool<byte>.Shared.Rent(Math.Max(1, rightByteCount));
+        var leftBytes = ArrayRenter<byte>.Shared.Rent(Math.Max(1, leftByteCount));
+        var rightBytes = ArrayRenter<byte>.Shared.Rent(Math.Max(1, rightByteCount));
         try
         {
             Utf8.GetBytes(left, leftBytes.AsSpan(0, leftByteCount));
@@ -795,8 +794,8 @@ internal readonly struct ColumnStatistics
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(leftBytes);
-            ArrayPool<byte>.Shared.Return(rightBytes);
+            ArrayRenter<byte>.Shared.Return(leftBytes);
+            ArrayRenter<byte>.Shared.Return(rightBytes);
         }
     }
 

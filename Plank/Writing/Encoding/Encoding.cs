@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -182,7 +181,7 @@ static class Encoding
             return;
 
         var presentCount = CountPresentValues(values);
-        var rentedValues = ArrayPool<T>.Shared.Rent(presentCount);
+        var rentedValues = ArrayRenter<T>.Shared.Rent(presentCount);
         var densePresentValues = rentedValues.AsSpan(0, presentCount);
         CopyPresentValues(values, densePresentValues);
         try
@@ -191,7 +190,7 @@ static class Encoding
         }
         finally
         {
-            ArrayPool<T>.Shared.Return(rentedValues);
+            ArrayRenter<T>.Shared.Return(rentedValues);
         }
     }
 
@@ -221,7 +220,7 @@ static class Encoding
             return;
         }
 
-        var rentedValues = ArrayPool<T>.Shared.Rent(presentCount);
+        var rentedValues = ArrayRenter<T>.Shared.Rent(presentCount);
         var densePresentValues = rentedValues.AsSpan(0, presentCount);
         CopyPresentValues(values, densePresentValues);
         try
@@ -230,7 +229,7 @@ static class Encoding
         }
         finally
         {
-            ArrayPool<T>.Shared.Return(rentedValues, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
+            ArrayRenter<T>.Shared.Return(rentedValues, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
         }
     }
 

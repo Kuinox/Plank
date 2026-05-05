@@ -1,5 +1,3 @@
-using System.Buffers;
-
 namespace Plank.Writing;
 
 public sealed class DefaultParquetBufferPool : IParquetBufferPool
@@ -11,11 +9,11 @@ public sealed class DefaultParquetBufferPool : IParquetBufferPool
     }
 
     public byte[] Rent(uint minimumLength)
-        => ArrayPool<byte>.Shared.Rent(checked((int)minimumLength));
+        => ArrayRenter<byte>.Shared.Rent(checked((int)minimumLength));
 
     public void Return(byte[] buffer)
     {
         ArgumentNullException.ThrowIfNull(buffer);
-        ArrayPool<byte>.Shared.Return(buffer);
+        ArrayRenter<byte>.Shared.Return(buffer);
     }
 }
