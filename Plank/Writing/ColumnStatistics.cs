@@ -461,11 +461,23 @@ internal readonly struct ColumnStatistics
 
     static ColumnStatistics CreateInt64(ReadOnlySpan<long> values, long nullCount)
     {
-        if (values.Length == 0)
+        if (!TryGetInt64MinMax(values, out var min, out var max))
             return Empty(nullCount);
 
-        var min = values[0];
-        var max = values[0];
+        return FromInt64(min, max, nullCount);
+    }
+
+    static bool TryGetInt64MinMax(ReadOnlySpan<long> values, out long min, out long max)
+    {
+        min = 0;
+        max = 0;
+        if (values.Length == 0)
+            return false;
+        if (Vector.IsHardwareAccelerated && values.Length >= Vector<long>.Count)
+            return TryGetInt64MinMaxVectorized(values, out min, out max);
+
+        min = values[0];
+        max = values[0];
         for (var i = 1; i < values.Length; i++)
         {
             var value = values[i];
@@ -475,7 +487,44 @@ internal readonly struct ColumnStatistics
                 max = value;
         }
 
-        return FromInt64(min, max, nullCount);
+        return true;
+    }
+
+    static bool TryGetInt64MinMaxVectorized(ReadOnlySpan<long> values, out long min, out long max)
+    {
+        var width = Vector<long>.Count;
+        var minVector = new Vector<long>(values);
+        var maxVector = minVector;
+        var i = width;
+        for (; i <= values.Length - width; i += width)
+        {
+            var current = new Vector<long>(values[i..]);
+            minVector = Vector.Min(minVector, current);
+            maxVector = Vector.Max(maxVector, current);
+        }
+
+        min = minVector[0];
+        max = maxVector[0];
+        for (var lane = 1; lane < width; lane++)
+        {
+            var minCandidate = minVector[lane];
+            var maxCandidate = maxVector[lane];
+            if (minCandidate < min)
+                min = minCandidate;
+            if (maxCandidate > max)
+                max = maxCandidate;
+        }
+
+        for (; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (value < min)
+                min = value;
+            if (value > max)
+                max = value;
+        }
+
+        return true;
     }
 
     static ColumnStatistics CreateNullableInt64(ReadOnlySpan<long?> values)
