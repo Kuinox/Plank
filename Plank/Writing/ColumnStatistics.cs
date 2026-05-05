@@ -362,11 +362,23 @@ internal readonly struct ColumnStatistics
 
     static ColumnStatistics CreateInt32(ReadOnlySpan<int> values, long nullCount)
     {
-        if (values.Length == 0)
+        if (!TryGetInt32MinMax(values, out var min, out var max))
             return Empty(nullCount);
 
-        var min = values[0];
-        var max = values[0];
+        return FromInt32(min, max, nullCount);
+    }
+
+    internal static bool TryGetInt32MinMax(ReadOnlySpan<int> values, out int min, out int max)
+    {
+        min = 0;
+        max = 0;
+        if (values.Length == 0)
+            return false;
+        if (Vector.IsHardwareAccelerated && values.Length >= Vector<int>.Count)
+            return TryGetInt32MinMaxVectorized(values, out min, out max);
+
+        min = values[0];
+        max = values[0];
         for (var i = 1; i < values.Length; i++)
         {
             var value = values[i];
@@ -376,7 +388,44 @@ internal readonly struct ColumnStatistics
                 max = value;
         }
 
-        return FromInt32(min, max, nullCount);
+        return true;
+    }
+
+    static bool TryGetInt32MinMaxVectorized(ReadOnlySpan<int> values, out int min, out int max)
+    {
+        var width = Vector<int>.Count;
+        var minVector = new Vector<int>(values);
+        var maxVector = minVector;
+        var i = width;
+        for (; i <= values.Length - width; i += width)
+        {
+            var current = new Vector<int>(values[i..]);
+            minVector = Vector.Min(minVector, current);
+            maxVector = Vector.Max(maxVector, current);
+        }
+
+        min = minVector[0];
+        max = maxVector[0];
+        for (var lane = 1; lane < width; lane++)
+        {
+            var minCandidate = minVector[lane];
+            var maxCandidate = maxVector[lane];
+            if (minCandidate < min)
+                min = minCandidate;
+            if (maxCandidate > max)
+                max = maxCandidate;
+        }
+
+        for (; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (value < min)
+                min = value;
+            if (value > max)
+                max = value;
+        }
+
+        return true;
     }
 
     static ColumnStatistics CreateNullableInt32(ReadOnlySpan<int?> values)
@@ -876,7 +925,7 @@ internal readonly struct ColumnStatistics
         return hasValue;
     }
 
-    static ColumnStatistics FromInt32(int min, int max, long nullCount)
+    internal static ColumnStatistics FromInt32(int min, int max, long nullCount)
         => new(ColumnStatisticsValueKind.Int32, min, max, nullCount, true);
 
     static ColumnStatistics FromUInt32(uint min, uint max, long nullCount)

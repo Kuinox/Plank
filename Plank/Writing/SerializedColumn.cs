@@ -584,11 +584,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = values.Length;
-        Statistics = ColumnStatistics.Create(_column, values, 0);
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategy, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+        if (_owner.WritePageIndexes && TryAssignInt32ColumnAndPageStatistics(values))
+            return;
+
+        Statistics = ColumnStatistics.Create(_column, values, 0);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
             AssignPageStatistics(values);
     }
@@ -658,6 +661,60 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return false;
 
         page.Statistics = statistics;
+        return true;
+    }
+
+    bool TryAssignInt32ColumnAndPageStatistics<TValue>(ReadOnlySpan<TValue> values)
+        where TValue : notnull
+    {
+        if (_column.PhysicalType != ParquetPhysicalType.Int32 || _column.Options.Repetition != ParquetRepetition.Required)
+            return false;
+        if (typeof(TValue) != typeof(int))
+            return false;
+
+        var intValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<int>>(ref values);
+        var rowOffset = 0;
+        var hasColumnValue = false;
+        var columnMin = 0;
+        var columnMax = 0;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var page = ref Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+
+            var pageValues = intValues.Slice(rowOffset, page.RowCount);
+            rowOffset += page.RowCount;
+            if (pageValues.Length == 0)
+            {
+                page.Statistics = ColumnStatistics.Empty(page.NullCount);
+                continue;
+            }
+
+            if (!ColumnStatistics.TryGetInt32MinMax(pageValues, out var pageMin, out var pageMax))
+                throw new InvalidOperationException("Page statistics could not be computed for a non-empty int32 page.");
+            page.Statistics = ColumnStatistics.FromInt32(pageMin, pageMax, page.NullCount);
+            if (!hasColumnValue)
+            {
+                columnMin = pageMin;
+                columnMax = pageMax;
+                hasColumnValue = true;
+                continue;
+            }
+
+            if (pageMin < columnMin)
+                columnMin = pageMin;
+            if (pageMax > columnMax)
+                columnMax = pageMax;
+        }
+
+        if (rowOffset != intValues.Length)
+            throw new InvalidOperationException(
+                $"Int32 page statistics covered {rowOffset} rows, but the column contains {intValues.Length} rows.");
+
+        Statistics = hasColumnValue
+            ? ColumnStatistics.FromInt32(columnMin, columnMax, 0)
+            : ColumnStatistics.Empty(0);
         return true;
     }
 

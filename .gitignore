@@ -12,3 +12,7 @@ riderModule.iml
 /Plank.Benchmarks/throughput-output/
 .dotnet
 /.claude
+/.tools/
+/artifacts/
+/benchmarks/report/
+__pycache__

@@ -231,6 +231,27 @@ internal sealed class ColumnStatisticsTests
     }
 
     [Test]
+    public void RequiredInt32PageStatisticsMatchPageBoundaries()
+    {
+        using var stream = new MemoryStream();
+        var schema = new PlankParquetSchema([
+            new PlankColumn("id", ParquetPhysicalType.Int32)
+        ])
+        {
+            PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
+                .Add("id", new FixedRowsPageStrategy(2))
+        };
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
+        var idColumn = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+
+        idColumn.Serialize([10, 50, -5, 40, 0]);
+
+        AssertDataPageInt32Statistics(idColumn.Pages, pageIndex: 0, min: 10, max: 50, nullCount: 0);
+        AssertDataPageInt32Statistics(idColumn.Pages, pageIndex: 1, min: -5, max: 40, nullCount: 0);
+        AssertDataPageInt32Statistics(idColumn.Pages, pageIndex: 2, min: 0, max: 0, nullCount: 0);
+    }
+
+    [Test]
     public void PageIndexesAreReadableByDuckDb()
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-page-index-duckdb-{Guid.NewGuid():N}.parquet");
@@ -378,6 +399,38 @@ internal sealed class ColumnStatisticsTests
         var actual = reader.GetInt32(ordinal);
         if (actual != expected)
             throw new InvalidOperationException($"DuckDB column {ordinal} mismatch. Expected {expected}, got {actual}.");
+    }
+
+    static void AssertDataPageInt32Statistics(PageList pages, int pageIndex, int min, int max, long nullCount)
+    {
+        var dataPageIndex = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (dataPageIndex == pageIndex)
+            {
+                var statistics = page.Statistics;
+                if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Int32)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} statistics kind mismatch. Expected Int32, got {statistics.ValueKind}.");
+                if (statistics.MinBits != min)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} min mismatch. Expected {min}, got {statistics.MinBits}.");
+                if (statistics.MaxBits != max)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} max mismatch. Expected {max}, got {statistics.MaxBits}.");
+                if (statistics.NullCount != nullCount)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+                return;
+            }
+
+            dataPageIndex++;
+        }
+
+        throw new InvalidOperationException($"Data page {pageIndex} was not written.");
     }
 
     static string EscapeDuckDbPath(string path)
