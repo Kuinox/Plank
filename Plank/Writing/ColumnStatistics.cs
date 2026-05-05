@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Numerics;
@@ -719,24 +720,24 @@ internal readonly struct ColumnStatistics
         if (values.Length == 0)
             return Empty(nullCount);
 
-        var min = GetRequiredUtf8(values[0]);
+        var min = values[0] ?? throw new InvalidOperationException("Required string column does not support null values.");
         var max = min;
         for (var i = 1; i < values.Length; i++)
         {
-            var value = GetRequiredUtf8(values[i]);
-            if (CompareBytes(value, min) < 0)
+            var value = values[i] ?? throw new InvalidOperationException("Required string column does not support null values.");
+            if (CompareUtf8Strings(value, min) < 0)
                 min = value;
-            if (CompareBytes(value, max) > 0)
+            if (CompareUtf8Strings(value, max) > 0)
                 max = value;
         }
 
-        return new ColumnStatistics(min, max, nullCount, true);
+        return new ColumnStatistics(Utf8.GetBytes(min), Utf8.GetBytes(max), nullCount, true);
     }
 
     static ColumnStatistics CreateOptionalString(ReadOnlySpan<string> values)
     {
-        byte[]? min = null;
-        byte[]? max = null;
+        string? min = null;
+        string? max = null;
         var nullCount = 0L;
         for (var i = 0; i < values.Length; i++)
         {
@@ -747,21 +748,56 @@ internal readonly struct ColumnStatistics
                 continue;
             }
 
-            var bytes = Utf8.GetBytes(value);
             if (min is null)
             {
-                min = bytes;
-                max = bytes;
+                min = value;
+                max = value;
                 continue;
             }
 
-            if (CompareBytes(bytes, min) < 0)
-                min = bytes;
-            if (CompareBytes(bytes, max!) > 0)
-                max = bytes;
+            if (CompareUtf8Strings(value, min) < 0)
+                min = value;
+            if (CompareUtf8Strings(value, max!) > 0)
+                max = value;
         }
 
-        return min is null ? Empty(nullCount) : new ColumnStatistics(min, max, nullCount, true);
+        return min is null ? Empty(nullCount) : new ColumnStatistics(Utf8.GetBytes(min), Utf8.GetBytes(max!), nullCount, true);
+    }
+
+    static int CompareUtf8Strings(string left, string right)
+    {
+        var length = Math.Min(left.Length, right.Length);
+        for (var i = 0; i < length; i++)
+        {
+            var leftChar = left[i];
+            var rightChar = right[i];
+            if (leftChar > 0x7F || rightChar > 0x7F)
+                return CompareUtf8StringsSlow(left, right);
+            var comparison = leftChar.CompareTo(rightChar);
+            if (comparison != 0)
+                return comparison;
+        }
+
+        return left.Length.CompareTo(right.Length);
+    }
+
+    static int CompareUtf8StringsSlow(string left, string right)
+    {
+        var leftByteCount = Utf8.GetByteCount(left);
+        var rightByteCount = Utf8.GetByteCount(right);
+        var leftBytes = ArrayPool<byte>.Shared.Rent(Math.Max(1, leftByteCount));
+        var rightBytes = ArrayPool<byte>.Shared.Rent(Math.Max(1, rightByteCount));
+        try
+        {
+            Utf8.GetBytes(left, leftBytes.AsSpan(0, leftByteCount));
+            Utf8.GetBytes(right, rightBytes.AsSpan(0, rightByteCount));
+            return CompareBytes(leftBytes.AsSpan(0, leftByteCount), rightBytes.AsSpan(0, rightByteCount));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(leftBytes);
+            ArrayPool<byte>.Shared.Return(rightBytes);
+        }
     }
 
     static bool TryGetFloatMinMax(ReadOnlySpan<float> values, out float min, out float max)
