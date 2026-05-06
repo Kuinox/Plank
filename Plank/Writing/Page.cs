@@ -26,6 +26,10 @@ internal struct Page
 
     internal ColumnStatistics Statistics;
 
+    internal byte[]? StatisticsMinValueBuffer;
+
+    internal byte[]? StatisticsMaxValueBuffer;
+
     public void ResetMetadata()
     {
         Kind = PageKind.DataV2;

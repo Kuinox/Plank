@@ -31,6 +31,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     readonly ParquetWriter _owner;
     readonly Column _column;
     object? _dictionaryState;
+    byte[]? _statisticsMinValueBuffer;
+    byte[]? _statisticsMaxValueBuffer;
 
     public SerializedColumn(ParquetWriter owner, Column column, uint initialPageCapacity)
     {
@@ -590,7 +592,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         if (_owner.WritePageIndexes && TryAssignInt32ColumnAndPageStatistics(values))
             return;
 
-        Statistics = ColumnStatistics.Create(_column, values, 0);
+        Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, values, 0,
+            ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
             AssignPageStatistics(values);
     }
@@ -738,7 +741,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             if (page.Kind != PageKind.DataV2)
                 continue;
             var pageRows = values.Slice(rowOffset, page.RowCount);
-            page.Statistics = ColumnStatistics.Create(_column, pageRows, page.NullCount);
+            page.Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, pageRows, page.NullCount,
+                ref page.StatisticsMinValueBuffer, ref page.StatisticsMaxValueBuffer);
             rowOffset += page.RowCount;
         }
     }

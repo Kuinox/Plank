@@ -5,6 +5,19 @@ namespace Plank.Tests.Writer;
 internal sealed class ReusableDictionaryStateTests
 {
     [Test]
+    public async Task GetOrAddIndexUsesOrdinalStringEquality()
+    {
+        var state = new ReusableDictionaryState<string>();
+        state.Reset(16, useMap: true, StringComparer.Ordinal);
+
+        var first = state.GetOrAddIndex(new string("same"));
+        var second = state.GetOrAddIndex(new string("same"));
+
+        await Assert.That(second).IsEqualTo(first);
+        await Assert.That(state.Count).IsEqualTo(1);
+    }
+
+    [Test]
     public void ResetClearsStoredReferences()
     {
         var state = new ReusableDictionaryState<object>();

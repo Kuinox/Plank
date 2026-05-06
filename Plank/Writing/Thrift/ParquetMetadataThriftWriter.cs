@@ -588,7 +588,8 @@ static class ParquetMetadataThriftWriter
             case ColumnStatistics.ColumnStatisticsValueKind.Binary:
             {
                 var value = writeMax ? statistics.MaxValue : statistics.MinValue;
-                writer.WriteBinary(value ?? []);
+                var length = writeMax ? statistics.MaxValueLength : statistics.MinValueLength;
+                writer.WriteBinary(value is null ? [] : value.AsSpan(0, length));
                 return;
             }
             case ColumnStatistics.ColumnStatisticsValueKind.None:

@@ -318,7 +318,7 @@ internal sealed class BenchmarkEncodingCompatibilityTests
         => encoding switch
         {
             "plain" => EncodingKind.Plain,
-            "dictionary" => EncodingKind.PlainDictionary,
+            "dictionary" => EncodingKind.RleDictionary,
             "delta_binary_packed" => EncodingKind.DeltaBinaryPacked,
             "delta_length_byte_array" => EncodingKind.DeltaLengthByteArray,
             "delta_byte_array" => EncodingKind.DeltaByteArray,

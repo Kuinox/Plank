@@ -90,10 +90,9 @@ static class Encoding
     {
         if (!strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytes))
             return false;
-        if (!TryGetFixedWidthByteCount(column, dataEncoding, out var valueByteCount))
+        if (!TryGetFixedWidthRowsPerPage(column, dataEncoding, targetPageBytes, out var rowsPerPage))
             return false;
 
-        var rowsPerPage = Math.Max(1, targetPageBytes / valueByteCount);
         for (var pageStart = 0; pageStart < values.Length; pageStart += rowsPerPage)
         {
             var pageRowCount = Math.Min(rowsPerPage, values.Length - pageStart);
@@ -113,12 +112,29 @@ static class Encoding
         WriteDataPageHeader(ref page, values.Length, values.Length, 0, 0, 0, dataEncoding);
     }
 
-    static bool TryGetFixedWidthByteCount(Column column, EncodingKind encoding, out int valueByteCount)
+    static bool TryGetFixedWidthRowsPerPage(Column column, EncodingKind encoding, int targetPageBytes,
+        out int rowsPerPage)
     {
-        valueByteCount = 0;
+        rowsPerPage = 0;
         if (encoding != EncodingKind.Plain)
             return false;
 
+        if (column.PhysicalType == ParquetPhysicalType.Boolean)
+        {
+            rowsPerPage = targetPageBytes > int.MaxValue / 8 ? int.MaxValue : targetPageBytes * 8;
+            return true;
+        }
+
+        if (!TryGetFixedWidthByteCount(column, out var valueByteCount))
+            return false;
+
+        rowsPerPage = Math.Max(1, targetPageBytes / valueByteCount);
+        return true;
+    }
+
+    static bool TryGetFixedWidthByteCount(Column column, out int valueByteCount)
+    {
+        valueByteCount = 0;
         valueByteCount = column.PhysicalType switch
         {
             ParquetPhysicalType.Int32 or ParquetPhysicalType.Float => sizeof(int),
@@ -269,7 +285,7 @@ static class Encoding
             }
 
             var initialUniqueCapacity = dictionaryMode == DictionaryMode.Forced
-                ? Math.Max(256, values.Length)
+                ? GetInitialForcedDictionaryCapacity(values.Length)
                 : Math.Max(256, values.Length / 2);
             var comparer = GetDictionaryComparer<T>();
             var knownSortOrder = strategy.GetDictionarySortOrder();
@@ -1285,6 +1301,9 @@ static class Encoding
 
         return EqualityComparer<T>.Default;
     }
+
+    static int GetInitialForcedDictionaryCapacity(int rowCount)
+        => Math.Max(256, Math.Min(rowCount, 65_536));
 
     static bool TryCompareForSort<T>(T left, T right, out int comparison)
     {

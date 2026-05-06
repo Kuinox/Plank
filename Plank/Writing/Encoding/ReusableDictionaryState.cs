@@ -163,10 +163,9 @@ sealed class ReusableDictionaryState<T>
         var newSize = Math.Max(32, _table.Length << 1);
         var newTable = new uint[newSize];
         var newTouched = new int[newSize];
-        if (_values.Length < newSize)
-            Array.Resize(ref _values, newSize);
 
         _threshold = checked((int)(newSize * 0.25f));
+        EnsureValueCapacity(_threshold);
         var mask = newSize - 1;
         var touchedCount = 0;
         for (var i = 0; i < _count; i++)
@@ -189,9 +188,8 @@ sealed class ReusableDictionaryState<T>
     {
         _table = new uint[slotLength];
         _touched = new int[slotLength];
-        if (_values.Length < slotLength)
-            Array.Resize(ref _values, slotLength);
         _threshold = checked((int)(slotLength * 0.25f));
+        EnsureValueCapacity(_threshold);
         _touchedCount = 0;
     }
 
@@ -244,7 +242,7 @@ sealed class ReusableDictionaryState<T>
     static bool KeysEqual(T a, T b)
     {
         if (typeof(T) == typeof(string))
-            return Unsafe.As<T, string>(ref a) == Unsafe.As<T, string>(ref b);
+            return string.Equals(Unsafe.As<T, string>(ref a), Unsafe.As<T, string>(ref b), StringComparison.Ordinal);
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
             return Unsafe.As<T, ReadOnlyMemory<byte>>(ref a).Span.SequenceEqual(
                 Unsafe.As<T, ReadOnlyMemory<byte>>(ref b).Span);
