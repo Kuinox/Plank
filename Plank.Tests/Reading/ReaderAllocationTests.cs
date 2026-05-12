@@ -87,21 +87,26 @@ internal sealed class ReaderAllocationTests
         {
             var bytes = File.ReadAllBytes(path);
             var source = new MemoryReadSource(bytes);
+            using var reader = ReaderAllocationRowSchema.CreateRowReader(source);
             for (var i = 0; i < 8; i++)
-                _ = SumGeneratedRows(source);
+            {
+                reader.Reset(source);
+                _ = SumGeneratedRows(reader);
+            }
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
+            reader.Reset(source);
             var before = GC.GetAllocatedBytesForCurrentThread();
-            _ = SumGeneratedRows(source);
+            _ = SumGeneratedRows(reader);
             var after = GC.GetAllocatedBytesForCurrentThread();
             var allocated = after - before;
 
-            if (allocated > 2048)
+            if (allocated != 0)
                 throw new InvalidOperationException(
-                    $"Expected generated row reader steady-state allocation to stay under 2048 bytes but saw {allocated} bytes.");
+                    $"Expected generated row reader steady-state iteration to allocate zero bytes but saw {allocated} bytes.");
         }
         finally
         {
@@ -133,9 +138,8 @@ internal sealed class ReaderAllocationTests
         return sum;
     }
 
-    static int SumGeneratedRows(IParquetReadSource source)
+    static int SumGeneratedRows(ReaderAllocationRowSchema.RowReader reader)
     {
-        using var reader = ReaderAllocationRowSchema.CreateRowReader(source);
         var sum = 0;
         while (reader.MoveNext())
             sum += reader.Current.Value;

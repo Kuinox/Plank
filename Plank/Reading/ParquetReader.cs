@@ -115,6 +115,29 @@ public sealed class ParquetReader : IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
 
+        var rowGroup = GetRowGroup(token);
+        return new RowGroupReader(this, source, rowGroup);
+    }
+
+    internal RowGroupReadContext CreateRowGroupReadContext()
+        => new(_schema.Columns.Length);
+
+    public RowGroupReader CreateReusableRowGroupReader()
+        => new(CreateRowGroupReadContext());
+
+    public RowGroupReader OpenRowGroup(IParquetReadSource source, RowGroupToken token, RowGroupReader reusable)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(reusable);
+
+        var rowGroup = GetRowGroup(token);
+        reusable.Reset(this, source, rowGroup);
+        return reusable;
+    }
+
+    InternalRowGroupMetadata GetRowGroup(RowGroupToken token)
+    {
         if (token.RowGroupOrdinal < 0)
             throw new ArgumentOutOfRangeException(nameof(token), token.RowGroupOrdinal, "Row group ordinal must be non-negative.");
         if ((uint)token.RowGroupOrdinal >= (uint)_footer.RowGroups.Length)
@@ -124,7 +147,7 @@ public sealed class ParquetReader : IDisposable
         if (rowGroup.MetadataOffset != token.MetadataOffset || rowGroup.ColumnChunkOffset != token.ColumnChunkOffset)
             throw new ArgumentException("Row group token does not belong to this reader.", nameof(token));
 
-        return new RowGroupReader(this, source, rowGroup);
+        return rowGroup;
     }
 
     public void Dispose()

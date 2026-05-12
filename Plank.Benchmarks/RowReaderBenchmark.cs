@@ -1,10 +1,15 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Engines;
+using System.Collections.Immutable;
 using Parquet;
 using Parquet.Schema;
 using Plank.Reading;
+using Plank.Schema;
 using Plank.Writing;
+using Plank.Writing.PageStrategy;
 using ParquetSchema = Parquet.Schema.ParquetSchema;
+using PlankColumn = Plank.Schema.Column;
+using PlankSchema = Plank.Schema.ParquetSchema;
 
 namespace Plank.Benchmarks;
 
@@ -29,10 +34,13 @@ public class RowReaderBenchmark
     [Params("all", "projected")]
     public string Projection { get; set; } = "all";
 
+    [Params("plain", "dictionary", "byte_stream_split")]
+    public string Encoding { get; set; } = "plain";
+
     [GlobalSetup]
     public void GlobalSetup()
     {
-        _fileBytes = CreateFileBytes(Rows);
+        _fileBytes = CreateFileBytes(Rows, Encoding);
         _fileSource = new MemoryReadSource(_fileBytes);
         _plankReader = RowReaderBenchmarkSchema.CreateRowReader(_fileSource);
     }
@@ -49,27 +57,6 @@ public class RowReaderBenchmark
 
         foreach (var row in _plankReader)
         {
-            checksum += row.Id;
-            checksum += row.Timestamp;
-            if (Projection == "all")
-            {
-                checksum += (long)row.Value;
-                checksum += row.Category;
-            }
-        }
-
-        return checksum;
-    }
-
-    [Benchmark]
-    public long ReadPlankGeneratedRowReaderMoveNext()
-    {
-        _plankReader.Reset(_fileSource, GetPlankProjection());
-        var checksum = 0L;
-
-        while (_plankReader.MoveNext())
-        {
-            var row = _plankReader.Current;
             checksum += row.Id;
             checksum += row.Timestamp;
             if (Projection == "all")
@@ -134,10 +121,11 @@ public class RowReaderBenchmark
         return values;
     }
 
-    static byte[] CreateFileBytes(int rows)
+    static byte[] CreateFileBytes(int rows, string encoding)
     {
         using var stream = new MemoryStream();
-        var writer = RowReaderBenchmarkSchema.Schema.CreateWriter(stream, new ParquetWriterOptions
+        var schema = CreateWriteSchema(encoding);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
             Compression = CompressionKind.None
         });
@@ -155,23 +143,55 @@ public class RowReaderBenchmark
             categories[i] = i % 2048;
         }
 
-        var idColumn = rowGroup.CreateSerializedColumn<int>(RowReaderBenchmarkSchema.Schema.Columns[0]);
+        var idColumn = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
         idColumn.Serialize(ids);
         rowGroup.Write(idColumn);
 
-        var timestampColumn = rowGroup.CreateSerializedColumn<long>(RowReaderBenchmarkSchema.Schema.Columns[1]);
+        var timestampColumn = rowGroup.CreateSerializedColumn<long>(schema.Columns[1]);
         timestampColumn.Serialize(timestamps);
         rowGroup.Write(timestampColumn);
 
-        var valueColumn = rowGroup.CreateSerializedColumn<double>(RowReaderBenchmarkSchema.Schema.Columns[2]);
+        var valueColumn = rowGroup.CreateSerializedColumn<double>(schema.Columns[2]);
         valueColumn.Serialize(values);
         rowGroup.Write(valueColumn);
 
-        var categoryColumn = rowGroup.CreateSerializedColumn<int>(RowReaderBenchmarkSchema.Schema.Columns[3]);
+        var categoryColumn = rowGroup.CreateSerializedColumn<int>(schema.Columns[3]);
         categoryColumn.Serialize(categories);
         rowGroup.Write(categoryColumn);
 
         writer.CloseFile();
         return stream.ToArray();
     }
+
+    static PlankSchema CreateWriteSchema(string encoding)
+    {
+        var encodingKind = MapPlankEncoding(encoding);
+        var options = new ColumnOptions(ParquetRepetition.Required, ImmutableArray.Create(encodingKind));
+        var columns = ImmutableArray.Create(
+            new PlankColumn("id", ParquetPhysicalType.Int32, options),
+            new PlankColumn("timestamp", ParquetPhysicalType.Int64, options),
+            new PlankColumn("value", ParquetPhysicalType.Double, options),
+            new PlankColumn("category", ParquetPhysicalType.Int32, options));
+        if (encoding != "dictionary")
+            return new PlankSchema(columns);
+
+        return new PlankSchema(columns)
+        {
+            PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
+                .WithComparers(StringComparer.Ordinal)
+                .Add("id", ForceDictionaryPageStrategy.Shared)
+                .Add("timestamp", ForceDictionaryPageStrategy.Shared)
+                .Add("value", ForceDictionaryPageStrategy.Shared)
+                .Add("category", ForceDictionaryPageStrategy.Shared)
+        };
+    }
+
+    static EncodingKind MapPlankEncoding(string encoding)
+        => encoding switch
+        {
+            "plain" => EncodingKind.Plain,
+            "dictionary" => EncodingKind.RleDictionary,
+            "byte_stream_split" => EncodingKind.ByteStreamSplit,
+            _ => throw new InvalidOperationException($"Encoding '{encoding}' is not supported by {nameof(RowReaderBenchmark)}.")
+        };
 }

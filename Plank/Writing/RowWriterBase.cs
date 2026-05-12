@@ -10,6 +10,7 @@ public abstract class RowWriterBase<TSlot>
     readonly Queue<QueuedSlot> _readySlots;
     readonly Queue<TSlot> _freeSlots;
     readonly Thread[] _workers;
+    readonly ParquetExecutionOptions _execution;
     readonly object _gate;
     readonly object _writeGate;
     bool _initialSlotTaken;
@@ -34,6 +35,7 @@ public abstract class RowWriterBase<TSlot>
 
         _writer = schema.CreateWriter(stream, options);
         var workerCount = checked((int)maxParallelism);
+        _execution = options.Execution;
         _readySlots = new Queue<QueuedSlot>(workerCount);
         _freeSlots = new Queue<TSlot>(workerCount);
         _workers = new Thread[workerCount];
@@ -71,12 +73,13 @@ public abstract class RowWriterBase<TSlot>
 
             for (var i = 0; i < _workers.Length; i++)
             {
+                var workerIndex = i;
                 _workers[i] = new Thread(WorkerLoop)
                 {
                     IsBackground = true,
                     Name = $"{WorkerThreadNamePrefix}-{i}"
                 };
-                _workers[i].Start();
+                _workers[i].Start(workerIndex);
             }
 
             _slotsInitialized = true;
@@ -177,8 +180,19 @@ public abstract class RowWriterBase<TSlot>
         return _freeSlots.Dequeue();
     }
 
-    void WorkerLoop()
+    void WorkerLoop(object? state)
     {
+        var workerIndex = (int)state!;
+        var workerName = Thread.CurrentThread.Name ?? $"{WorkerThreadNamePrefix}-{workerIndex}";
+        try
+        {
+            _execution.OnWorkerStarted?.Invoke(new ParquetWorkerContext(workerIndex, _workers.Length, workerName));
+        }
+        catch (Exception ex)
+        {
+            RecordFault(ex);
+        }
+
         while (true)
         {
             QueuedSlot queuedSlot;

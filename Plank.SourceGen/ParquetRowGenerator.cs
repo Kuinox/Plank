@@ -443,7 +443,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        readonly global::Plank.Reading.ParquetReader _reader;");
         builder.AppendLine("        global::Plank.Reading.StreamReadSource? _streamSource;");
         builder.AppendLine("        global::Plank.Reading.RowGroupTokenEnumerable.Enumerator _rowGroups;");
-        builder.AppendLine("        global::Plank.Reading.RowGroupReader? _rowGroup;");
+        builder.AppendLine("        readonly global::Plank.Reading.RowGroupReader _rowGroup;");
         builder.AppendLine("        long _rowGroupRowsRemaining;");
         builder.AppendLine("        bool _started;");
         builder.AppendLine("        bool _hasCurrent;");
@@ -473,7 +473,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            _reader = Schema.CreateReader(source, options);");
         builder.AppendLine("            _streamSource = source as global::Plank.Reading.StreamReadSource;");
         builder.AppendLine("            _rowGroups = default;");
-        builder.AppendLine("            _rowGroup = null;");
+        builder.AppendLine("            _rowGroup = _reader.CreateReusableRowGroupReader();");
         builder.AppendLine("            _rowGroupRowsRemaining = 0;");
         builder.AppendLine("            _started = false;");
         builder.AppendLine("            _hasCurrent = false;");
@@ -507,10 +507,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            _source = source ?? throw new global::System.ArgumentNullException(nameof(source));");
         builder.AppendLine("            _projection = projection;");
         builder.AppendLine("            DisposeColumnReaders();");
-        builder.AppendLine("            _rowGroup?.Dispose();");
+        builder.AppendLine("            _rowGroup.Dispose();");
         builder.AppendLine("            _reader.Reset(source);");
         builder.AppendLine("            _rowGroups = default;");
-        builder.AppendLine("            _rowGroup = null;");
         builder.AppendLine("            _rowGroupRowsRemaining = 0;");
         builder.AppendLine("            _started = false;");
         builder.AppendLine("            _hasCurrent = false;");
@@ -737,7 +736,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("                return;");
         builder.AppendLine();
         builder.AppendLine("            DisposeColumnReaders();");
-        builder.AppendLine("            _rowGroup?.Dispose();");
+        builder.AppendLine("            _rowGroup.Dispose();");
         builder.AppendLine("            _reader.Dispose();");
         builder.AppendLine("            _disposed = true;");
         builder.AppendLine("        }");
@@ -771,14 +770,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            while (true)");
         builder.AppendLine("            {");
         builder.AppendLine("                DisposeColumnReaders();");
-        builder.AppendLine("                _rowGroup?.Dispose();");
+        builder.AppendLine("                _rowGroup.Dispose();");
         builder.AppendLine("                if (!_rowGroups.MoveNext())");
         builder.AppendLine("                {");
-        builder.AppendLine("                    _rowGroup = null;");
         builder.AppendLine("                    return false;");
         builder.AppendLine("                }");
         builder.AppendLine();
-        builder.AppendLine("                _rowGroup = _reader.OpenRowGroup(_source, _rowGroups.Current);");
+        builder.AppendLine("                _reader.OpenRowGroup(_source, _rowGroups.Current, _rowGroup);");
         builder.AppendLine("                _rowGroupRowsRemaining = _rowGroup.RowCount;");
         builder.AppendLine("                if (_rowGroupRowsRemaining == 0)");
         builder.AppendLine("                    continue;");
