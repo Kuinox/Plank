@@ -29,7 +29,7 @@ static class ColumnChunkReader
     }
 
     internal static bool TryReadNextDataPage<T>(byte[] buffer, int bufferLength, ref int offset, Column column,
-        InternalColumnChunkMetadata columnChunk, ref Array? dictionary, ref T[]? valuesBuffer,
+        InternalColumnChunkMetadata columnChunk, ref Array? dictionary, ref T[]? dictionaryBuffer, ref T[]? valuesBuffer,
         out ReadOnlyMemory<T> values, out EncodingKind encoding)
     {
         ArgumentNullException.ThrowIfNull(buffer);
@@ -49,7 +49,8 @@ static class ColumnChunkReader
             switch (header.Type)
             {
                 case PageHeaderType.DictionaryPage:
-                    dictionary = DecodeValues(payload, column, header, columnChunk.Compression, GetPhysicalDecodeType<T>());
+                    dictionary = DecodeDictionaryPage(payload, column, header, columnChunk.Compression,
+                        ref dictionaryBuffer, GetPhysicalDecodeType<T>());
                     break;
                 case PageHeaderType.DataPageV2:
                 {
@@ -112,7 +113,7 @@ static class ColumnChunkReader
                         }
                         else
                         {
-                            values = DecodeDictionaryIndexes<T>(effectiveData, physicalValueCount, dictionary);
+                            DecodeDictionaryIndexes(effectiveData, physicalValueCount, dictionary, ref valuesBuffer, out values);
                         }
                     }
 
@@ -413,6 +414,21 @@ static class ColumnChunkReader
         return buffer;
     }
 
+    static Array DecodeDictionaryPage<T>(ReadOnlySpan<byte> payload, Column column, PageHeader header,
+        CompressionKind compression, ref T[]? dictionaryBuffer, Type physicalDecodeType)
+    {
+        var effectivePayload = compression == CompressionKind.None || header.CompressedPageSize == 0
+            ? payload
+            : Decompress(payload, header.UncompressedPageSize, compression);
+
+        if (physicalDecodeType == typeof(T) &&
+            TryDecodeValuesIntoBuffer(effectivePayload, column, header.ValueCount, header.Encoding,
+                ref dictionaryBuffer, out _))
+            return dictionaryBuffer!;
+
+        return DecodeValues(effectivePayload, column, header.ValueCount, header.Encoding, physicalDecodeType);
+    }
+
     static T[] EnsureValueBuffer<T>(ref T[]? buffer, int minimumLength)
     {
         if (buffer is not null && buffer.Length >= minimumLength)
@@ -425,21 +441,28 @@ static class ColumnChunkReader
         return buffer;
     }
 
-    static T[] DecodeDictionaryIndexes<T>(ReadOnlySpan<byte> payload, int valueCount, Array dictionary)
+    static void DecodeDictionaryIndexes<T>(ReadOnlySpan<byte> payload, int valueCount, Array dictionary,
+        ref T[]? valuesBuffer, out ReadOnlyMemory<T> values)
     {
-        var bytes = valueCount == 0 ? [] : payload.ToArray();
-        var indexes = ReadRleBitPackedHybrid(bytes, valueCount, hasBitWidthPrefix: true);
-        var result = new T[indexes.Length];
-        for (var i = 0; i < indexes.Length; i++)
-            result[i] = (T)dictionary.GetValue(indexes[i])!;
-        return result;
+        var result = EnsureValueBuffer(ref valuesBuffer, valueCount);
+        if (dictionary is T[] typedDictionary)
+        {
+            DecodeDictionaryIndexesIntoBuffer(payload, valueCount, typedDictionary, result);
+        }
+        else
+        {
+            var indexes = ReadRleBitPackedHybrid(payload, valueCount, hasBitWidthPrefix: true);
+            for (var i = 0; i < indexes.Length; i++)
+                result[i] = (T)dictionary.GetValue(indexes[i])!;
+        }
+
+        values = new ReadOnlyMemory<T>(result, 0, valueCount);
     }
 
     static T[] DecodeDictionaryIndexesWithNulls<T>(ReadOnlySpan<byte> dataPayload, int totalValueCount,
         int physicalValueCount, Array dictionary, ReadOnlySpan<byte> definitionPayload)
     {
-        var bytes = physicalValueCount == 0 ? [] : dataPayload.ToArray();
-        var indexes = ReadRleBitPackedHybrid(bytes, physicalValueCount, hasBitWidthPrefix: true);
+        var indexes = ReadRleBitPackedHybrid(dataPayload, physicalValueCount, hasBitWidthPrefix: true);
         var definitionLevels = ReadRleBitPackedHybrid(definitionPayload, totalValueCount, bitWidth: 1);
         var result = new T[totalValueCount];
         var valueIndex = 0;
@@ -449,6 +472,42 @@ static class ColumnChunkReader
                 result[i] = (T)dictionary.GetValue(indexes[valueIndex++])!;
         }
         return result;
+    }
+
+    static void DecodeDictionaryIndexesIntoBuffer<T>(ReadOnlySpan<byte> payload, int valueCount, T[] dictionary,
+        T[] destination)
+    {
+        if (valueCount == 0)
+            return;
+
+        var bitWidth = payload[0];
+        payload = payload[1..];
+        var valueIndex = 0;
+        while (valueIndex < valueCount)
+        {
+            var header = ReadUnsignedVarInt(ref payload);
+            if ((header & 1U) == 0)
+            {
+                var runLength = checked((int)(header >> 1));
+                var byteWidth = (bitWidth + 7) >> 3;
+                var dictionaryIndex = byteWidth == 0 ? 0 : ReadLittleEndian(ref payload, byteWidth);
+                var repeated = dictionary[dictionaryIndex];
+                var copyLength = Math.Min(runLength, valueCount - valueIndex);
+                destination.AsSpan(valueIndex, copyLength).Fill(repeated);
+                valueIndex += copyLength;
+                continue;
+            }
+
+            var literalCount = checked((int)(header >> 1) * 8);
+            for (var i = 0; i < literalCount && valueIndex < valueCount; i++)
+            {
+                var dictionaryIndex = ReadBitPackedValue(ref payload, bitWidth, i);
+                destination[valueIndex++] = dictionary[dictionaryIndex];
+            }
+
+            var literalByteCount = ((literalCount * bitWidth) + 7) >> 3;
+            payload = payload[literalByteCount..];
+        }
     }
 
     static Array DecodeValues(ReadOnlySpan<byte> payload, Column column, PageHeader header, CompressionKind compression,

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Plank.Reading;
 using Plank.Schema;
 using Plank.Writing;
+using Plank.Writing.PageStrategy;
 
 namespace Plank.Tests.Reading;
 
@@ -72,6 +73,48 @@ internal sealed class ReaderAllocationTests
             if (allocated != 0)
                 throw new InvalidOperationException(
                     $"Expected zero allocations for steady-state column page enumeration but saw {allocated} bytes.");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public void DictionaryColumnPageEnumerationDoesNotAllocateAfterWarmup()
+    {
+        var schema = new ParquetSchema([
+            new Column("Value", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)))
+        ])
+        {
+            PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
+                .WithComparers(StringComparer.Ordinal)
+                .Add("Value", ForceDictionaryPageStrategy.Shared)
+        };
+        var path = CreateFile(schema, CreateLowCardinalityValues(4096));
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = schema.CreateReader(stream);
+            var token = EnumerateTokens(reader)[0];
+            using var rowGroup = reader.OpenRowGroup(stream, token);
+
+            for (var i = 0; i < 8; i++)
+                _ = SumValues(rowGroup, schema.Columns[0]);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            _ = SumValues(rowGroup, schema.Columns[0]);
+            var after = GC.GetAllocatedBytesForCurrentThread();
+            var allocated = after - before;
+
+            if (allocated != 0)
+                throw new InvalidOperationException(
+                    $"Expected zero allocations for steady-state dictionary column page enumeration but saw {allocated} bytes.");
         }
         finally
         {
@@ -159,6 +202,14 @@ internal sealed class ReaderAllocationTests
         var values = new int[count];
         for (var i = 0; i < values.Length; i++)
             values[i] = i * 3;
+        return values;
+    }
+
+    static int[] CreateLowCardinalityValues(int count)
+    {
+        var values = new int[count];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = i & 63;
         return values;
     }
 }

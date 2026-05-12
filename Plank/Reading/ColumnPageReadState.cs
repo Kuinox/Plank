@@ -8,6 +8,7 @@ sealed class ColumnPageReadState<T>
     internal byte[]? Buffer;
     internal int BufferLength;
     internal Array? Dictionary;
+    internal T[]? DictionaryBuffer;
     internal T[]? ValuesBuffer;
 
     internal void Release(IParquetBufferPool bufferPool)
@@ -25,6 +26,12 @@ sealed class ColumnPageReadState<T>
         {
             ArrayRenter<T>.Shared.Return(ValuesBuffer, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
             ValuesBuffer = null;
+        }
+
+        if (DictionaryBuffer is not null)
+        {
+            ArrayRenter<T>.Shared.Return(DictionaryBuffer, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
+            DictionaryBuffer = null;
         }
 
         Dictionary = null;
