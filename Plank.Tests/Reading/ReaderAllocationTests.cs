@@ -79,6 +79,36 @@ internal sealed class ReaderAllocationTests
         }
     }
 
+    [Test]
+    public void GeneratedRowReaderDoesNotAllocateBatchBuffersAfterWarmup()
+    {
+        var path = CreateFile(ReaderAllocationRowSchema.Schema, CreateValues(4096));
+        try
+        {
+            var bytes = File.ReadAllBytes(path);
+            var source = new MemoryReadSource(bytes);
+            for (var i = 0; i < 8; i++)
+                _ = SumGeneratedRows(source);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            _ = SumGeneratedRows(source);
+            var after = GC.GetAllocatedBytesForCurrentThread();
+            var allocated = after - before;
+
+            if (allocated > 2048)
+                throw new InvalidOperationException(
+                    $"Expected generated row reader steady-state allocation to stay under 2048 bytes but saw {allocated} bytes.");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     static string CreateFile(ParquetSchema schema, int[] values)
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-reader-alloc-{Guid.NewGuid():N}.parquet");
@@ -100,6 +130,15 @@ internal sealed class ReaderAllocationTests
         foreach (var page in rowGroup.Column<int>(column).Pages)
             foreach (var value in page.Values.Span)
                 sum += value;
+        return sum;
+    }
+
+    static int SumGeneratedRows(IParquetReadSource source)
+    {
+        using var reader = ReaderAllocationRowSchema.CreateRowReader(source);
+        var sum = 0;
+        while (reader.MoveNext())
+            sum += reader.Current.Value;
         return sum;
     }
 

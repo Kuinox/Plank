@@ -52,6 +52,9 @@ public abstract class RowWriterBase<TSlot>
     protected abstract void SerializeSlot(TSlot slot);
     protected abstract void WriteSerializedSlot(TSlot slot, RowGroupWriter rowGroupWriter);
     protected abstract void ResetSlotForReuse(TSlot slot);
+    protected virtual string WorkerThreadNamePrefix
+        => "PlankRowApiWorker";
+
     protected virtual void OnSlotWritten(TSlot slot)
     {
     }
@@ -71,7 +74,7 @@ public abstract class RowWriterBase<TSlot>
                 _workers[i] = new Thread(WorkerLoop)
                 {
                     IsBackground = true,
-                    Name = $"PlankRowApiWorker-{i}"
+                    Name = $"{WorkerThreadNamePrefix}-{i}"
                 };
                 _workers[i].Start();
             }

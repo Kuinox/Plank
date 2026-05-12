@@ -82,6 +82,7 @@ static class ParquetMetadataThriftReader
     {
         var previousFieldId = 0;
         var columnChunkOffset = 0L;
+        var rowCount = 0L;
         InternalColumnChunkMetadata[] columns = [];
 
         while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
@@ -90,6 +91,9 @@ static class ParquetMetadataThriftReader
             {
                 case 1:
                     columns = ReadColumns(ref reader, previousColumns);
+                    break;
+                case 3:
+                    rowCount = reader.ReadI64();
                     break;
                 case 5:
                     columnChunkOffset = reader.ReadI64();
@@ -103,7 +107,7 @@ static class ParquetMetadataThriftReader
         if (columnChunkOffset == 0 && columns.Length != 0)
             columnChunkOffset = columns[0].ChunkOffset;
 
-        return new InternalRowGroupMetadata(rowGroupOrdinal, metadataOffset, columnChunkOffset, columns);
+        return new InternalRowGroupMetadata(rowGroupOrdinal, metadataOffset, columnChunkOffset, rowCount, columns);
     }
 
     static InternalColumnChunkMetadata[] ReadColumns(ref CompactProtocolReader reader, InternalColumnChunkMetadata[] previous)

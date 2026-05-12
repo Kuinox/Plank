@@ -5,30 +5,33 @@ namespace Plank.Reading;
 public sealed class RowGroupReader : IDisposable
 {
     readonly ParquetReader _reader;
-    readonly Stream _stream;
+    readonly IParquetReadSource _source;
     readonly InternalRowGroupMetadata _rowGroup;
     readonly RowGroupToken _token;
     readonly object?[] _columnPageStates;
     bool _disposed;
 
-    internal RowGroupReader(ParquetReader reader, Stream stream, InternalRowGroupMetadata rowGroup)
+    internal RowGroupReader(ParquetReader reader, IParquetReadSource source, InternalRowGroupMetadata rowGroup)
     {
         ArgumentNullException.ThrowIfNull(reader);
-        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(source);
 
         _reader = reader;
-        _stream = stream;
+        _source = source;
         _rowGroup = rowGroup;
         _token = new RowGroupToken(rowGroup.RowGroupOrdinal, rowGroup.MetadataOffset, rowGroup.ColumnChunkOffset);
         _columnPageStates = new object?[rowGroup.Columns.Length];
         _disposed = false;
     }
 
-    internal Stream Stream
-        => _stream;
+    internal IParquetReadSource Source
+        => _source;
 
     public RowGroupToken Token
         => _token;
+
+    public long RowCount
+        => _rowGroup.RowCount;
 
     public RowGroupColumn<T> Column<T>(Column column)
     {
@@ -47,8 +50,8 @@ public sealed class RowGroupReader : IDisposable
     }
 
     internal ColumnPageEnumerable<T> EnumeratePages<T>(Column column, int columnOrdinal)
-        => new(_stream, column, _reader.GetColumnChunk(_rowGroup.RowGroupOrdinal, columnOrdinal),
-            GetPageReadState<T>(columnOrdinal));
+        => new(_source, column, _reader.GetColumnChunk(_rowGroup.RowGroupOrdinal, columnOrdinal),
+            GetPageReadState<T>(columnOrdinal), _reader.Options.BufferPool);
 
     ColumnPageReadState<T> GetPageReadState<T>(int columnOrdinal)
     {

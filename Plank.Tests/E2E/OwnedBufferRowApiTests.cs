@@ -114,6 +114,41 @@ internal sealed class OwnedBufferRowApiTests
         }
     }
 
+    [Test]
+    public void GeneratedRowApiNamesOwnedWorkerThreads()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-owned-buffer-thread-name-{Guid.NewGuid():N}.parquet");
+        var threadName = string.Empty;
+        using var owner = new TrackingMemoryOwner([42]);
+
+        try
+        {
+            using (var stream = File.Create(path))
+            {
+                var writer = OwnedBufferRowSchema.CreateRowWriter(stream,
+                    _ => threadName = Thread.CurrentThread.Name ?? string.Empty,
+                    new ParquetWriterOptions
+                    {
+                        RowApiMaxParallelism = 1
+                    });
+
+                var row = writer.GetRow();
+                row.SetPayload(owner);
+                writer.Next();
+                writer.Complete();
+            }
+
+            if (threadName != "PlankOwnedBufferRowSchemaRowApiWorker-0")
+                throw new InvalidOperationException(
+                    $"Expected worker thread name 'PlankOwnedBufferRowSchemaRowApiWorker-0', got '{threadName}'.");
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
     sealed class TrackingMemoryOwner(byte[] buffer) : IMemoryOwner<byte>
     {
         bool _disposed;

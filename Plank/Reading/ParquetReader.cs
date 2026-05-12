@@ -9,9 +9,11 @@ public sealed class ParquetReader : IDisposable
         => "PAR1"u8;
 
     readonly ParquetSchema _schema;
+    readonly ParquetReaderOptions _options;
     InternalParquetFooter _footer;
     ParquetFileMetadata _metadata;
     byte[] _footerBuffer;
+    StreamReadSource? _streamSource;
     bool _disposed;
 
     internal ParquetReader(Stream stream, ParquetSchema schema, ParquetReaderOptions options)
@@ -19,13 +21,33 @@ public sealed class ParquetReader : IDisposable
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
 
         _schema = schema;
+        _options = options;
         _footer = InternalParquetFooter.Empty;
         _metadata = default;
         _footerBuffer = [];
+        _streamSource = new StreamReadSource(stream);
         _disposed = false;
-        Reset(stream);
+        Reset(_streamSource);
+    }
+
+    internal ParquetReader(IParquetReadSource source, ParquetSchema schema, ParquetReaderOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(schema);
+        ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
+
+        _schema = schema;
+        _options = options;
+        _footer = InternalParquetFooter.Empty;
+        _metadata = default;
+        _footerBuffer = [];
+        _streamSource = null;
+        _disposed = false;
+        Reset(source);
     }
 
     public ParquetSchema Schema
@@ -37,20 +59,28 @@ public sealed class ParquetReader : IDisposable
     public ParquetFooter Footer
         => new(this);
 
+    internal ParquetReaderOptions Options
+        => _options;
+
     public void Reset(Stream stream)
     {
         ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(stream);
-        if (!stream.CanRead)
-            throw new InvalidOperationException("Reader stream must be readable.");
-        if (!stream.CanSeek)
-            throw new InvalidOperationException("Reader stream must be seekable.");
-        if (stream.Length < 12)
+        if (_streamSource is null)
+            _streamSource = new StreamReadSource(stream);
+        else
+            _streamSource.Reset(stream);
+        Reset(_streamSource);
+    }
+
+    public void Reset(IParquetReadSource source)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(source);
+        if (source.Length < 12)
             throw new InvalidDataException("Stream is too small to contain a Parquet footer.");
 
         Span<byte> trailer = stackalloc byte[8];
-        stream.Position = stream.Length - trailer.Length;
-        stream.ReadExactly(trailer);
+        source.ReadExactly(source.Length - trailer.Length, trailer);
         if (!trailer[4..].SequenceEqual(FileMagic))
             throw new InvalidDataException("Stream does not end with the PAR1 footer marker.");
 
@@ -58,15 +88,14 @@ public sealed class ParquetReader : IDisposable
         if (footerLength < 0)
             throw new InvalidDataException("Footer length must be non-negative.");
 
-        var footerOffset = stream.Length - trailer.Length - footerLength;
+        var footerOffset = source.Length - trailer.Length - footerLength;
         if (footerOffset < 4)
             throw new InvalidDataException("Footer offset is invalid for this stream.");
 
         if (_footerBuffer.Length < footerLength)
             _footerBuffer = new byte[footerLength];
         var footerBytes = _footerBuffer.AsSpan(0, footerLength);
-        stream.Position = footerOffset;
-        stream.ReadExactly(footerBytes);
+        source.ReadExactly(footerOffset, footerBytes);
 
         _footer = ParquetMetadataThriftReader.Read(footerBytes, footerOffset, _footer);
         _metadata = new ParquetFileMetadata(_schema, footerOffset, footerLength, _footer.Version);
@@ -79,13 +108,12 @@ public sealed class ParquetReader : IDisposable
     }
 
     public RowGroupReader OpenRowGroup(Stream stream, RowGroupToken token)
+        => OpenRowGroup(new StreamReadSource(stream), token);
+
+    public RowGroupReader OpenRowGroup(IParquetReadSource source, RowGroupToken token)
     {
         ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(stream);
-        if (!stream.CanRead)
-            throw new InvalidOperationException("Row group stream must be readable.");
-        if (!stream.CanSeek)
-            throw new InvalidOperationException("Row group stream must be seekable.");
+        ArgumentNullException.ThrowIfNull(source);
 
         if (token.RowGroupOrdinal < 0)
             throw new ArgumentOutOfRangeException(nameof(token), token.RowGroupOrdinal, "Row group ordinal must be non-negative.");
@@ -96,7 +124,7 @@ public sealed class ParquetReader : IDisposable
         if (rowGroup.MetadataOffset != token.MetadataOffset || rowGroup.ColumnChunkOffset != token.ColumnChunkOffset)
             throw new ArgumentException("Row group token does not belong to this reader.", nameof(token));
 
-        return new RowGroupReader(this, stream, rowGroup);
+        return new RowGroupReader(this, source, rowGroup);
     }
 
     public void Dispose()

@@ -1,6 +1,6 @@
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using TextEncoding = System.Text.Encoding;
 using Plank.Schema;
 using Plank.Writing.PageStrategy;
 
@@ -9,6 +9,7 @@ namespace Plank.Writing.Encoding;
 static class Encoding
 {
     const int DictionaryDropCheckPeriodRows = 2048;
+    static readonly TextEncoding Utf8 = TextEncoding.UTF8;
 
     internal static void Encode<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         IPageStrategy strategy, PageList pages, LeafProjectionInfo leafProjectionInfo,
@@ -44,12 +45,14 @@ static class Encoding
         {
             if (useDictionary)
             {
-                WriteDictionaryDataPages(bufferWriters, values, dictionaryEncoding, pages, dictionaryIndexes,
+                WriteDictionaryDataPages(bufferWriters, values.Length, dictionaryEncoding, pages, dictionaryIndexes,
                     dictionaryBitWidth, strategy);
                 return;
             }
 
             if (TryWriteFixedWidthDataPages(bufferWriters, column, values, dataEncoding, strategy, pages))
+                return;
+            if (TryWritePlainSizeDataPages(bufferWriters, column, values, dataEncoding, strategy, pages))
                 return;
 
             WriteStrategyDataPages(bufferWriters, column, values, dataEncoding, strategy, pages);
@@ -102,6 +105,64 @@ static class Encoding
         return true;
     }
 
+    static bool TryWritePlainSizeDataPages<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
+        EncodingKind dataEncoding, IPageStrategy strategy, PageList pages)
+        where T : notnull
+    {
+        if (!strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytes))
+            return false;
+        if (dataEncoding != EncodingKind.Plain)
+            return false;
+        if (!TryGetPlainEncodedValueSize(column, typeof(T), out var fixedValueBytes))
+            return false;
+
+        if (fixedValueBytes > 0)
+        {
+            var rowsPerPage = Math.Max(1, targetPageBytes / fixedValueBytes);
+            WriteFixedRowsDataPages(bufferWriters, column, values, dataEncoding, pages, rowsPerPage);
+            return true;
+        }
+
+        WriteVariablePlainDataPages(bufferWriters, column, values, dataEncoding, pages, targetPageBytes);
+        return true;
+    }
+
+    static void WriteFixedRowsDataPages<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
+        EncodingKind dataEncoding, PageList pages, int rowsPerPage)
+        where T : notnull
+    {
+        for (var pageStart = 0; pageStart < values.Length; pageStart += rowsPerPage)
+        {
+            var pageRowCount = Math.Min(rowsPerPage, values.Length - pageStart);
+            WriteDataPage(bufferWriters, column, values.Slice(pageStart, pageRowCount), dataEncoding, pages);
+        }
+    }
+
+    static void WriteVariablePlainDataPages<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
+        EncodingKind dataEncoding, PageList pages, int targetPageBytes)
+        where T : notnull
+    {
+        var rowsWritten = 0;
+        while (rowsWritten < values.Length)
+        {
+            var pageStart = rowsWritten;
+            var pageRowCount = 0;
+            var pageBytes = 0;
+            while (rowsWritten < values.Length)
+            {
+                var rowBytes = GetVariablePlainValueBytes(column, values[rowsWritten]);
+                if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
+                    break;
+
+                rowsWritten++;
+                pageRowCount++;
+                pageBytes = checked(pageBytes + rowBytes);
+            }
+
+            WriteDataPage(bufferWriters, column, values.Slice(pageStart, pageRowCount), dataEncoding, pages);
+        }
+    }
+
     static void WriteDataPage<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         EncodingKind dataEncoding, PageList pages)
         where T : notnull
@@ -147,23 +208,27 @@ static class Encoding
         return valueByteCount > 0;
     }
 
-    static void WriteDictionaryDataPages<T>(BufferWriterFactory bufferWriters, ReadOnlySpan<T> values,
+    static void WriteDictionaryDataPages(BufferWriterFactory bufferWriters, int totalRowCount,
         EncodingKind dictionaryEncoding, PageList pages, ReadOnlySpan<int> dictionaryIndexes, int dictionaryBitWidth,
         IPageStrategy strategy)
-        where T : notnull
     {
+        var rowsPerTargetPage = TryGetDictionaryRowsPerPage(strategy, dictionaryBitWidth, out var rowsPerPage)
+            ? rowsPerPage
+            : 0;
         var rowsWritten = 0;
-        while (rowsWritten < values.Length)
+        while (rowsWritten < totalRowCount)
         {
             var pageStart = rowsWritten;
             var pageRowCount = 0;
-            while (rowsWritten < values.Length)
+            while (rowsWritten < totalRowCount)
             {
                 rowsWritten++;
                 pageRowCount++;
-                if (rowsWritten == values.Length)
+                if (rowsWritten == totalRowCount)
                     break;
-                if (strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
+                if (rowsPerTargetPage > 0 && pageRowCount >= rowsPerTargetPage)
+                    break;
+                if (rowsPerTargetPage == 0 && strategy.ShouldStartNewDataPage(totalRowCount, rowsWritten, pageRowCount))
                     break;
             }
 
@@ -175,6 +240,71 @@ static class Encoding
                 dictionaryIndexes.Slice(pageStart, pageRowCount), dictionaryBitWidth, ref page.Content);
             WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0, dictionaryEncoding);
         }
+    }
+
+    static bool TryGetDictionaryRowsPerPage(IPageStrategy strategy, int dictionaryBitWidth, out int rowsPerPage)
+    {
+        rowsPerPage = 0;
+        if (!strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytes))
+            return false;
+
+        if (dictionaryBitWidth <= 0)
+        {
+            rowsPerPage = int.MaxValue;
+            return true;
+        }
+
+        var targetBits = (long)Math.Max(1, targetPageBytes - 1) * 8;
+        rowsPerPage = (int)Math.Clamp(targetBits / dictionaryBitWidth, 1, int.MaxValue);
+        return true;
+    }
+
+    static bool TryGetPlainEncodedValueSize(Column column, Type valueType, out int valueBytes)
+    {
+        valueBytes = 0;
+        if (column.PhysicalType == ParquetPhysicalType.Boolean)
+        {
+            valueBytes = 1;
+            return true;
+        }
+
+        if (TryGetFixedWidthByteCount(column, out valueBytes))
+            return true;
+
+        if (column.PhysicalType != ParquetPhysicalType.ByteArray)
+            return false;
+
+        if (valueType == typeof(byte[]) || valueType == typeof(ReadOnlyMemory<byte>) || valueType == typeof(string))
+            return true;
+
+        return false;
+    }
+
+    static int GetVariablePlainValueBytes<T>(Column column, T value)
+        where T : notnull
+    {
+        if (typeof(T) == typeof(byte[]))
+        {
+            var bytes = Unsafe.As<T, byte[]>(ref value) ?? throw new InvalidOperationException(
+                $"Column '{column.Name}' does not support null values.");
+            return checked(sizeof(int) + bytes.Length);
+        }
+
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+        {
+            var memory = Unsafe.As<T, ReadOnlyMemory<byte>>(ref value);
+            return checked(sizeof(int) + memory.Length);
+        }
+
+        if (typeof(T) == typeof(string))
+        {
+            var text = Unsafe.As<T, string>(ref value) ?? throw new InvalidOperationException(
+                $"Column '{column.Name}' does not support null values.");
+            return checked(sizeof(int) + Utf8.GetByteCount(text));
+        }
+
+        throw new InvalidOperationException(
+            $"Column '{column.Name}' cannot estimate plain encoded size for value type '{typeof(T)}'.");
     }
 
     internal static void EncodeOptional<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T?> values,
@@ -397,6 +527,8 @@ static class Encoding
         var dictionaryBitWidth = useDictionary
             ? RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
             : 0;
+        var useTargetPageBytes = TryGetOptionalPageSizer(column, dataEncoding, useDictionary, dictionaryBitWidth,
+            strategy, out var targetPageBytes, out var presentValueBytes);
 
         var rowsWritten = 0;
         var denseOffset = 0;
@@ -406,13 +538,24 @@ static class Encoding
             {
                 var pageStart = rowsWritten;
                 var pageRowCount = 0;
+                var pageBytes = 0;
                 while (rowsWritten < values.Length)
                 {
+                    var rowBytes = 0;
+                    if (useTargetPageBytes)
+                    {
+                        rowBytes = GetOptionalRowBytes(column, values[rowsWritten], presentValueBytes);
+                        if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
+                            break;
+                    }
+
                     rowsWritten++;
                     pageRowCount++;
+                    if (useTargetPageBytes)
+                        pageBytes = checked(pageBytes + rowBytes);
                     if (rowsWritten == values.Length)
                         break;
-                    if (strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
+                    if (!useTargetPageBytes && strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
                         break;
                 }
 
@@ -459,6 +602,8 @@ static class Encoding
         var dictionaryBitWidth = useDictionary
             ? RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
             : 0;
+        var useTargetPageBytes = TryGetOptionalPageSizer(column, dataEncoding, useDictionary, dictionaryBitWidth,
+            strategy, out var targetPageBytes, out var presentValueBytes);
 
         var rowsWritten = 0;
         var denseOffset = 0;
@@ -468,13 +613,24 @@ static class Encoding
             {
                 var pageStart = rowsWritten;
                 var pageRowCount = 0;
+                var pageBytes = 0;
                 while (rowsWritten < values.Length)
                 {
+                    var rowBytes = 0;
+                    if (useTargetPageBytes)
+                    {
+                        rowBytes = GetOptionalRowBytes(column, values[rowsWritten], presentValueBytes);
+                        if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
+                            break;
+                    }
+
                     rowsWritten++;
                     pageRowCount++;
+                    if (useTargetPageBytes)
+                        pageBytes = checked(pageBytes + rowBytes);
                     if (rowsWritten == values.Length)
                         break;
-                    if (strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
+                    if (!useTargetPageBytes && strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
                         break;
                 }
 
@@ -506,6 +662,41 @@ static class Encoding
                 bufferWriters.ReturnScratch(dictionaryIndexesBytes);
         }
     }
+
+    static bool TryGetOptionalPageSizer(Column column, EncodingKind dataEncoding, bool useDictionary,
+        int dictionaryBitWidth, IPageStrategy strategy, out int targetPageBytes, out int presentValueBytes)
+    {
+        targetPageBytes = 0;
+        presentValueBytes = 0;
+        if (!strategy.TryGetTargetDataPageSizeBytes(out targetPageBytes))
+            return false;
+
+        if (!useDictionary && dataEncoding == EncodingKind.Plain
+            && TryGetPlainEncodedValueSize(column, column.PhysicalType == ParquetPhysicalType.ByteArray
+                ? typeof(byte[])
+                : typeof(int), out presentValueBytes))
+            return true;
+
+        if (!useDictionary)
+            return false;
+
+        presentValueBytes = dictionaryBitWidth <= 0
+            ? 0
+            : Math.Max(1, (dictionaryBitWidth + 7) / 8);
+        return true;
+    }
+
+    static int GetOptionalRowBytes<T>(Column column, T? value, int presentValueBytes)
+        where T : struct
+        => 1 + (value is { } presentValue ? GetOptionalPresentValueBytes(column, presentValue, presentValueBytes) : 0);
+
+    static int GetOptionalRowBytes<T>(Column column, T value, int presentValueBytes)
+        where T : class
+        => 1 + (value is null ? 0 : GetOptionalPresentValueBytes(column, value, presentValueBytes));
+
+    static int GetOptionalPresentValueBytes<T>(Column column, T value, int presentValueBytes)
+        where T : notnull
+        => presentValueBytes > 0 ? presentValueBytes : GetVariablePlainValueBytes(column, value);
 
     static int WriteOptionalDefinitionLevels<T>(ReadOnlySpan<T?> values, ref int nullCount, ref int presentRows,
         ref BufferWriter writer)

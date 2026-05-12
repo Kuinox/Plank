@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
+using System.Runtime.CompilerServices;
 using System.Text;
 using K4os.Compression.LZ4;
 using Plank.Schema;
@@ -13,16 +14,17 @@ static class ColumnChunkReader
 {
     static readonly Encoding Utf8 = new UTF8Encoding(false, true);
 
-    internal static int ReadChunkBuffer(Stream stream, InternalColumnChunkMetadata columnChunk, ref byte[]? buffer)
+    internal static int ReadChunkBuffer(IParquetReadSource source, InternalColumnChunkMetadata columnChunk, ref byte[]? buffer,
+        IParquetBufferPool bufferPool)
     {
-        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(bufferPool);
         if (columnChunk.TotalCompressedSize > int.MaxValue)
             throw new NotSupportedException("Column chunks larger than Int32.MaxValue are not supported.");
 
         var length = checked((int)columnChunk.TotalCompressedSize);
-        buffer = EnsureByteBuffer(ref buffer, length);
-        stream.Position = columnChunk.ChunkOffset;
-        stream.ReadExactly(buffer.AsSpan(0, length));
+        buffer = EnsureByteBuffer(ref buffer, length, bufferPool);
+        source.ReadExactly(columnChunk.ChunkOffset, buffer.AsSpan(0, length));
         return length;
     }
 
@@ -399,12 +401,15 @@ static class ColumnChunkReader
         }
     }
 
-    static byte[] EnsureByteBuffer(ref byte[]? buffer, int minimumLength)
+    static byte[] EnsureByteBuffer(ref byte[]? buffer, int minimumLength, IParquetBufferPool bufferPool)
     {
         if (buffer is not null && buffer.Length >= minimumLength)
             return buffer;
 
-        buffer = new byte[minimumLength];
+        if (buffer is not null)
+            bufferPool.Return(buffer);
+
+        buffer = bufferPool.Rent(checked((uint)minimumLength));
         return buffer;
     }
 
@@ -413,7 +418,10 @@ static class ColumnChunkReader
         if (buffer is not null && buffer.Length >= minimumLength)
             return buffer;
 
-        buffer = new T[minimumLength];
+        if (buffer is not null)
+            ArrayRenter<T>.Shared.Return(buffer, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
+
+        buffer = ArrayRenter<T>.Shared.Rent(minimumLength);
         return buffer;
     }
 
