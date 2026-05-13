@@ -55,15 +55,23 @@ public class RowReaderBenchmark
         _plankReader.Reset(_fileSource, GetPlankProjection());
         var checksum = 0L;
 
+        if (Projection == "all")
+        {
+            foreach (var row in _plankReader)
+            {
+                checksum += row.Id;
+                checksum += row.Timestamp;
+                checksum += (long)row.Value;
+                checksum += row.Category;
+            }
+
+            return checksum;
+        }
+
         foreach (var row in _plankReader)
         {
             checksum += row.Id;
             checksum += row.Timestamp;
-            if (Projection == "all")
-            {
-                checksum += (long)row.Value;
-                checksum += row.Category;
-            }
         }
 
         return checksum;

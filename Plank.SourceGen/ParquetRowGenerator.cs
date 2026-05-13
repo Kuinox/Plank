@@ -458,6 +458,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 .Append(columns[i].PropertyName).AppendLine("PageArray;");
             builder.Append("        int _").Append(columns[i].PropertyName).AppendLine("PageIndex;");
             builder.Append("        bool _").Append(columns[i].PropertyName).AppendLine("PagesOpen;");
+            builder.Append("        bool _").Append(columns[i].PropertyName).AppendLine("Projected;");
         }
         builder.AppendLine();
         builder.AppendLine("        internal RowReader(global::System.IO.Stream stream, Projection projection, global::Plank.Reading.ParquetReaderOptions options)");
@@ -486,6 +487,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 .Append(columns[i].ClrTypeName).AppendLine(">();");
             builder.Append("            _").Append(columns[i].PropertyName).AppendLine("PageIndex = -1;");
             builder.Append("            _").Append(columns[i].PropertyName).AppendLine("PagesOpen = false;");
+            builder.Append("            _").Append(columns[i].PropertyName).Append("Projected = IsProjected(Projection.")
+                .Append(columns[i].PropertyName).AppendLine(");");
         }
         builder.AppendLine("        }");
         builder.AppendLine();
@@ -506,6 +509,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            ThrowIfDisposed();");
         builder.AppendLine("            _source = source ?? throw new global::System.ArgumentNullException(nameof(source));");
         builder.AppendLine("            _projection = projection;");
+        for (var i = 0; i < columns.Length; i++)
+            builder.Append("            _").Append(columns[i].PropertyName).Append("Projected = IsProjected(Projection.")
+                .Append(columns[i].PropertyName).AppendLine(");");
         builder.AppendLine("            DisposeColumnReaders();");
         builder.AppendLine("            _rowGroup.Dispose();");
         builder.AppendLine("            _reader.Reset(source);");
@@ -561,6 +567,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 .Append(columns[i].PropertyName).AppendLine("PageArray;");
             builder.Append("            int _").Append(columns[i].PropertyName).AppendLine("PageIndex;");
             builder.Append("            bool _").Append(columns[i].PropertyName).AppendLine("PagesOpen;");
+            builder.Append("            bool _").Append(columns[i].PropertyName).AppendLine("Projected;");
         }
         builder.AppendLine();
         builder.AppendLine("            internal LocalEnumerator(global::Plank.Reading.IParquetReadSource source, Projection projection, global::Plank.Reading.ParquetReader reader)");
@@ -581,6 +588,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 .Append(columns[i].ClrTypeName).AppendLine(">();");
             builder.Append("                _").Append(columns[i].PropertyName).AppendLine("PageIndex = -1;");
             builder.Append("                _").Append(columns[i].PropertyName).AppendLine("PagesOpen = false;");
+            builder.Append("                _").Append(columns[i].PropertyName).Append("Projected = IsProjected(Projection.")
+                .Append(columns[i].PropertyName).AppendLine(");");
         }
         builder.AppendLine("            }");
         builder.AppendLine();
@@ -596,10 +605,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         {
             if (i > 0)
                 builder.Append(", ");
-            builder.Append("IsProjected(Projection.").Append(columns[i].PropertyName).Append(") ? _")
-                .Append(columns[i].PropertyName).Append("PageArray : global::System.Array.Empty<")
-                .Append(columns[i].ClrTypeName).Append(">(), IsProjected(Projection.")
-                .Append(columns[i].PropertyName).Append(") ? _").Append(columns[i].PropertyName).Append("PageIndex : 0");
+            builder.Append('_').Append(columns[i].PropertyName).Append("PageArray, _")
+                .Append(columns[i].PropertyName).Append("PageIndex");
         }
         builder.AppendLine(");");
         builder.AppendLine("                }");
@@ -633,7 +640,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         for (var i = 0; i < columns.Length; i++)
         {
-            builder.Append("                if (IsProjected(Projection.").Append(columns[i].PropertyName).AppendLine("))");
+            builder.Append("                if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
             builder.AppendLine("                {");
             builder.Append("                    AdvanceColumn(ref _")
                 .Append(columns[i].PropertyName).Append("Pages, ref _").Append(columns[i].PropertyName)
@@ -664,7 +671,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("                        continue;");
         for (var i = 0; i < columns.Length; i++)
         {
-            builder.Append("                    if (IsProjected(Projection.").Append(columns[i].PropertyName).AppendLine("))");
+            builder.Append("                    if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
             builder.AppendLine("                    {");
             builder.Append("                        _").Append(columns[i].PropertyName).Append("Pages = _rowGroup.Column<")
                 .Append(columns[i].ClrTypeName).Append(">(Schema.Columns[").Append(i).AppendLine("]).Pages.GetEnumerator();");
@@ -713,10 +720,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         {
             if (i > 0)
                 builder.Append(", ");
-            builder.Append("IsProjected(Projection.").Append(columns[i].PropertyName).Append(") ? _")
-                .Append(columns[i].PropertyName).Append("PageArray : global::System.Array.Empty<")
-                .Append(columns[i].ClrTypeName).Append(">(), IsProjected(Projection.")
-                .Append(columns[i].PropertyName).Append(") ? _").Append(columns[i].PropertyName).Append("PageIndex : 0");
+            builder.Append('_').Append(columns[i].PropertyName).Append("PageArray, _")
+                .Append(columns[i].PropertyName).Append("PageIndex");
         }
         builder.AppendLine(");");
         builder.AppendLine("            }");
@@ -752,7 +757,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         for (var i = 0; i < columns.Length; i++)
         {
-            builder.Append("            if (IsProjected(Projection.").Append(columns[i].PropertyName).AppendLine("))");
+            builder.Append("            if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
             builder.AppendLine("            {");
             builder.Append("                AdvanceColumn(ref _")
                 .Append(columns[i].PropertyName).Append("Pages, ref _").Append(columns[i].PropertyName)
@@ -782,7 +787,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("                    continue;");
         for (var i = 0; i < columns.Length; i++)
         {
-            builder.Append("                if (IsProjected(Projection.").Append(columns[i].PropertyName).AppendLine("))");
+            builder.Append("                if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
             builder.AppendLine("                {");
             builder.Append("                    _").Append(columns[i].PropertyName).Append("Pages = _rowGroup.Column<")
                 .Append(columns[i].ClrTypeName).Append(">(Schema.Columns[").Append(i).AppendLine("]).Pages.GetEnumerator();");

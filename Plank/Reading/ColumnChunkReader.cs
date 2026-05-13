@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using K4os.Compression.LZ4;
 using Plank.Schema;
@@ -162,8 +163,7 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(int) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
             var typed = (int[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-            for (var i = 0; i < valueCount; i++)
-                typed[i] = BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4));
+            CopyLittleEndianInt32(payload, typed.AsSpan(0, valueCount));
             values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
             return true;
         }
@@ -189,8 +189,7 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(uint) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
             var typed = (uint[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-            for (var i = 0; i < valueCount; i++)
-                typed[i] = unchecked((uint)BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4)));
+            CopyLittleEndianUInt32(payload, typed.AsSpan(0, valueCount));
             values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
             return true;
         }
@@ -198,8 +197,7 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(long) && column.PhysicalType == ParquetPhysicalType.Int64)
         {
             var typed = (long[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-            for (var i = 0; i < valueCount; i++)
-                typed[i] = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
+            CopyLittleEndianInt64(payload, typed.AsSpan(0, valueCount));
             values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
             return true;
         }
@@ -207,8 +205,7 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(ulong) && column.PhysicalType == ParquetPhysicalType.Int64)
         {
             var typed = (ulong[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-            for (var i = 0; i < valueCount; i++)
-                typed[i] = unchecked((ulong)BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8)));
+            CopyLittleEndianUInt64(payload, typed.AsSpan(0, valueCount));
             values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
             return true;
         }
@@ -216,11 +213,7 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(float) && column.PhysicalType == ParquetPhysicalType.Float)
         {
             var typed = (float[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-            for (var i = 0; i < valueCount; i++)
-            {
-                var bits = BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4));
-                typed[i] = BitConverter.Int32BitsToSingle(bits);
-            }
+            CopyLittleEndianFloat(payload, typed.AsSpan(0, valueCount));
             values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
             return true;
         }
@@ -228,11 +221,7 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(double) && column.PhysicalType == ParquetPhysicalType.Double)
         {
             var typed = (double[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-            for (var i = 0; i < valueCount; i++)
-            {
-                var bits = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
-                typed[i] = BitConverter.Int64BitsToDouble(bits);
-            }
+            CopyLittleEndianDouble(payload, typed.AsSpan(0, valueCount));
             values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
             return true;
         }
@@ -312,9 +301,7 @@ static class ColumnChunkReader
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(int):
             {
                 var typed = (int[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-                for (var i = 0; i < valueCount; i++)
-                    typed[i] = payload[i] | (payload[valueCount + i] << 8) | (payload[(valueCount * 2) + i] << 16) |
-                        (payload[(valueCount * 3) + i] << 24);
+                DecodeByteStreamSplitInt32(payload, typed.AsSpan(0, valueCount));
                 values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
                 return true;
             }
@@ -348,51 +335,28 @@ static class ColumnChunkReader
             case ParquetPhysicalType.Int64 when typeof(T) == typeof(long):
             {
                 var typed = (long[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-                for (var i = 0; i < valueCount; i++)
-                {
-                    ulong value = 0;
-                    for (var lane = 0; lane < 8; lane++)
-                        value |= (ulong)payload[(lane * valueCount) + i] << (lane * 8);
-                    typed[i] = unchecked((long)value);
-                }
+                DecodeByteStreamSplitInt64(payload, typed.AsSpan(0, valueCount));
                 values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
                 return true;
             }
             case ParquetPhysicalType.Int64 when typeof(T) == typeof(ulong):
             {
                 var typed = (ulong[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-                for (var i = 0; i < valueCount; i++)
-                {
-                    ulong value = 0;
-                    for (var lane = 0; lane < 8; lane++)
-                        value |= (ulong)payload[(lane * valueCount) + i] << (lane * 8);
-                    typed[i] = value;
-                }
+                DecodeByteStreamSplitUInt64(payload, typed.AsSpan(0, valueCount));
                 values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
                 return true;
             }
             case ParquetPhysicalType.Float when typeof(T) == typeof(float):
             {
                 var typed = (float[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-                for (var i = 0; i < valueCount; i++)
-                {
-                    var bits = payload[i] | (payload[valueCount + i] << 8) | (payload[(valueCount * 2) + i] << 16) |
-                        (payload[(valueCount * 3) + i] << 24);
-                    typed[i] = BitConverter.Int32BitsToSingle(bits);
-                }
+                DecodeByteStreamSplitFloat(payload, typed.AsSpan(0, valueCount));
                 values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
                 return true;
             }
             case ParquetPhysicalType.Double when typeof(T) == typeof(double):
             {
                 var typed = (double[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-                for (var i = 0; i < valueCount; i++)
-                {
-                    ulong bits = 0;
-                    for (var lane = 0; lane < 8; lane++)
-                        bits |= (ulong)payload[(lane * valueCount) + i] << (lane * 8);
-                    typed[i] = BitConverter.Int64BitsToDouble(unchecked((long)bits));
-                }
+                DecodeByteStreamSplitDouble(payload, typed.AsSpan(0, valueCount));
                 values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
                 return true;
             }
@@ -412,6 +376,135 @@ static class ColumnChunkReader
 
         buffer = bufferPool.Rent(checked((uint)minimumLength));
         return buffer;
+    }
+
+    static void CopyLittleEndianInt32(ReadOnlySpan<byte> source, Span<int> destination)
+    {
+        if (BitConverter.IsLittleEndian)
+        {
+            source[..checked(destination.Length * sizeof(int))].CopyTo(MemoryMarshal.AsBytes(destination));
+            return;
+        }
+
+        for (var i = 0; i < destination.Length; i++)
+            destination[i] = BinaryPrimitives.ReadInt32LittleEndian(source.Slice(i * sizeof(int), sizeof(int)));
+    }
+
+    static void CopyLittleEndianUInt32(ReadOnlySpan<byte> source, Span<uint> destination)
+    {
+        if (BitConverter.IsLittleEndian)
+        {
+            source[..checked(destination.Length * sizeof(uint))].CopyTo(MemoryMarshal.AsBytes(destination));
+            return;
+        }
+
+        for (var i = 0; i < destination.Length; i++)
+            destination[i] = BinaryPrimitives.ReadUInt32LittleEndian(source.Slice(i * sizeof(uint), sizeof(uint)));
+    }
+
+    static void CopyLittleEndianInt64(ReadOnlySpan<byte> source, Span<long> destination)
+    {
+        if (BitConverter.IsLittleEndian)
+        {
+            source[..checked(destination.Length * sizeof(long))].CopyTo(MemoryMarshal.AsBytes(destination));
+            return;
+        }
+
+        for (var i = 0; i < destination.Length; i++)
+            destination[i] = BinaryPrimitives.ReadInt64LittleEndian(source.Slice(i * sizeof(long), sizeof(long)));
+    }
+
+    static void CopyLittleEndianUInt64(ReadOnlySpan<byte> source, Span<ulong> destination)
+    {
+        if (BitConverter.IsLittleEndian)
+        {
+            source[..checked(destination.Length * sizeof(ulong))].CopyTo(MemoryMarshal.AsBytes(destination));
+            return;
+        }
+
+        for (var i = 0; i < destination.Length; i++)
+            destination[i] = BinaryPrimitives.ReadUInt64LittleEndian(source.Slice(i * sizeof(ulong), sizeof(ulong)));
+    }
+
+    static void CopyLittleEndianFloat(ReadOnlySpan<byte> source, Span<float> destination)
+    {
+        if (BitConverter.IsLittleEndian)
+        {
+            source[..checked(destination.Length * sizeof(float))].CopyTo(MemoryMarshal.AsBytes(destination));
+            return;
+        }
+
+        for (var i = 0; i < destination.Length; i++)
+        {
+            var bits = BinaryPrimitives.ReadInt32LittleEndian(source.Slice(i * sizeof(float), sizeof(float)));
+            destination[i] = BitConverter.Int32BitsToSingle(bits);
+        }
+    }
+
+    static void CopyLittleEndianDouble(ReadOnlySpan<byte> source, Span<double> destination)
+    {
+        if (BitConverter.IsLittleEndian)
+        {
+            source[..checked(destination.Length * sizeof(double))].CopyTo(MemoryMarshal.AsBytes(destination));
+            return;
+        }
+
+        for (var i = 0; i < destination.Length; i++)
+        {
+            var bits = BinaryPrimitives.ReadInt64LittleEndian(source.Slice(i * sizeof(double), sizeof(double)));
+            destination[i] = BitConverter.Int64BitsToDouble(bits);
+        }
+    }
+
+    static void DecodeByteStreamSplitInt32(ReadOnlySpan<byte> payload, Span<int> destination)
+    {
+        var count = destination.Length;
+        var lane1 = count;
+        var lane2 = count * 2;
+        var lane3 = count * 3;
+        for (var i = 0; i < count; i++)
+            destination[i] = payload[i] | (payload[lane1 + i] << 8) | (payload[lane2 + i] << 16) |
+                (payload[lane3 + i] << 24);
+    }
+
+    static void DecodeByteStreamSplitInt64(ReadOnlySpan<byte> payload, Span<long> destination)
+    {
+        var uintDestination = MemoryMarshal.Cast<long, ulong>(destination);
+        DecodeByteStreamSplitUInt64(payload, uintDestination);
+    }
+
+    static void DecodeByteStreamSplitUInt64(ReadOnlySpan<byte> payload, Span<ulong> destination)
+    {
+        var count = destination.Length;
+        var lane1 = count;
+        var lane2 = count * 2;
+        var lane3 = count * 3;
+        var lane4 = count * 4;
+        var lane5 = count * 5;
+        var lane6 = count * 6;
+        var lane7 = count * 7;
+        for (var i = 0; i < count; i++)
+            destination[i] =
+                (ulong)payload[i] |
+                ((ulong)payload[lane1 + i] << 8) |
+                ((ulong)payload[lane2 + i] << 16) |
+                ((ulong)payload[lane3 + i] << 24) |
+                ((ulong)payload[lane4 + i] << 32) |
+                ((ulong)payload[lane5 + i] << 40) |
+                ((ulong)payload[lane6 + i] << 48) |
+                ((ulong)payload[lane7 + i] << 56);
+    }
+
+    static void DecodeByteStreamSplitFloat(ReadOnlySpan<byte> payload, Span<float> destination)
+    {
+        var intDestination = MemoryMarshal.Cast<float, int>(destination);
+        DecodeByteStreamSplitInt32(payload, intDestination);
+    }
+
+    static void DecodeByteStreamSplitDouble(ReadOnlySpan<byte> payload, Span<double> destination)
+    {
+        var longDestination = MemoryMarshal.Cast<double, ulong>(destination);
+        DecodeByteStreamSplitUInt64(payload, longDestination);
     }
 
     static Array DecodeDictionaryPage<T>(ReadOnlySpan<byte> payload, Column column, PageHeader header,
@@ -499,14 +592,40 @@ static class ColumnChunkReader
             }
 
             var literalCount = checked((int)(header >> 1) * 8);
-            for (var i = 0; i < literalCount && valueIndex < valueCount; i++)
+            var literalByteCount = ((literalCount * bitWidth) + 7) >> 3;
+            var literalPayload = payload[..literalByteCount];
+            var literalCopyLength = Math.Min(literalCount, valueCount - valueIndex);
+            DecodeDictionaryLiteralIndexes(literalPayload, bitWidth, dictionary, destination.AsSpan(valueIndex, literalCopyLength));
+            valueIndex += literalCopyLength;
+            payload = payload[literalByteCount..];
+        }
+    }
+
+    static void DecodeDictionaryLiteralIndexes<T>(ReadOnlySpan<byte> payload, int bitWidth, T[] dictionary,
+        Span<T> destination)
+    {
+        if (bitWidth == 0)
+        {
+            destination.Fill(dictionary[0]);
+            return;
+        }
+
+        var mask = bitWidth == 32 ? ulong.MaxValue : (1UL << bitWidth) - 1UL;
+        ulong bitBuffer = 0;
+        var bufferedBits = 0;
+        var byteIndex = 0;
+        for (var i = 0; i < destination.Length; i++)
+        {
+            while (bufferedBits < bitWidth)
             {
-                var dictionaryIndex = ReadBitPackedValue(ref payload, bitWidth, i);
-                destination[valueIndex++] = dictionary[dictionaryIndex];
+                bitBuffer |= (ulong)payload[byteIndex++] << bufferedBits;
+                bufferedBits += 8;
             }
 
-            var literalByteCount = ((literalCount * bitWidth) + 7) >> 3;
-            payload = payload[literalByteCount..];
+            var dictionaryIndex = (int)(bitBuffer & mask);
+            bitBuffer >>= bitWidth;
+            bufferedBits -= bitWidth;
+            destination[i] = dictionary[dictionaryIndex];
         }
     }
 
