@@ -38,7 +38,18 @@ static class RleBitPackingHybridEncoding
             {
                 runLength = CountRunLength(values, index);
                 if (runLength >= 8)
-                    break;
+                {
+                    var literalLength = index - literalStart;
+                    var padding = literalLength & 7;
+                    if (padding == 0)
+                        break;
+
+                    var take = Math.Min(runLength, 8 - padding);
+                    index += take;
+                    if (take < runLength)
+                        break;
+                    continue;
+                }
                 index += runLength;
             }
 
@@ -69,7 +80,18 @@ static class RleBitPackingHybridEncoding
             {
                 runLength = CountBooleanRunLength(values, index);
                 if (runLength >= 8)
-                    break;
+                {
+                    var literalLength = index - literalStart;
+                    var padding = literalLength & 7;
+                    if (padding == 0)
+                        break;
+
+                    var take = Math.Min(runLength, 8 - padding);
+                    index += take;
+                    if (take < runLength)
+                        break;
+                    continue;
+                }
                 index += runLength;
             }
 
@@ -113,7 +135,18 @@ static class RleBitPackingHybridEncoding
             {
                 runLength = CountRunLength(values, index);
                 if (runLength >= 8)
-                    break;
+                {
+                    var literalLength = index - literalStart;
+                    var padding = literalLength & 7;
+                    if (padding == 0)
+                        break;
+
+                    var take = Math.Min(runLength, 8 - padding);
+                    index += take;
+                    if (take < runLength)
+                        break;
+                    continue;
+                }
                 index += runLength;
             }
 
