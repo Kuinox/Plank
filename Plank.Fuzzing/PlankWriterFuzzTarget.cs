@@ -503,18 +503,10 @@ public static class PlankWriterFuzzTarget
     sealed class ByteCursor
     {
         readonly byte[] _data;
-        uint _state;
         int _offset;
 
         public ByteCursor(ReadOnlySpan<byte> data)
-        {
-            _data = data.ToArray();
-            _state = 2166136261U;
-            for (var i = 0; i < _data.Length; i++)
-                _state = (_state ^ _data[i]) * 16777619U;
-            if (_state == 0)
-                _state = 0x9E3779B9U;
-        }
+            => _data = data.ToArray();
 
         public int NextInt(int minInclusive, int maxExclusive)
         {
@@ -546,12 +538,7 @@ public static class PlankWriterFuzzTarget
         }
 
         byte NextByte()
-        {
-            if (_offset < _data.Length)
-                return _data[_offset++];
-
-            return (byte)(NextFallbackUInt32() & 0xFF);
-        }
+            => _data.Length == 0 ? (byte)0 : _data[_offset++ % _data.Length];
 
         uint NextUInt32()
         {
@@ -564,14 +551,6 @@ public static class PlankWriterFuzzTarget
 
         ulong NextUInt64()
             => ((ulong)NextUInt32() << 32) | NextUInt32();
-
-        uint NextFallbackUInt32()
-        {
-            _state ^= _state << 13;
-            _state ^= _state >> 17;
-            _state ^= _state << 5;
-            return _state;
-        }
     }
 
 }

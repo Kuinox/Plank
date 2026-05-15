@@ -19,4 +19,9 @@
     <ProjectReference Include="..\Plank.Fuzzing\Plank.Fuzzing.csproj" />
   </ItemGroup>
 
+  <Target Name="SharpFuzzInstrument" AfterTargets="Build">
+    <Exec Command="sharpfuzz &quot;$(OutDir)Plank.dll&quot;" />
+    <Exec Command="sharpfuzz &quot;$(OutDir)Plank.Fuzzing.dll&quot;" />
+  </Target>
+
 </Project>

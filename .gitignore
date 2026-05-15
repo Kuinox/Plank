@@ -17,3 +17,6 @@ riderModule.iml
 /artifacts/
 /benchmarks/report/
 __pycache__
+/fuzz/findings/
+/fuzz/findings-noninstru/
+core.*

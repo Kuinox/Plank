@@ -44,4 +44,25 @@ internal sealed class PlankWriterFuzzTargetTests
         => PlankWriterFuzzTarget.Execute([
             0x63, 0x00, 0x00, 0x00, 0x14, 0x02, 0x02, 0x00
         ]);
+
+    [Test]
+    public void AllGeneratedSeedsAreValid()
+    {
+        foreach (var (name, bytes) in SeedGenerator.AllSeeds())
+        {
+            try
+            {
+                PlankWriterFuzzTarget.Validate(PlankWriterFuzzTarget.Decode(bytes));
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Seed '{name}' failed validation.", ex);
+            }
+        }
+    }
+
+    [Test]
+    [Explicit]
+    public void WriteCorpusSeeds()
+        => SeedGenerator.WriteSeedsToCorpus();
 }
