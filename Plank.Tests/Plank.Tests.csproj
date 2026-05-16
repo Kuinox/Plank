@@ -19,6 +19,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="Fuzzing\Fixtures\*.parquet">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Plank.Fuzzing\Plank.Fuzzing.csproj" />
     <ProjectReference Include="..\Plank\Plank.csproj" />
     <ProjectReference Include="..\Plank.SourceGen\Plank.SourceGen.csproj"
