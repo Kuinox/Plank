@@ -87,6 +87,8 @@ public sealed class ParquetReader : IDisposable
         var footerLength = BinaryPrimitives.ReadInt32LittleEndian(trailer[..4]);
         if (footerLength < 0)
             throw new CorruptParquetException("Footer length must be non-negative.");
+        if ((ulong)footerLength > source.Length - (ulong)trailer.Length)
+            throw new CorruptParquetException("Footer length exceeds stream size.");
 
         var footerOffset = source.Length - (ulong)trailer.Length - (ulong)footerLength;
         if (footerOffset < 4)

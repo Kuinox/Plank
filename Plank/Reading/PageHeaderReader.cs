@@ -9,7 +9,7 @@ static class PageHeaderReader
         var reader = new CompactProtocolReader(buffer);
         var previousFieldId = 0;
         var type = PageHeaderType.DataPage;
-        var uncompressedPageSize = 0;
+        var uncompressedPageSize = 0U;
         var compressedPageSize = 0;
         var valueCount = 0U;
         var encoding = EncodingKind.Plain;
@@ -26,7 +26,7 @@ static class PageHeaderReader
                     type = (PageHeaderType)reader.ReadI32();
                     break;
                 case 2:
-                    uncompressedPageSize = (int)reader.ReadI32AsU32(max: reader.Remaining);
+                    uncompressedPageSize = reader.ReadI32AsU32(max: reader.Remaining);
                     break;
                 case 3:
                     compressedPageSize = (int)reader.ReadI32AsU32(max: reader.Remaining);

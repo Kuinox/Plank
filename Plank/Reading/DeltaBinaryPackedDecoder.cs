@@ -23,6 +23,20 @@ static class DeltaBinaryPackedDecoder
     internal static int ReadInt64(ReadOnlySpan<byte> payload, Span<long> destination)
         => ReadInt64Core(payload, destination);
 
+    internal static uint[] ReadUInt32(ReadOnlySpan<byte> payload)
+    {
+        var (values, _) = ReadInt32Core(payload);
+        var result = new uint[values.Length];
+        for (var i = 0; i < values.Length; i++)
+        {
+            if (values[i] < 0)
+                throw new CorruptParquetException(
+                    $"Delta encoded length {values[i]} is negative.");
+            result[i] = (uint)values[i];
+        }
+        return result;
+    }
+
     internal static int ReadConsumedByteCount(ReadOnlySpan<byte> payload)
     {
         var (_, consumedBytes) = ReadInt64Core(payload);
@@ -87,8 +101,8 @@ static class DeltaBinaryPackedDecoder
             throw new NotSupportedException(
                 $"Delta binary packed decoding currently supports block size {BlockSize} and mini-block count {MiniBlockCount} only.");
         if (destination.Length != valueCount)
-            throw new ArgumentException($"Destination length {destination.Length} does not match encoded value count {valueCount}.",
-                nameof(destination));
+            throw new CorruptParquetException(
+                $"DeltaBinaryPacked encoded value count {valueCount} does not match expected {destination.Length}.");
 
         if (valueCount == 0)
         {
@@ -183,8 +197,8 @@ static class DeltaBinaryPackedDecoder
             throw new NotSupportedException(
                 $"Delta binary packed decoding currently supports block size {BlockSize} and mini-block count {MiniBlockCount} only.");
         if (destination.Length != valueCount)
-            throw new ArgumentException($"Destination length {destination.Length} does not match encoded value count {valueCount}.",
-                nameof(destination));
+            throw new CorruptParquetException(
+                $"DeltaBinaryPacked encoded value count {valueCount} does not match expected {destination.Length}.");
 
         if (valueCount == 0)
         {

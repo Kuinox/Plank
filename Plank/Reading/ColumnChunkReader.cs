@@ -1,13 +1,9 @@
 using System.Buffers.Binary;
-using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
-using K4os.Compression.LZ4;
 using Plank.Schema;
-using Plank.Snappy;
 using Plank.Writing;
-using ZstdSharp;
 
 namespace Plank.Reading;
 
@@ -69,14 +65,20 @@ static class ColumnChunkReader
                     var physicalValueCount = header.ValueCount - header.NullCount;
 
                     // In DataPageV2, levels are always uncompressed; only the values portion may be compressed.
+                    if (levelBytes > (uint)payload.Length)
+                        throw new CorruptParquetException(
+                            $"Level bytes ({levelBytes}) exceed compressed page size ({payload.Length}).");
                     var definitionPayload = defLen > 0 ? payload.Slice((int)repLen, (int)defLen) : default;
                     var dataPayload = payload[(int)levelBytes..];
 
                     ReadOnlySpan<byte> effectiveData;
                     if (header.IsCompressed && dataPayload.Length > 0)
                     {
-                        var expectedUncompressedDataSize = (int)(header.UncompressedPageSize - levelBytes);
-                        effectiveData = Decompress(dataPayload, expectedUncompressedDataSize, columnChunk.Compression);
+                        if (levelBytes > header.UncompressedPageSize)
+                            throw new CorruptParquetException(
+                                $"Level bytes ({levelBytes}) exceed uncompressed page size ({header.UncompressedPageSize}).");
+                        var expectedUncompressedDataSize = header.UncompressedPageSize - levelBytes;
+                        effectiveData = ParquetDecompressor.Decompress(dataPayload, expectedUncompressedDataSize, columnChunk.Compression);
                     }
                     else
                     {
@@ -566,7 +568,7 @@ static class ColumnChunkReader
     {
         var effectivePayload = compression == CompressionKind.None || header.CompressedPageSize == 0
             ? payload
-            : Decompress(payload, header.UncompressedPageSize, compression);
+            : ParquetDecompressor.Decompress(payload, header.UncompressedPageSize, compression);
 
         if (physicalDecodeType == typeof(T) &&
             TryDecodeValuesIntoBuffer(effectivePayload, column, header.ValueCount, header.Encoding,
@@ -627,31 +629,41 @@ static class ColumnChunkReader
         if (valueCount == 0)
             return;
 
+        if (payload.IsEmpty)
+            throw new CorruptParquetException("Dictionary payload is empty but value count is non-zero.");
         var bitWidth = payload[0];
+        if (bitWidth > 32)
+            throw new CorruptParquetException($"Dictionary bit width {bitWidth} exceeds the maximum of 32.");
         payload = payload[1..];
-        var valueIndex = 0;
+        var valueIndex = 0U;
         while (valueIndex < valueCount)
         {
             var header = ReadUnsignedVarInt(ref payload);
             if ((header & 1U) == 0)
             {
-                var runLength = checked((int)(header >> 1));
+                var runLength = header >> 1;
                 var byteWidth = (bitWidth + 7) >> 3;
                 var dictionaryIndex = byteWidth == 0 ? 0 : ReadLittleEndian(ref payload, byteWidth);
+                if ((uint)dictionaryIndex >= (uint)dictionary.Length)
+                    throw new CorruptParquetException(
+                        $"Dictionary index {dictionaryIndex} is out of range for a dictionary of {dictionary.Length} entries.");
                 var repeated = dictionary[dictionaryIndex];
-                var copyLength = (int)Math.Min((uint)runLength, valueCount - (uint)valueIndex);
-                destination.AsSpan(valueIndex, copyLength).Fill(repeated);
+                var copyLength = Math.Min(runLength, valueCount - valueIndex);
+                destination.AsSpan((int)valueIndex, (int)copyLength).Fill(repeated);
                 valueIndex += copyLength;
                 continue;
             }
 
-            var literalCount = checked((int)(header >> 1) * 8);
+            var literalCount = (header >> 1) * 8U;
             var literalByteCount = ((literalCount * bitWidth) + 7) >> 3;
-            var literalPayload = payload[..literalByteCount];
-            var literalCopyLength = (int)Math.Min((uint)literalCount, valueCount - (uint)valueIndex);
-            DecodeDictionaryLiteralIndexes(literalPayload, bitWidth, dictionary, destination.AsSpan(valueIndex, literalCopyLength));
+            if (literalByteCount > (uint)payload.Length)
+                throw new CorruptParquetException(
+                    $"Literal run claims {literalByteCount} bytes but only {payload.Length} remain.");
+            var literalPayload = payload[..(int)literalByteCount];
+            var literalCopyLength = Math.Min(literalCount, valueCount - valueIndex);
+            DecodeDictionaryLiteralIndexes(literalPayload, bitWidth, dictionary, destination.AsSpan((int)valueIndex, (int)literalCopyLength));
             valueIndex += literalCopyLength;
-            payload = payload[literalByteCount..];
+            payload = payload[(int)literalByteCount..];
         }
     }
 
@@ -679,6 +691,9 @@ static class ColumnChunkReader
             var dictionaryIndex = (int)(bitBuffer & mask);
             bitBuffer >>= bitWidth;
             bufferedBits -= bitWidth;
+            if ((uint)dictionaryIndex >= (uint)dictionary.Length)
+                throw new CorruptParquetException(
+                    $"Dictionary index {dictionaryIndex} is out of range for a dictionary of {dictionary.Length} entries.");
             destination[i] = dictionary[dictionaryIndex];
         }
     }
@@ -688,7 +703,7 @@ static class ColumnChunkReader
     {
         var bytes = compression == CompressionKind.None || header.CompressedPageSize == 0
             ? payload.ToArray()
-            : Decompress(payload, header.UncompressedPageSize, compression);
+            : ParquetDecompressor.Decompress(payload, header.UncompressedPageSize, compression);
         return DecodeValues(bytes, column, header.ValueCount, header.Encoding, targetType);
     }
 
@@ -867,13 +882,18 @@ static class ColumnChunkReader
         if (targetType == typeof(byte[]))
         {
             var values = new byte[valueCount][];
-            var offset = 0;
+            var remaining = payload;
             for (var i = 0; i < valueCount; i++)
             {
-                var length = BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(offset, 4));
-                offset += 4;
-                values[i] = payload.Slice(offset, length).ToArray();
-                offset += length;
+                if (remaining.Length < 4)
+                    throw new CorruptParquetException("Payload too short to read byte array length prefix.");
+                var length = BinaryPrimitives.ReadInt32LittleEndian(remaining);
+                remaining = remaining[4..];
+                if (length < 0 || length > remaining.Length)
+                    throw new CorruptParquetException(
+                        $"Byte array length {length} exceeds remaining payload ({remaining.Length} bytes).");
+                values[i] = remaining[..length].ToArray();
+                remaining = remaining[length..];
             }
             return values;
         }
@@ -1065,41 +1085,56 @@ static class ColumnChunkReader
 
     static Array DecodeDeltaLengthByteArray(ReadOnlySpan<byte> payload, Type targetType)
     {
-        var lengths = DeltaBinaryPackedDecoder.ReadInt32(payload);
+        var lengths = DeltaBinaryPackedDecoder.ReadUInt32(payload);
         var consumedLengthBytes = DeltaBinaryPackedDecoder.ReadConsumedByteCount(payload);
-        var dataBytes = payload[consumedLengthBytes..];
+        var remaining = payload[consumedLengthBytes..];
         var values = new byte[lengths.Length][];
-        var offset = 0;
         for (var i = 0; i < lengths.Length; i++)
         {
-            values[i] = dataBytes.Slice(offset, lengths[i]).ToArray();
-            offset += lengths[i];
+            var length = lengths[i];
+            if (length > (uint)remaining.Length)
+                throw new CorruptParquetException(
+                    $"Delta length byte array entry {i} claims {length} bytes but only {remaining.Length} remain.");
+            values[i] = remaining[..(int)length].ToArray();
+            remaining = remaining[(int)length..];
         }
         return targetType == typeof(byte[]) ? values : DecodePlainByteArray(ToLengthPrefixed(values), (uint)values.Length, targetType);
     }
 
     static Array DecodeDeltaByteArray(ReadOnlySpan<byte> payload, Type targetType)
     {
-        var prefixLengths = DeltaBinaryPackedDecoder.ReadInt32(payload);
+        var prefixLengths = DeltaBinaryPackedDecoder.ReadUInt32(payload);
         var prefixConsumed = DeltaBinaryPackedDecoder.ReadConsumedByteCount(payload);
         var suffixPayload = payload[prefixConsumed..];
-        var suffixLengths = DeltaBinaryPackedDecoder.ReadInt32(suffixPayload);
+        var suffixLengths = DeltaBinaryPackedDecoder.ReadUInt32(suffixPayload);
         var suffixConsumed = DeltaBinaryPackedDecoder.ReadConsumedByteCount(suffixPayload);
         var suffixBytes = suffixPayload[suffixConsumed..];
 
         var values = new byte[prefixLengths.Length][];
-        var offset = 0;
+        var suffixRemaining = suffixBytes;
         for (var i = 0; i < values.Length; i++)
         {
             var prefixLength = prefixLengths[i];
             var suffixLength = suffixLengths[i];
-            var value = new byte[prefixLength + suffixLength];
+            var totalLength = prefixLength + suffixLength;
+            if (totalLength < prefixLength)
+                throw new CorruptParquetException(
+                    $"Delta byte array value length overflow (prefix={prefixLength} + suffix={suffixLength}).");
+            var value = new byte[(int)totalLength];
             if (prefixLength > 0 && i > 0)
-                values[i - 1].AsSpan(0, prefixLength).CopyTo(value);
+            {
+                if (prefixLength > (uint)values[i - 1].Length)
+                    throw new CorruptParquetException(
+                        $"Delta byte array prefix length {prefixLength} exceeds previous value length {values[i - 1].Length}.");
+                values[i - 1].AsSpan(0, (int)prefixLength).CopyTo(value);
+            }
             if (suffixLength > 0)
             {
-                suffixBytes.Slice(offset, suffixLength).CopyTo(value.AsSpan(prefixLength));
-                offset += suffixLength;
+                if (suffixLength > (uint)suffixRemaining.Length)
+                    throw new CorruptParquetException(
+                        $"Delta byte array suffix length {suffixLength} exceeds remaining suffix bytes ({suffixRemaining.Length}).");
+                suffixRemaining[..(int)suffixLength].CopyTo(value.AsSpan((int)prefixLength));
+                suffixRemaining = suffixRemaining[(int)suffixLength..];
             }
             values[i] = value;
         }
@@ -1441,6 +1476,9 @@ static class ColumnChunkReader
         var bitOffset = index * bitWidth;
         var byteIndex = bitOffset >> 3;
         var shift = bitOffset & 7;
+        if (byteIndex >= payload.Length)
+            throw new CorruptParquetException(
+                $"Bit-packed value at bit offset {bitOffset} reads past end of payload ({payload.Length} bytes).");
         ulong bits = payload[byteIndex];
         if (byteIndex + 1 < payload.Length)
             bits |= (ulong)payload[byteIndex + 1] << 8;
@@ -1459,6 +1497,8 @@ static class ColumnChunkReader
         var shift = 0;
         while (true)
         {
+            if (payload.IsEmpty)
+                throw new CorruptParquetException("Unexpected end of RLE/bit-pack payload while reading varint.");
             var b = payload[0];
             payload = payload[1..];
             value |= (uint)(b & 0x7F) << shift;
@@ -1470,6 +1510,9 @@ static class ColumnChunkReader
 
     static int ReadLittleEndian(ref ReadOnlySpan<byte> payload, int byteWidth)
     {
+        if (byteWidth > payload.Length)
+            throw new CorruptParquetException(
+                $"RLE run needs {byteWidth} bytes but only {payload.Length} remain.");
         var value = byteWidth switch
         {
             1 => payload[0],
@@ -1482,51 +1525,4 @@ static class ColumnChunkReader
         return value;
     }
 
-    static byte[] Decompress(ReadOnlySpan<byte> payload, int expectedLength, CompressionKind compression)
-        => compression switch
-        {
-            CompressionKind.Gzip => DecompressWithStream(payload, expectedLength, static s => new GZipStream(s, CompressionMode.Decompress, leaveOpen: true)),
-            CompressionKind.Brotli => DecompressWithStream(payload, expectedLength, static s => new BrotliStream(s, CompressionMode.Decompress, leaveOpen: true)),
-            CompressionKind.Lz4 => DecompressLz4(payload, expectedLength),
-            CompressionKind.Zstd => DecompressZstd(payload, expectedLength),
-            CompressionKind.Snappy => DecompressSnappy(payload, expectedLength),
-            _ => throw new NotSupportedException($"Compression '{compression}' is not supported.")
-        };
-
-    static byte[] DecompressWithStream(ReadOnlySpan<byte> payload, int expectedLength, Func<MemoryStream, Stream> create)
-    {
-        using var memory = new MemoryStream(payload.ToArray(), writable: false);
-        using var stream = create(memory);
-        var buffer = new byte[expectedLength];
-        stream.ReadExactly(buffer);
-        return buffer;
-    }
-
-    static byte[] DecompressLz4(ReadOnlySpan<byte> payload, int expectedLength)
-    {
-        var buffer = new byte[expectedLength];
-        var written = LZ4Codec.Decode(payload, buffer);
-        if (written != expectedLength)
-            throw new CorruptParquetException("LZ4 decompression did not produce the expected byte count.");
-        return buffer;
-    }
-
-    static byte[] DecompressZstd(ReadOnlySpan<byte> payload, int expectedLength)
-    {
-        using var decompressor = new Decompressor();
-        var buffer = new byte[expectedLength];
-        var written = decompressor.Unwrap(payload, buffer);
-        if (written != expectedLength)
-            throw new CorruptParquetException("Zstd decompression did not produce the expected byte count.");
-        return buffer;
-    }
-
-    static byte[] DecompressSnappy(ReadOnlySpan<byte> payload, int expectedLength)
-    {
-        var buffer = new byte[expectedLength];
-        var written = SnappyCodec.Decompress(payload, buffer);
-        if (written != expectedLength)
-            throw new CorruptParquetException("Snappy decompression did not produce the expected byte count.");
-        return buffer;
-    }
 }

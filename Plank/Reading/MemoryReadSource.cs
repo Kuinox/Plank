@@ -12,9 +12,9 @@ public sealed class MemoryReadSource : IParquetReadSource
 
     public void ReadExactly(ulong offset, Span<byte> destination)
     {
-        if (offset > (ulong)_bytes.Length - (ulong)destination.Length)
+        if (offset > int.MaxValue || (long)(int)offset + destination.Length > _bytes.Length)
             throw new CorruptParquetException($"Attempted to read {destination.Length} bytes at offset {offset} but the source is only {_bytes.Length} bytes long.");
 
-        _bytes.Span.Slice(checked((int)offset), destination.Length).CopyTo(destination);
+        _bytes.Span.Slice((int)offset, destination.Length).CopyTo(destination);
     }
 }
