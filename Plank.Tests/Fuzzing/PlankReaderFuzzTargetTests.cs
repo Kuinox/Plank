@@ -160,4 +160,11 @@ internal sealed class PlankReaderFuzzTargetTests
     [Explicit]
     public void WriteReaderCorpusSeeds()
         => ReaderSeedGenerator.WriteSeeds();
+
+    [Test]
+    public void RowGroupCountOverflowDoesNotCrash()
+        // ReadRowGroups: count > int.MaxValue caused OverflowException from checked((int)count).
+        => PlankReaderFuzzTarget.Execute(Convert.FromHexString(
+            "C65041523115062B2814285C1654160A150A1506160A150A150615633000160A191C191C26081C504152311506154415445C150C19301500160A1654165426083C1804AABBCCFB1800160027FCAABBCCDD1800111100001682011514165C152600151E15022608165400002400000050415231"));
+
 }

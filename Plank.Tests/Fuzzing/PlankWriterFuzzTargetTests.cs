@@ -65,4 +65,5 @@ internal sealed class PlankWriterFuzzTargetTests
     [Explicit]
     public void WriteCorpusSeeds()
         => SeedGenerator.WriteSeedsToCorpus();
+
 }

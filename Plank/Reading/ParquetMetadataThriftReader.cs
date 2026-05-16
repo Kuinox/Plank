@@ -67,8 +67,10 @@ static class ParquetMetadataThriftReader
         var (count, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.Struct)
             throw new CorruptParquetException("Expected row_groups to be encoded as a list of structs.");
+        if (count > (uint)Array.MaxLength)
+            throw new CorruptParquetException($"Row group count {count} exceeds the maximum array length.");
 
-        var rowGroups = (uint)previous.Length == count ? previous : new InternalRowGroupMetadata[checked((int)count)];
+        var rowGroups = (uint)previous.Length == count ? previous : new InternalRowGroupMetadata[(int)count];
         for (var i = 0U; i < count; i++)
         {
             var previousColumns = rowGroups[i].Columns ?? [];
@@ -115,8 +117,10 @@ static class ParquetMetadataThriftReader
         var (count, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.Struct)
             throw new CorruptParquetException("Expected row group columns to be encoded as a list of structs.");
+        if (count > (uint)Array.MaxLength)
+            throw new CorruptParquetException($"Column count {count} exceeds the maximum array length.");
 
-        var columns = (uint)previous.Length == count ? previous : new InternalColumnChunkMetadata[checked((int)count)];
+        var columns = (uint)previous.Length == count ? previous : new InternalColumnChunkMetadata[(int)count];
         for (var i = 0U; i < count; i++)
         {
             var previousEncodings = columns[i].Encodings ?? [];
@@ -204,8 +208,10 @@ static class ParquetMetadataThriftReader
         var (count, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.I32)
             throw new CorruptParquetException("Expected encoding ids to be encoded as I32 list elements.");
+        if (count > (uint)Array.MaxLength)
+            throw new CorruptParquetException($"Encoding count {count} exceeds the maximum array length.");
 
-        var encodings = (uint)previous.Length == count ? previous : new EncodingKind[checked((int)count)];
+        var encodings = (uint)previous.Length == count ? previous : new EncodingKind[(int)count];
         for (var i = 0U; i < count; i++)
             encodings[i] = ReadEncoding(reader.ReadI32());
         return encodings;
