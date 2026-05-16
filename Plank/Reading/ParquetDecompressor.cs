@@ -24,7 +24,7 @@ static class ParquetDecompressor
                 _ => throw new NotSupportedException($"Compression '{compression}' is not supported.")
             };
         }
-        catch (InvalidDataException ex)
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentException)
         {
             throw new CorruptParquetException($"{compression} decompression failed due to invalid compressed data.", ex);
         }

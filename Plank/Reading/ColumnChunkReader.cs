@@ -625,7 +625,16 @@ static class ColumnChunkReader
         for (var i = 0; i < totalValueCount; i++)
         {
             if (definitionLevels[i] != 0)
-                result[i] = (T)dictionary.GetValue(indexes[valueIndex++])!;
+            {
+                if (valueIndex >= indexes.Length)
+                    throw new CorruptParquetException(
+                        $"Definition levels claim more non-null values than page header's physical count ({physicalValueCount}).");
+                var dictIndex = indexes[valueIndex++];
+                if ((uint)dictIndex >= (uint)dictionary.Length)
+                    throw new CorruptParquetException(
+                        $"Dictionary index {dictIndex} is out of range for a dictionary of {dictionary.Length} entries.");
+                result[i] = (T)dictionary.GetValue(dictIndex)!;
+            }
         }
         return result;
     }
@@ -770,6 +779,7 @@ static class ColumnChunkReader
 
     static Array DecodePlainInt32(ReadOnlySpan<byte> payload, uint valueCount, LogicalType? logicalType, Type targetType)
     {
+        ValidatePlainPayload(payload, valueCount, sizeof(int));
         if (targetType == typeof(int))
         {
             var values = new int[(int)valueCount];
@@ -818,6 +828,7 @@ static class ColumnChunkReader
 
     static Array DecodePlainInt64(ReadOnlySpan<byte> payload, uint valueCount, LogicalType? logicalType, Type targetType)
     {
+        ValidatePlainPayload(payload, valueCount, sizeof(long));
         if (targetType == typeof(long))
         {
             var values = new long[valueCount];
@@ -864,6 +875,7 @@ static class ColumnChunkReader
 
     static Array DecodePlainFloat(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
     {
+        ValidatePlainPayload(payload, valueCount, sizeof(float));
         if (targetType != typeof(float))
             throw new InvalidOperationException($"Float column cannot be projected to '{targetType}'.");
 
@@ -878,6 +890,7 @@ static class ColumnChunkReader
 
     static Array DecodePlainDouble(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
     {
+        ValidatePlainPayload(payload, valueCount, sizeof(double));
         if (targetType != typeof(double))
             throw new InvalidOperationException($"Double column cannot be projected to '{targetType}'.");
 
@@ -956,6 +969,9 @@ static class ColumnChunkReader
         {
             case ParquetPhysicalType.Int32:
             {
+                if ((long)valueCount * 4 > payload.Length)
+                    throw new CorruptParquetException(
+                        $"ByteStreamSplit payload ({payload.Length} bytes) is too short for {valueCount} Int32 values.");
                 if (targetType == typeof(int))
                 {
                     var values = new int[(int)valueCount];
@@ -992,6 +1008,9 @@ static class ColumnChunkReader
             }
             case ParquetPhysicalType.Int64:
             {
+                if ((long)valueCount * 8 > payload.Length)
+                    throw new CorruptParquetException(
+                        $"ByteStreamSplit payload ({payload.Length} bytes) is too short for {valueCount} 8-byte values.");
                 if (targetType == typeof(long))
                 {
                     var values = new long[valueCount];
@@ -1309,7 +1328,7 @@ static class ColumnChunkReader
 
     static int[] ReadDefinitionLevels(ReadOnlySpan<byte> payload, uint valueCount, out int nonNullCount)
     {
-        var values = new int[checked((int)valueCount)];
+        var values = new int[(int)valueCount];
         var valueIndex = 0U;
         var count = 0;
         while (valueIndex < valueCount)
@@ -1329,16 +1348,22 @@ static class ColumnChunkReader
                 continue;
             }
 
-            var literalCount = checked((header >> 1) * 8U);
+            var literalGroupCount = header >> 1;
+            if (literalGroupCount > uint.MaxValue / 8)
+                throw new CorruptParquetException($"Definition levels literal run group count {literalGroupCount} is too large.");
+            var literalCount = literalGroupCount * 8U;
             for (var i = 0U; i < literalCount && valueIndex < valueCount; i++)
             {
-                var v = ReadBitPackedValue(ref payload, bitWidth: 1, checked((int)i));
-                values[checked((int)valueIndex++)] = v;
+                var v = ReadBitPackedValue(ref payload, bitWidth: 1, (int)i);
+                values[(int)valueIndex++] = v;
                 count += v;
             }
 
             var literalByteCount = (literalCount + 7U) >> 3;
-            payload = payload[checked((int)literalByteCount)..];
+            if (literalByteCount > (uint)payload.Length)
+                throw new CorruptParquetException(
+                    $"Definition level literal group claims {literalByteCount} bytes but only {payload.Length} remain.");
+            payload = payload[(int)literalByteCount..];
         }
 
         nonNullCount = count;
@@ -1471,7 +1496,7 @@ static class ColumnChunkReader
 
     static int[] ReadRleBitPackedHybrid(ReadOnlySpan<byte> payload, uint valueCount, int bitWidth)
     {
-        var values = new int[checked((int)valueCount)];
+        var values = new int[(int)valueCount];
         var valueIndex = 0U;
         while (valueIndex < valueCount)
         {
@@ -1482,17 +1507,25 @@ static class ColumnChunkReader
                 var byteWidth = (bitWidth + 7) >> 3;
                 var repeated = byteWidth == 0 ? 0 : ReadLittleEndian(ref payload, byteWidth);
                 var copyLength = Math.Min(runLength, valueCount - valueIndex);
-                Array.Fill(values, repeated, checked((int)valueIndex), checked((int)copyLength));
+                Array.Fill(values, repeated, (int)valueIndex, (int)copyLength);
                 valueIndex += copyLength;
                 continue;
             }
 
-            var literalCount = checked((header >> 1) * 8U);
+            var literalGroupCount = header >> 1;
+            if (literalGroupCount > uint.MaxValue / 8)
+                throw new CorruptParquetException($"RLE literal run group count {literalGroupCount} is too large.");
+            var literalCount = literalGroupCount * 8U;
             for (var i = 0U; i < literalCount && valueIndex < valueCount; i++)
-                values[checked((int)valueIndex++)] = ReadBitPackedValue(ref payload, bitWidth, checked((int)i));
+                values[(int)valueIndex++] = ReadBitPackedValue(ref payload, bitWidth, (int)i);
 
-            var literalByteCount = checked(((literalCount * (uint)bitWidth) + 7U) >> 3);
-            payload = payload[checked((int)literalByteCount)..];
+            if (bitWidth > 0 && literalCount > (uint.MaxValue - 7) / (uint)bitWidth)
+                throw new CorruptParquetException($"RLE literal run bit count overflow (count={literalCount}, width={bitWidth}).");
+            var literalByteCount = bitWidth == 0 ? 0U : (literalCount * (uint)bitWidth + 7U) >> 3;
+            if (literalByteCount > (uint)payload.Length)
+                throw new CorruptParquetException(
+                    $"RLE literal group claims {literalByteCount} bytes but only {payload.Length} remain.");
+            payload = payload[(int)literalByteCount..];
         }
 
         return values;
@@ -1510,17 +1543,23 @@ static class ColumnChunkReader
                 var runLength = header >> 1;
                 var repeated = ReadLittleEndian(ref payload, 1) != 0;
                 var copyLength = Math.Min(runLength, destinationLength - valueIndex);
-                destination.Slice(checked((int)valueIndex), checked((int)copyLength)).Fill(repeated);
+                destination.Slice((int)valueIndex, (int)copyLength).Fill(repeated);
                 valueIndex += copyLength;
                 continue;
             }
 
-            var literalCount = checked((header >> 1) * 8U);
+            var literalGroupCount = header >> 1;
+            if (literalGroupCount > uint.MaxValue / 8)
+                throw new CorruptParquetException($"Boolean RLE literal run group count {literalGroupCount} is too large.");
+            var literalCount = literalGroupCount * 8U;
             for (var i = 0U; i < literalCount && valueIndex < destinationLength; i++)
-                destination[checked((int)valueIndex++)] = ReadBitPackedValue(ref payload, bitWidth: 1, checked((int)i)) != 0;
+                destination[(int)valueIndex++] = ReadBitPackedValue(ref payload, bitWidth: 1, (int)i) != 0;
 
             var literalByteCount = (literalCount + 7U) >> 3;
-            payload = payload[checked((int)literalByteCount)..];
+            if (literalByteCount > (uint)payload.Length)
+                throw new CorruptParquetException(
+                    $"Boolean RLE literal group claims {literalByteCount} bytes but only {payload.Length} remain.");
+            payload = payload[(int)literalByteCount..];
         }
     }
 
