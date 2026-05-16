@@ -5,6 +5,15 @@ set BIN $ROOT/Plank.Fuzzing.Reader.Target/bin/Release/net10.0/Plank.Fuzzing.Read
 set CORPUS $ROOT/fuzz/reader-corpus
 set OUT $ROOT/fuzz/reader-findings
 
+# --oop flag: stable but slow (~2k exec/sec); default is inline (~54k exec/sec)
+set oop 0
+if contains -- --oop $argv
+    set oop 1
+    echo "==> Mode: OutOfProcess (stable)"
+else
+    echo "==> Mode: Inline/persistent (fast, workers auto-restart on fork server crash)"
+end
+
 # Preserve queue into corpus before nuking
 if test -d $OUT
     echo "==> Minimizing existing queue into corpus..."
@@ -30,12 +39,22 @@ or exit 1
 rm -rf $OUT
 mkdir -p $OUT
 
-# Launch workers with auto-restart (fork server crashes are expected with Fuzzer.Run)
+set base_env "AFL_SKIP_BIN_CHECK=1"
+if test $oop -eq 1
+    set base_env "AFL_SKIP_BIN_CHECK=1 FUZZ_OOP=1"
+end
+
+# Workers with auto-restart
 echo "==> Starting 24 workers..."
 for i in (seq 1 23)
     set name (string pad -w 2 -c 0 $i)
-    fish -c "while true; env AFL_SKIP_BIN_CHECK=1 afl-fuzz -b $i -i $CORPUS -o $OUT -t 1100 -S worker-$name -- $BIN; sleep 2; end" &
+    fish -c "while true; env $base_env afl-fuzz -b $i -i $CORPUS -o $OUT -t 1100 -S worker-$name -- $BIN; sleep 2; end" &
     disown
 end
 
-AFL_SKIP_BIN_CHECK=1 afl-fuzz -b 0 -i $CORPUS -o $OUT -t 1100 -M main -- $BIN
+# Main with auto-restart (foreground so the UI stays visible)
+while true
+    env $base_env afl-fuzz -b 0 -i $CORPUS -o $OUT -t 1100 -M main -- $BIN
+    echo "==> main crashed, restarting in 2s..."
+    sleep 2
+end
