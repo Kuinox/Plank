@@ -22,8 +22,8 @@ sleep 2
 
 # Build
 echo "==> Building..."
-rm -rf $ROOT/Plank.Snappy/{bin,obj} $ROOT/Plank.Fuzzing/{bin,obj} $ROOT/Plank.Fuzzing.Reader.Target/{bin,obj}
-dotnet build -c Release $ROOT/Plank.Fuzzing.Reader.Target/Plank.Fuzzing.Reader.Target.csproj -q
+dotnet build -c Release $ROOT/Plank.Fuzzing.Reader.Target/Plank.Fuzzing.Reader.Target.csproj \
+  --verbosity minimal 2>&1 | grep -v "warning NU\|up-to-date"
 or exit 1
 
 # Fresh output dir
