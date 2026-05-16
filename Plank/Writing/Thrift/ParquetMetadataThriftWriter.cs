@@ -10,8 +10,8 @@ static class ParquetMetadataThriftWriter
 {
     static readonly TextEncoding _utf8 = new UTF8Encoding(false, true);
 
-    internal static void WriteDataPageHeaderV2(ref BufferWriter destination, int rowCount, int valueCount, int nullCount,
-        int repetitionLevelsByteLength, int definitionLevelsByteLength, EncodingKind encoding, int uncompressedPageSize,
+    internal static void WriteDataPageHeaderV2(ref BufferWriter destination, uint rowCount, uint valueCount, uint nullCount,
+        uint repetitionLevelsByteLength, uint definitionLevelsByteLength, EncodingKind encoding, int uncompressedPageSize,
         int compressedPageSize, bool isCompressed)
     {
         var writer = new CompactWriter(ref destination);
@@ -22,19 +22,19 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldHeader(8, CompactType.Struct);
 
         var previousData = writer.BeginStruct();
-        writer.WriteFieldI32(1, valueCount);
-        writer.WriteFieldI32(2, nullCount);
-        writer.WriteFieldI32(3, rowCount);
+        writer.WriteFieldI32(1, checked((int)valueCount));
+        writer.WriteFieldI32(2, checked((int)nullCount));
+        writer.WriteFieldI32(3, checked((int)rowCount));
         writer.WriteFieldI32(4, GetEncoding(encoding));
-        writer.WriteFieldI32(5, definitionLevelsByteLength);
-        writer.WriteFieldI32(6, repetitionLevelsByteLength);
+        writer.WriteFieldI32(5, checked((int)definitionLevelsByteLength));
+        writer.WriteFieldI32(6, checked((int)repetitionLevelsByteLength));
         writer.WriteFieldBool(7, isCompressed);
         writer.EndStruct(previousData);
 
         writer.EndStruct(previous);
     }
 
-    internal static void WriteDictionaryPageHeader(ref BufferWriter destination, int valueCount, int uncompressedPageSize,
+    internal static void WriteDictionaryPageHeader(ref BufferWriter destination, uint valueCount, int uncompressedPageSize,
         int compressedPageSize)
     {
         var writer = new CompactWriter(ref destination);
@@ -45,7 +45,7 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldHeader(7, CompactType.Struct);
 
         var previousDictionary = writer.BeginStruct();
-        writer.WriteFieldI32(1, valueCount);
+        writer.WriteFieldI32(1, checked((int)valueCount));
         writer.WriteFieldI32(2, GetEncoding(EncodingKind.Plain));
         writer.EndStruct(previousDictionary);
 
@@ -90,7 +90,7 @@ static class ParquetMetadataThriftWriter
         {
             var previousLocation = writer.BeginStruct();
             writer.WriteFieldI64(1, locations[i].Offset);
-            writer.WriteFieldI32(2, locations[i].CompressedPageSize);
+            writer.WriteFieldI32(2, checked((int)locations[i].CompressedPageSize));
             writer.WriteFieldI64(3, locations[i].FirstRowIndex);
             writer.EndStruct(previousLocation);
         }
@@ -112,11 +112,11 @@ static class ParquetMetadataThriftWriter
     }
 
     internal static void WriteRowGroup(ref BufferWriter destination, ReadOnlySpan<Column> columns,
-        ReadOnlySpan<ColumnChunkMetadata> metadata, int rowCount)
+        ReadOnlySpan<ColumnChunkMetadata> metadata, uint rowCount)
         => WriteRowGroup(ref destination, columns, default, metadata, rowCount);
 
     internal static void WriteRowGroup(ref BufferWriter destination, ReadOnlySpan<Column> columns,
-        ReadOnlySpan<string[]> columnPaths, ReadOnlySpan<ColumnChunkMetadata> metadata, int rowCount)
+        ReadOnlySpan<string[]> columnPaths, ReadOnlySpan<ColumnChunkMetadata> metadata, uint rowCount)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
@@ -491,12 +491,12 @@ static class ParquetMetadataThriftWriter
         if (metadata.OffsetIndexLength > 0)
         {
             writer.WriteFieldI64(4, metadata.OffsetIndexOffset);
-            writer.WriteFieldI32(5, metadata.OffsetIndexLength);
+            writer.WriteFieldI32(5, checked((int)metadata.OffsetIndexLength));
         }
         if (metadata.ColumnIndexLength > 0)
         {
             writer.WriteFieldI64(6, metadata.ColumnIndexOffset);
-            writer.WriteFieldI32(7, metadata.ColumnIndexLength);
+            writer.WriteFieldI32(7, checked((int)metadata.ColumnIndexLength));
         }
         writer.EndStruct(previousChunk);
     }

@@ -6,13 +6,13 @@ public interface IPageStrategy
     DictionarySortOrder GetDictionarySortOrder();
     void SetDictionarySortOrder(DictionarySortOrder sortOrder);
 
-    bool ShouldDropDictionary(int uniqueCount, int totalRowCount, int rowsSeen);
+    bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen);
 
-    bool TryGetTargetDataPageSizeBytes(out int sizeBytes)
+    bool TryGetTargetDataPageSizeBytes(out uint sizeBytes)
     {
         sizeBytes = 0;
         return false;
     }
 
-    bool ShouldStartNewDataPage(int totalRowCount, int rowsWritten, int currentPageRowCount);
+    bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount);
 }

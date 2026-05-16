@@ -30,8 +30,8 @@ internal sealed class ParquetReaderTests
         var tokens = EnumerateTokens(reader);
 
         await Assert.That(reader.Metadata.Version).IsEqualTo(1);
-        await Assert.That(reader.Metadata.FooterOffset).IsGreaterThan(0);
-        await Assert.That(reader.Metadata.FooterLength).IsGreaterThan(0);
+        await Assert.That(reader.Metadata.FooterOffset).IsGreaterThan(0UL);
+        await Assert.That(reader.Metadata.FooterLength).IsGreaterThan(0U);
         await Assert.That(tokens.Length).IsEqualTo(2);
         await Assert.That(tokens[0].RowGroupOrdinal).IsEqualTo(0);
         await Assert.That(tokens[1].RowGroupOrdinal).IsEqualTo(1);

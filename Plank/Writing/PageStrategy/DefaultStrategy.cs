@@ -6,10 +6,10 @@ namespace Plank.Writing.PageStrategy;
 sealed class DefaultStrategy : IPageStrategy
 {
     readonly DictionaryMode _dictionaryMode;
-    readonly int _targetDataPageSizeBytes;
+    readonly uint _targetDataPageSizeBytes;
     int _dictionarySortOrder = (int)DictionarySortOrder.Unknown;
 
-    public DefaultStrategy(Column column, int targetDataPageSizeBytes)
+    public DefaultStrategy(Column column, uint targetDataPageSizeBytes)
     {
         _targetDataPageSizeBytes = targetDataPageSizeBytes;
         var encodings = column.Options.Encodings;
@@ -36,12 +36,12 @@ sealed class DefaultStrategy : IPageStrategy
         Volatile.Write(ref _dictionarySortOrder, (int)sortOrder);
     }
 
-    public bool ShouldDropDictionary(int uniqueCount, int totalRowCount, int rowsSeen)
+    public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
     {
         if (rowsSeen <= 0 || totalRowCount <= 0)
             return false;
 
-        var minRowsForDecision = Math.Max(16_384, totalRowCount / 8);
+        var minRowsForDecision = Math.Max(16_384U, totalRowCount / 8U);
         if (rowsSeen < minRowsForDecision && rowsSeen < totalRowCount)
             return false;
 
@@ -51,18 +51,18 @@ sealed class DefaultStrategy : IPageStrategy
         if ((long)uniqueCount * 100 >= (long)rowsSeen * 98)
             return true;
 
-        var projectedUniqueCount = (int)Math.Min(totalRowCount,
-            ((long)uniqueCount * totalRowCount + rowsSeen - 1) / rowsSeen);
+        var projectedUniqueCount = (uint)Math.Min(totalRowCount,
+            ((ulong)uniqueCount * totalRowCount + rowsSeen - 1U) / rowsSeen);
         return (long)projectedUniqueCount * 4 >= (long)totalRowCount * 3
                && (long)uniqueCount * 100 >= (long)rowsSeen * 85;
     }
 
-    public bool TryGetTargetDataPageSizeBytes(out int sizeBytes)
+    public bool TryGetTargetDataPageSizeBytes(out uint sizeBytes)
     {
         sizeBytes = _targetDataPageSizeBytes;
         return true;
     }
 
-    public bool ShouldStartNewDataPage(int totalRowCount, int rowsWritten, int currentPageRowCount)
+    public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
         => false;
 }

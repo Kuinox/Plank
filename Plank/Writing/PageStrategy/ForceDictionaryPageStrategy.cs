@@ -25,9 +25,9 @@ public sealed class ForceDictionaryPageStrategy : IPageStrategy
         Volatile.Write(ref _dictionarySortOrder, (int)sortOrder);
     }
 
-    public bool ShouldDropDictionary(int uniqueCount, int totalRowCount, int rowsSeen)
+    public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
         => false;
 
-    public bool ShouldStartNewDataPage(int totalRowCount, int rowsWritten, int currentPageRowCount)
+    public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
         => false;
 }

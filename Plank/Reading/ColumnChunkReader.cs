@@ -40,12 +40,13 @@ static class ColumnChunkReader
             var header = PageHeaderReader.Read(buffer.AsSpan(offset, bufferLength - offset));
             offset += header.HeaderLength;
 
-            if (header.CompressedPageSize > bufferLength - offset)
+            if (header.CompressedPageSize > (uint)(bufferLength - offset))
                 throw new CorruptParquetException(
                     $"Page compressed size ({header.CompressedPageSize}) exceeds remaining column chunk buffer ({bufferLength - offset}).");
 
-            var payload = buffer.AsSpan(offset, header.CompressedPageSize);
-            offset += header.CompressedPageSize;
+            var compressedPageSize = checked((int)header.CompressedPageSize);
+            var payload = buffer.AsSpan(offset, compressedPageSize);
+            offset += compressedPageSize;
 
             switch (header.Type)
             {
@@ -887,13 +888,13 @@ static class ColumnChunkReader
             {
                 if (remaining.Length < 4)
                     throw new CorruptParquetException("Payload too short to read byte array length prefix.");
-                var length = BinaryPrimitives.ReadInt32LittleEndian(remaining);
+                var length = BinaryPrimitives.ReadUInt32LittleEndian(remaining);
                 remaining = remaining[4..];
-                if (length < 0 || length > remaining.Length)
+                if (length > (uint)remaining.Length)
                     throw new CorruptParquetException(
                         $"Byte array length {length} exceeds remaining payload ({remaining.Length} bytes).");
-                values[i] = remaining[..length].ToArray();
-                remaining = remaining[length..];
+                values[i] = remaining[..checked((int)length)].ToArray();
+                remaining = remaining[checked((int)length)..];
             }
             return values;
         }
@@ -1416,28 +1417,28 @@ static class ColumnChunkReader
 
     static int[] ReadRleBitPackedHybrid(ReadOnlySpan<byte> payload, uint valueCount, int bitWidth)
     {
-        var values = new int[(int)valueCount];
-        var valueIndex = 0;
+        var values = new int[checked((int)valueCount)];
+        var valueIndex = 0U;
         while (valueIndex < valueCount)
         {
             var header = ReadUnsignedVarInt(ref payload);
             if ((header & 1U) == 0)
             {
-                var runLength = checked((int)(header >> 1));
+                var runLength = header >> 1;
                 var byteWidth = (bitWidth + 7) >> 3;
                 var repeated = byteWidth == 0 ? 0 : ReadLittleEndian(ref payload, byteWidth);
-                var copyLength = (int)Math.Min((uint)runLength, valueCount - (uint)valueIndex);
-                Array.Fill(values, repeated, valueIndex, copyLength);
+                var copyLength = Math.Min(runLength, valueCount - valueIndex);
+                Array.Fill(values, repeated, checked((int)valueIndex), checked((int)copyLength));
                 valueIndex += copyLength;
                 continue;
             }
 
-            var literalCount = checked((int)(header >> 1) * 8);
-            for (var i = 0; i < literalCount && valueIndex < valueCount; i++)
-                values[valueIndex++] = ReadBitPackedValue(ref payload, bitWidth, i);
+            var literalCount = checked((header >> 1) * 8U);
+            for (var i = 0U; i < literalCount && valueIndex < valueCount; i++)
+                values[checked((int)valueIndex++)] = ReadBitPackedValue(ref payload, bitWidth, checked((int)i));
 
-            var literalByteCount = ((literalCount * bitWidth) + 7) >> 3;
-            payload = payload[literalByteCount..];
+            var literalByteCount = checked(((literalCount * (uint)bitWidth) + 7U) >> 3);
+            payload = payload[checked((int)literalByteCount)..];
         }
 
         return values;
@@ -1445,26 +1446,27 @@ static class ColumnChunkReader
 
     static void DecodeBooleanRle(ReadOnlySpan<byte> payload, Span<bool> destination)
     {
-        var valueIndex = 0;
-        while (valueIndex < destination.Length)
+        var valueIndex = 0U;
+        var destinationLength = (uint)destination.Length;
+        while (valueIndex < destinationLength)
         {
             var header = ReadUnsignedVarInt(ref payload);
             if ((header & 1U) == 0)
             {
-                var runLength = checked((int)(header >> 1));
+                var runLength = header >> 1;
                 var repeated = ReadLittleEndian(ref payload, 1) != 0;
-                var copyLength = Math.Min(runLength, destination.Length - valueIndex);
-                destination.Slice(valueIndex, copyLength).Fill(repeated);
+                var copyLength = Math.Min(runLength, destinationLength - valueIndex);
+                destination.Slice(checked((int)valueIndex), checked((int)copyLength)).Fill(repeated);
                 valueIndex += copyLength;
                 continue;
             }
 
-            var literalCount = checked((int)(header >> 1) * 8);
-            for (var i = 0; i < literalCount && valueIndex < destination.Length; i++)
-                destination[valueIndex++] = ReadBitPackedValue(ref payload, bitWidth: 1, i) != 0;
+            var literalCount = checked((header >> 1) * 8U);
+            for (var i = 0U; i < literalCount && valueIndex < destinationLength; i++)
+                destination[checked((int)valueIndex++)] = ReadBitPackedValue(ref payload, bitWidth: 1, checked((int)i)) != 0;
 
-            var literalByteCount = (literalCount + 7) >> 3;
-            payload = payload[literalByteCount..];
+            var literalByteCount = (literalCount + 7U) >> 3;
+            payload = payload[checked((int)literalByteCount)..];
         }
     }
 

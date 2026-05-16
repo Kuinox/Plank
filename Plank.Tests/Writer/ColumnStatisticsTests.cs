@@ -484,9 +484,9 @@ internal sealed class ColumnStatisticsTests
             var (count, elementType) = reader.ReadListHeader();
             if (elementType is not (CompactProtocolType.BooleanTrue or CompactProtocolType.BooleanFalse))
                 throw new InvalidOperationException("Column index null_pages was not a bool list.");
-            for (var i = 0; i < count; i++)
+            for (var i = 0U; i < count; i++)
                 _ = reader.ReadBool(inlineBool: null);
-            return count;
+            return checked((int)count);
         }
 
         throw new InvalidOperationException("Column index did not include null page flags.");
@@ -507,7 +507,7 @@ internal sealed class ColumnStatisticsTests
             var (count, elementType) = reader.ReadListHeader();
             if (elementType != CompactProtocolType.Struct)
                 throw new InvalidOperationException("Offset index page_locations was not a struct list.");
-            return count;
+            return checked((int)count);
         }
 
         throw new InvalidOperationException("Offset index did not include page locations.");
@@ -530,10 +530,10 @@ internal sealed class ColumnStatisticsTests
         {
         }
 
-        public bool ShouldDropDictionary(int uniqueCount, int totalRowCount, int rowsSeen)
+        public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
             => false;
 
-        public bool ShouldStartNewDataPage(int totalRowCount, int rowsWritten, int currentPageRowCount)
-            => currentPageRowCount >= _rowsPerPage;
+        public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
+            => currentPageRowCount >= (uint)_rowsPerPage;
     }
 }

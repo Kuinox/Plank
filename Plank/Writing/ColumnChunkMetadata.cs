@@ -6,7 +6,7 @@ internal struct ColumnChunkMetadata
 {
     internal long DataPageOffset;
     internal long DictionaryPageOffset;
-    internal int ValueCount;
+    internal uint ValueCount;
     internal long TotalUncompressedSize;
     internal long TotalCompressedSize;
     internal EncodingKind DataEncoding;
@@ -14,8 +14,8 @@ internal struct ColumnChunkMetadata
     internal ColumnStatistics Statistics;
     internal bool HasDictionaryPage;
     internal long ColumnIndexOffset;
-    internal int ColumnIndexLength;
+    internal uint ColumnIndexLength;
     internal long OffsetIndexOffset;
-    internal int OffsetIndexLength;
+    internal uint OffsetIndexLength;
     internal PageIndex PageIndex;
 }

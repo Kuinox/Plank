@@ -79,7 +79,8 @@ static class Encoding
                 pageRowCount++;
                 if (rowsWritten == values.Length)
                     break;
-                if (strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
+                if (strategy.ShouldStartNewDataPage(checked((uint)values.Length), checked((uint)rowsWritten),
+                        checked((uint)pageRowCount)))
                     break;
             }
 
@@ -93,7 +94,7 @@ static class Encoding
     {
         if (!strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytes))
             return false;
-        if (!TryGetFixedWidthRowsPerPage(column, dataEncoding, targetPageBytes, out var rowsPerPage))
+        if (!TryGetFixedWidthRowsPerPage(column, dataEncoding, checked((int)targetPageBytes), out var rowsPerPage))
             return false;
 
         for (var pageStart = 0; pageStart < values.Length; pageStart += rowsPerPage)
@@ -118,12 +119,12 @@ static class Encoding
 
         if (fixedValueBytes > 0)
         {
-            var rowsPerPage = Math.Max(1, targetPageBytes / fixedValueBytes);
+            var rowsPerPage = Math.Max(1, checked((int)targetPageBytes) / fixedValueBytes);
             WriteFixedRowsDataPages(bufferWriters, column, values, dataEncoding, pages, rowsPerPage);
             return true;
         }
 
-        WriteVariablePlainDataPages(bufferWriters, column, values, dataEncoding, pages, targetPageBytes);
+        WriteVariablePlainDataPages(bufferWriters, column, values, dataEncoding, pages, checked((int)targetPageBytes));
         return true;
     }
 
@@ -228,7 +229,8 @@ static class Encoding
                     break;
                 if (rowsPerTargetPage > 0 && pageRowCount >= rowsPerTargetPage)
                     break;
-                if (rowsPerTargetPage == 0 && strategy.ShouldStartNewDataPage(totalRowCount, rowsWritten, pageRowCount))
+                if (rowsPerTargetPage == 0 && strategy.ShouldStartNewDataPage(checked((uint)totalRowCount),
+                        checked((uint)rowsWritten), checked((uint)pageRowCount)))
                     break;
             }
 
@@ -254,7 +256,7 @@ static class Encoding
             return true;
         }
 
-        var targetBits = (long)Math.Max(1, targetPageBytes - 1) * 8;
+        var targetBits = (long)Math.Max(1U, targetPageBytes - 1U) * 8;
         rowsPerPage = (int)Math.Clamp(targetBits / dictionaryBitWidth, 1, int.MaxValue);
         return true;
     }
@@ -473,7 +475,8 @@ static class Encoding
                 var rowsSeen = i + 1;
                 if (rowsSeen != nextDropCheckRow && rowsSeen != values.Length)
                     continue;
-                if (strategy.ShouldDropDictionary(dictionaryState.Count, values.Length, rowsSeen))
+                if (strategy.ShouldDropDictionary(checked((uint)dictionaryState.Count), checked((uint)values.Length),
+                        checked((uint)rowsSeen)))
                 {
                     dictionaryPage.Header.Reset();
                     dictionaryPage.Content.Reset();
@@ -500,7 +503,7 @@ static class Encoding
 
             PlainEncoding.WriteValues(column, dictionaryState.AsSpan(), ref dictionaryPage.Content);
 
-            dictionaryPage.SetDictionaryPageMetadata(dictionaryState.Count);
+            dictionaryPage.SetDictionaryPageMetadata(checked((uint)dictionaryState.Count));
             dictionaryValueCount = dictionaryState.Count;
             dictionaryIndexesBytes = rentedIndexesBytes;
             rentedIndexesBytes = null;
@@ -555,7 +558,8 @@ static class Encoding
                         pageBytes = checked(pageBytes + rowBytes);
                     if (rowsWritten == values.Length)
                         break;
-                    if (!useTargetPageBytes && strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
+                    if (!useTargetPageBytes && strategy.ShouldStartNewDataPage(checked((uint)values.Length),
+                            checked((uint)rowsWritten), checked((uint)pageRowCount)))
                         break;
                 }
 
@@ -630,7 +634,8 @@ static class Encoding
                         pageBytes = checked(pageBytes + rowBytes);
                     if (rowsWritten == values.Length)
                         break;
-                    if (!useTargetPageBytes && strategy.ShouldStartNewDataPage(values.Length, rowsWritten, pageRowCount))
+                    if (!useTargetPageBytes && strategy.ShouldStartNewDataPage(checked((uint)values.Length),
+                            checked((uint)rowsWritten), checked((uint)pageRowCount)))
                         break;
                 }
 
@@ -668,8 +673,9 @@ static class Encoding
     {
         targetPageBytes = 0;
         presentValueBytes = 0;
-        if (!strategy.TryGetTargetDataPageSizeBytes(out targetPageBytes))
+        if (!strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytesUnsigned))
             return false;
+        targetPageBytes = checked((int)targetPageBytesUnsigned);
 
         if (!useDictionary && dataEncoding == EncodingKind.Plain
             && TryGetPlainEncodedValueSize(column, column.PhysicalType == ParquetPhysicalType.ByteArray
@@ -823,7 +829,7 @@ static class Encoding
         dictionaryValues[1] = true;
         PlainEncoding.WriteValues(column, dictionaryValues, ref dictionaryPage.Content);
 
-        dictionaryPage.SetDictionaryPageMetadata(2);
+        dictionaryPage.SetDictionaryPageMetadata(2U);
         dictionaryValueCount = 2;
     }
 
@@ -1479,8 +1485,8 @@ static class Encoding
 
     static void WriteDataPageHeader(ref Page page, int rowCount, int valueCount, int nullCount,
         int repetitionLevelsByteLength, int definitionLevelsByteLength, EncodingKind encoding)
-        => page.SetDataPageMetadata(rowCount, valueCount, nullCount, repetitionLevelsByteLength,
-            definitionLevelsByteLength, encoding);
+        => page.SetDataPageMetadata(checked((uint)rowCount), checked((uint)valueCount), checked((uint)nullCount),
+            checked((uint)repetitionLevelsByteLength), checked((uint)definitionLevelsByteLength), encoding);
 
     static IEqualityComparer<T> GetDictionaryComparer<T>()
         where T : notnull

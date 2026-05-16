@@ -91,13 +91,13 @@ ref struct CompactProtocolReader
         };
     }
 
-    internal (int Count, CompactProtocolType ElementType) ReadListHeader()
+    internal (uint Count, CompactProtocolType ElementType) ReadListHeader()
     {
         EnsureAvailable(1);
         var header = _buffer[_offset++];
         var countNibble = header >> 4;
         var type = (CompactProtocolType)(header & 0x0F);
-        var count = countNibble == 15 ? (int)ReadVarU32() : countNibble;
+        var count = countNibble == 15 ? ReadVarU32() : (uint)countNibble;
         return (count, type);
     }
 
@@ -124,7 +124,7 @@ ref struct CompactProtocolReader
                 return;
             case CompactProtocolType.Binary:
             {
-                var length = (int)ReadVarU32(max: Remaining);
+                var length = checked((int)ReadVarU32(max: Remaining));
                 EnsureAvailable(length);
                 _offset += length;
                 return;
@@ -140,7 +140,7 @@ ref struct CompactProtocolReader
             case CompactProtocolType.Set:
             {
                 var (count, elementType) = ReadListHeader();
-                for (var i = 0; i < count; i++)
+                for (var i = 0U; i < count; i++)
                     Skip(elementType);
                 return;
             }

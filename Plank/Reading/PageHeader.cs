@@ -4,7 +4,7 @@ namespace Plank.Reading;
 
 readonly struct PageHeader
 {
-    internal PageHeader(PageHeaderType type, uint uncompressedPageSize, int compressedPageSize, uint valueCount,
+    internal PageHeader(PageHeaderType type, uint uncompressedPageSize, uint compressedPageSize, uint valueCount,
         EncodingKind encoding, int headerLength, uint repetitionLevelsByteLength, uint definitionLevelsByteLength,
         uint nullCount, bool isCompressed)
     {
@@ -24,7 +24,7 @@ readonly struct PageHeader
 
     internal uint UncompressedPageSize { get; }
 
-    internal int CompressedPageSize { get; }
+    internal uint CompressedPageSize { get; }
 
     internal uint ValueCount { get; }
 

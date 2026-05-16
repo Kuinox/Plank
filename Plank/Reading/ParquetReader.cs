@@ -84,23 +84,22 @@ public sealed class ParquetReader : IDisposable
         if (!trailer[4..].SequenceEqual(FileMagic))
             throw new CorruptParquetException("Stream does not end with the PAR1 footer marker.");
 
-        var footerLength = BinaryPrimitives.ReadInt32LittleEndian(trailer[..4]);
-        if (footerLength < 0)
-            throw new CorruptParquetException("Footer length must be non-negative.");
-        if ((ulong)footerLength > source.Length - (ulong)trailer.Length)
+        var footerLength = BinaryPrimitives.ReadUInt32LittleEndian(trailer[..4]);
+        if (footerLength > source.Length - (ulong)trailer.Length)
             throw new CorruptParquetException("Footer length exceeds stream size.");
 
-        var footerOffset = source.Length - (ulong)trailer.Length - (ulong)footerLength;
+        var footerOffset = source.Length - (ulong)trailer.Length - footerLength;
         if (footerOffset < 4)
             throw new CorruptParquetException("Footer offset is invalid for this stream.");
 
-        if (_footerBuffer.Length < footerLength)
-            _footerBuffer = new byte[footerLength];
-        var footerBytes = _footerBuffer.AsSpan(0, footerLength);
+        var footerLengthInt32 = checked((int)footerLength);
+        if (_footerBuffer.Length < footerLengthInt32)
+            _footerBuffer = new byte[footerLengthInt32];
+        var footerBytes = _footerBuffer.AsSpan(0, footerLengthInt32);
         source.ReadExactly(footerOffset, footerBytes);
 
         _footer = ParquetMetadataThriftReader.Read(footerBytes, footerOffset, _footer);
-        _metadata = new ParquetFileMetadata(_schema, (long)footerOffset, footerLength, _footer.Version);
+        _metadata = new ParquetFileMetadata(_schema, footerOffset, footerLength, _footer.Version);
     }
 
     public RowGroupTokenEnumerable EnumerateRowGroups()

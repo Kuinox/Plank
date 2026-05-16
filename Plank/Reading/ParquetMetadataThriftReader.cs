@@ -68,11 +68,11 @@ static class ParquetMetadataThriftReader
         if (elementType != CompactProtocolType.Struct)
             throw new CorruptParquetException("Expected row_groups to be encoded as a list of structs.");
 
-        var rowGroups = previous.Length == count ? previous : new InternalRowGroupMetadata[count];
-        for (var i = 0; i < count; i++)
+        var rowGroups = (uint)previous.Length == count ? previous : new InternalRowGroupMetadata[checked((int)count)];
+        for (var i = 0U; i < count; i++)
         {
             var previousColumns = rowGroups[i].Columns ?? [];
-            rowGroups[i] = ReadRowGroup(ref reader, i, footerOffset + (ulong)reader.Offset, previousColumns);
+            rowGroups[i] = ReadRowGroup(ref reader, checked((int)i), footerOffset + (ulong)reader.Offset, previousColumns);
         }
         return rowGroups;
     }
@@ -116,8 +116,8 @@ static class ParquetMetadataThriftReader
         if (elementType != CompactProtocolType.Struct)
             throw new CorruptParquetException("Expected row group columns to be encoded as a list of structs.");
 
-        var columns = previous.Length == count ? previous : new InternalColumnChunkMetadata[count];
-        for (var i = 0; i < count; i++)
+        var columns = (uint)previous.Length == count ? previous : new InternalColumnChunkMetadata[checked((int)count)];
+        for (var i = 0U; i < count; i++)
         {
             var previousEncodings = columns[i].Encodings ?? [];
             columns[i] = ReadColumn(ref reader, previousEncodings);
@@ -205,8 +205,8 @@ static class ParquetMetadataThriftReader
         if (elementType != CompactProtocolType.I32)
             throw new CorruptParquetException("Expected encoding ids to be encoded as I32 list elements.");
 
-        var encodings = previous.Length == count ? previous : new EncodingKind[count];
-        for (var i = 0; i < count; i++)
+        var encodings = (uint)previous.Length == count ? previous : new EncodingKind[checked((int)count)];
+        for (var i = 0U; i < count; i++)
             encodings[i] = ReadEncoding(reader.ReadI32());
         return encodings;
     }

@@ -12,17 +12,17 @@ internal struct Page
 
     public EncodingKind Encoding;
 
-    public int RowCount;
+    public uint RowCount;
 
-    public int ValueCount;
+    public uint ValueCount;
 
-    public int NullCount;
+    public uint NullCount;
 
-    public int RepetitionLevelsByteLength;
+    public uint RepetitionLevelsByteLength;
 
-    public int DefinitionLevelsByteLength;
+    public uint DefinitionLevelsByteLength;
 
-    public int DictionaryValueCount;
+    public uint DictionaryValueCount;
 
     internal ColumnStatistics Statistics;
 
@@ -43,8 +43,8 @@ internal struct Page
         Statistics = default;
     }
 
-    public void SetDataPageMetadata(int rowCount, int valueCount, int nullCount, int repetitionLevelsByteLength,
-        int definitionLevelsByteLength, EncodingKind encoding)
+    public void SetDataPageMetadata(uint rowCount, uint valueCount, uint nullCount, uint repetitionLevelsByteLength,
+        uint definitionLevelsByteLength, EncodingKind encoding)
     {
         Kind = PageKind.DataV2;
         RowCount = rowCount;
@@ -57,7 +57,7 @@ internal struct Page
         Statistics = default;
     }
 
-    public void SetDictionaryPageMetadata(int dictionaryValueCount)
+    public void SetDictionaryPageMetadata(uint dictionaryValueCount)
     {
         Kind = PageKind.Dictionary;
         DictionaryValueCount = dictionaryValueCount;

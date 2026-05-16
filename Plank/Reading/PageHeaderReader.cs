@@ -10,7 +10,7 @@ static class PageHeaderReader
         var previousFieldId = 0;
         var type = PageHeaderType.DataPage;
         var uncompressedPageSize = 0U;
-        var compressedPageSize = 0;
+        var compressedPageSize = 0U;
         var valueCount = 0U;
         var encoding = EncodingKind.Plain;
         var repetitionLevelsByteLength = 0U;
@@ -29,7 +29,7 @@ static class PageHeaderReader
                     uncompressedPageSize = reader.ReadI32AsU32(max: reader.Remaining);
                     break;
                 case 3:
-                    compressedPageSize = (int)reader.ReadI32AsU32(max: reader.Remaining);
+                    compressedPageSize = reader.ReadI32AsU32(max: reader.Remaining);
                     break;
                 case 7:
                     valueCount = ReadDictionaryHeader(ref reader);

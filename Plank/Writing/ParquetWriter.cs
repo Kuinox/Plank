@@ -55,7 +55,7 @@ public sealed class ParquetWriter
             throw new InvalidOperationException("Leaf projection metadata did not match projected column count.");
         ColumnCount = ColumnsByOrdinal.Length;
         _pageStrategiesByOrdinal = CreateColumnPageStrategies(ColumnsByOrdinal, _schema.PageStrategiesByColumnName,
-            checked((int)_options.TargetDataPageSizeBytes));
+            _options.TargetDataPageSizeBytes);
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
             _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
         Compression = _options.Compression;
@@ -153,7 +153,7 @@ public sealed class ParquetWriter
         => _pageStrategiesByOrdinal[columnOrdinal];
 
     static IPageStrategy[] CreateColumnPageStrategies(Column[] columns,
-        IReadOnlyDictionary<string, IPageStrategy> pageStrategiesByColumnName, int targetDataPageSizeBytes)
+        IReadOnlyDictionary<string, IPageStrategy> pageStrategiesByColumnName, uint targetDataPageSizeBytes)
     {
         if (columns.Length == 0)
             return [];
@@ -208,7 +208,7 @@ public sealed class ParquetWriter
         FileOffset = checked(FileOffset + suffix.Length);
     }
 
-    internal void CompleteOpenRowGroup(int rowCount)
+    internal void CompleteOpenRowGroup(uint rowCount)
     {
         _rowGroupCount++;
         _totalRowCount = checked(_totalRowCount + rowCount);

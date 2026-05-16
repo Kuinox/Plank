@@ -16,7 +16,7 @@ public sealed class RowGroupWriter
     ColumnStatistics[][] _pageStatisticsByColumn;
     PageLocation[][] _pageLocationsByColumn;
     uint _nextColumnOrdinal;
-    int _rowCount;
+    uint? _rowCount;
 
     internal RowGroupWriter(ParquetWriter writer)
     {
@@ -32,7 +32,7 @@ public sealed class RowGroupWriter
     internal void ResetForNewRowGroup()
     {
         _nextColumnOrdinal = 0;
-        _rowCount = -1;
+        _rowCount = null;
     }
 
     public SerializedColumn<T> CreateSerializedColumn<T>(Column column)
@@ -131,10 +131,11 @@ public sealed class RowGroupWriter
                     var definitionLevelsByteLength = page.DefinitionLevelsByteLength;
                     var pageEncoding = page.Encoding;
                     var levelBytes = checked(repetitionLevelsByteLength + definitionLevelsByteLength);
-                    if ((uint)levelBytes > (uint)pageContentSize)
+                    if (levelBytes > (uint)pageContentSize)
                         throw new InvalidOperationException(
                             $"Invalid level byte lengths ({levelBytes}) for data page content size {pageContentSize}.");
-                    var valueBytes = pageContentSize - levelBytes;
+                    var levelBytesInt32 = checked((int)levelBytes);
+                    var valueBytes = pageContentSize - levelBytesInt32;
                     uncompressedPageHeaderSize = pageContentSize;
                     compressedContentSize = pageContentSize;
                     storedContentSize = pageContentSize;
@@ -154,8 +155,8 @@ public sealed class RowGroupWriter
                             _compressedContent.Reset();
 
                             var source = _writer.CompressionContext.GetContiguousSourceSpan(ref page.Content);
-                            var levels = source[..levelBytes];
-                            var values = source[levelBytes..];
+                            var levels = source[..levelBytesInt32];
+                            var values = source[levelBytesInt32..];
                             _compressionInput.Write(values);
                             Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionContext,
                                 ref _compressionInput, ref _compressedValues);
@@ -200,7 +201,7 @@ public sealed class RowGroupWriter
                 pageStatistics[dataPageCount] = page.Statistics.HasStatistics
                     ? page.Statistics.WithNullCount(page.NullCount)
                     : ColumnStatistics.Empty(page.NullCount);
-                pageLocations[dataPageCount] = new PageLocation(pageOffset, checked(headerSize + storedContentSize),
+                pageLocations[dataPageCount] = new PageLocation(pageOffset, checked((uint)(headerSize + storedContentSize)),
                     firstRowIndex);
             }
             dataPageCount++;
@@ -238,8 +239,8 @@ public sealed class RowGroupWriter
         if (writePageIndexes)
             WritePageIndexes(_writer.OpenRowGroupColumnMetadata);
         ParquetMetadataThriftWriter.WriteRowGroup(ref _writer.SerializedRowGroupsMetadata, _writer.ColumnsByOrdinal,
-            _writer.ColumnPathsByOrdinal, _writer.OpenRowGroupColumnMetadata, _rowCount);
-        _writer.CompleteOpenRowGroup(_rowCount);
+            _writer.ColumnPathsByOrdinal, _writer.OpenRowGroupColumnMetadata, _rowCount.GetValueOrDefault());
+        _writer.CompleteOpenRowGroup(_rowCount.GetValueOrDefault());
     }
 
     void EnsurePageIndexCapacity(int columnOrdinal, int pageCount)
@@ -279,14 +280,14 @@ public sealed class RowGroupWriter
         ParquetMetadataThriftWriter.WriteColumnIndex(ref _columnIndexBuffer,
             metadata.PageIndex.Statistics.AsSpan(0, metadata.PageIndex.Count));
         metadata.ColumnIndexOffset = _writer.FileOffset;
-        metadata.ColumnIndexLength = _columnIndexBuffer.WrittenLength;
+        metadata.ColumnIndexLength = checked((uint)_columnIndexBuffer.WrittenLength);
         _writer.WriteBuffer(ref _columnIndexBuffer);
 
         _offsetIndexBuffer.Reset();
         ParquetMetadataThriftWriter.WriteOffsetIndex(ref _offsetIndexBuffer,
             metadata.PageIndex.Locations.AsSpan(0, metadata.PageIndex.Count));
         metadata.OffsetIndexOffset = _writer.FileOffset;
-        metadata.OffsetIndexLength = _offsetIndexBuffer.WrittenLength;
+        metadata.OffsetIndexLength = checked((uint)_offsetIndexBuffer.WrittenLength);
         _writer.WriteBuffer(ref _offsetIndexBuffer);
     }
 }

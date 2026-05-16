@@ -96,7 +96,7 @@ internal sealed class PageSizeTests
 
             if (dataPageIndex >= expectedRows.Length)
                 throw new InvalidOperationException($"Unexpected data page {dataPageIndex}.");
-            if (page.RowCount != expectedRows[dataPageIndex])
+            if (page.RowCount != (uint)expectedRows[dataPageIndex])
                 throw new InvalidOperationException(
                     $"Page {dataPageIndex} row count mismatch. Expected {expectedRows[dataPageIndex]}, got {page.RowCount}.");
             dataPageIndex++;

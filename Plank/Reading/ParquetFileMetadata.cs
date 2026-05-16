@@ -14,13 +14,9 @@ public readonly struct ParquetFileMetadata
         Version = 0;
     }
 
-    internal ParquetFileMetadata(ParquetSchema schema, long footerOffset, int footerLength, int version)
+    internal ParquetFileMetadata(ParquetSchema schema, ulong footerOffset, uint footerLength, int version)
     {
         ArgumentNullException.ThrowIfNull(schema);
-        if (footerOffset < 0)
-            throw new ArgumentOutOfRangeException(nameof(footerOffset), footerOffset, "Footer offset must be non-negative.");
-        if (footerLength < 0)
-            throw new ArgumentOutOfRangeException(nameof(footerLength), footerLength, "Footer length must be non-negative.");
 
         Schema = schema;
         FooterOffset = footerOffset;
@@ -30,9 +26,9 @@ public readonly struct ParquetFileMetadata
 
     public ParquetSchema Schema { get; }
 
-    public long FooterOffset { get; }
+    public ulong FooterOffset { get; }
 
-    public int FooterLength { get; }
+    public uint FooterLength { get; }
 
     public int Version { get; }
 }

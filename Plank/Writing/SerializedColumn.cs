@@ -13,7 +13,7 @@ internal interface ISerializedColumn
 
     uint ColumnOrdinal { get; }
 
-    int RowCount { get; }
+    uint RowCount { get; }
 
     ColumnStatistics Statistics { get; }
 
@@ -50,7 +50,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     internal uint ColumnOrdinal { get; private set; }
 
-    internal int RowCount { get; private set; }
+    internal uint RowCount { get; private set; }
 
     internal ColumnStatistics Statistics { get; private set; }
 
@@ -60,7 +60,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     uint ISerializedColumn.ColumnOrdinal => ColumnOrdinal;
 
-    int ISerializedColumn.RowCount => RowCount;
+    uint ISerializedColumn.RowCount => RowCount;
 
     ColumnStatistics ISerializedColumn.Statistics => Statistics;
 
@@ -584,7 +584,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
-        RowCount = values.Length;
+        RowCount = checked((uint)values.Length);
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategy, Pages,
@@ -607,7 +607,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
-        RowCount = values.Length;
+        RowCount = checked((uint)values.Length);
         Statistics = ColumnStatistics.CreateOptional(_column, values);
         HasPendingData = true;
 
@@ -626,7 +626,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
-        RowCount = values.Length;
+        RowCount = checked((uint)values.Length);
         Statistics = ColumnStatistics.CreateOptional(_column, values);
         HasPendingData = true;
 
@@ -685,8 +685,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             if (page.Kind != PageKind.DataV2)
                 continue;
 
-            var pageValues = intValues.Slice(rowOffset, page.RowCount);
-            rowOffset += page.RowCount;
+            var pageRowCount = checked((int)page.RowCount);
+            var pageValues = intValues.Slice(rowOffset, pageRowCount);
+            rowOffset += pageRowCount;
             if (pageValues.Length == 0)
             {
                 page.Statistics = ColumnStatistics.Empty(page.NullCount);
@@ -740,10 +741,11 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             ref var page = ref Pages[i];
             if (page.Kind != PageKind.DataV2)
                 continue;
-            var pageRows = values.Slice(rowOffset, page.RowCount);
+            var pageRowCount = checked((int)page.RowCount);
+            var pageRows = values.Slice(rowOffset, pageRowCount);
             page.Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, pageRows, page.NullCount,
                 ref page.StatisticsMinValueBuffer, ref page.StatisticsMaxValueBuffer);
-            rowOffset += page.RowCount;
+            rowOffset += pageRowCount;
         }
     }
 
@@ -756,9 +758,10 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             ref var page = ref Pages[i];
             if (page.Kind != PageKind.DataV2)
                 continue;
-            var pageRows = values.Slice(rowOffset, page.RowCount);
+            var pageRowCount = checked((int)page.RowCount);
+            var pageRows = values.Slice(rowOffset, pageRowCount);
             page.Statistics = ColumnStatistics.CreateOptional(_column, pageRows);
-            rowOffset += page.RowCount;
+            rowOffset += pageRowCount;
         }
     }
 
@@ -771,9 +774,10 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             ref var page = ref Pages[i];
             if (page.Kind != PageKind.DataV2)
                 continue;
-            var pageRows = values.Slice(rowOffset, page.RowCount);
+            var pageRowCount = checked((int)page.RowCount);
+            var pageRows = values.Slice(rowOffset, pageRowCount);
             page.Statistics = ColumnStatistics.CreateOptional(_column, pageRows);
-            rowOffset += page.RowCount;
+            rowOffset += pageRowCount;
         }
     }
 
@@ -818,9 +822,10 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             ref var page = ref Pages[i];
             if (page.Kind != PageKind.DataV2)
                 continue;
-            var pageRows = values.Slice(rowOffset, page.RowCount);
+            var pageRowCount = checked((int)page.RowCount);
+            var pageRows = values.Slice(rowOffset, pageRowCount);
             page.Statistics = createStatistics(pageRows, page.NullCount);
-            rowOffset += page.RowCount;
+            rowOffset += pageRowCount;
         }
     }
 
