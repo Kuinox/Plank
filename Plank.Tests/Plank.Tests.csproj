@@ -12,6 +12,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="*">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="DuckDB.NET.Data.Full" Version="1.1.1" />
     <PackageReference Include="Parquet.Net" Version="5.5.0" />
     <PackageReference Include="ParquetSharp" Version="21.0.0" />
@@ -27,9 +31,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Plank.Fuzzing\Plank.Fuzzing.csproj" />
     <ProjectReference Include="..\Plank\Plank.csproj" />
-    <ProjectReference Include="..\Plank.SourceGen\Plank.SourceGen.csproj"
-                      OutputItemType="Analyzer"
-                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Plank.SourceGen\Plank.SourceGen.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>
