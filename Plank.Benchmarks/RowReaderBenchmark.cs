@@ -34,7 +34,7 @@ public class RowReaderBenchmark
     [Params("all", "projected")]
     public string Projection { get; set; } = "all";
 
-    [Params("plain", "dictionary", "byte_stream_split")]
+    [Params("plain", "dictionary", "byte_stream_split", "delta_binary_packed", "delta_byte_array", "delta_length_byte_array")]
     public string Encoding { get; set; } = "plain";
 
     [GlobalSetup]
@@ -80,6 +80,8 @@ public class RowReaderBenchmark
     [Benchmark]
     public async Task<long> ReadParquetNetAsync()
     {
+        if (Encoding is "delta_binary_packed" or "delta_byte_array" or "delta_length_byte_array")
+            throw new NotSupportedException($"ParquetNet does not produce '{Encoding}' encoding.");
         using var stream = new MemoryStream(_fileBytes, writable: false);
         await using var reader = await Parquet.ParquetReader.CreateAsync(stream).ConfigureAwait(false);
         var checksum = 0L;
@@ -143,12 +145,14 @@ public class RowReaderBenchmark
         var timestamps = new long[rows];
         var values = new double[rows];
         var categories = new int[rows];
+        var labels = new byte[rows][];
         for (var i = 0; i < rows; i++)
         {
             ids[i] = i;
             timestamps[i] = 1_700_000_000_000L + i;
             values[i] = i * 0.25d;
             categories[i] = i % 2048;
+            labels[i] = System.Text.Encoding.UTF8.GetBytes($"label-{i % 1000}");
         }
 
         var idColumn = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
@@ -167,19 +171,37 @@ public class RowReaderBenchmark
         categoryColumn.Serialize(categories);
         rowGroup.Write(categoryColumn);
 
+        var labelColumn = rowGroup.CreateSerializedColumn<byte[]>(schema.Columns[4]);
+        labelColumn.Serialize(labels);
+        rowGroup.Write(labelColumn);
+
         writer.CloseFile();
         return stream.ToArray();
     }
 
     static PlankSchema CreateWriteSchema(string encoding)
     {
-        var encodingKind = MapPlankEncoding(encoding);
-        var options = new ColumnOptions(ParquetRepetition.Required, ImmutableArray.Create(encodingKind));
+        // delta_byte_array / delta_length_byte_array apply only to ByteArray columns;
+        // delta_binary_packed applies only to integer columns (not double).
+        // For mixed cases we use plain on columns where the target encoding doesn't apply.
+        var isByteArrayEncoding = encoding is "delta_byte_array" or "delta_length_byte_array";
+        var isIntEncoding = encoding is "delta_binary_packed";
+
+        var numericEncoding = isByteArrayEncoding ? EncodingKind.Plain : MapNumericEncoding(encoding);
+        var byteArrayEncoding = isIntEncoding ? EncodingKind.Plain : MapByteArrayEncoding(encoding);
+
+        var numericOptions = new ColumnOptions(ParquetRepetition.Required, ImmutableArray.Create(numericEncoding));
+        var byteArrayOptions = new ColumnOptions(ParquetRepetition.Required, ImmutableArray.Create(byteArrayEncoding));
+
         var columns = ImmutableArray.Create(
-            new PlankColumn("id", ParquetPhysicalType.Int32, options),
-            new PlankColumn("timestamp", ParquetPhysicalType.Int64, options),
-            new PlankColumn("value", ParquetPhysicalType.Double, options),
-            new PlankColumn("category", ParquetPhysicalType.Int32, options));
+            new PlankColumn("id", ParquetPhysicalType.Int32, numericOptions),
+            new PlankColumn("timestamp", ParquetPhysicalType.Int64, numericOptions),
+            new PlankColumn("value", ParquetPhysicalType.Double,
+                new ColumnOptions(ParquetRepetition.Required, ImmutableArray.Create(
+                    isIntEncoding ? EncodingKind.Plain : numericEncoding))),
+            new PlankColumn("category", ParquetPhysicalType.Int32, numericOptions),
+            new PlankColumn("label", ParquetPhysicalType.ByteArray, byteArrayOptions));
+
         if (encoding != "dictionary")
             return new PlankSchema(columns);
 
@@ -191,15 +213,27 @@ public class RowReaderBenchmark
                 .Add("timestamp", ForceDictionaryPageStrategy.Shared)
                 .Add("value", ForceDictionaryPageStrategy.Shared)
                 .Add("category", ForceDictionaryPageStrategy.Shared)
+                .Add("label", ForceDictionaryPageStrategy.Shared)
         };
     }
 
-    static EncodingKind MapPlankEncoding(string encoding)
+    static EncodingKind MapNumericEncoding(string encoding)
         => encoding switch
         {
             "plain" => EncodingKind.Plain,
             "dictionary" => EncodingKind.RleDictionary,
             "byte_stream_split" => EncodingKind.ByteStreamSplit,
-            _ => throw new InvalidOperationException($"Encoding '{encoding}' is not supported by {nameof(RowReaderBenchmark)}.")
+            "delta_binary_packed" => EncodingKind.DeltaBinaryPacked,
+            _ => EncodingKind.Plain
+        };
+
+    static EncodingKind MapByteArrayEncoding(string encoding)
+        => encoding switch
+        {
+            "plain" => EncodingKind.Plain,
+            "dictionary" => EncodingKind.RleDictionary,
+            "delta_byte_array" => EncodingKind.DeltaByteArray,
+            "delta_length_byte_array" => EncodingKind.DeltaLengthByteArray,
+            _ => EncodingKind.Plain
         };
 }

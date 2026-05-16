@@ -16,4 +16,7 @@ public sealed partial class RowReaderBenchmarkSchema
 
     [ParquetColumn("category")]
     public int Category { get; set; }
+
+    [ParquetColumn("label")]
+    public string Label { get; set; } = "";
 }
