@@ -14,8 +14,8 @@ ref struct CompactProtocolReader
     internal int Offset
         => _offset;
 
-    internal int Remaining
-        => _buffer.Length - _offset;
+    internal uint Remaining
+        => (uint)(_buffer.Length - _offset);
 
     internal bool TryReadFieldHeader(ref int previousFieldId, out int fieldId, out CompactProtocolType type,
         out bool? inlineBool)
@@ -51,6 +51,14 @@ ref struct CompactProtocolReader
 
     internal long ReadI64()
         => DecodeZigZag64(ReadVarUInt64());
+
+    internal uint ReadVarU32(uint max = uint.MaxValue)
+    {
+        var value = ReadVarUInt32();
+        if (value > max)
+            throw new CorruptParquetException($"Expected a varint value no greater than {max} but got {value}.");
+        return value;
+    }
 
     internal uint ReadI32AsU32(uint max = uint.MaxValue)
     {
@@ -89,7 +97,7 @@ ref struct CompactProtocolReader
         var header = _buffer[_offset++];
         var countNibble = header >> 4;
         var type = (CompactProtocolType)(header & 0x0F);
-        var count = countNibble == 15 ? checked((int)ReadVarUInt32()) : countNibble;
+        var count = countNibble == 15 ? (int)ReadVarU32() : countNibble;
         return (count, type);
     }
 
@@ -116,7 +124,7 @@ ref struct CompactProtocolReader
                 return;
             case CompactProtocolType.Binary:
             {
-                var length = checked((int)ReadVarUInt32());
+                var length = (int)ReadVarU32(max: Remaining);
                 EnsureAvailable(length);
                 _offset += length;
                 return;

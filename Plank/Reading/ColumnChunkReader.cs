@@ -150,6 +150,8 @@ static class ColumnChunkReader
                 return TryDecodeBooleanRleIntoBuffer(payload, valueCount, ref valuesBuffer, out values);
             case EncodingKind.ByteStreamSplit:
                 return TryDecodeByteStreamSplitIntoBuffer(payload, column, valueCount, ref valuesBuffer, out values);
+            case EncodingKind.DeltaBinaryPacked:
+                return TryDecodeDeltaBinaryPackedIntoBuffer(payload, column, valueCount, ref valuesBuffer, out values);
             default:
                 values = default;
                 return false;
@@ -314,11 +316,9 @@ static class ColumnChunkReader
             return false;
         }
 
-        var ints = ReadRleBitPackedHybrid(payload, valueCount, bitWidth: 1);
-        var typed = (bool[])(object)EnsureValueBuffer(ref valuesBuffer, (uint)ints.Length);
-        for (var i = 0; i < ints.Length; i++)
-            typed[i] = ints[i] != 0;
-        values = new ReadOnlyMemory<T>(valuesBuffer!, 0, ints.Length);
+        var typed = (bool[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
+        DecodeBooleanRle(payload, typed.AsSpan(0, (int)valueCount));
+        values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
         return true;
     }
 
@@ -386,6 +386,31 @@ static class ColumnChunkReader
             {
                 var typed = (double[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
                 DecodeByteStreamSplitDouble(payload, typed.AsSpan(0, (int)valueCount));
+                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
+                return true;
+            }
+            default:
+                values = default;
+                return false;
+        }
+    }
+
+    static bool TryDecodeDeltaBinaryPackedIntoBuffer<T>(ReadOnlySpan<byte> payload, Column column, uint valueCount,
+        ref T[]? valuesBuffer, out ReadOnlyMemory<T> values)
+    {
+        switch (column.PhysicalType)
+        {
+            case ParquetPhysicalType.Int32 when typeof(T) == typeof(int):
+            {
+                var typed = (int[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
+                DeltaBinaryPackedDecoder.ReadInt32(payload, typed.AsSpan(0, (int)valueCount));
+                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
+                return true;
+            }
+            case ParquetPhysicalType.Int64 when typeof(T) == typeof(long):
+            {
+                var typed = (long[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
+                DeltaBinaryPackedDecoder.ReadInt64(payload, typed.AsSpan(0, (int)valueCount));
                 values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
                 return true;
             }
@@ -1381,6 +1406,31 @@ static class ColumnChunkReader
         }
 
         return values;
+    }
+
+    static void DecodeBooleanRle(ReadOnlySpan<byte> payload, Span<bool> destination)
+    {
+        var valueIndex = 0;
+        while (valueIndex < destination.Length)
+        {
+            var header = ReadUnsignedVarInt(ref payload);
+            if ((header & 1U) == 0)
+            {
+                var runLength = checked((int)(header >> 1));
+                var repeated = ReadLittleEndian(ref payload, 1) != 0;
+                var copyLength = Math.Min(runLength, destination.Length - valueIndex);
+                destination.Slice(valueIndex, copyLength).Fill(repeated);
+                valueIndex += copyLength;
+                continue;
+            }
+
+            var literalCount = checked((int)(header >> 1) * 8);
+            for (var i = 0; i < literalCount && valueIndex < destination.Length; i++)
+                destination[valueIndex++] = ReadBitPackedValue(ref payload, bitWidth: 1, i) != 0;
+
+            var literalByteCount = (literalCount + 7) >> 3;
+            payload = payload[literalByteCount..];
+        }
     }
 
     static int ReadBitPackedValue(ref ReadOnlySpan<byte> payload, int bitWidth, int index)
