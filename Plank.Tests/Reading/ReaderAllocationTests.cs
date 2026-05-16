@@ -6,6 +6,7 @@ using Plank.Writing.PageStrategy;
 
 namespace Plank.Tests.Reading;
 
+[NotInParallel]
 internal sealed class ReaderAllocationTests
 {
     [Test]

@@ -3,6 +3,7 @@ using Plank.Writing;
 
 namespace Plank.Tests.Writer;
 
+[NotInParallel]
 internal sealed class WriterAllocationTests
 {
     [Test]
