@@ -53,6 +53,13 @@ static class DeltaBinaryPackedDecoder
             throw new NotSupportedException(
                 $"Delta binary packed decoding currently supports block size {BlockSize} and mini-block count {MiniBlockCount} only.");
 
+        // Each block encodes 128 values in at minimum 5 bytes (1 minDelta varint + 4 bitwidths, bitWidth=0).
+        // A corrupt header claiming more values than the payload could hold would cause a huge allocation.
+        var maxPossibleValues = (uint)(payload.Length - reader.Offset) * 26U + 2U;
+        if (valueCount > maxPossibleValues)
+            throw new CorruptParquetException(
+                $"Delta binary packed value count {valueCount} exceeds what {payload.Length - reader.Offset} bytes could encode.");
+
         if (valueCount == 0)
         {
             _ = reader.ReadUnsignedVarInt();
@@ -149,6 +156,11 @@ static class DeltaBinaryPackedDecoder
         if (blockSize != BlockSize || miniBlockCount != MiniBlockCount)
             throw new NotSupportedException(
                 $"Delta binary packed decoding currently supports block size {BlockSize} and mini-block count {MiniBlockCount} only.");
+
+        var maxPossibleValues = (uint)(payload.Length - reader.Offset) * 26U + 2U;
+        if (valueCount > maxPossibleValues)
+            throw new CorruptParquetException(
+                $"Delta binary packed value count {valueCount} exceeds what {payload.Length - reader.Offset} bytes could encode.");
 
         if (valueCount == 0)
         {

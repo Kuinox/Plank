@@ -9,17 +9,25 @@ static class ParquetDecompressor
 {
     internal static byte[] Decompress(ReadOnlySpan<byte> payload, uint expectedLength, CompressionKind compression)
     {
-        var result = compression switch
+        byte[] result;
+        try
         {
-            CompressionKind.Gzip => DecompressWithStream(payload, expectedLength,
-                static s => new GZipStream(s, CompressionMode.Decompress, leaveOpen: true)),
-            CompressionKind.Brotli => DecompressWithStream(payload, expectedLength,
-                static s => new BrotliStream(s, CompressionMode.Decompress, leaveOpen: true)),
-            CompressionKind.Lz4 => DecompressLz4(payload, expectedLength),
-            CompressionKind.Zstd => DecompressZstd(payload, expectedLength),
-            CompressionKind.Snappy => DecompressSnappy(payload, expectedLength),
-            _ => throw new NotSupportedException($"Compression '{compression}' is not supported.")
-        };
+            result = compression switch
+            {
+                CompressionKind.Gzip => DecompressWithStream(payload, expectedLength,
+                    static s => new GZipStream(s, CompressionMode.Decompress, leaveOpen: true)),
+                CompressionKind.Brotli => DecompressWithStream(payload, expectedLength,
+                    static s => new BrotliStream(s, CompressionMode.Decompress, leaveOpen: true)),
+                CompressionKind.Lz4 => DecompressLz4(payload, expectedLength),
+                CompressionKind.Zstd => DecompressZstd(payload, expectedLength),
+                CompressionKind.Snappy => DecompressSnappy(payload, expectedLength),
+                _ => throw new NotSupportedException($"Compression '{compression}' is not supported.")
+            };
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new CorruptParquetException($"{compression} decompression failed due to invalid compressed data.", ex);
+        }
 
         if ((uint)result.Length != expectedLength)
             throw new CorruptParquetException(

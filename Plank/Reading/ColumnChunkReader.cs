@@ -516,6 +516,9 @@ static class ColumnChunkReader
     static void DecodeByteStreamSplitInt32(ReadOnlySpan<byte> payload, Span<int> destination)
     {
         var count = destination.Length;
+        if ((long)count * 4 > payload.Length)
+            throw new CorruptParquetException(
+                $"ByteStreamSplit payload ({payload.Length} bytes) is too short for {count} Int32 values.");
         var lane1 = count;
         var lane2 = count * 2;
         var lane3 = count * 3;
@@ -533,6 +536,9 @@ static class ColumnChunkReader
     static void DecodeByteStreamSplitUInt64(ReadOnlySpan<byte> payload, Span<ulong> destination)
     {
         var count = destination.Length;
+        if ((long)count * 8 > payload.Length)
+            throw new CorruptParquetException(
+                $"ByteStreamSplit payload ({payload.Length} bytes) is too short for {count} 8-byte values.");
         var lane1 = count;
         var lane2 = count * 2;
         var lane3 = count * 3;
@@ -673,6 +679,8 @@ static class ColumnChunkReader
     {
         if (bitWidth == 0)
         {
+            if (dictionary.Length == 0)
+                throw new CorruptParquetException("Dictionary is empty but values reference index 0.");
             destination.Fill(dictionary[0]);
             return;
         }
@@ -749,6 +757,10 @@ static class ColumnChunkReader
     {
         if (targetType != typeof(bool))
             throw new InvalidOperationException($"Boolean column cannot be projected to '{targetType}'.");
+
+        if (valueCount > (uint)payload.Length * 8)
+            throw new CorruptParquetException(
+                $"Payload ({payload.Length} bytes) is too short to decode {valueCount} plain boolean values.");
 
         var values = new bool[(int)valueCount];
         for (var i = 0; i < valueCount; i++)
@@ -1111,6 +1123,10 @@ static class ColumnChunkReader
         var suffixConsumed = DeltaBinaryPackedDecoder.ReadConsumedByteCount(suffixPayload);
         var suffixBytes = suffixPayload[suffixConsumed..];
 
+        if (suffixLengths.Length != prefixLengths.Length)
+            throw new CorruptParquetException(
+                $"Delta byte array prefix count {prefixLengths.Length} does not match suffix count {suffixLengths.Length}.");
+
         var values = new byte[prefixLengths.Length][];
         var suffixRemaining = suffixBytes;
         for (var i = 0; i < values.Length; i++)
@@ -1192,7 +1208,10 @@ static class ColumnChunkReader
         if (!hasNulls)
             return ExpandAllPresent<T>(physicalValues, totalValueCount);
 
-        var definitionLevels = ReadRleBitPackedHybrid(definitionPayload, totalValueCount, bitWidth: 1);
+        var definitionLevels = ReadDefinitionLevels(definitionPayload, totalValueCount, out var nonNullCount);
+        if (nonNullCount != (int)physicalValueCount)
+            throw new CorruptParquetException(
+                $"Definition levels indicate {nonNullCount} non-null values but page header claimed {physicalValueCount}.");
         return ExpandWithDefinitionLevels<T>(physicalValues, definitionLevels, totalValueCount);
     }
 
@@ -1289,6 +1308,44 @@ static class ColumnChunkReader
                 result[i] = (T)physicalValues.GetValue(i)!;
         }
         return new ReadOnlyMemory<T>(result, 0, (int)valueCount);
+    }
+
+    static int[] ReadDefinitionLevels(ReadOnlySpan<byte> payload, uint valueCount, out int nonNullCount)
+    {
+        var values = new int[checked((int)valueCount)];
+        var valueIndex = 0U;
+        var count = 0;
+        while (valueIndex < valueCount)
+        {
+            var header = ReadUnsignedVarInt(ref payload);
+            if ((header & 1U) == 0)
+            {
+                var runLength = header >> 1;
+                var repeated = ReadLittleEndian(ref payload, byteWidth: 1);
+                var copyLength = (int)Math.Min(runLength, valueCount - valueIndex);
+                if (repeated != 0)
+                {
+                    Array.Fill(values, repeated, (int)valueIndex, copyLength);
+                    count += copyLength;
+                }
+                valueIndex += (uint)copyLength;
+                continue;
+            }
+
+            var literalCount = checked((header >> 1) * 8U);
+            for (var i = 0U; i < literalCount && valueIndex < valueCount; i++)
+            {
+                var v = ReadBitPackedValue(ref payload, bitWidth: 1, checked((int)i));
+                values[checked((int)valueIndex++)] = v;
+                count += v;
+            }
+
+            var literalByteCount = (literalCount + 7U) >> 3;
+            payload = payload[checked((int)literalByteCount)..];
+        }
+
+        nonNullCount = count;
+        return values;
     }
 
     static ReadOnlyMemory<T> ExpandWithDefinitionLevels<T>(Array physicalValues, int[] definitionLevels, uint totalValueCount)
