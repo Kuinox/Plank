@@ -20,8 +20,9 @@ pkill -9 -f afl-fuzz 2>/dev/null
 pkill -9 -f Plank.Fuzzing.Reader.Target 2>/dev/null
 sleep 2
 
-# Build
+# Build (remove stale MSBuild cache that causes spurious errors)
 echo "==> Building..."
+rm -f $ROOT/Plank.Snappy/obj/Release/net10.0/Plank.Snappy.AssemblyInfoInputs.cache
 dotnet build -c Release $ROOT/Plank.Fuzzing.Reader.Target/Plank.Fuzzing.Reader.Target.csproj -q
 or exit 1
 
