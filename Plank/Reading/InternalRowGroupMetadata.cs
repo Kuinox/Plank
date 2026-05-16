@@ -2,8 +2,8 @@ namespace Plank.Reading;
 
 readonly struct InternalRowGroupMetadata
 {
-    internal InternalRowGroupMetadata(int rowGroupOrdinal, long metadataOffset, long columnChunkOffset,
-        long rowCount, InternalColumnChunkMetadata[] columns)
+    internal InternalRowGroupMetadata(int rowGroupOrdinal, ulong metadataOffset, ulong columnChunkOffset,
+        ulong rowCount, InternalColumnChunkMetadata[] columns)
     {
         RowGroupOrdinal = rowGroupOrdinal;
         MetadataOffset = metadataOffset;
@@ -14,11 +14,11 @@ readonly struct InternalRowGroupMetadata
 
     internal int RowGroupOrdinal { get; }
 
-    internal long MetadataOffset { get; }
+    internal ulong MetadataOffset { get; }
 
-    internal long ColumnChunkOffset { get; }
+    internal ulong ColumnChunkOffset { get; }
 
-    internal long RowCount { get; }
+    internal ulong RowCount { get; }
 
     internal InternalColumnChunkMetadata[] Columns { get; }
 }

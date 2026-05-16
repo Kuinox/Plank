@@ -77,20 +77,20 @@ public sealed class ParquetReader : IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length < 12)
-            throw new InvalidDataException("Stream is too small to contain a Parquet footer.");
+            throw new CorruptParquetException("Stream is too small to contain a Parquet footer.");
 
         Span<byte> trailer = stackalloc byte[8];
-        source.ReadExactly(source.Length - trailer.Length, trailer);
+        source.ReadExactly(source.Length - (ulong)trailer.Length, trailer);
         if (!trailer[4..].SequenceEqual(FileMagic))
-            throw new InvalidDataException("Stream does not end with the PAR1 footer marker.");
+            throw new CorruptParquetException("Stream does not end with the PAR1 footer marker.");
 
         var footerLength = BinaryPrimitives.ReadInt32LittleEndian(trailer[..4]);
         if (footerLength < 0)
-            throw new InvalidDataException("Footer length must be non-negative.");
+            throw new CorruptParquetException("Footer length must be non-negative.");
 
-        var footerOffset = source.Length - trailer.Length - footerLength;
+        var footerOffset = source.Length - (ulong)trailer.Length - (ulong)footerLength;
         if (footerOffset < 4)
-            throw new InvalidDataException("Footer offset is invalid for this stream.");
+            throw new CorruptParquetException("Footer offset is invalid for this stream.");
 
         if (_footerBuffer.Length < footerLength)
             _footerBuffer = new byte[footerLength];
@@ -98,7 +98,7 @@ public sealed class ParquetReader : IDisposable
         source.ReadExactly(footerOffset, footerBytes);
 
         _footer = ParquetMetadataThriftReader.Read(footerBytes, footerOffset, _footer);
-        _metadata = new ParquetFileMetadata(_schema, footerOffset, footerLength, _footer.Version);
+        _metadata = new ParquetFileMetadata(_schema, (long)footerOffset, footerLength, _footer.Version);
     }
 
     public RowGroupTokenEnumerable EnumerateRowGroups()

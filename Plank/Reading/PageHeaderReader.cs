@@ -11,11 +11,11 @@ static class PageHeaderReader
         var type = PageHeaderType.DataPage;
         var uncompressedPageSize = 0;
         var compressedPageSize = 0;
-        var valueCount = 0;
+        var valueCount = 0U;
         var encoding = EncodingKind.Plain;
-        var repetitionLevelsByteLength = 0;
-        var definitionLevelsByteLength = 0;
-        var nullCount = 0;
+        var repetitionLevelsByteLength = 0U;
+        var definitionLevelsByteLength = 0U;
+        var nullCount = 0U;
         var isCompressed = false;
 
         while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var fieldType, out var inlineBool))
@@ -26,10 +26,10 @@ static class PageHeaderReader
                     type = (PageHeaderType)reader.ReadI32();
                     break;
                 case 2:
-                    uncompressedPageSize = reader.ReadI32();
+                    uncompressedPageSize = (int)reader.ReadI32AsU32(max: (uint)reader.Remaining);
                     break;
                 case 3:
-                    compressedPageSize = reader.ReadI32();
+                    compressedPageSize = (int)reader.ReadI32AsU32(max: (uint)reader.Remaining);
                     break;
                 case 7:
                     valueCount = ReadDictionaryHeader(ref reader);
@@ -48,14 +48,14 @@ static class PageHeaderReader
             repetitionLevelsByteLength, definitionLevelsByteLength, nullCount, isCompressed);
     }
 
-    static int ReadDictionaryHeader(ref CompactProtocolReader reader)
+    static uint ReadDictionaryHeader(ref CompactProtocolReader reader)
     {
         var previousFieldId = 0;
-        var valueCount = 0;
+        var valueCount = 0U;
         while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var fieldType, out var inlineBool))
         {
             if (fieldId == 1)
-                valueCount = reader.ReadI32();
+                valueCount = reader.ReadI32AsU32();
             else
                 reader.Skip(fieldType, inlineBool);
         }
@@ -63,15 +63,15 @@ static class PageHeaderReader
         return valueCount;
     }
 
-    static (int ValueCount, EncodingKind Encoding, int NullCount, int RepetitionLevelsByteLength,
-        int DefinitionLevelsByteLength, bool IsCompressed) ReadDataPageV2Header(ref CompactProtocolReader reader)
+    static (uint ValueCount, EncodingKind Encoding, uint NullCount, uint RepetitionLevelsByteLength,
+        uint DefinitionLevelsByteLength, bool IsCompressed) ReadDataPageV2Header(ref CompactProtocolReader reader)
     {
         var previousFieldId = 0;
-        var valueCount = 0;
+        var valueCount = 0U;
         var encoding = EncodingKind.Plain;
-        var nullCount = 0;
-        var repetitionLevelsByteLength = 0;
-        var definitionLevelsByteLength = 0;
+        var nullCount = 0U;
+        var repetitionLevelsByteLength = 0U;
+        var definitionLevelsByteLength = 0U;
         var isCompressed = true; // spec default
 
         while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var fieldType, out var inlineBool))
@@ -79,19 +79,19 @@ static class PageHeaderReader
             switch (fieldId)
             {
                 case 1:
-                    valueCount = reader.ReadI32();
+                    valueCount = reader.ReadI32AsU32();
                     break;
                 case 2:
-                    nullCount = reader.ReadI32();
+                    nullCount = reader.ReadI32AsU32();
                     break;
                 case 4:
                     encoding = ParquetMetadataThriftReader.ReadEncoding(reader.ReadI32());
                     break;
                 case 5:
-                    definitionLevelsByteLength = reader.ReadI32();
+                    definitionLevelsByteLength = reader.ReadI32AsU32(max: (uint)reader.Remaining);
                     break;
                 case 6:
-                    repetitionLevelsByteLength = reader.ReadI32();
+                    repetitionLevelsByteLength = reader.ReadI32AsU32(max: (uint)reader.Remaining);
                     break;
                 case 7:
                     isCompressed = reader.ReadBool(inlineBool);

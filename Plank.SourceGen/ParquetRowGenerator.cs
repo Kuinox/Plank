@@ -444,7 +444,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        global::Plank.Reading.StreamReadSource? _streamSource;");
         builder.AppendLine("        global::Plank.Reading.RowGroupTokenEnumerable.Enumerator _rowGroups;");
         builder.AppendLine("        readonly global::Plank.Reading.RowGroupReader _rowGroup;");
-        builder.AppendLine("        long _rowGroupRowsRemaining;");
+        builder.AppendLine("        ulong _rowGroupRowsRemaining;");
         builder.AppendLine("        bool _started;");
         builder.AppendLine("        bool _hasCurrent;");
         builder.AppendLine("        bool _disposed;");
@@ -554,7 +554,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            readonly global::Plank.Reading.ParquetReader _reader;");
         builder.AppendLine("            global::Plank.Reading.RowGroupTokenEnumerable.Enumerator _rowGroups;");
         builder.AppendLine("            global::Plank.Reading.RowGroupReader? _rowGroup;");
-        builder.AppendLine("            long _rowGroupRowsRemaining;");
+        builder.AppendLine("            ulong _rowGroupRowsRemaining;");
         builder.AppendLine("            bool _hasCurrent;");
         builder.AppendLine("            bool _disposed;");
         for (var i = 0; i < columns.Length; i++)

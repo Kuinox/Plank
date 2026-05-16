@@ -35,9 +35,9 @@ internal sealed class ParquetReaderTests
         await Assert.That(tokens.Length).IsEqualTo(2);
         await Assert.That(tokens[0].RowGroupOrdinal).IsEqualTo(0);
         await Assert.That(tokens[1].RowGroupOrdinal).IsEqualTo(1);
-        await Assert.That(tokens[0].MetadataOffset).IsGreaterThan(0);
+        await Assert.That(tokens[0].MetadataOffset).IsGreaterThan(0UL);
         await Assert.That(tokens[1].MetadataOffset).IsGreaterThan(tokens[0].MetadataOffset);
-            await Assert.That(tokens[0].ColumnChunkOffset).IsGreaterThan(0);
+            await Assert.That(tokens[0].ColumnChunkOffset).IsGreaterThan(0UL);
             await Assert.That(tokens[1].ColumnChunkOffset).IsGreaterThan(tokens[0].ColumnChunkOffset);
         }
         finally

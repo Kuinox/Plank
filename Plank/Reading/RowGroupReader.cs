@@ -7,7 +7,7 @@ public sealed class RowGroupReader : IDisposable
     readonly RowGroupReadContext _context;
 
     internal RowGroupReader(ParquetReader reader, IParquetReadSource source, InternalRowGroupMetadata rowGroup)
-        : this(new RowGroupReadContext(rowGroup.Columns.Length), reader, source, rowGroup)
+        : this(reader.CreateRowGroupReadContext(), reader, source, rowGroup)
     {
     }
 
@@ -36,7 +36,7 @@ public sealed class RowGroupReader : IDisposable
     public RowGroupToken Token
         => _context.Token;
 
-    public long RowCount
+    public ulong RowCount
         => _context.RowCount;
 
     public RowGroupColumn<T> Column<T>(Column column)

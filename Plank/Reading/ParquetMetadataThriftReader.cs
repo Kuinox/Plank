@@ -5,10 +5,10 @@ namespace Plank.Reading;
 
 static class ParquetMetadataThriftReader
 {
-    internal static InternalParquetFooter Read(ReadOnlySpan<byte> buffer, long footerOffset)
+    internal static InternalParquetFooter Read(ReadOnlySpan<byte> buffer, ulong footerOffset)
         => Read(buffer, footerOffset, InternalParquetFooter.Empty);
 
-    internal static InternalParquetFooter Read(ReadOnlySpan<byte> buffer, long footerOffset, InternalParquetFooter previous)
+    internal static InternalParquetFooter Read(ReadOnlySpan<byte> buffer, ulong footerOffset, InternalParquetFooter previous)
     {
         var reader = new CompactProtocolReader(buffer);
         var previousFieldId = 0;
@@ -61,28 +61,28 @@ static class ParquetMetadataThriftReader
             _ => throw new NotSupportedException($"Encoding '{encoding}' is not supported.")
         };
 
-    static InternalRowGroupMetadata[] ReadRowGroups(ref CompactProtocolReader reader, long footerOffset,
+    static InternalRowGroupMetadata[] ReadRowGroups(ref CompactProtocolReader reader, ulong footerOffset,
         InternalRowGroupMetadata[] previous)
     {
         var (count, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.Struct)
-            throw new InvalidDataException("Expected row_groups to be encoded as a list of structs.");
+            throw new CorruptParquetException("Expected row_groups to be encoded as a list of structs.");
 
         var rowGroups = previous.Length == count ? previous : new InternalRowGroupMetadata[count];
         for (var i = 0; i < count; i++)
         {
             var previousColumns = rowGroups[i].Columns ?? [];
-            rowGroups[i] = ReadRowGroup(ref reader, i, footerOffset + reader.Offset, previousColumns);
+            rowGroups[i] = ReadRowGroup(ref reader, i, footerOffset + (ulong)reader.Offset, previousColumns);
         }
         return rowGroups;
     }
 
-    static InternalRowGroupMetadata ReadRowGroup(ref CompactProtocolReader reader, int rowGroupOrdinal, long metadataOffset,
+    static InternalRowGroupMetadata ReadRowGroup(ref CompactProtocolReader reader, int rowGroupOrdinal, ulong metadataOffset,
         InternalColumnChunkMetadata[] previousColumns)
     {
         var previousFieldId = 0;
-        var columnChunkOffset = 0L;
-        var rowCount = 0L;
+        var columnChunkOffset = 0UL;
+        var rowCount = 0UL;
         InternalColumnChunkMetadata[] columns = [];
 
         while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
@@ -93,10 +93,10 @@ static class ParquetMetadataThriftReader
                     columns = ReadColumns(ref reader, previousColumns);
                     break;
                 case 3:
-                    rowCount = reader.ReadI64();
+                    rowCount = reader.ReadI64AsU64();
                     break;
                 case 5:
-                    columnChunkOffset = reader.ReadI64();
+                    columnChunkOffset = reader.ReadI64AsU64();
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -114,7 +114,7 @@ static class ParquetMetadataThriftReader
     {
         var (count, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.Struct)
-            throw new InvalidDataException("Expected row group columns to be encoded as a list of structs.");
+            throw new CorruptParquetException("Expected row group columns to be encoded as a list of structs.");
 
         var columns = previous.Length == count ? previous : new InternalColumnChunkMetadata[count];
         for (var i = 0; i < count; i++)
@@ -128,13 +128,13 @@ static class ParquetMetadataThriftReader
     static InternalColumnChunkMetadata ReadColumn(ref CompactProtocolReader reader, EncodingKind[] previousEncodings)
     {
         var previousFieldId = 0;
-        var dataPageOffset = 0L;
-        var dictionaryPageOffset = 0L;
-        var totalCompressedSize = 0L;
-        var columnIndexOffset = 0L;
-        var columnIndexLength = 0;
-        var offsetIndexOffset = 0L;
-        var offsetIndexLength = 0;
+        var dataPageOffset = 0UL;
+        var dictionaryPageOffset = 0UL;
+        var totalCompressedSize = 0UL;
+        var columnIndexOffset = 0UL;
+        var columnIndexLength = 0U;
+        var offsetIndexOffset = 0UL;
+        var offsetIndexLength = 0U;
         var compression = CompressionKind.None;
         EncodingKind[] encodings = [];
 
@@ -143,23 +143,23 @@ static class ParquetMetadataThriftReader
             switch (fieldId)
             {
                 case 2:
-                    dataPageOffset = reader.ReadI64();
+                    dataPageOffset = reader.ReadI64AsU64();
                     break;
                 case 3:
                     ReadColumnMetadata(ref reader, ref dictionaryPageOffset, ref totalCompressedSize, ref compression,
                         ref encodings, previousEncodings);
                     break;
                 case 4:
-                    offsetIndexOffset = reader.ReadI64();
+                    offsetIndexOffset = reader.ReadI64AsU64();
                     break;
                 case 5:
-                    offsetIndexLength = reader.ReadI32();
+                    offsetIndexLength = reader.ReadI32AsU32();
                     break;
                 case 6:
-                    columnIndexOffset = reader.ReadI64();
+                    columnIndexOffset = reader.ReadI64AsU64();
                     break;
                 case 7:
-                    columnIndexLength = reader.ReadI32();
+                    columnIndexLength = reader.ReadI32AsU32();
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -171,8 +171,8 @@ static class ParquetMetadataThriftReader
             encodings, columnIndexOffset, columnIndexLength, offsetIndexOffset, offsetIndexLength);
     }
 
-    static void ReadColumnMetadata(ref CompactProtocolReader reader, ref long dictionaryPageOffset,
-        ref long totalCompressedSize, ref CompressionKind compression, ref EncodingKind[] encodings,
+    static void ReadColumnMetadata(ref CompactProtocolReader reader, ref ulong dictionaryPageOffset,
+        ref ulong totalCompressedSize, ref CompressionKind compression, ref EncodingKind[] encodings,
         EncodingKind[] previousEncodings)
     {
         var previousFieldId = 0;
@@ -187,10 +187,10 @@ static class ParquetMetadataThriftReader
                     compression = ReadCompression(reader.ReadI32());
                     break;
                 case 7:
-                    totalCompressedSize = reader.ReadI64();
+                    totalCompressedSize = reader.ReadI64AsU64();
                     break;
                 case 11:
-                    dictionaryPageOffset = reader.ReadI64();
+                    dictionaryPageOffset = reader.ReadI64AsU64();
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -203,7 +203,7 @@ static class ParquetMetadataThriftReader
     {
         var (count, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.I32)
-            throw new InvalidDataException("Expected encoding ids to be encoded as I32 list elements.");
+            throw new CorruptParquetException("Expected encoding ids to be encoded as I32 list elements.");
 
         var encodings = previous.Length == count ? previous : new EncodingKind[count];
         for (var i = 0; i < count; i++)

@@ -2,7 +2,7 @@ namespace Plank.Reading;
 
 public interface IParquetReadSource
 {
-    long Length { get; }
+    ulong Length { get; }
 
-    void ReadExactly(long offset, Span<byte> destination);
+    void ReadExactly(ulong offset, Span<byte> destination);
 }

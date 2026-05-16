@@ -30,7 +30,7 @@ ref struct DeltaBinaryPackedReader
                 return value;
             shift += 7;
             if (shift >= 70)
-                throw new InvalidDataException("Invalid delta-binary-packed UInt64 varint.");
+                throw new CorruptParquetException("Invalid delta-binary-packed UInt64 varint.");
         }
     }
 
@@ -43,7 +43,7 @@ ref struct DeltaBinaryPackedReader
     internal byte ReadByte()
     {
         if ((uint)_offset >= (uint)_buffer.Length)
-            throw new InvalidDataException("Unexpected end of delta-binary-packed payload.");
+            throw new CorruptParquetException("Unexpected end of delta-binary-packed payload.");
 
         _bitBuffer = 0;
         _bufferedBits = 0;
@@ -59,7 +59,7 @@ ref struct DeltaBinaryPackedReader
             if (_bufferedBits == 0)
             {
                 if ((uint)_offset >= (uint)_buffer.Length)
-                    throw new InvalidDataException("Unexpected end of delta-binary-packed mini-block.");
+                    throw new CorruptParquetException("Unexpected end of delta-binary-packed mini-block.");
 
                 _bitBuffer = _buffer[_offset++];
                 _bufferedBits = 8;

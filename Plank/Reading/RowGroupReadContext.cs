@@ -31,15 +31,13 @@ sealed class RowGroupReadContext
     internal RowGroupToken Token
         => _token;
 
-    internal long RowCount
+    internal ulong RowCount
         => _rowGroup.RowCount;
 
     internal void Reset(ParquetReader reader, IParquetReadSource source, InternalRowGroupMetadata rowGroup)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(source);
-        if (rowGroup.Columns.Length != _columnPageStates.Length)
-            throw new InvalidOperationException("Row group column count does not match the reader schema.");
 
         _reader = reader;
         _source = source;
@@ -61,8 +59,13 @@ sealed class RowGroupReadContext
         => _reader.GetColumnOrdinal(column);
 
     internal ColumnPageEnumerable<T> EnumeratePages<T>(Column column, int columnOrdinal)
-        => new(_source, column, _reader.GetColumnChunk(_rowGroup.RowGroupOrdinal, columnOrdinal),
+    {
+        if ((uint)columnOrdinal >= (uint)_rowGroup.Columns.Length)
+            throw new CorruptParquetException(
+                $"Column '{column.Name}' (ordinal {columnOrdinal}) is not present in this row group ({_rowGroup.Columns.Length} columns).");
+        return new(_source, column, _rowGroup.Columns[columnOrdinal],
             GetPageReadState<T>(columnOrdinal), _reader.Options.BufferPool);
+    }
 
     ColumnPageReadState<T> GetPageReadState<T>(int columnOrdinal)
     {

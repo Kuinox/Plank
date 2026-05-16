@@ -450,11 +450,11 @@ internal sealed class ColumnStatisticsTests
             throw new InvalidOperationException("Column index was written before the column chunk.");
         if (column.OffsetIndexOffset <= column.ColumnIndexOffset)
             throw new InvalidOperationException("Offset index was not written after the column index.");
-        var actualStatisticsCount = ReadColumnIndexPageCount(fileBytes, column.ColumnIndexOffset, column.ColumnIndexLength);
+        var actualStatisticsCount = ReadColumnIndexPageCount(fileBytes, (long)column.ColumnIndexOffset, (int)column.ColumnIndexLength);
         if (actualStatisticsCount != expectedPageCount)
             throw new InvalidOperationException(
                 $"Column index page count mismatch. Expected {expectedPageCount}, got {actualStatisticsCount}.");
-        var actualPageCount = ReadOffsetIndexPageCount(fileBytes, column.OffsetIndexOffset, column.OffsetIndexLength);
+        var actualPageCount = ReadOffsetIndexPageCount(fileBytes, (long)column.OffsetIndexOffset, (int)column.OffsetIndexLength);
         if (actualPageCount != expectedPageCount)
             throw new InvalidOperationException(
                 $"Offset index page count mismatch. Expected {expectedPageCount}, got {actualPageCount}.");
@@ -465,8 +465,8 @@ internal sealed class ColumnStatisticsTests
         var bytes = File.ReadAllBytes(path);
         var trailer = bytes.AsSpan(bytes.Length - 8, 8);
         var footerLength = BinaryPrimitives.ReadInt32LittleEndian(trailer[..4]);
-        var footerOffset = bytes.Length - 8 - footerLength;
-        return ParquetMetadataThriftReader.Read(bytes.AsSpan(footerOffset, footerLength), footerOffset);
+        var footerOffset = (ulong)(bytes.Length - 8 - footerLength);
+        return ParquetMetadataThriftReader.Read(bytes.AsSpan((int)footerOffset, footerLength), footerOffset);
     }
 
     static int ReadColumnIndexPageCount(byte[] fileBytes, long offset, int length)

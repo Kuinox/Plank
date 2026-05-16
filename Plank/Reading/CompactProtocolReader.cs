@@ -14,6 +14,9 @@ ref struct CompactProtocolReader
     internal int Offset
         => _offset;
 
+    internal int Remaining
+        => _buffer.Length - _offset;
+
     internal bool TryReadFieldHeader(ref int previousFieldId, out int fieldId, out CompactProtocolType type,
         out bool? inlineBool)
     {
@@ -49,6 +52,22 @@ ref struct CompactProtocolReader
     internal long ReadI64()
         => DecodeZigZag64(ReadVarUInt64());
 
+    internal uint ReadI32AsU32(uint max = uint.MaxValue)
+    {
+        var value = DecodeZigZag32(ReadVarUInt32());
+        if (value < 0 || (uint)value > max)
+            throw new CorruptParquetException($"Expected a non-negative i32 value no greater than {max} but got {value}.");
+        return (uint)value;
+    }
+
+    internal ulong ReadI64AsU64(ulong max = ulong.MaxValue)
+    {
+        var value = DecodeZigZag64(ReadVarUInt64());
+        if (value < 0 || (ulong)value > max)
+            throw new CorruptParquetException($"Expected a non-negative i64 value no greater than {max} but got {value}.");
+        return (ulong)value;
+    }
+
     internal bool ReadBool(bool? inlineBool)
     {
         if (inlineBool.HasValue)
@@ -60,7 +79,7 @@ ref struct CompactProtocolReader
         {
             (byte)CompactProtocolType.BooleanTrue => true,
             (byte)CompactProtocolType.BooleanFalse => false,
-            _ => throw new InvalidDataException($"Invalid compact protocol boolean value '{value}'.")
+            _ => throw new CorruptParquetException($"Invalid compact protocol boolean value '{value}'.")
         };
     }
 
@@ -118,7 +137,7 @@ ref struct CompactProtocolReader
                 return;
             }
             default:
-                throw new InvalidDataException($"Unsupported compact protocol type '{type}'.");
+                throw new CorruptParquetException($"Unsupported compact protocol type '{type}'.");
         }
     }
 
@@ -135,7 +154,7 @@ ref struct CompactProtocolReader
                 return value;
             shift += 7;
             if (shift >= 35)
-                throw new InvalidDataException("Invalid compact protocol UInt32 varint.");
+                throw new CorruptParquetException("Invalid compact protocol UInt32 varint.");
         }
     }
 
@@ -152,14 +171,14 @@ ref struct CompactProtocolReader
                 return value;
             shift += 7;
             if (shift >= 70)
-                throw new InvalidDataException("Invalid compact protocol UInt64 varint.");
+                throw new CorruptParquetException("Invalid compact protocol UInt64 varint.");
         }
     }
 
     void EnsureAvailable(int length)
     {
         if ((uint)length > (uint)(_buffer.Length - _offset))
-            throw new InvalidDataException("Unexpected end of compact protocol payload.");
+            throw new CorruptParquetException("Unexpected end of compact protocol payload.");
     }
 
     static int DecodeZigZag32(uint value)

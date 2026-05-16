@@ -27,14 +27,14 @@ public sealed class StreamReadSource : IParquetReadSource
         _stream = stream;
     }
 
-    public long Length
-        => _stream.Length;
+    public ulong Length
+        => (ulong)_stream.Length;
 
-    public void ReadExactly(long offset, Span<byte> destination)
+    public void ReadExactly(ulong offset, Span<byte> destination)
     {
         lock (_gate)
         {
-            _stream.Position = offset;
+            _stream.Position = (long)offset;
             _stream.ReadExactly(destination);
         }
     }

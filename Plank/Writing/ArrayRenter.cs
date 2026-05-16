@@ -14,17 +14,16 @@ sealed class ArrayRenter<T>
     {
     }
 
-    internal T[] Rent(int minimumLength)
+    internal T[] Rent(int minimumLength) => Rent((uint)minimumLength);
+
+    internal T[] Rent(uint minimumLength)
     {
-        if (minimumLength < 0)
-            throw new ArgumentOutOfRangeException(nameof(minimumLength), minimumLength,
-                "Minimum length must be non-negative.");
         if (minimumLength == 0)
             return [];
 
         var bucketIndex = GetBucketIndex(minimumLength);
         if ((uint)bucketIndex >= _buckets.Length)
-            return new T[minimumLength];
+            return new T[(int)minimumLength];
 
         var buffer = _buckets[bucketIndex].Rent();
         return buffer ?? new T[GetBucketLength(bucketIndex)];
@@ -38,7 +37,7 @@ sealed class ArrayRenter<T>
         if (clearArray)
             buffer.AsSpan().Clear();
 
-        var bucketIndex = GetBucketIndex(buffer.Length);
+        var bucketIndex = GetBucketIndex((uint)buffer.Length);
         if ((uint)bucketIndex >= _buckets.Length || GetBucketLength(bucketIndex) != buffer.Length)
             return;
 
@@ -53,9 +52,9 @@ sealed class ArrayRenter<T>
         return buckets;
     }
 
-    static int GetBucketIndex(int minimumLength)
+    static int GetBucketIndex(uint minimumLength)
     {
-        var bucketLength = 1 << MinimumBucketPower;
+        var bucketLength = 1U << MinimumBucketPower;
         var index = 0;
         while (bucketLength < minimumLength && index < BucketCount - 1)
         {

@@ -5,9 +5,9 @@ namespace Plank.Reading;
 
 readonly struct InternalColumnChunkMetadata
 {
-    internal InternalColumnChunkMetadata(long dataPageOffset, long dictionaryPageOffset, long totalCompressedSize,
-        CompressionKind compression, EncodingKind[] encodings, long columnIndexOffset = 0, int columnIndexLength = 0,
-        long offsetIndexOffset = 0, int offsetIndexLength = 0)
+    internal InternalColumnChunkMetadata(ulong dataPageOffset, ulong dictionaryPageOffset, ulong totalCompressedSize,
+        CompressionKind compression, EncodingKind[] encodings, ulong columnIndexOffset = 0, uint columnIndexLength = 0,
+        ulong offsetIndexOffset = 0, uint offsetIndexLength = 0)
     {
         DataPageOffset = dataPageOffset;
         DictionaryPageOffset = dictionaryPageOffset;
@@ -20,24 +20,24 @@ readonly struct InternalColumnChunkMetadata
         OffsetIndexLength = offsetIndexLength;
     }
 
-    internal long DataPageOffset { get; }
+    internal ulong DataPageOffset { get; }
 
-    internal long DictionaryPageOffset { get; }
+    internal ulong DictionaryPageOffset { get; }
 
-    internal long TotalCompressedSize { get; }
+    internal ulong TotalCompressedSize { get; }
 
     internal CompressionKind Compression { get; }
 
     internal EncodingKind[] Encodings { get; }
 
-    internal long ColumnIndexOffset { get; }
+    internal ulong ColumnIndexOffset { get; }
 
-    internal int ColumnIndexLength { get; }
+    internal uint ColumnIndexLength { get; }
 
-    internal long OffsetIndexOffset { get; }
+    internal ulong OffsetIndexOffset { get; }
 
-    internal int OffsetIndexLength { get; }
+    internal uint OffsetIndexLength { get; }
 
-    internal long ChunkOffset
+    internal ulong ChunkOffset
         => DictionaryPageOffset > 0 && DictionaryPageOffset < DataPageOffset ? DictionaryPageOffset : DataPageOffset;
 }

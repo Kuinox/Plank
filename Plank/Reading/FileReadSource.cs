@@ -14,22 +14,23 @@ public sealed class FileReadSource : IParquetReadSource, IDisposable
         _length = RandomAccess.GetLength(_handle);
     }
 
-    public long Length
-        => _length;
+    public ulong Length
+        => (ulong)_length;
 
-    public void ReadExactly(long offset, Span<byte> destination)
+    public void ReadExactly(ulong offset, Span<byte> destination)
     {
-        if (offset < 0 || offset > _length - destination.Length)
-            throw new ArgumentOutOfRangeException(nameof(offset), offset, "Read range is outside the source.");
+        if (offset > (ulong)_length - (ulong)destination.Length)
+            throw new CorruptParquetException($"Attempted to read {destination.Length} bytes at offset {offset} but the source is only {_length} bytes long.");
 
+        var signedOffset = (long)offset;
         while (!destination.IsEmpty)
         {
-            var read = RandomAccess.Read(_handle, destination, offset);
+            var read = RandomAccess.Read(_handle, destination, signedOffset);
             if (read == 0)
                 throw new EndOfStreamException();
 
             destination = destination[read..];
-            offset += read;
+            signedOffset += read;
         }
     }
 

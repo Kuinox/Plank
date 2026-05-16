@@ -44,6 +44,10 @@ static class ColumnChunkReader
             var header = PageHeaderReader.Read(buffer.AsSpan(offset, bufferLength - offset));
             offset += header.HeaderLength;
 
+            if (header.CompressedPageSize > bufferLength - offset)
+                throw new CorruptParquetException(
+                    $"Page compressed size ({header.CompressedPageSize}) exceeds remaining column chunk buffer ({bufferLength - offset}).");
+
             var payload = buffer.AsSpan(offset, header.CompressedPageSize);
             offset += header.CompressedPageSize;
 
@@ -58,16 +62,20 @@ static class ColumnChunkReader
                     var repLen = header.RepetitionLevelsByteLength;
                     var defLen = header.DefinitionLevelsByteLength;
                     var levelBytes = repLen + defLen;
+                    if (header.NullCount > header.ValueCount)
+                        throw new CorruptParquetException(
+                            $"Page null count ({header.NullCount}) exceeds value count ({header.ValueCount}).");
+                    var totalValueCount = header.ValueCount;
                     var physicalValueCount = header.ValueCount - header.NullCount;
 
                     // In DataPageV2, levels are always uncompressed; only the values portion may be compressed.
-                    var definitionPayload = defLen > 0 ? payload.Slice(repLen, defLen) : default;
-                    var dataPayload = payload[levelBytes..];
+                    var definitionPayload = defLen > 0 ? payload.Slice((int)repLen, (int)defLen) : default;
+                    var dataPayload = payload[(int)levelBytes..];
 
                     ReadOnlySpan<byte> effectiveData;
                     if (header.IsCompressed && dataPayload.Length > 0)
                     {
-                        var expectedUncompressedDataSize = header.UncompressedPageSize - levelBytes;
+                        var expectedUncompressedDataSize = (int)(header.UncompressedPageSize - levelBytes);
                         effectiveData = Decompress(dataPayload, expectedUncompressedDataSize, columnChunk.Compression);
                     }
                     else
@@ -87,7 +95,7 @@ static class ColumnChunkReader
                         if (needsNullExpansion)
                         {
                             values = DecodeValuesWithNullExpansion<T>(effectiveData, definitionPayload, column,
-                                header.ValueCount, physicalValueCount, header.Encoding, header.NullCount > 0);
+                                totalValueCount, physicalValueCount, header.Encoding, header.NullCount > 0);
                         }
                         else if (header.NullCount > 0 && defLen > 0)
                         {
@@ -109,7 +117,7 @@ static class ColumnChunkReader
                     {
                         if (header.NullCount > 0 && defLen > 0)
                         {
-                            values = DecodeDictionaryIndexesWithNulls<T>(effectiveData, header.ValueCount, physicalValueCount,
+                            values = DecodeDictionaryIndexesWithNulls<T>(effectiveData, totalValueCount, physicalValueCount,
                                 dictionary, definitionPayload);
                         }
                         else
@@ -131,7 +139,7 @@ static class ColumnChunkReader
         return false;
     }
 
-    static bool TryDecodeValuesIntoBuffer<T>(ReadOnlySpan<byte> payload, Column column, int valueCount,
+    static bool TryDecodeValuesIntoBuffer<T>(ReadOnlySpan<byte> payload, Column column, uint valueCount,
         EncodingKind encoding, ref T[]? valuesBuffer, out ReadOnlyMemory<T> values)
     {
         switch (encoding)
@@ -148,98 +156,118 @@ static class ColumnChunkReader
         }
     }
 
-    static bool TryDecodePlainIntoBuffer<T>(ReadOnlySpan<byte> payload, Column column, int valueCount, ref T[]? valuesBuffer,
+    static void ValidatePlainPayload(ReadOnlySpan<byte> payload, uint valueCount, uint elementSize)
+    {
+        if (valueCount > (uint)payload.Length / elementSize)
+            throw new CorruptParquetException(
+                $"Payload ({payload.Length} bytes) is too short to decode {valueCount} plain values of {elementSize} bytes each.");
+    }
+
+    static bool TryDecodePlainIntoBuffer<T>(ReadOnlySpan<byte> payload, Column column, uint valueCount, ref T[]? valuesBuffer,
         out ReadOnlyMemory<T> values)
     {
         if (typeof(T) == typeof(bool) && column.PhysicalType == ParquetPhysicalType.Boolean)
         {
+            if ((uint)payload.Length < (valueCount + 7u) / 8u)
+                throw new CorruptParquetException(
+                    $"Payload ({payload.Length} bytes) is too short to decode {valueCount} plain boolean values.");
             var typed = (bool[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
             for (var i = 0; i < valueCount; i++)
                 typed[i] = ((payload[i >> 3] >> (i & 7)) & 1) != 0;
-            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
         }
 
         if (typeof(T) == typeof(int) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
+            ValidatePlainPayload(payload, valueCount, sizeof(int));
             var typed = (int[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-            CopyLittleEndianInt32(payload, typed.AsSpan(0, valueCount));
-            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+            CopyLittleEndianInt32(payload, typed.AsSpan(0, (int)valueCount));
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
         }
 
         if (typeof(T) == typeof(byte) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
+            ValidatePlainPayload(payload, valueCount, sizeof(int));
             var typed = (byte[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
             for (var i = 0; i < valueCount; i++)
                 typed[i] = unchecked((byte)BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4)));
-            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
         }
 
         if (typeof(T) == typeof(ushort) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
+            ValidatePlainPayload(payload, valueCount, sizeof(int));
             var typed = (ushort[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
             for (var i = 0; i < valueCount; i++)
                 typed[i] = unchecked((ushort)BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4)));
-            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
         }
 
         if (typeof(T) == typeof(uint) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
+            ValidatePlainPayload(payload, valueCount, sizeof(uint));
             var typed = (uint[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-            CopyLittleEndianUInt32(payload, typed.AsSpan(0, valueCount));
-            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+            CopyLittleEndianUInt32(payload, typed.AsSpan(0, (int)valueCount));
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
         }
 
         if (typeof(T) == typeof(long) && column.PhysicalType == ParquetPhysicalType.Int64)
         {
+            ValidatePlainPayload(payload, valueCount, sizeof(long));
             var typed = (long[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-            CopyLittleEndianInt64(payload, typed.AsSpan(0, valueCount));
-            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+            CopyLittleEndianInt64(payload, typed.AsSpan(0, (int)valueCount));
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
         }
 
         if (typeof(T) == typeof(ulong) && column.PhysicalType == ParquetPhysicalType.Int64)
         {
+            ValidatePlainPayload(payload, valueCount, sizeof(ulong));
             var typed = (ulong[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-            CopyLittleEndianUInt64(payload, typed.AsSpan(0, valueCount));
-            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+            CopyLittleEndianUInt64(payload, typed.AsSpan(0, (int)valueCount));
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
         }
 
         if (typeof(T) == typeof(float) && column.PhysicalType == ParquetPhysicalType.Float)
         {
+            ValidatePlainPayload(payload, valueCount, sizeof(float));
             var typed = (float[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-            CopyLittleEndianFloat(payload, typed.AsSpan(0, valueCount));
-            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+            CopyLittleEndianFloat(payload, typed.AsSpan(0, (int)valueCount));
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
         }
 
         if (typeof(T) == typeof(double) && column.PhysicalType == ParquetPhysicalType.Double)
         {
+            ValidatePlainPayload(payload, valueCount, sizeof(double));
             var typed = (double[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-            CopyLittleEndianDouble(payload, typed.AsSpan(0, valueCount));
-            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+            CopyLittleEndianDouble(payload, typed.AsSpan(0, (int)valueCount));
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
         }
 
         if (typeof(T) == typeof(DateOnly) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
+            ValidatePlainPayload(payload, valueCount, sizeof(int));
             var typed = (DateOnly[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
             for (var i = 0; i < valueCount; i++)
             {
                 var days = BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4));
                 typed[i] = DateOnly.FromDayNumber(days);
             }
-            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
         }
 
         if (typeof(T) == typeof(DateTimeOffset) && column.PhysicalType == ParquetPhysicalType.Int64)
         {
+            ValidatePlainPayload(payload, valueCount, sizeof(long));
             var typed = (DateTimeOffset[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
             for (var i = 0; i < valueCount; i++)
             {
@@ -251,12 +279,13 @@ static class ColumnChunkReader
                     _ => throw new InvalidOperationException("DateTimeOffset projection requires a timestamp logical type.")
                 };
             }
-            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
         }
 
         if (typeof(T) == typeof(DateTime) && column.PhysicalType == ParquetPhysicalType.Int64)
         {
+            ValidatePlainPayload(payload, valueCount, sizeof(long));
             var typed = (DateTime[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
             for (var i = 0; i < valueCount; i++)
             {
@@ -268,7 +297,7 @@ static class ColumnChunkReader
                     _ => throw new InvalidOperationException("DateTime projection requires a timestamp logical type.")
                 };
             }
-            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
         }
 
@@ -276,7 +305,7 @@ static class ColumnChunkReader
         return false;
     }
 
-    static bool TryDecodeBooleanRleIntoBuffer<T>(ReadOnlySpan<byte> payload, int valueCount, ref T[]? valuesBuffer,
+    static bool TryDecodeBooleanRleIntoBuffer<T>(ReadOnlySpan<byte> payload, uint valueCount, ref T[]? valuesBuffer,
         out ReadOnlyMemory<T> values)
     {
         if (typeof(T) != typeof(bool))
@@ -286,14 +315,14 @@ static class ColumnChunkReader
         }
 
         var ints = ReadRleBitPackedHybrid(payload, valueCount, bitWidth: 1);
-        var typed = (bool[])(object)EnsureValueBuffer(ref valuesBuffer, ints.Length);
+        var typed = (bool[])(object)EnsureValueBuffer(ref valuesBuffer, (uint)ints.Length);
         for (var i = 0; i < ints.Length; i++)
             typed[i] = ints[i] != 0;
         values = new ReadOnlyMemory<T>(valuesBuffer!, 0, ints.Length);
         return true;
     }
 
-    static bool TryDecodeByteStreamSplitIntoBuffer<T>(ReadOnlySpan<byte> payload, Column column, int valueCount,
+    static bool TryDecodeByteStreamSplitIntoBuffer<T>(ReadOnlySpan<byte> payload, Column column, uint valueCount,
         ref T[]? valuesBuffer, out ReadOnlyMemory<T> values)
     {
         switch (column.PhysicalType)
@@ -301,63 +330,63 @@ static class ColumnChunkReader
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(int):
             {
                 var typed = (int[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-                DecodeByteStreamSplitInt32(payload, typed.AsSpan(0, valueCount));
-                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+                DecodeByteStreamSplitInt32(payload, typed.AsSpan(0, (int)valueCount));
+                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
                 return true;
             }
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(byte):
             {
                 var typed = (byte[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
                 for (var i = 0; i < valueCount; i++)
-                    typed[i] = (byte)(payload[i] | (payload[valueCount + i] << 8) | (payload[(valueCount * 2) + i] << 16) |
-                        (payload[(valueCount * 3) + i] << 24));
-                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+                    typed[i] = (byte)(payload[i] | (payload[(int)valueCount + i] << 8) | (payload[((int)valueCount * 2) + i] << 16) |
+                        (payload[((int)valueCount * 3) + i] << 24));
+                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
                 return true;
             }
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(ushort):
             {
                 var typed = (ushort[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
                 for (var i = 0; i < valueCount; i++)
-                    typed[i] = unchecked((ushort)(payload[i] | (payload[valueCount + i] << 8) |
-                        (payload[(valueCount * 2) + i] << 16) | (payload[(valueCount * 3) + i] << 24)));
-                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+                    typed[i] = unchecked((ushort)(payload[i] | (payload[(int)valueCount + i] << 8) |
+                        (payload[((int)valueCount * 2) + i] << 16) | (payload[((int)valueCount * 3) + i] << 24)));
+                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
                 return true;
             }
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(uint):
             {
                 var typed = (uint[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
                 for (var i = 0; i < valueCount; i++)
-                    typed[i] = unchecked((uint)(payload[i] | (payload[valueCount + i] << 8) |
-                        (payload[(valueCount * 2) + i] << 16) | (payload[(valueCount * 3) + i] << 24)));
-                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+                    typed[i] = unchecked((uint)(payload[i] | (payload[(int)valueCount + i] << 8) |
+                        (payload[((int)valueCount * 2) + i] << 16) | (payload[((int)valueCount * 3) + i] << 24)));
+                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
                 return true;
             }
             case ParquetPhysicalType.Int64 when typeof(T) == typeof(long):
             {
                 var typed = (long[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-                DecodeByteStreamSplitInt64(payload, typed.AsSpan(0, valueCount));
-                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+                DecodeByteStreamSplitInt64(payload, typed.AsSpan(0, (int)valueCount));
+                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
                 return true;
             }
             case ParquetPhysicalType.Int64 when typeof(T) == typeof(ulong):
             {
                 var typed = (ulong[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-                DecodeByteStreamSplitUInt64(payload, typed.AsSpan(0, valueCount));
-                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+                DecodeByteStreamSplitUInt64(payload, typed.AsSpan(0, (int)valueCount));
+                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
                 return true;
             }
             case ParquetPhysicalType.Float when typeof(T) == typeof(float):
             {
                 var typed = (float[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-                DecodeByteStreamSplitFloat(payload, typed.AsSpan(0, valueCount));
-                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+                DecodeByteStreamSplitFloat(payload, typed.AsSpan(0, (int)valueCount));
+                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
                 return true;
             }
             case ParquetPhysicalType.Double when typeof(T) == typeof(double):
             {
                 var typed = (double[])(object)EnsureValueBuffer(ref valuesBuffer, valueCount);
-                DecodeByteStreamSplitDouble(payload, typed.AsSpan(0, valueCount));
-                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, valueCount);
+                DecodeByteStreamSplitDouble(payload, typed.AsSpan(0, (int)valueCount));
+                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
                 return true;
             }
             default:
@@ -522,9 +551,9 @@ static class ColumnChunkReader
         return DecodeValues(effectivePayload, column, header.ValueCount, header.Encoding, physicalDecodeType);
     }
 
-    static T[] EnsureValueBuffer<T>(ref T[]? buffer, int minimumLength)
+    static T[] EnsureValueBuffer<T>(ref T[]? buffer, uint minimumLength)
     {
-        if (buffer is not null && buffer.Length >= minimumLength)
+        if (buffer is not null && (uint)buffer.Length >= minimumLength)
             return buffer;
 
         if (buffer is not null)
@@ -534,7 +563,7 @@ static class ColumnChunkReader
         return buffer;
     }
 
-    static void DecodeDictionaryIndexes<T>(ReadOnlySpan<byte> payload, int valueCount, Array dictionary,
+    static void DecodeDictionaryIndexes<T>(ReadOnlySpan<byte> payload, uint valueCount, Array dictionary,
         ref T[]? valuesBuffer, out ReadOnlyMemory<T> values)
     {
         var result = EnsureValueBuffer(ref valuesBuffer, valueCount);
@@ -549,15 +578,15 @@ static class ColumnChunkReader
                 result[i] = (T)dictionary.GetValue(indexes[i])!;
         }
 
-        values = new ReadOnlyMemory<T>(result, 0, valueCount);
+        values = new ReadOnlyMemory<T>(result, 0, (int)valueCount);
     }
 
-    static T[] DecodeDictionaryIndexesWithNulls<T>(ReadOnlySpan<byte> dataPayload, int totalValueCount,
-        int physicalValueCount, Array dictionary, ReadOnlySpan<byte> definitionPayload)
+    static T[] DecodeDictionaryIndexesWithNulls<T>(ReadOnlySpan<byte> dataPayload, uint totalValueCount,
+        uint physicalValueCount, Array dictionary, ReadOnlySpan<byte> definitionPayload)
     {
         var indexes = ReadRleBitPackedHybrid(dataPayload, physicalValueCount, hasBitWidthPrefix: true);
         var definitionLevels = ReadRleBitPackedHybrid(definitionPayload, totalValueCount, bitWidth: 1);
-        var result = new T[totalValueCount];
+        var result = new T[(int)totalValueCount];
         var valueIndex = 0;
         for (var i = 0; i < totalValueCount; i++)
         {
@@ -567,7 +596,7 @@ static class ColumnChunkReader
         return result;
     }
 
-    static void DecodeDictionaryIndexesIntoBuffer<T>(ReadOnlySpan<byte> payload, int valueCount, T[] dictionary,
+    static void DecodeDictionaryIndexesIntoBuffer<T>(ReadOnlySpan<byte> payload, uint valueCount, T[] dictionary,
         T[] destination)
     {
         if (valueCount == 0)
@@ -585,7 +614,7 @@ static class ColumnChunkReader
                 var byteWidth = (bitWidth + 7) >> 3;
                 var dictionaryIndex = byteWidth == 0 ? 0 : ReadLittleEndian(ref payload, byteWidth);
                 var repeated = dictionary[dictionaryIndex];
-                var copyLength = Math.Min(runLength, valueCount - valueIndex);
+                var copyLength = (int)Math.Min((uint)runLength, valueCount - (uint)valueIndex);
                 destination.AsSpan(valueIndex, copyLength).Fill(repeated);
                 valueIndex += copyLength;
                 continue;
@@ -594,7 +623,7 @@ static class ColumnChunkReader
             var literalCount = checked((int)(header >> 1) * 8);
             var literalByteCount = ((literalCount * bitWidth) + 7) >> 3;
             var literalPayload = payload[..literalByteCount];
-            var literalCopyLength = Math.Min(literalCount, valueCount - valueIndex);
+            var literalCopyLength = (int)Math.Min((uint)literalCount, valueCount - (uint)valueIndex);
             DecodeDictionaryLiteralIndexes(literalPayload, bitWidth, dictionary, destination.AsSpan(valueIndex, literalCopyLength));
             valueIndex += literalCopyLength;
             payload = payload[literalByteCount..];
@@ -638,7 +667,7 @@ static class ColumnChunkReader
         return DecodeValues(bytes, column, header.ValueCount, header.Encoding, targetType);
     }
 
-    static Array DecodeValues(ReadOnlySpan<byte> payload, Column column, int valueCount, EncodingKind encoding,
+    static Array DecodeValues(ReadOnlySpan<byte> payload, Column column, uint valueCount, EncodingKind encoding,
         Type targetType)
     {
         switch (encoding)
@@ -660,7 +689,7 @@ static class ColumnChunkReader
         }
     }
 
-    static Array DecodePlain(ReadOnlySpan<byte> payload, Column column, int valueCount, Type targetType)
+    static Array DecodePlain(ReadOnlySpan<byte> payload, Column column, uint valueCount, Type targetType)
         => column.PhysicalType switch
         {
             ParquetPhysicalType.Boolean => DecodePlainBoolean(payload, valueCount, targetType),
@@ -675,22 +704,22 @@ static class ColumnChunkReader
             _ => throw new NotSupportedException($"Physical type '{column.PhysicalType}' is not supported.")
         };
 
-    static Array DecodePlainBoolean(ReadOnlySpan<byte> payload, int valueCount, Type targetType)
+    static Array DecodePlainBoolean(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
     {
         if (targetType != typeof(bool))
             throw new InvalidOperationException($"Boolean column cannot be projected to '{targetType}'.");
 
-        var values = new bool[valueCount];
+        var values = new bool[(int)valueCount];
         for (var i = 0; i < valueCount; i++)
             values[i] = ((payload[i >> 3] >> (i & 7)) & 1) != 0;
         return values;
     }
 
-    static Array DecodePlainInt32(ReadOnlySpan<byte> payload, int valueCount, LogicalType? logicalType, Type targetType)
+    static Array DecodePlainInt32(ReadOnlySpan<byte> payload, uint valueCount, LogicalType? logicalType, Type targetType)
     {
         if (targetType == typeof(int))
         {
-            var values = new int[valueCount];
+            var values = new int[(int)valueCount];
             for (var i = 0; i < valueCount; i++)
                 values[i] = BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4));
             return values;
@@ -734,7 +763,7 @@ static class ColumnChunkReader
         throw new InvalidOperationException($"Int32 column cannot be projected to '{targetType}'.");
     }
 
-    static Array DecodePlainInt64(ReadOnlySpan<byte> payload, int valueCount, LogicalType? logicalType, Type targetType)
+    static Array DecodePlainInt64(ReadOnlySpan<byte> payload, uint valueCount, LogicalType? logicalType, Type targetType)
     {
         if (targetType == typeof(long))
         {
@@ -780,7 +809,7 @@ static class ColumnChunkReader
         throw new InvalidOperationException($"Int64 column cannot be projected to '{targetType}'.");
     }
 
-    static Array DecodePlainFloat(ReadOnlySpan<byte> payload, int valueCount, Type targetType)
+    static Array DecodePlainFloat(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
     {
         if (targetType != typeof(float))
             throw new InvalidOperationException($"Float column cannot be projected to '{targetType}'.");
@@ -794,7 +823,7 @@ static class ColumnChunkReader
         return values;
     }
 
-    static Array DecodePlainDouble(ReadOnlySpan<byte> payload, int valueCount, Type targetType)
+    static Array DecodePlainDouble(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
     {
         if (targetType != typeof(double))
             throw new InvalidOperationException($"Double column cannot be projected to '{targetType}'.");
@@ -808,7 +837,7 @@ static class ColumnChunkReader
         return values;
     }
 
-    static Array DecodePlainByteArray(ReadOnlySpan<byte> payload, int valueCount, Type targetType)
+    static Array DecodePlainByteArray(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
     {
         if (targetType == typeof(byte[]))
         {
@@ -836,7 +865,7 @@ static class ColumnChunkReader
         throw new InvalidOperationException($"Byte-array column cannot be projected to '{targetType}'.");
     }
 
-    static Array DecodeFixedLengthByteArray(ReadOnlySpan<byte> payload, int valueCount, int valueLength, Type targetType)
+    static Array DecodeFixedLengthByteArray(ReadOnlySpan<byte> payload, uint valueCount, int valueLength, Type targetType)
     {
         if (targetType != typeof(byte[]))
             throw new InvalidOperationException($"Fixed-length binary column cannot be projected to '{targetType}'.");
@@ -851,7 +880,7 @@ static class ColumnChunkReader
         return values;
     }
 
-    static Array DecodeBooleanRle(ReadOnlySpan<byte> payload, int valueCount, Type targetType)
+    static Array DecodeBooleanRle(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
     {
         if (targetType != typeof(bool))
             throw new InvalidOperationException($"Boolean column cannot be projected to '{targetType}'.");
@@ -863,7 +892,7 @@ static class ColumnChunkReader
         return values;
     }
 
-    static Array DecodeByteStreamSplit(ReadOnlySpan<byte> payload, Column column, int valueCount, Type targetType)
+    static Array DecodeByteStreamSplit(ReadOnlySpan<byte> payload, Column column, uint valueCount, Type targetType)
     {
         switch (column.PhysicalType)
         {
@@ -871,34 +900,34 @@ static class ColumnChunkReader
             {
                 if (targetType == typeof(int))
                 {
-                    var values = new int[valueCount];
+                    var values = new int[(int)valueCount];
                     for (var i = 0; i < valueCount; i++)
-                        values[i] = payload[i] | (payload[valueCount + i] << 8) | (payload[(valueCount * 2) + i] << 16) |
-                            (payload[(valueCount * 3) + i] << 24);
+                        values[i] = payload[i] | (payload[(int)valueCount + i] << 8) | (payload[((int)valueCount * 2) + i] << 16) |
+                            (payload[((int)valueCount * 3) + i] << 24);
                     return values;
                 }
                 if (targetType == typeof(byte))
                 {
                     var values = new byte[valueCount];
                     for (var i = 0; i < valueCount; i++)
-                        values[i] = (byte)(payload[i] | (payload[valueCount + i] << 8) | (payload[(valueCount * 2) + i] << 16) |
-                            (payload[(valueCount * 3) + i] << 24));
+                        values[i] = (byte)(payload[i] | (payload[(int)valueCount + i] << 8) | (payload[((int)valueCount * 2) + i] << 16) |
+                            (payload[((int)valueCount * 3) + i] << 24));
                     return values;
                 }
                 if (targetType == typeof(ushort))
                 {
                     var values = new ushort[valueCount];
                     for (var i = 0; i < valueCount; i++)
-                        values[i] = unchecked((ushort)(payload[i] | (payload[valueCount + i] << 8) |
-                            (payload[(valueCount * 2) + i] << 16) | (payload[(valueCount * 3) + i] << 24)));
+                        values[i] = unchecked((ushort)(payload[i] | (payload[(int)valueCount + i] << 8) |
+                            (payload[((int)valueCount * 2) + i] << 16) | (payload[((int)valueCount * 3) + i] << 24)));
                     return values;
                 }
                 if (targetType == typeof(uint))
                 {
                     var values = new uint[valueCount];
                     for (var i = 0; i < valueCount; i++)
-                        values[i] = unchecked((uint)(payload[i] | (payload[valueCount + i] << 8) |
-                            (payload[(valueCount * 2) + i] << 16) | (payload[(valueCount * 3) + i] << 24)));
+                        values[i] = unchecked((uint)(payload[i] | (payload[(int)valueCount + i] << 8) |
+                            (payload[((int)valueCount * 2) + i] << 16) | (payload[((int)valueCount * 3) + i] << 24)));
                     return values;
                 }
                 throw new InvalidOperationException($"Int32 column cannot be projected to '{targetType}'.");
@@ -912,7 +941,7 @@ static class ColumnChunkReader
                     {
                         ulong value = 0;
                         for (var lane = 0; lane < 8; lane++)
-                            value |= (ulong)payload[(lane * valueCount) + i] << (lane * 8);
+                            value |= (ulong)payload[((int)valueCount * lane) + i] << (lane * 8);
                         values[i] = unchecked((long)value);
                     }
                     return values;
@@ -924,7 +953,7 @@ static class ColumnChunkReader
                     {
                         ulong value = 0;
                         for (var lane = 0; lane < 8; lane++)
-                            value |= (ulong)payload[(lane * valueCount) + i] << (lane * 8);
+                            value |= (ulong)payload[((int)valueCount * lane) + i] << (lane * 8);
                         values[i] = value;
                     }
                     return values;
@@ -1021,7 +1050,7 @@ static class ColumnChunkReader
             values[i] = dataBytes.Slice(offset, lengths[i]).ToArray();
             offset += lengths[i];
         }
-        return targetType == typeof(byte[]) ? values : DecodePlainByteArray(ToLengthPrefixed(values), values.Length, targetType);
+        return targetType == typeof(byte[]) ? values : DecodePlainByteArray(ToLengthPrefixed(values), (uint)values.Length, targetType);
     }
 
     static Array DecodeDeltaByteArray(ReadOnlySpan<byte> payload, Type targetType)
@@ -1050,7 +1079,7 @@ static class ColumnChunkReader
             values[i] = value;
         }
 
-        return targetType == typeof(byte[]) ? values : DecodePlainByteArray(ToLengthPrefixed(values), values.Length, targetType);
+        return targetType == typeof(byte[]) ? values : DecodePlainByteArray(ToLengthPrefixed(values), (uint)values.Length, targetType);
     }
 
     static byte[] ToLengthPrefixed(byte[][] values)
@@ -1091,7 +1120,7 @@ static class ColumnChunkReader
     }
 
     static ReadOnlyMemory<T> DecodeValuesWithNullExpansion<T>(ReadOnlySpan<byte> dataPayload,
-        ReadOnlySpan<byte> definitionPayload, Column column, int totalValueCount, int physicalValueCount,
+        ReadOnlySpan<byte> definitionPayload, Column column, uint totalValueCount, uint physicalValueCount,
         EncodingKind encoding, bool hasNulls)
     {
         var physicalDecodeType = GetPhysicalDecodeType<T>();
@@ -1106,9 +1135,9 @@ static class ColumnChunkReader
         return ExpandWithDefinitionLevels<T>(physicalValues, definitionLevels, totalValueCount);
     }
 
-    static ReadOnlyMemory<T> ExpandAllPresent<T>(Array physicalValues, int valueCount)
+    static ReadOnlyMemory<T> ExpandAllPresent<T>(Array physicalValues, uint valueCount)
     {
-        var result = new T[valueCount];
+        var result = new T[(int)valueCount];
         if (typeof(T) == typeof(int?))
         {
             var src = (int[])physicalValues;
@@ -1198,12 +1227,12 @@ static class ColumnChunkReader
             for (var i = 0; i < valueCount; i++)
                 result[i] = (T)physicalValues.GetValue(i)!;
         }
-        return new ReadOnlyMemory<T>(result, 0, valueCount);
+        return new ReadOnlyMemory<T>(result, 0, (int)valueCount);
     }
 
-    static ReadOnlyMemory<T> ExpandWithDefinitionLevels<T>(Array physicalValues, int[] definitionLevels, int totalValueCount)
+    static ReadOnlyMemory<T> ExpandWithDefinitionLevels<T>(Array physicalValues, int[] definitionLevels, uint totalValueCount)
     {
-        var result = new T[totalValueCount];
+        var result = new T[(int)totalValueCount];
         var valueIndex = 0;
         if (typeof(T) == typeof(int?))
         {
@@ -1312,10 +1341,10 @@ static class ColumnChunkReader
                     result[i] = (T)physicalValues.GetValue(valueIndex++)!;
             }
         }
-        return new ReadOnlyMemory<T>(result, 0, totalValueCount);
+        return new ReadOnlyMemory<T>(result, 0, (int)totalValueCount);
     }
 
-    static int[] ReadRleBitPackedHybrid(ReadOnlySpan<byte> payload, int valueCount, bool hasBitWidthPrefix)
+    static int[] ReadRleBitPackedHybrid(ReadOnlySpan<byte> payload, uint valueCount, bool hasBitWidthPrefix)
     {
         if (payload.IsEmpty)
             return [];
@@ -1325,9 +1354,9 @@ static class ColumnChunkReader
         return ReadRleBitPackedHybrid(payload, valueCount, bitWidth);
     }
 
-    static int[] ReadRleBitPackedHybrid(ReadOnlySpan<byte> payload, int valueCount, int bitWidth)
+    static int[] ReadRleBitPackedHybrid(ReadOnlySpan<byte> payload, uint valueCount, int bitWidth)
     {
-        var values = new int[valueCount];
+        var values = new int[(int)valueCount];
         var valueIndex = 0;
         while (valueIndex < valueCount)
         {
@@ -1337,7 +1366,7 @@ static class ColumnChunkReader
                 var runLength = checked((int)(header >> 1));
                 var byteWidth = (bitWidth + 7) >> 3;
                 var repeated = byteWidth == 0 ? 0 : ReadLittleEndian(ref payload, byteWidth);
-                var copyLength = Math.Min(runLength, valueCount - valueIndex);
+                var copyLength = (int)Math.Min((uint)runLength, valueCount - (uint)valueIndex);
                 Array.Fill(values, repeated, valueIndex, copyLength);
                 valueIndex += copyLength;
                 continue;
@@ -1397,7 +1426,7 @@ static class ColumnChunkReader
             2 => BinaryPrimitives.ReadUInt16LittleEndian(payload),
             3 => payload[0] | (payload[1] << 8) | (payload[2] << 16),
             4 => unchecked((int)BinaryPrimitives.ReadUInt32LittleEndian(payload)),
-            _ => throw new InvalidDataException($"Unsupported RLE byte width '{byteWidth}'.")
+            _ => throw new CorruptParquetException($"Unsupported RLE byte width '{byteWidth}'.")
         };
         payload = payload[byteWidth..];
         return value;
@@ -1428,7 +1457,7 @@ static class ColumnChunkReader
         var buffer = new byte[expectedLength];
         var written = LZ4Codec.Decode(payload, buffer);
         if (written != expectedLength)
-            throw new InvalidDataException("LZ4 decompression did not produce the expected byte count.");
+            throw new CorruptParquetException("LZ4 decompression did not produce the expected byte count.");
         return buffer;
     }
 
@@ -1438,7 +1467,7 @@ static class ColumnChunkReader
         var buffer = new byte[expectedLength];
         var written = decompressor.Unwrap(payload, buffer);
         if (written != expectedLength)
-            throw new InvalidDataException("Zstd decompression did not produce the expected byte count.");
+            throw new CorruptParquetException("Zstd decompression did not produce the expected byte count.");
         return buffer;
     }
 
@@ -1447,7 +1476,7 @@ static class ColumnChunkReader
         var buffer = new byte[expectedLength];
         var written = SnappyCodec.Decompress(payload, buffer);
         if (written != expectedLength)
-            throw new InvalidDataException("Snappy decompression did not produce the expected byte count.");
+            throw new CorruptParquetException("Snappy decompression did not produce the expected byte count.");
         return buffer;
     }
 }
