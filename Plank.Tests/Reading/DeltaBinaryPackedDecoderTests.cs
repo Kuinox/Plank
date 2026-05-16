@@ -36,7 +36,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
         payload[^1] = 0xCC;
 
         var decoded = DeltaBinaryPackedDecoder.ReadInt32(payload);
-        var consumed = DeltaBinaryPackedDecoder.ReadConsumedByteCount(payload);
+        var (_, consumed) = DeltaBinaryPackedDecoder.ReadUInt32WithConsumedBytes(payload);
 
         if (!decoded.SequenceEqual(values))
             throw new InvalidOperationException("Delta binary packed values did not round-trip.");

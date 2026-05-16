@@ -1098,8 +1098,7 @@ static class ColumnChunkReader
 
     static Array DecodeDeltaLengthByteArray(ReadOnlySpan<byte> payload, Type targetType)
     {
-        var lengths = DeltaBinaryPackedDecoder.ReadUInt32(payload);
-        var consumedLengthBytes = DeltaBinaryPackedDecoder.ReadConsumedByteCount(payload);
+        var (lengths, consumedLengthBytes) = DeltaBinaryPackedDecoder.ReadUInt32WithConsumedBytes(payload);
         var remaining = payload[consumedLengthBytes..];
         var values = new byte[lengths.Length][];
         for (var i = 0; i < lengths.Length; i++)
@@ -1116,11 +1115,9 @@ static class ColumnChunkReader
 
     static Array DecodeDeltaByteArray(ReadOnlySpan<byte> payload, Type targetType)
     {
-        var prefixLengths = DeltaBinaryPackedDecoder.ReadUInt32(payload);
-        var prefixConsumed = DeltaBinaryPackedDecoder.ReadConsumedByteCount(payload);
+        var (prefixLengths, prefixConsumed) = DeltaBinaryPackedDecoder.ReadUInt32WithConsumedBytes(payload);
         var suffixPayload = payload[prefixConsumed..];
-        var suffixLengths = DeltaBinaryPackedDecoder.ReadUInt32(suffixPayload);
-        var suffixConsumed = DeltaBinaryPackedDecoder.ReadConsumedByteCount(suffixPayload);
+        var (suffixLengths, suffixConsumed) = DeltaBinaryPackedDecoder.ReadUInt32WithConsumedBytes(suffixPayload);
         var suffixBytes = suffixPayload[suffixConsumed..];
 
         if (suffixLengths.Length != prefixLengths.Length)
