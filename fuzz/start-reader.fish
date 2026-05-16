@@ -30,11 +30,11 @@ or exit 1
 rm -rf $OUT
 mkdir -p $OUT
 
-# Launch
+# Launch workers with auto-restart (fork server crashes are expected with Fuzzer.Run)
 echo "==> Starting 24 workers..."
 for i in (seq 1 23)
     set name (string pad -w 2 -c 0 $i)
-    AFL_SKIP_BIN_CHECK=1 afl-fuzz -b $i -i $CORPUS -o $OUT -t 1100 -S worker-$name -- $BIN &
+    fish -c "while true; env AFL_SKIP_BIN_CHECK=1 afl-fuzz -b $i -i $CORPUS -o $OUT -t 1100 -S worker-$name -- $BIN; sleep 2; end" &
     disown
 end
 
