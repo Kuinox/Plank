@@ -14,11 +14,12 @@ if test -d $OUT
     and echo "==> Corpus updated: "(count $CORPUS/*)" seeds"
 end
 
-# Kill any running fuzzers
+# Kill any running fuzzers and their target children
 if pgrep -f afl-fuzz > /dev/null
     echo "==> Killing existing fuzzers..."
     pkill -9 -f afl-fuzz
-    sleep 1
+    pkill -9 -f Plank.Fuzzing.Reader.Target
+    sleep 2
 end
 
 # Build
