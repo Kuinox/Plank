@@ -63,7 +63,7 @@ internal sealed class RowGroupWriterContractTests
         rowGroup.Write(col); // completes the row group
 
         col.Serialize([4, 5, 6]);
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await Task.Run(() => rowGroup.Write(col)).ConfigureAwait(false));
     }
 
