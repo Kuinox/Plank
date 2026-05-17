@@ -11,8 +11,10 @@ public readonly struct ColumnPageEnumerable<T>
     readonly ColumnPageReadState<T> _state;
     readonly IParquetBufferPool _bufferPool;
 
+    readonly ulong _rowCount;
+
     internal ColumnPageEnumerable(IParquetReadSource source, Column column, InternalColumnChunkMetadata columnChunk,
-        ColumnPageReadState<T> state, IParquetBufferPool bufferPool)
+        ColumnPageReadState<T> state, IParquetBufferPool bufferPool, ulong rowCount)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(column);
@@ -24,10 +26,11 @@ public readonly struct ColumnPageEnumerable<T>
         _columnChunk = columnChunk;
         _state = state;
         _bufferPool = bufferPool;
+        _rowCount = rowCount;
     }
 
     public Enumerator GetEnumerator()
-        => new(_source, _column, _columnChunk, _state, _bufferPool);
+        => new(_source, _column, _columnChunk, _state, _bufferPool, _rowCount);
 
     public struct Enumerator : IDisposable
     {
@@ -39,8 +42,10 @@ public readonly struct ColumnPageEnumerable<T>
         int _offset;
         bool _readBuffer;
 
+        readonly ulong _rowCount;
+
         internal Enumerator(IParquetReadSource source, Column column, InternalColumnChunkMetadata columnChunk,
-            ColumnPageReadState<T> state, IParquetBufferPool bufferPool)
+            ColumnPageReadState<T> state, IParquetBufferPool bufferPool, ulong rowCount)
         {
             ArgumentNullException.ThrowIfNull(source);
             ArgumentNullException.ThrowIfNull(column);
@@ -52,6 +57,7 @@ public readonly struct ColumnPageEnumerable<T>
             _columnChunk = columnChunk;
             _state = state;
             _bufferPool = bufferPool;
+            _rowCount = rowCount;
             _offset = 0;
             _readBuffer = false;
             _state.Dictionary = null;
@@ -68,7 +74,7 @@ public readonly struct ColumnPageEnumerable<T>
                 _readBuffer = true;
             }
             if (!ColumnChunkReader.TryReadNextDataPage(_state.Buffer!, _state.BufferLength, ref _offset, _column, _columnChunk,
-                    ref _state.Dictionary, ref _state.DictionaryBuffer, ref _state.ValuesBuffer, out var values, out var encoding))
+                    _rowCount, ref _state.Dictionary, ref _state.DictionaryBuffer, ref _state.ValuesBuffer, out var values, out var encoding))
                 return false;
 
             Current = new ColumnPage<T>(values, encoding);

@@ -101,8 +101,11 @@ ref struct CompactProtocolReader
         return (count, type);
     }
 
-    internal void Skip(CompactProtocolType type, bool? inlineBool = null)
+    internal void Skip(CompactProtocolType type, bool? inlineBool = null, int remainingDepth = 64)
     {
+        if (remainingDepth <= 0)
+            throw new CorruptParquetException("Compact protocol nesting depth exceeds maximum.");
+
         switch (type)
         {
             case CompactProtocolType.BooleanTrue:
@@ -133,7 +136,7 @@ ref struct CompactProtocolReader
             {
                 var previousFieldId = 0;
                 while (TryReadFieldHeader(ref previousFieldId, out _, out var nestedType, out var nestedInlineBool))
-                    Skip(nestedType, nestedInlineBool);
+                    Skip(nestedType, nestedInlineBool, remainingDepth - 1);
                 return;
             }
             case CompactProtocolType.List:
@@ -141,7 +144,7 @@ ref struct CompactProtocolReader
             {
                 var (count, elementType) = ReadListHeader();
                 for (var i = 0U; i < count; i++)
-                    Skip(elementType);
+                    Skip(elementType, remainingDepth: remainingDepth - 1);
                 return;
             }
             default:

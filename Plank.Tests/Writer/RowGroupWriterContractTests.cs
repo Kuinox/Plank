@@ -49,6 +49,25 @@ internal sealed class RowGroupWriterContractTests
     }
 
     [Test]
+    public async Task ThrowsWhenWritingAfterRowGroupIsComplete()
+    {
+        using var stream = new MemoryStream();
+        var schema = new ParquetSchema([
+            new PlankColumn("A", ParquetPhysicalType.Int32, ColumnOptions.Default)
+        ]);
+        var writer = schema.CreateWriter(stream);
+        var rowGroup = writer.StartRowGroup();
+        var col = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+
+        col.Serialize([1, 2, 3]);
+        rowGroup.Write(col); // completes the row group
+
+        col.Serialize([4, 5, 6]);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Task.Run(() => rowGroup.Write(col)).ConfigureAwait(false));
+    }
+
+    [Test]
     public async Task ThrowsWhenRleEncodingIsUsedForNonBooleanColumn()
     {
         Assert.ThrowsAsync<NotSupportedException>(async () =>
@@ -81,6 +100,34 @@ internal sealed class RowGroupWriterContractTests
         writer.CloseFile();
 
         Assert.That(stream.Length, Is.GreaterThan(0));
+    }
+
+    [Test]
+    [Explicit]
+    public void GenerateReadingFixtures()
+    {
+        var fixturesDir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Reading", "Fixtures");
+
+        // DictionaryLiteralRunBeforeRleRun: 8 distinct values (literal group) then 16 repeats (RLE run)
+        // Schema selector byte 0x04 = schema 4 (int32 RleDictionary) prepended so the fixture matches
+        // the fuzz-format used by ParquetReaderRobustnessTests.
+        var schema = new ParquetSchema([
+            new PlankColumn("val", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream);
+        var rowGroup = writer.StartRowGroup();
+        var col = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+        col.Serialize([1, 2, 3, 4, 5, 6, 7, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+        rowGroup.Write(col);
+        writer.CloseFile();
+
+        var parquet = stream.ToArray();
+        var withSelector = new byte[1 + parquet.Length];
+        withSelector[0] = 0x04; // schema 4 = int32 RleDictionary
+        parquet.CopyTo(withSelector, 1);
+        File.WriteAllBytes(Path.Combine(fixturesDir, "DictionaryLiteralRunBeforeRleRun.parquet"), withSelector);
     }
 
     sealed class NonClosingMemoryStream : MemoryStream

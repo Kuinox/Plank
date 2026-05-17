@@ -46,6 +46,10 @@ public sealed class RowGroupWriter
             throw new InvalidOperationException(
                 "SerializedColumn has no serialized data. Call serialized.Serialize(values) before Write(...).");
 
+        if (_nextColumnOrdinal == (uint)_writer.ColumnCount)
+            throw new InvalidOperationException(
+                "All columns for this row group have already been written. Call writer.StartRowGroup() to start a new row group.");
+
         if (state.ColumnOrdinal != _nextColumnOrdinal)
         {
             var expectedColumn = _writer.ColumnsByOrdinal[(int)_nextColumnOrdinal];

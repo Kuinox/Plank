@@ -5,22 +5,13 @@ set BIN $ROOT/Plank.Fuzzing.Reader.Target/bin/Release/net10.0/Plank.Fuzzing.Read
 set CORPUS $ROOT/fuzz/reader-corpus
 set OUT $ROOT/fuzz/reader-findings
 
-# --oop flag: run workers in OutOfProcess mode too (default: inline/fast)
-set oop 0
-if contains -- --oop $argv
-    set oop 1
-    echo "==> Mode: OutOfProcess everywhere (stable)"
-else
+# --inline flag: run workers in inline/fast mode (default: OOP everywhere)
+set oop 1
+if contains -- --inline $argv
+    set oop 0
     echo "==> Mode: main=OOP (stable), workers=inline/fast (auto-restart on crash)"
-end
-
-# Preserve queue into corpus before nuking
-if test -d $OUT
-    echo "==> Minimizing existing queue into corpus..."
-    afl-cmin -i $OUT -o /tmp/afl-cmin-reader -t 1100 -- $BIN
-    and cp /tmp/afl-cmin-reader/* $CORPUS/
-    and rm -rf /tmp/afl-cmin-reader
-    and echo "==> Corpus updated: "(count $CORPUS/*)" seeds"
+else
+    echo "==> Mode: OutOfProcess everywhere (crash-safe)"
 end
 
 # Kill any running fuzzers and orphaned target processes
@@ -35,13 +26,30 @@ dotnet build -c Release $ROOT/Plank.Fuzzing.Reader.Target/Plank.Fuzzing.Reader.T
   --verbosity minimal 2>&1 | grep -v "warning NU\|up-to-date"
 or exit 1
 
-# Fresh output dir
-rm -rf $OUT
+# Preserve queue into corpus before nuking
+if test -d $OUT
+    echo "==> Minimizing existing queue into corpus..."
+    rm -rf /tmp/afl-all-queues /tmp/afl-cmin-reader
+    mkdir -p /tmp/afl-all-queues
+    find $OUT -path "*/queue/id:*" -exec cp {} /tmp/afl-all-queues/ \;
+    set queue_count (find /tmp/afl-all-queues -maxdepth 1 -type f | wc -l | string trim)
+    if test $queue_count -gt 0
+        echo "==> Found $queue_count queue items across all workers"
+        env AFL_SKIP_BIN_CHECK=1 AFL_NO_FORKSRV=1 FUZZ_SINGLE=1 afl-cmin.bash -T all -i /tmp/afl-all-queues -o /tmp/afl-cmin-reader -t 1100 -- $BIN
+        or exit 1
+        echo "==> cmin kept "(count /tmp/afl-cmin-reader/*)" files"
+        rm -rf /tmp/afl-cmin-reader /tmp/afl-all-queues
+    else
+        echo "==> No queue items found, skipping minimization"
+        rm -rf /tmp/afl-all-queues
+    end
+    rm -rf $OUT
+end
 mkdir -p $OUT
 
-set worker_env "AFL_SKIP_BIN_CHECK=1"
+set worker_env "AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1"
 if test $oop -eq 1
-    set worker_env "AFL_SKIP_BIN_CHECK=1 FUZZ_OOP=1"
+    set worker_env "AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 FUZZ_OOP=1"
 end
 
 # Workers with auto-restart
@@ -54,7 +62,7 @@ end
 
 # Main always runs OOP so it never crashes and keeps coordinating
 while true
-    env AFL_SKIP_BIN_CHECK=1 FUZZ_OOP=1 afl-fuzz -b 0 -i $CORPUS -o $OUT -t 1100 -M main -- $BIN
+    env AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 FUZZ_OOP=1 afl-fuzz -b 0 -i $CORPUS -o $OUT -t 1100 -M main -- $BIN
     echo "==> main crashed, restarting in 2s..."
     sleep 2
 end
