@@ -96,19 +96,21 @@ unsafe static partial class ZlibNative
         internal uint Reserved;
     }
 
-    [LibraryImport(LibraryName, EntryPoint = "zlibVersion")]
-    internal static partial IntPtr GetVersion();
+    // Replaced LibraryImport (source-generated) with DllImport (static) for Stryker worktree
+    // — LibraryImportGenerator requires .NET 10 Immutable Collections which Stryker's Roslyn can't load.
+    [DllImport(LibraryName, EntryPoint = "zlibVersion")]
+    internal static extern IntPtr GetVersion();
 
-    [LibraryImport(LibraryName, EntryPoint = "deflateInit2_")]
-    internal static partial int DeflateInit2(void* stream, int level, int method, int windowBits, int memoryLevel,
+    [DllImport(LibraryName, EntryPoint = "deflateInit2_")]
+    internal static extern int DeflateInit2(void* stream, int level, int method, int windowBits, int memoryLevel,
         int strategy, byte* version, int streamSize);
 
-    [LibraryImport(LibraryName, EntryPoint = "deflate")]
-    internal static partial int Deflate(void* stream, int flushMode);
+    [DllImport(LibraryName, EntryPoint = "deflate")]
+    internal static extern int Deflate(void* stream, int flushMode);
 
-    [LibraryImport(LibraryName, EntryPoint = "deflateReset")]
-    internal static partial int DeflateReset(void* stream);
+    [DllImport(LibraryName, EntryPoint = "deflateReset")]
+    internal static extern int DeflateReset(void* stream);
 
-    [LibraryImport(LibraryName, EntryPoint = "deflateEnd")]
-    internal static partial int DeflateEnd(void* stream);
+    [DllImport(LibraryName, EntryPoint = "deflateEnd")]
+    internal static extern int DeflateEnd(void* stream);
 }

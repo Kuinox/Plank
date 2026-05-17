@@ -13,8 +13,8 @@ internal sealed class ReusableDictionaryStateTests
         var first = state.GetOrAddIndex(new string("same"));
         var second = state.GetOrAddIndex(new string("same"));
 
-        await Assert.That(second).IsEqualTo(first);
-        await Assert.That(state.Count).IsEqualTo(1);
+        ClassicAssert.AreEqual(first, second);
+        ClassicAssert.AreEqual(1, state.Count);
     }
 
     [Test]

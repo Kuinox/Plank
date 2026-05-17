@@ -23,7 +23,7 @@ internal sealed class RowGroupWriterContractTests
         second.Serialize([1, 2]);
         first.Serialize([3, 4]);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await Task.Run(() => rowGroup.Write(second)).ConfigureAwait(false));
     }
 
@@ -44,7 +44,7 @@ internal sealed class RowGroupWriterContractTests
         second.Serialize([4, 5]);
 
         rowGroup.Write(first);
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await Task.Run(() => rowGroup.Write(second)).ConfigureAwait(false));
     }
 
@@ -63,14 +63,14 @@ internal sealed class RowGroupWriterContractTests
         rowGroup.Write(col); // completes the row group
 
         col.Serialize([4, 5, 6]);
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await Task.Run(() => rowGroup.Write(col)).ConfigureAwait(false));
     }
 
     [Test]
     public async Task ThrowsWhenRleEncodingIsUsedForNonBooleanColumn()
     {
-        await Assert.ThrowsAsync<NotSupportedException>(async () =>
+        Assert.ThrowsAsync<NotSupportedException>(async () =>
             await Task.Run(() => new PlankColumn("A", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Rle)))).ConfigureAwait(false));
     }
@@ -78,7 +78,7 @@ internal sealed class RowGroupWriterContractTests
     [Test]
     public async Task ThrowsWhenBitPackedEncodingIsUsedForDataColumn()
     {
-        await Assert.ThrowsAsync<NotSupportedException>(async () =>
+        Assert.ThrowsAsync<NotSupportedException>(async () =>
             await Task.Run(() => new PlankColumn("A", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.BitPacked)))).ConfigureAwait(false));
     }
@@ -99,7 +99,7 @@ internal sealed class RowGroupWriterContractTests
         rowGroup.Write(serialized);
         writer.CloseFile();
 
-        await Assert.That(stream.Length).IsGreaterThan(0);
+        Assert.That(stream.Length, Is.GreaterThan(0));
     }
 
     [Test]

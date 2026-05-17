@@ -25,8 +25,8 @@ internal sealed class GeneratedRowReaderE2ETests
                 AssertUnprojectedDefaultValueThrows(row);
             }
 
-            await Assert.That(ids).IsEquivalentTo([10UL, 20UL, 30UL, 40UL]);
-            await Assert.That(tags).IsEquivalentTo(["a", null, "c", "d"]);
+            CollectionAssert.AreEquivalent(new ulong?[] {10UL, 20UL, 30UL, 40UL}, ids);
+            CollectionAssert.AreEquivalent(new string?[] {"a", null, "c", "d"}, tags);
         }
         finally
         {
@@ -56,7 +56,7 @@ internal sealed class GeneratedRowReaderE2ETests
                 defaultValues.Add(row.DefaultValue);
             }
 
-            await Assert.That(defaultValues).IsEquivalentTo([1U, 2U, 3U, 4U]);
+            CollectionAssert.AreEquivalent(new[] {1U, 2U, 3U, 4U}, defaultValues);
             AssertByteArrays(payloads, [[1, 2], [3], [4, 5, 6], [7]]);
         }
         finally

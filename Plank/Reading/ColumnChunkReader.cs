@@ -10,6 +10,7 @@ namespace Plank.Reading;
 static class ColumnChunkReader
 {
     static readonly Encoding Utf8 = new UTF8Encoding(false, true);
+    static readonly int UnixEpochDayNumber = new DateOnly(1970, 1, 1).DayNumber;
 
     internal static int ReadChunkBuffer(IParquetReadSource source, InternalColumnChunkMetadata columnChunk, ref byte[]? buffer,
         IParquetBufferPool bufferPool)
@@ -270,7 +271,7 @@ static class ColumnChunkReader
             for (var i = 0; i < valueCount; i++)
             {
                 var days = BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4));
-                typed[i] = DateOnly.FromDayNumber(days);
+                typed[i] = DateOnly.FromDayNumber(UnixEpochDayNumber + days);
             }
             values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
@@ -828,7 +829,7 @@ static class ColumnChunkReader
             for (var i = 0; i < valueCount; i++)
             {
                 var days = BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4));
-                values[i] = DateOnly.FromDayNumber(days);
+                values[i] = DateOnly.FromDayNumber(UnixEpochDayNumber + days);
             }
             return values;
         }
