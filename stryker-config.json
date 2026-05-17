@@ -3,7 +3,7 @@
     "solution": "Plank.sln",
     "project": "Plank/Plank.csproj",
     "test-projects": [
-      "Plank.StrykerTests/Plank.StrykerTests.csproj"
+      "Plank.Tests/Plank.Tests.csproj"
     ],
     "reporters": ["html", "json", "progress"],
     "report-file-name": "mutation-report",

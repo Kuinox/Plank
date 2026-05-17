@@ -12,7 +12,7 @@ internal sealed class PlankReaderFuzzTargetTests
                     .Select(Path.GetFileNameWithoutExtension)!;
 
     [Test]
-    [MethodDataSource(nameof(FuzzFixtures))]
+    [TestCaseSource(nameof(FuzzFixtures))]
     public void DoesNotCrash(string fixture)
         => PlankReaderFuzzTarget.Execute(
             File.ReadAllBytes(Path.Combine(FixturesDir, fixture + ".parquet")));

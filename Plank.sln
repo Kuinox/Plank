@@ -26,8 +26,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Fuzzing.Target", "Pla
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Fuzzing.Reader.Target", "Plank.Fuzzing.Reader.Target\Plank.Fuzzing.Reader.Target.csproj", "{F49E820C-A458-486D-ABDC-DB28CED268F8}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.StrykerTests", "Plank.StrykerTests\Plank.StrykerTests.csproj", "{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -182,18 +180,6 @@ Global
 		{F49E820C-A458-486D-ABDC-DB28CED268F8}.Release|x64.Build.0 = Release|Any CPU
 		{F49E820C-A458-486D-ABDC-DB28CED268F8}.Release|x86.ActiveCfg = Release|Any CPU
 		{F49E820C-A458-486D-ABDC-DB28CED268F8}.Release|x86.Build.0 = Release|Any CPU
-		{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}.Debug|x64.Build.0 = Debug|Any CPU
-		{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}.Debug|x86.Build.0 = Debug|Any CPU
-		{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}.Release|Any CPU.Build.0 = Release|Any CPU
-		{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}.Release|x64.ActiveCfg = Release|Any CPU
-		{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}.Release|x64.Build.0 = Release|Any CPU
-		{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}.Release|x86.ActiveCfg = Release|Any CPU
-		{7A0ECEF3-443A-4267-BD2F-61E5AD692B8B}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

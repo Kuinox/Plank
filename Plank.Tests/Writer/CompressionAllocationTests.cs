@@ -3,7 +3,7 @@ using Plank.Writing.Compression;
 
 namespace Plank.Tests.Writer;
 
-[NotInParallel]
+[NonParallelizable]
 internal sealed class CompressionAllocationTests
 {
     static readonly CompressionKind[] _compressionKinds =
