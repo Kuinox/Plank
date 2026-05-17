@@ -1,0 +1,19 @@
+{
+  "stryker-config": {
+    "solution": "Plank.sln",
+    "project": "Plank/Plank.csproj",
+    "test-projects": [
+      "Plank.StrykerTests/Plank.StrykerTests.csproj"
+    ],
+    "reporters": ["html", "json", "progress"],
+    "report-file-name": "mutation-report",
+    "mutation-level": "Standard",
+    "coverage-analysis": "perTest",
+    "ignore-mutations": ["string"],
+    "thresholds": {
+      "high": 80,
+      "low": 60,
+      "break": 0
+    }
+  }
+}
