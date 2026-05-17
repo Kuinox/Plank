@@ -33,52 +33,52 @@ public class RleBitPackingRunPatternTests
 
     // ──────────────── Exact run-length boundary at 8 ────────────────
 
-    [Fact]
+    [Test]
     public void Write_ExactlyEightInRun_FollowedByLiterals()
     {
         // [1, 0, 0, 0, 0, 0, 0, 0, 0, 2] — literal 1, then RLE of exactly 8 zeros, then literal 2
         // This exercises the runLength >= 8 threshold at line 40 with run=8
         var values = new int[] { 1, 0, 0, 0, 0, 0, 0, 0, 0, 2 };
         var encoded = Encode(values, 2);
-        Assert.True(encoded.Length > 0);
+        ClassicAssert.IsTrue(encoded.Length > 0);
         // Verify that 7-length run (should be literal) vs 8-length run (RLE) differ
         var encodedSeven = Encode(new int[] { 1, 0, 0, 0, 0, 0, 0, 0, 2 }, 2); // only 7 zeros
         // With 8 zeros → RLE encoding (more compact); with 7 → bit-packed
         // Just verify both produce valid (non-empty) output and differ in size
-        Assert.NotEqual(encoded.Length, encodedSeven.Length);
+        ClassicAssert.AreNotEqual(encoded.Length, encodedSeven.Length);
     }
 
-    [Fact]
+    [Test]
     public void Write_SevenInRun_IsNotRle()
     {
         // Run of 7 should not trigger RLE (threshold is >= 8)
         var sevenZeros = Encode(new int[] { 0, 0, 0, 0, 0, 0, 0 }, 1);
         var eightZeros = Encode(new int[] { 0, 0, 0, 0, 0, 0, 0, 0 }, 1);
         // 8 zeros uses RLE → shorter than bit-packing 7 zeros
-        Assert.True(eightZeros.Length <= sevenZeros.Length);
+        ClassicAssert.IsTrue(eightZeros.Length <= sevenZeros.Length);
     }
 
-    [Fact]
+    [Test]
     public void Write_LiteralsFollowedByExact8Run_Correct()
     {
         // Literals [1,2,3] then 8 zeros — exercises inner while loop at line 37-54
         var values = new int[] { 1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 4 };
         var encoded = Encode(values, 4);
-        Assert.True(encoded.Length > 0);
+        ClassicAssert.IsTrue(encoded.Length > 0);
     }
 
-    [Fact]
+    [Test]
     public void Write_LiteralsFollowedByNineRun_Correct()
     {
         // Literals [1,2,3] then 9 zeros — run > 8 which pads literals to 8-alignment
         var values = new int[] { 1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4 };
         var encoded = Encode(values, 4);
-        Assert.True(encoded.Length > 0);
+        ClassicAssert.IsTrue(encoded.Length > 0);
     }
 
     // ──────────────── Partial byte at end of literal group (line 341) ────────────────
 
-    [Fact]
+    [Test]
     public void Write_ThreeLiterals_PartialBytePacked()
     {
         // 3 distinct values (no run >= 8) → partial byte at end
@@ -86,81 +86,81 @@ public class RleBitPackingRunPatternTests
         var encoded = Encode(values, 2);
         // group_count = (3+7)>>3 = 1, byteCount = 1*2 = 2
         // header varint = ((1 << 1) | 1) = 3 → 1 byte; payload = 2 bytes; total = 3
-        Assert.Equal(3, encoded.Length);
+        ClassicAssert.AreEqual(3, encoded.Length);
     }
 
-    [Fact]
+    [Test]
     public void Write_NineLiterals_OneFullByteOnePartial()
     {
         // 9 distinct values → 1 full byte (values 0-7) + 1 partial byte (value 8)
         var values = new int[] { 0, 1, 2, 3, 4, 5, 6, 7, 8 };
         var encoded = Encode(values, 4);
         // group_count = (9+7)>>3 = 2, byteCount = 2*4 = 8
-        Assert.True(encoded.Length > 0);
+        ClassicAssert.IsTrue(encoded.Length > 0);
     }
 
-    [Fact]
+    [Test]
     public void Write_FiveLiterals_PartialBytePacked()
     {
         // 5 literals (not a multiple of 8) → partial byte at end
         var values = new int[] { 1, 0, 1, 0, 1 }; // these are < 8 runs each
         var encoded = Encode(values, 1);
-        Assert.True(encoded.Length > 0);
+        ClassicAssert.IsTrue(encoded.Length > 0);
     }
 
     // ──────────────── bitWidth = 32 mask (line 243) ────────────────
 
-    [Fact]
+    [Test]
     public void Write_BitWidth32_MaxValueMask()
     {
         // bitWidth=32 uses uint.MaxValue as mask
         var values = new int[] { int.MinValue, 0, int.MaxValue };
         var encoded = Encode(values, 32);
-        Assert.True(encoded.Length > 0);
+        ClassicAssert.IsTrue(encoded.Length > 0);
         // Each 32-bit value uses exactly 4 bytes; 3 values padded to 8 = 8 values × 4 bytes = 32 bytes for data
     }
 
-    [Fact]
+    [Test]
     public void Write_BitWidth16_SmallValues()
     {
         // bitWidth=16: mask = (1u << 16) - 1 = 0xFFFF
         var values = new int[] { 0, 1, 65535 }; // max 16-bit value
         var encoded = Encode(values, 16);
-        Assert.True(encoded.Length > 0);
+        ClassicAssert.IsTrue(encoded.Length > 0);
     }
 
     // ──────────────── Boolean line 82 (same logic as line 40 but for booleans) ────────────────
 
-    [Fact]
+    [Test]
     public void WriteBooleans_LiteralsThenExact8Run()
     {
         // [T, F, T, T, T, T, T, T, T, T, F] — 3 literals, then 8 trues, then 1 false
         var values = new bool[] { true, false, true, true, true, true, true, true, true, true, false };
         var encoded = EncodeBooleans(values);
-        Assert.True(encoded.Length > 0);
+        ClassicAssert.IsTrue(encoded.Length > 0);
     }
 
-    [Fact]
+    [Test]
     public void WriteBooleans_Exact8RunThenLiterals()
     {
         // 8 trues (RLE run), then alternating false/true literals
         var values = new bool[] { true, true, true, true, true, true, true, true, false, true };
         var encoded = EncodeBooleans(values);
-        Assert.True(encoded.Length > 0);
+        ClassicAssert.IsTrue(encoded.Length > 0);
     }
 
-    [Fact]
+    [Test]
     public void WriteBooleans_ThreeLiterals_PartialByte()
     {
         // 3 booleans → partial byte at end of group (line 335-347)
         var encoded = EncodeBooleans(new bool[] { true, false, true });
         // group_count = 1, but only 3 values
-        Assert.True(encoded.Length > 0);
+        ClassicAssert.IsTrue(encoded.Length > 0);
     }
 
     // ──────────────── Verified via Parquet roundtrip ────────────────
 
-    [Fact]
+    [Test]
     public void DictionaryEncoding_Exact8RunBoundary_Roundtrip()
     {
         // In dictionary encoding, the indexes are RLE/bit-packed
@@ -178,10 +178,10 @@ public class RleBitPackingRunPatternTests
         writer.CloseFile();
 
         var result = ReadAll<int>(ms.ToArray(), schema);
-        Assert.Equal(values, result);
+        ClassicAssert.AreEqual(values, result);
     }
 
-    [Fact]
+    [Test]
     public void DictionaryEncoding_SevenRunBoundary_Roundtrip()
     {
         // Run of 7 (not RLE, should be bit-packed)
@@ -194,10 +194,10 @@ public class RleBitPackingRunPatternTests
         col.Serialize(values);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<int>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(ms.ToArray(), schema));
     }
 
-    [Fact]
+    [Test]
     public void BooleanEncoding_Mixed_RoundTrip_ExactBoundaries()
     {
         // Tests RLE and bit-pack transitions for booleans (line 82 and 341)
@@ -217,10 +217,10 @@ public class RleBitPackingRunPatternTests
         col.Serialize(values);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<bool>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<bool>(ms.ToArray(), schema));
     }
 
-    [Fact]
+    [Test]
     public void BooleanEncoding_LiteralsWithPartialByte_Roundtrip()
     {
         // Tests partial-byte packing at line 335-347
@@ -234,7 +234,7 @@ public class RleBitPackingRunPatternTests
         col.Serialize(values);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<bool>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<bool>(ms.ToArray(), schema));
     }
 
     static T[] ReadAll<T>(byte[] data, ParquetSchema schema)

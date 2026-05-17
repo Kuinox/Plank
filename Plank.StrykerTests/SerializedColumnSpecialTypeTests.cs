@@ -48,51 +48,51 @@ public class SerializedColumnSpecialTypeTests
 
     // ──────────────── byte → Int32 ────────────────
 
-    [Fact]
+    [Test]
     public void Byte_Serialize_RoundTripAsInt32()
     {
         var schema = Int32Schema();
         var values = new byte[] { 0, 1, 128, 255, 42 };
         var data = WriteAndClose<byte>(schema, values);
         var result = ReadAll<int>(data, schema);
-        Assert.Equal(values.Select(b => (int)b).ToArray(), result);
+        ClassicAssert.AreEqual(values.Select(b => (int)b).ToArray(), result);
     }
 
-    [Fact]
+    [Test]
     public void NullableByte_Serialize_RoundTripAsNullableInt32()
     {
         var schema = OptionalInt32Schema();
         var values = new byte?[] { 1, null, 200, null, 5 };
         var data = WriteAndClose<byte?>(schema, values);
         var result = ReadAll<int?>(data, schema);
-        Assert.Equal(values.Select(b => b is { } v ? (int?)v : null).ToArray(), result);
+        ClassicAssert.AreEqual(values.Select(b => b is { } v ? (int?)v : null).ToArray(), result);
     }
 
     // ──────────────── ushort → Int32 ────────────────
 
-    [Fact]
+    [Test]
     public void UShort_Serialize_RoundTripAsInt32()
     {
         var schema = Int32Schema();
         var values = new ushort[] { 0, 1, 1000, 65535 };
         var data = WriteAndClose<ushort>(schema, values);
         var result = ReadAll<int>(data, schema);
-        Assert.Equal(values.Select(v => (int)v).ToArray(), result);
+        ClassicAssert.AreEqual(values.Select(v => (int)v).ToArray(), result);
     }
 
-    [Fact]
+    [Test]
     public void NullableUShort_Serialize_RoundTrip()
     {
         var schema = OptionalInt32Schema();
         var values = new ushort?[] { 100, null, 500 };
         var data = WriteAndClose<ushort?>(schema, values);
         var result = ReadAll<int?>(data, schema);
-        Assert.Equal([100, null, 500], result);
+        Assert.That(result, Is.EqualTo(new int?[] {100, null, 500}));
     }
 
     // ──────────────── uint → Int32 (unsigned) ────────────────
 
-    [Fact]
+    [Test]
     public void UInt32_Serialize_RoundTrip()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32, null,
@@ -101,14 +101,14 @@ public class SerializedColumnSpecialTypeTests
         var data = WriteAndClose<uint>(schema, values);
         // Reads back as int (bitwise same)
         var result = ReadAll<int>(data, schema);
-        Assert.Equal(values.Length, result.Length);
+        ClassicAssert.AreEqual(values.Length, result.Length);
         for (var i = 0; i < values.Length; i++)
-            Assert.Equal(unchecked((int)values[i]), result[i]);
+            ClassicAssert.AreEqual(unchecked((int)values[i]), result[i]);
     }
 
     // ──────────────── ulong → Int64 (unsigned) ────────────────
 
-    [Fact]
+    [Test]
     public void UInt64_Serialize_RoundTrip()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int64, null,
@@ -116,14 +116,14 @@ public class SerializedColumnSpecialTypeTests
         var values = new ulong[] { 0, 1, ulong.MaxValue / 2, 1_000_000_000L };
         var data = WriteAndClose<ulong>(schema, values);
         var result = ReadAll<long>(data, schema);
-        Assert.Equal(values.Length, result.Length);
+        ClassicAssert.AreEqual(values.Length, result.Length);
         for (var i = 0; i < values.Length; i++)
-            Assert.Equal(unchecked((long)values[i]), result[i]);
+            ClassicAssert.AreEqual(unchecked((long)values[i]), result[i]);
     }
 
     // ──────────────── DateOnly → Int32 ────────────────
 
-    [Fact]
+    [Test]
     public void DateOnly_Serialize_StoredAsDaysSinceEpoch()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32, null,
@@ -138,12 +138,12 @@ public class SerializedColumnSpecialTypeTests
         var data = WriteAndClose<DateOnly>(schema, values);
         var result = ReadAll<int>(data, schema);
         // Each DateOnly should be stored as day offset from Unix epoch
-        Assert.Equal(0, result[0]);
-        Assert.Equal(values[1].DayNumber - epoch.DayNumber, result[1]);
-        Assert.Equal(values[2].DayNumber - epoch.DayNumber, result[2]);
+        ClassicAssert.AreEqual(0, result[0]);
+        ClassicAssert.AreEqual(values[1].DayNumber - epoch.DayNumber, result[1]);
+        ClassicAssert.AreEqual(values[2].DayNumber - epoch.DayNumber, result[2]);
     }
 
-    [Fact]
+    [Test]
     public void NullableDateOnly_Serialize_RoundTrip()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32,
@@ -151,15 +151,15 @@ public class SerializedColumnSpecialTypeTests
         var values = new DateOnly?[] { new DateOnly(2024, 1, 1), null, new DateOnly(2000, 1, 1) };
         var data = WriteAndClose<DateOnly?>(schema, values);
         var result = ReadAll<int?>(data, schema);
-        Assert.Equal(3, result.Length);
-        Assert.NotNull(result[0]);
-        Assert.Null(result[1]);
-        Assert.NotNull(result[2]);
+        ClassicAssert.AreEqual(3, result.Length);
+        ClassicAssert.IsNotNull(result[0]);
+        ClassicAssert.IsNull(result[1]);
+        ClassicAssert.IsNotNull(result[2]);
     }
 
     // ──────────────── DateTime → Int64 (timestamp micros) ────────────────
 
-    [Fact]
+    [Test]
     public void DateTime_Serialize_StoredAsMicros()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int64, null,
@@ -168,12 +168,12 @@ public class SerializedColumnSpecialTypeTests
         var ts = new DateTime(2024, 3, 15, 12, 0, 0, DateTimeKind.Utc);
         var data = WriteAndClose<DateTime>(schema, [epoch, ts]);
         var result = ReadAll<long>(data, schema);
-        Assert.Equal(0L, result[0]); // epoch → 0 micros
+        ClassicAssert.AreEqual(0L, result[0]); // epoch → 0 micros
         var expectedMicros = (ts.Ticks - epoch.Ticks) / 10;
-        Assert.Equal(expectedMicros, result[1]);
+        ClassicAssert.AreEqual(expectedMicros, result[1]);
     }
 
-    [Fact]
+    [Test]
     public void NullableDateTime_Serialize_NullsPreserved()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int64,
@@ -182,14 +182,14 @@ public class SerializedColumnSpecialTypeTests
         var ts = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var data = WriteAndClose<DateTime?>(schema, [ts, null, ts]);
         var result = ReadAll<long?>(data, schema);
-        Assert.NotNull(result[0]);
-        Assert.Null(result[1]);
-        Assert.NotNull(result[2]);
+        ClassicAssert.IsNotNull(result[0]);
+        ClassicAssert.IsNull(result[1]);
+        ClassicAssert.IsNotNull(result[2]);
     }
 
     // ──────────────── TimeOnly → Int64 (time micros) ────────────────
 
-    [Fact]
+    [Test]
     public void TimeOnly_Serialize_StoredAsMicros()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int64, null,
@@ -198,14 +198,14 @@ public class SerializedColumnSpecialTypeTests
         var noon = new TimeOnly(12, 0, 0);
         var data = WriteAndClose<TimeOnly>(schema, [midnight, noon]);
         var result = ReadAll<long>(data, schema);
-        Assert.Equal(0L, result[0]); // midnight → 0 micros
+        ClassicAssert.AreEqual(0L, result[0]); // midnight → 0 micros
         var expectedMicros = noon.Ticks / 10L;
-        Assert.Equal(expectedMicros, result[1]);
+        ClassicAssert.AreEqual(expectedMicros, result[1]);
     }
 
     // ──────────────── HasPendingData / double Serialize guard ────────────────
 
-    [Fact]
+    [Test]
     public void Serialize_Twice_WithoutWrite_Throws()
     {
         var schema = Int32Schema();
@@ -218,7 +218,7 @@ public class SerializedColumnSpecialTypeTests
 
     // ──────────────── Serialize array overload ────────────────
 
-    [Fact]
+    [Test]
     public void Serialize_ArrayOverload_SameAsSpan()
     {
         var schema = Int32Schema();
@@ -229,12 +229,12 @@ public class SerializedColumnSpecialTypeTests
         col.Serialize(values); // T[] overload
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<int>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(ms.ToArray(), schema));
     }
 
     // ──────────────── WritePageIndexes path ────────────────
 
-    [Fact]
+    [Test]
     public void Int32_WithPageIndexes_StatisticsAssigned()
     {
         var schema = Int32Schema();
@@ -249,6 +249,6 @@ public class SerializedColumnSpecialTypeTests
         col.Serialize(values);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<int>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(ms.ToArray(), schema));
     }
 }

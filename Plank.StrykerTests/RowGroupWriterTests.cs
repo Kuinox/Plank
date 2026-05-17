@@ -43,7 +43,7 @@ public class RowGroupWriterTests
 
     // ──────────────── Row count validation ────────────────
 
-    [Fact]
+    [Test]
     public void Write_TwoColumnsWithSameRowCount_Succeeds()
     {
         var schema = Schema(
@@ -62,11 +62,11 @@ public class RowGroupWriterTests
 
         var aVals = ReadAll<int>(data, schema, 0);
         var bVals = ReadAll<int>(data, schema, 1);
-        Assert.Equal([1, 2, 3], aVals);
-        Assert.Equal([10, 20, 30], bVals);
+        Assert.That(aVals, Is.EqualTo(new[] {1, 2, 3}));
+        Assert.That(bVals, Is.EqualTo(new[] {10, 20, 30}));
     }
 
-    [Fact]
+    [Test]
     public void Write_RowCountMismatch_Throws()
     {
         var schema = Schema(
@@ -84,7 +84,7 @@ public class RowGroupWriterTests
         Assert.Throws<InvalidOperationException>(() => rg.Write(b));
     }
 
-    [Fact]
+    [Test]
     public void Write_ZeroRows_Succeeds()
     {
         var schema = Schema(new Column("v", ParquetPhysicalType.Int32));
@@ -95,10 +95,10 @@ public class RowGroupWriterTests
             rg.Write(c);
         });
         var vals = ReadAll<int>(data, schema);
-        Assert.Empty(vals);
+        ClassicAssert.IsEmpty(vals);
     }
 
-    [Fact]
+    [Test]
     public void Write_SingleRow_Succeeds()
     {
         var schema = Schema(new Column("v", ParquetPhysicalType.Int32));
@@ -108,12 +108,12 @@ public class RowGroupWriterTests
             c.Serialize([42]);
             rg.Write(c);
         });
-        Assert.Equal([42], ReadAll<int>(data, schema));
+        Assert.That(ReadAll<int>(data, schema), Is.EqualTo(new[] {42}));
     }
 
     // ──────────────── Column ordering ────────────────
 
-    [Fact]
+    [Test]
     public void Write_WrongColumnOrder_Throws()
     {
         var schema = Schema(
@@ -133,7 +133,7 @@ public class RowGroupWriterTests
 
     // ──────────────── Null count tracking ────────────────
 
-    [Fact]
+    [Test]
     public void Write_OptionalColumn_NullCountCorrect()
     {
         var schema = Schema(
@@ -158,12 +158,12 @@ public class RowGroupWriterTests
                 foreach (var v in page.Values.Span)
                     results.Add(v);
         }
-        Assert.Equal([1, null, 3, null, null], results);
+        Assert.That(results, Is.EqualTo(new int?[] {1, null, 3, null, null}));
     }
 
     // ──────────────── Multiple row groups ────────────────
 
-    [Fact]
+    [Test]
     public void TwoRowGroups_BothPreserved()
     {
         var schema = Schema(new Column("v", ParquetPhysicalType.Int32));
@@ -182,12 +182,12 @@ public class RowGroupWriterTests
 
         writer.CloseFile();
 
-        Assert.Equal([1, 2, 3, 4, 5], ReadAll<int>(ms.ToArray(), schema));
+        Assert.That(ReadAll<int>(ms.ToArray(), schema), Is.EqualTo(new[] {1, 2, 3, 4, 5}));
     }
 
     // ──────────────── Compression paths ────────────────
 
-    [Fact]
+    [Test]
     public void Write_WithSnappyCompression_RoundTrips()
     {
         var schema = Schema(new Column("v", ParquetPhysicalType.Int32));
@@ -198,12 +198,12 @@ public class RowGroupWriterTests
             c.Serialize(values);
             rg.Write(c);
         }, CompressionKind.Snappy);
-        Assert.Equal(values, ReadAll<int>(data, schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(data, schema));
     }
 
     // ──────────────── CreateSerializedColumn via RowGroupWriter ────────────────
 
-    [Fact]
+    [Test]
     public void CreateSerializedColumn_ViaRowGroupWriter_Works()
     {
         var schema = Schema(new Column("v", ParquetPhysicalType.Boolean));
@@ -213,12 +213,12 @@ public class RowGroupWriterTests
             c.Serialize([true, false, true]);
             rg.Write(c);
         });
-        Assert.Equal([true, false, true], ReadAll<bool>(data, schema));
+        Assert.That(ReadAll<bool>(data, schema), Is.EqualTo(new[] {true, false, true}));
     }
 
     // ──────────────── Write without prior Serialize ────────────────
 
-    [Fact]
+    [Test]
     public void Write_WithoutSerialize_Throws()
     {
         var schema = Schema(new Column("v", ParquetPhysicalType.Int32));
@@ -232,7 +232,7 @@ public class RowGroupWriterTests
 
     // ──────────────── Large dataset (exercises checked arithmetic in RowGroupWriter) ────────────────
 
-    [Fact]
+    [Test]
     public void Write_LargeDataset_RowCountMatchesWritten()
     {
         var schema = Schema(new Column("v", ParquetPhysicalType.Int32));
@@ -244,7 +244,7 @@ public class RowGroupWriterTests
             rg.Write(c);
         });
         var result = ReadAll<int>(data, schema);
-        Assert.Equal(10_000, result.Length);
-        Assert.Equal(values, result);
+        ClassicAssert.AreEqual(10_000, result.Length);
+        ClassicAssert.AreEqual(values, result);
     }
 }

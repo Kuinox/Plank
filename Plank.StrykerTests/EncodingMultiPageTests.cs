@@ -46,7 +46,7 @@ public class EncodingMultiPageTests
 
     // ──────────────── Fixed-rows page strategy ────────────────
 
-    [Fact]
+    [Test]
     public void Int32_Plain_MultiPage_TwoRowsPerPage()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32,
@@ -54,20 +54,20 @@ public class EncodingMultiPageTests
         var values = new int[] { 1, 2, 3, 4, 5 };
         var data = WriteWithPageStrategy(schema, values, new FixedRowsStrategy(2));
         // Must round-trip correctly across multiple pages
-        Assert.Equal(values, ReadAll<int>(data, schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(data, schema));
     }
 
-    [Fact]
+    [Test]
     public void Int32_Plain_MultiPage_OneRowPerPage()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.Plain]))]);
         var values = Enumerable.Range(0, 10).ToArray();
         var data = WriteWithPageStrategy(schema, values, new FixedRowsStrategy(1));
-        Assert.Equal(values, ReadAll<int>(data, schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(data, schema));
     }
 
-    [Fact]
+    [Test]
     public void Int32_Plain_MultiPage_ExactBoundary()
     {
         // 6 rows, 2 per page → exactly 3 pages
@@ -75,10 +75,10 @@ public class EncodingMultiPageTests
             new ColumnOptions(encodings: [EncodingKind.Plain]))]);
         var values = new int[] { 10, 20, 30, 40, 50, 60 };
         var data = WriteWithPageStrategy(schema, values, new FixedRowsStrategy(2));
-        Assert.Equal(values, ReadAll<int>(data, schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(data, schema));
     }
 
-    [Fact]
+    [Test]
     public void Int32_Plain_MultiPage_LastPageHasRemainder()
     {
         // 7 rows, 3 per page → pages of [3,3,1]
@@ -86,12 +86,12 @@ public class EncodingMultiPageTests
             new ColumnOptions(encodings: [EncodingKind.Plain]))]);
         var values = new int[] { 1, 2, 3, 4, 5, 6, 7 };
         var data = WriteWithPageStrategy(schema, values, new FixedRowsStrategy(3));
-        Assert.Equal(values, ReadAll<int>(data, schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(data, schema));
     }
 
     // ──────────────── Dictionary encoding with multi-page ────────────────
 
-    [Fact]
+    [Test]
     public void Int32_Dictionary_MultiPage_LowCardinality()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32,
@@ -99,10 +99,10 @@ public class EncodingMultiPageTests
         // Low cardinality: 3 distinct values, 300 total → should use dictionary
         var values = Enumerable.Range(0, 300).Select(i => i % 3).ToArray();
         var data = WriteWithPageStrategy(schema, values, new FixedRowsStrategy(100));
-        Assert.Equal(values, ReadAll<int>(data, schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(data, schema));
     }
 
-    [Fact]
+    [Test]
     public void Int32_Dictionary_SinglePage()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32,
@@ -114,24 +114,24 @@ public class EncodingMultiPageTests
         col.Serialize(values);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<int>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(ms.ToArray(), schema));
     }
 
     // ──────────────── DeltaBinaryPacked multi-page ────────────────
 
-    [Fact]
+    [Test]
     public void Int32_Delta_MultiPage_MonotonicValues()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.DeltaBinaryPacked]))]);
         var values = Enumerable.Range(0, 300).ToArray();
         var data = WriteWithPageStrategy(schema, values, new FixedRowsStrategy(100));
-        Assert.Equal(values, ReadAll<int>(data, schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(data, schema));
     }
 
     // ──────────────── Boolean RLE multi-page ────────────────
 
-    [Fact]
+    [Test]
     public void Boolean_Rle_MultiPage()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Boolean,
@@ -153,12 +153,12 @@ public class EncodingMultiPageTests
         writer.CloseFile();
 
         var result = ReadAll<bool>(ms.ToArray(), schema);
-        Assert.Equal(values, result);
+        ClassicAssert.AreEqual(values, result);
     }
 
     // ──────────────── Page index recording ────────────────
 
-    [Fact]
+    [Test]
     public void Int32_WithPageIndexes_MultiPage_RoundTrips()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32,
@@ -182,12 +182,12 @@ public class EncodingMultiPageTests
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
 
-        Assert.Equal(values, ReadAll<int>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(ms.ToArray(), schema));
     }
 
     // ──────────────── Variable-width (ByteArray) multi-page ────────────────
 
-    [Fact]
+    [Test]
     public void ByteArray_Plain_MultiPage_RoundTrips()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.ByteArray,
@@ -219,9 +219,9 @@ public class EncodingMultiPageTests
                 foreach (var v in page.Values.Span)
                     results.Add(v);
         }
-        Assert.Equal(values.Length, results.Count);
+        ClassicAssert.AreEqual(values.Length, results.Count);
         for (var i = 0; i < values.Length; i++)
-            Assert.Equal(values[i], results[i]);
+            ClassicAssert.AreEqual(values[i], results[i]);
     }
 
     sealed class FixedRowsStrategy : IPageStrategy

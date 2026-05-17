@@ -45,7 +45,7 @@ public class SerializedColumnRemainingTests
 
     // ──────────────── DateTimeOffset serialization (line 488) ────────────────
 
-    [Fact]
+    [Test]
     public void DateTimeOffset_Millis_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.Int64, null,
@@ -60,14 +60,14 @@ public class SerializedColumnRemainingTests
         writer.StartRowGroup().Write(c);
         writer.CloseFile();
         var result = ReadAll<DateTimeOffset>(ms.ToArray(), schema);
-        Assert.Equal(2, result.Length);
+        ClassicAssert.AreEqual(2, result.Length);
         // Epoch should round-trip exactly (millis precision)
-        Assert.Equal(epoch.UtcDateTime.Ticks, result[0].UtcTicks);
+        ClassicAssert.AreEqual(epoch.UtcDateTime.Ticks, result[0].UtcTicks);
         // Now should be within 1ms
-        Assert.True(Math.Abs((now.UtcDateTime - result[1].UtcDateTime).TotalMilliseconds) < 1.0);
+        ClassicAssert.IsTrue(Math.Abs((now.UtcDateTime - result[1].UtcDateTime).TotalMilliseconds) < 1.0);
     }
 
-    [Fact]
+    [Test]
     public void DateTimeOffset_Micros_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.Int64, null,
@@ -81,12 +81,12 @@ public class SerializedColumnRemainingTests
         writer.StartRowGroup().Write(c);
         writer.CloseFile();
         var result = ReadAll<DateTimeOffset>(ms.ToArray(), schema);
-        Assert.Equal(2, result.Length);
+        ClassicAssert.AreEqual(2, result.Length);
         // Verify statistics are captured
-        Assert.True(c.Statistics.HasStatistics);
+        ClassicAssert.IsTrue(c.Statistics.HasStatistics);
     }
 
-    [Fact]
+    [Test]
     public void DateTimeOffset_Statistics_CorrectMinMax()
     {
         var col = new Column("v", ParquetPhysicalType.Int64, null,
@@ -101,12 +101,12 @@ public class SerializedColumnRemainingTests
         writer.StartRowGroup().Write(c);
         writer.CloseFile();
         // Min should be 'early', max should be 'late'
-        Assert.True(c.Statistics.MinBits < c.Statistics.MaxBits);
+        ClassicAssert.IsTrue(c.Statistics.MinBits < c.Statistics.MaxBits);
     }
 
     // ──────────────── TimeOnly? nullable (line 539) ────────────────
 
-    [Fact]
+    [Test]
     public void TimeOnly_Nullable_Micros_WritesCorrectly()
     {
         // Reader doesn't yet support TimeOnly projection — test writer path only
@@ -122,11 +122,11 @@ public class SerializedColumnRemainingTests
         writer.StartRowGroup().Write(c);
         writer.CloseFile();
         var data = ms.ToArray();
-        Assert.True(data.Length > 0);
-        Assert.Equal(1L, c.Statistics.NullCount);
+        ClassicAssert.IsTrue(data.Length > 0);
+        ClassicAssert.AreEqual(1L, c.Statistics.NullCount);
     }
 
-    [Fact]
+    [Test]
     public void TimeOnly_Nullable_Millis_WritesCorrectly()
     {
         var col = new Column("v", ParquetPhysicalType.Int64,
@@ -141,13 +141,13 @@ public class SerializedColumnRemainingTests
         writer.StartRowGroup().Write(c);
         writer.CloseFile();
         var data = ms.ToArray();
-        Assert.True(data.Length > 0);
-        Assert.Equal(1L, c.Statistics.NullCount);
+        ClassicAssert.IsTrue(data.Length > 0);
+        ClassicAssert.AreEqual(1L, c.Statistics.NullCount);
     }
 
     // ──────────────── DateTimeOffset nullable ────────────────
 
-    [Fact]
+    [Test]
     public void DateTimeOffset_Nullable_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Int64,
@@ -162,14 +162,14 @@ public class SerializedColumnRemainingTests
         writer.StartRowGroup().Write(c);
         writer.CloseFile();
         var result = ReadAllNullable<DateTimeOffset>(ms.ToArray(), schema);
-        Assert.NotNull(result[0]);
-        Assert.Null(result[1]);
-        Assert.NotNull(result[2]);
+        ClassicAssert.IsNotNull(result[0]);
+        ClassicAssert.IsNull(result[1]);
+        ClassicAssert.IsNotNull(result[2]);
     }
 
     // ──────────────── RowGroupWriter null count tracking (line 195) ────────────────
 
-    [Fact]
+    [Test]
     public void RowGroupWriter_NullCountInStats_OptionalColumn()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32,
@@ -182,10 +182,10 @@ public class SerializedColumnRemainingTests
         rg.Write(col);
         writer.CloseFile();
         // Verify the written null count is reflected in statistics
-        Assert.Equal(3L, col.Statistics.NullCount);
+        ClassicAssert.AreEqual(3L, col.Statistics.NullCount);
     }
 
-    [Fact]
+    [Test]
     public void RowGroupWriter_NullCountZero_RequiredColumn()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32)]);
@@ -196,10 +196,10 @@ public class SerializedColumnRemainingTests
         var rg = writer.StartRowGroup();
         rg.Write(col);
         writer.CloseFile();
-        Assert.Equal(0L, col.Statistics.NullCount);
+        ClassicAssert.AreEqual(0L, col.Statistics.NullCount);
     }
 
-    [Fact]
+    [Test]
     public void RowGroupWriter_MultipleNullColumns_IndependentNullCounts()
     {
         var schema = new ParquetSchema([
@@ -216,13 +216,13 @@ public class SerializedColumnRemainingTests
         rg.Write(colA);
         rg.Write(colB);
         writer.CloseFile();
-        Assert.Equal(1L, colA.Statistics.NullCount);
-        Assert.Equal(2L, colB.Statistics.NullCount);
+        ClassicAssert.AreEqual(1L, colA.Statistics.NullCount);
+        ClassicAssert.AreEqual(2L, colB.Statistics.NullCount);
     }
 
     // ──────────────── TryAssignSingleDataPageStatistics paths (line 672) ────────────────
 
-    [Fact]
+    [Test]
     public void RequiredInt32_WithPageIndexes_StatisticsCorrect()
     {
         // WithPageIndexes=true exercises TryAssignSingleDataPageStatistics (line 672)
@@ -237,11 +237,11 @@ public class SerializedColumnRemainingTests
         col.Serialize([5, 3, 9, 1, 7]);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(1L, col.Statistics.MinBits);
-        Assert.Equal(9L, col.Statistics.MaxBits);
+        ClassicAssert.AreEqual(1L, col.Statistics.MinBits);
+        ClassicAssert.AreEqual(9L, col.Statistics.MaxBits);
     }
 
-    [Fact]
+    [Test]
     public void OptionalInt32_WithPageIndexes_StatisticsIncludeNullCount()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32,
@@ -256,8 +256,8 @@ public class SerializedColumnRemainingTests
         col.Serialize([5, null, 9, null, 1]);  // 2 nulls
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(2L, col.Statistics.NullCount);
-        Assert.Equal(1L, col.Statistics.MinBits);
-        Assert.Equal(9L, col.Statistics.MaxBits);
+        ClassicAssert.AreEqual(2L, col.Statistics.NullCount);
+        ClassicAssert.AreEqual(1L, col.Statistics.MinBits);
+        ClassicAssert.AreEqual(9L, col.Statistics.MaxBits);
     }
 }

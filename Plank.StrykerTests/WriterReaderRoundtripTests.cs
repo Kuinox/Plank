@@ -33,7 +33,7 @@ public class WriterReaderRoundtripTests
 
     // ──────────────── Int32 roundtrip ────────────────
 
-    [Fact]
+    [Test]
     public void Int32_Plain_Roundtrip()
     {
         var schema = new ParquetSchema([
@@ -48,10 +48,10 @@ public class WriterReaderRoundtripTests
             w.StartRowGroup().Write(col);
         });
         var roundtripped = ReadColumnFromBytes<int>(data, schema);
-        Assert.Equal(values, roundtripped);
+        ClassicAssert.AreEqual(values, roundtripped);
     }
 
-    [Fact]
+    [Test]
     public void Int32_DeltaBinaryPacked_Roundtrip()
     {
         var schema = new ParquetSchema([
@@ -66,10 +66,10 @@ public class WriterReaderRoundtripTests
             w.StartRowGroup().Write(col);
         });
         var roundtripped = ReadColumnFromBytes<int>(data, schema);
-        Assert.Equal(values, roundtripped);
+        ClassicAssert.AreEqual(values, roundtripped);
     }
 
-    [Fact]
+    [Test]
     public void Int32_RleDictionary_Roundtrip()
     {
         var schema = new ParquetSchema([
@@ -84,12 +84,12 @@ public class WriterReaderRoundtripTests
             w.StartRowGroup().Write(col);
         });
         var roundtripped = ReadColumnFromBytes<int>(data, schema);
-        Assert.Equal(values, roundtripped);
+        ClassicAssert.AreEqual(values, roundtripped);
     }
 
     // ──────────────── Boolean roundtrip ────────────────
 
-    [Fact]
+    [Test]
     public void Boolean_Plain_Roundtrip()
     {
         var schema = new ParquetSchema([
@@ -103,12 +103,12 @@ public class WriterReaderRoundtripTests
             w.StartRowGroup().Write(col);
         });
         var roundtripped = ReadColumnFromBytes<bool>(data, schema);
-        Assert.Equal(values, roundtripped);
+        ClassicAssert.AreEqual(values, roundtripped);
     }
 
     // ──────────────── Float roundtrip ────────────────
 
-    [Fact]
+    [Test]
     public void Float_Plain_Roundtrip()
     {
         var schema = new ParquetSchema([
@@ -122,10 +122,10 @@ public class WriterReaderRoundtripTests
             w.StartRowGroup().Write(col);
         });
         var roundtripped = ReadColumnFromBytes<float>(data, schema);
-        Assert.Equal(values, roundtripped);
+        ClassicAssert.AreEqual(values, roundtripped);
     }
 
-    [Fact]
+    [Test]
     public void Float_ByteStreamSplit_Roundtrip()
     {
         var schema = new ParquetSchema([
@@ -140,12 +140,12 @@ public class WriterReaderRoundtripTests
             w.StartRowGroup().Write(col);
         });
         var roundtripped = ReadColumnFromBytes<float>(data, schema);
-        Assert.Equal(values, roundtripped);
+        ClassicAssert.AreEqual(values, roundtripped);
     }
 
     // ──────────────── Double roundtrip ────────────────
 
-    [Fact]
+    [Test]
     public void Double_Plain_Roundtrip()
     {
         var schema = new ParquetSchema([
@@ -159,12 +159,12 @@ public class WriterReaderRoundtripTests
             w.StartRowGroup().Write(col);
         });
         var roundtripped = ReadColumnFromBytes<double>(data, schema);
-        Assert.Equal(values, roundtripped);
+        ClassicAssert.AreEqual(values, roundtripped);
     }
 
     // ──────────────── Long roundtrip ────────────────
 
-    [Fact]
+    [Test]
     public void Int64_Plain_Roundtrip()
     {
         var schema = new ParquetSchema([
@@ -178,10 +178,10 @@ public class WriterReaderRoundtripTests
             w.StartRowGroup().Write(col);
         });
         var roundtripped = ReadColumnFromBytes<long>(data, schema);
-        Assert.Equal(values, roundtripped);
+        ClassicAssert.AreEqual(values, roundtripped);
     }
 
-    [Fact]
+    [Test]
     public void Int64_DeltaBinaryPacked_Roundtrip()
     {
         var schema = new ParquetSchema([
@@ -196,12 +196,12 @@ public class WriterReaderRoundtripTests
             w.StartRowGroup().Write(col);
         });
         var roundtripped = ReadColumnFromBytes<long>(data, schema);
-        Assert.Equal(values, roundtripped);
+        ClassicAssert.AreEqual(values, roundtripped);
     }
 
     // ──────────────── ByteArray roundtrip ────────────────
 
-    [Fact]
+    [Test]
     public void ByteArray_Plain_Roundtrip()
     {
         var schema = new ParquetSchema([
@@ -219,12 +219,12 @@ public class WriterReaderRoundtripTests
             w.StartRowGroup().Write(col);
         });
         var roundtripped = ReadColumnFromBytes<byte[]>(data, schema);
-        Assert.Equal(values.Length, roundtripped.Length);
+        ClassicAssert.AreEqual(values.Length, roundtripped.Length);
         for (var i = 0; i < values.Length; i++)
-            Assert.Equal(values[i], roundtripped[i]);
+            ClassicAssert.AreEqual(values[i], roundtripped[i]);
     }
 
-    [Fact]
+    [Test]
     public void ByteArray_DeltaLengthByteArray_Roundtrip()
     {
         var schema = new ParquetSchema([
@@ -243,14 +243,14 @@ public class WriterReaderRoundtripTests
             w.StartRowGroup().Write(col);
         });
         var roundtripped = ReadColumnFromBytes<byte[]>(data, schema);
-        Assert.Equal(values.Length, roundtripped.Length);
+        ClassicAssert.AreEqual(values.Length, roundtripped.Length);
         for (var i = 0; i < values.Length; i++)
-            Assert.Equal(values[i], roundtripped[i]);
+            ClassicAssert.AreEqual(values[i], roundtripped[i]);
     }
 
     // ──────────────── Multiple row groups ────────────────
 
-    [Fact]
+    [Test]
     public void TwoRowGroups_AllValuesPreserved()
     {
         var schema = new ParquetSchema([
@@ -270,12 +270,12 @@ public class WriterReaderRoundtripTests
         var data = ms.ToArray();
 
         var roundtripped = ReadColumnFromBytes<int>(data, schema);
-        Assert.Equal([1, 2, 3, 4, 5, 6], roundtripped);
+        Assert.That(roundtripped, Is.EqualTo(new[] {1, 2, 3, 4, 5, 6}));
     }
 
     // ──────────────── Optional (nullable) columns ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalInt32_Roundtrip()
     {
         var schema = new ParquetSchema([
@@ -300,12 +300,12 @@ public class WriterReaderRoundtripTests
                     results.Add(val);
         }
 
-        Assert.Equal([1, null, 3, null, 5], results);
+        Assert.That(results, Is.EqualTo(new int?[] {1, null, 3, null, 5}));
     }
 
     // ──────────────── Empty row group ────────────────
 
-    [Fact]
+    [Test]
     public void EmptyRowGroup_ReadsZeroValues()
     {
         var schema = new ParquetSchema([
@@ -318,23 +318,23 @@ public class WriterReaderRoundtripTests
             w.StartRowGroup().Write(col);
         });
         var roundtripped = ReadColumnFromBytes<int>(data, schema);
-        Assert.Empty(roundtripped);
+        ClassicAssert.IsEmpty(roundtripped);
     }
 
     // ──────────────── Schema structure ────────────────
 
-    [Fact]
+    [Test]
     public void Schema_SingleColumn_HasCorrectLeafPath()
     {
         var schema = new ParquetSchema([
             new Column("my_column", ParquetPhysicalType.Int32)
         ]);
-        Assert.Equal(1, schema.Columns.Length);
-        Assert.Equal("my_column", schema.Columns[0].Name);
-        Assert.Equal(ParquetPhysicalType.Int32, schema.Columns[0].PhysicalType);
+        ClassicAssert.AreEqual(1, schema.Columns.Length);
+        ClassicAssert.AreEqual("my_column", schema.Columns[0].Name);
+        ClassicAssert.AreEqual(ParquetPhysicalType.Int32, schema.Columns[0].PhysicalType);
     }
 
-    [Fact]
+    [Test]
     public void Schema_MultipleColumns_OrderPreserved()
     {
         var schema = new ParquetSchema([
@@ -342,16 +342,16 @@ public class WriterReaderRoundtripTests
             new Column("b", ParquetPhysicalType.Float),
             new Column("c", ParquetPhysicalType.Boolean)
         ]);
-        Assert.Equal(3, schema.Columns.Length);
-        Assert.Equal("a", schema.Columns[0].Name);
-        Assert.Equal("b", schema.Columns[1].Name);
-        Assert.Equal("c", schema.Columns[2].Name);
+        ClassicAssert.AreEqual(3, schema.Columns.Length);
+        ClassicAssert.AreEqual("a", schema.Columns[0].Name);
+        ClassicAssert.AreEqual("b", schema.Columns[1].Name);
+        ClassicAssert.AreEqual("c", schema.Columns[2].Name);
     }
 
-    [Fact]
+    [Test]
     public void Schema_Empty_HasNoColumns()
     {
         var schema = new ParquetSchema(ImmutableArray<Column>.Empty);
-        Assert.Empty(schema.Columns);
+        ClassicAssert.IsEmpty(schema.Columns);
     }
 }

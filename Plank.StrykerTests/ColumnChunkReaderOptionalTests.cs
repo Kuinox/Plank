@@ -44,61 +44,61 @@ public class ColumnChunkReaderOptionalTests
 
     // ──────────────── Optional byte? (line 1417) ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalByte_WithNulls_ExpandsCorrectly()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(ParquetRepetition.Optional));
         var values = new byte?[] { 10, null, 200, null, 42 };
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<byte>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<byte>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void OptionalByte_AllNulls_ReturnsAllNull()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(ParquetRepetition.Optional));
         var values = new byte?[] { null, null, null };
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<byte>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<byte>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void OptionalByte_NoNulls_ReturnsAll()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(ParquetRepetition.Optional));
         var values = new byte?[] { 1, 2, 3, 255 };
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<byte>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<byte>(data, col));
     }
 
     // ──────────────── Optional ushort? (line 1424) ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalUShort_WithNulls_ExpandsCorrectly()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(ParquetRepetition.Optional));
         var values = new ushort?[] { 100, null, 65535, null, 0 };
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<ushort>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<ushort>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void OptionalUShort_AllNulls_ReturnsAllNull()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(ParquetRepetition.Optional));
         var values = new ushort?[] { null, null };
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<ushort>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<ushort>(data, col));
     }
 
     // ──────────────── Optional uint? (line 1431) ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalUInt_WithNulls_ExpandsCorrectly()
     {
         var col = new Column("v", ParquetPhysicalType.Int32, null,
@@ -108,12 +108,12 @@ public class ColumnChunkReaderOptionalTests
             new LogicalType.Int(bitWidth: 32, isSigned: false));
         var values = new uint?[] { 1_000_000, null, 0, null, uint.MaxValue };
         var data = WriteOptional(optCol, values);
-        Assert.Equal(values, ReadOptional<uint>(data, optCol));
+        ClassicAssert.AreEqual(values, ReadOptional<uint>(data, optCol));
     }
 
     // ──────────────── Optional ulong? (line 1433) ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalULong_WithNulls_ExpandsCorrectly()
     {
         var col = new Column("v", ParquetPhysicalType.Int64,
@@ -121,34 +121,34 @@ public class ColumnChunkReaderOptionalTests
             new LogicalType.Int(bitWidth: 64, isSigned: false));
         var values = new ulong?[] { 1_000_000_000UL, null, 0UL, null };
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<ulong>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<ulong>(data, col));
     }
 
     // ──────────────── Optional with compression (line 722) ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalInt32_Snappy_Compressed_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(ParquetRepetition.Optional));
         var values = new int?[] { 1, null, 3, null, 5 };
         var data = WriteOptional(col, values, CompressionKind.Snappy);
-        Assert.Equal(values, ReadOptional<int>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<int>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void OptionalFloat_Snappy_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Float,
             new ColumnOptions(ParquetRepetition.Optional));
         var values = new float?[] { 1.5f, null, 3.5f };
         var data = WriteOptional(col, values, CompressionKind.Snappy);
-        Assert.Equal(values, ReadOptional<float>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<float>(data, col));
     }
 
     // ──────────────── ByteStreamSplit optional (non-buffer path, lines 979-1033) ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalByteStreamSplit_Int32_WithNulls()
     {
         // Optional ByteStreamSplit requires null expansion → uses non-buffer DecodeValues path
@@ -156,43 +156,43 @@ public class ColumnChunkReaderOptionalTests
             new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.ByteStreamSplit]));
         var values = new int?[] { 100, null, -200, null, 0 };
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<int>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<int>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void OptionalByteStreamSplit_Float_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Float,
             new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.ByteStreamSplit]));
         var values = new float?[] { 1.5f, null, -2.5f, null };
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<float>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<float>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void OptionalByteStreamSplit_Double_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Double,
             new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.ByteStreamSplit]));
         var values = new double?[] { 1.5, null, 3.14, null, -7.0 };
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<double>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<double>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void OptionalByteStreamSplit_Int64_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Int64,
             new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.ByteStreamSplit]));
         var values = new long?[] { 1_000_000L, null, -500L };
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<long>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<long>(data, col));
     }
 
     // ──────────────── Definition level literal runs (line 1355) ────────────────
     // Interleaved null/non-null creates literal groups (not RLE runs) in def levels
 
-    [Fact]
+    [Test]
     public void OptionalInt32_InterleavedNulls_LiteralGroups()
     {
         // Alternating null/value forces literal group of definition levels
@@ -200,10 +200,10 @@ public class ColumnChunkReaderOptionalTests
             new ColumnOptions(ParquetRepetition.Optional));
         var values = Enumerable.Range(0, 16).Select(i => i % 2 == 0 ? (int?)i : null).ToArray();
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<int>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<int>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void OptionalBool_InterleavedNulls_LiteralGroups()
     {
         var col = new Column("v", ParquetPhysicalType.Boolean,
@@ -211,10 +211,10 @@ public class ColumnChunkReaderOptionalTests
         // 16 alternating null/bool forces literal definition level groups
         var values = Enumerable.Range(0, 16).Select(i => i % 2 == 0 ? (bool?)(i % 4 == 0) : null).ToArray();
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<bool>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<bool>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void OptionalFloat_ManyInterleavedNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Float,
@@ -224,24 +224,24 @@ public class ColumnChunkReaderOptionalTests
             .Select(i => i < 8 ? null : (float?)((float)i * 0.5f))
             .ToArray();
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<float>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<float>(data, col));
     }
 
     // ──────────────── DateOnly? (line 1440-1446) ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalDateOnly_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(ParquetRepetition.Optional), new LogicalType.Date());
         var values = new DateOnly?[] { new DateOnly(2024, 1, 1), null, new DateOnly(2000, 6, 15) };
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<DateOnly>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<DateOnly>(data, col));
     }
 
     // ──────────────── DateTime? (line 1447-1453) ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalDateTime_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Int64,
@@ -250,28 +250,28 @@ public class ColumnChunkReaderOptionalTests
         var ts = new DateTime(2024, 3, 15, 12, 0, 0, DateTimeKind.Utc);
         var values = new DateTime?[] { ts, null, DateTime.UnixEpoch };
         var data = WriteOptional(col, values);
-        Assert.Equal(values, ReadOptional<DateTime>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<DateTime>(data, col));
     }
 
     // ──────────────── Additional compressed optional test ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalDouble_Snappy_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Double,
             new ColumnOptions(ParquetRepetition.Optional));
         var values = new double?[] { 1.5, null, 3.14, null };
         var data = WriteOptional(col, values, CompressionKind.Snappy);
-        Assert.Equal(values, ReadOptional<double>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<double>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void OptionalBool_Snappy_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Boolean,
             new ColumnOptions(ParquetRepetition.Optional));
         var values = new bool?[] { true, null, false, null, true };
         var data = WriteOptional(col, values, CompressionKind.Snappy);
-        Assert.Equal(values, ReadOptional<bool>(data, col));
+        ClassicAssert.AreEqual(values, ReadOptional<bool>(data, col));
     }
 }

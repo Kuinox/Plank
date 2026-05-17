@@ -33,7 +33,7 @@ public class EncodingPageSplitTests
 
     // ──────────────── Variable-length page splitting (line 155) ────────────────
 
-    [Fact]
+    [Test]
     public void ByteArray_PageSizeLimit_SplitsAtBoundary()
     {
         // Write byte arrays where 2 fit in a 10-byte page but 3 don't
@@ -59,13 +59,13 @@ public class EncodingPageSplitTests
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
         var result = ReadAll<byte[]>(ms.ToArray(), schema);
-        Assert.Equal(3, result.Length);
-        Assert.Equal(values[0], result[0]);
-        Assert.Equal(values[1], result[1]);
-        Assert.Equal(values[2], result[2]);
+        ClassicAssert.AreEqual(3, result.Length);
+        ClassicAssert.AreEqual(values[0], result[0]);
+        ClassicAssert.AreEqual(values[1], result[1]);
+        ClassicAssert.AreEqual(values[2], result[2]);
     }
 
-    [Fact]
+    [Test]
     public void String_PageSizeLimit_AllFitInOnePage()
     {
         // Small strings that all fit in one page
@@ -83,10 +83,10 @@ public class EncodingPageSplitTests
         col.Serialize(values);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<string>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<string>(ms.ToArray(), schema));
     }
 
-    [Fact]
+    [Test]
     public void String_PageSizeLimit_ForcesMultiplePages()
     {
         // Each string value forces a new page due to tiny page size
@@ -104,12 +104,12 @@ public class EncodingPageSplitTests
         col.Serialize(values);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<string>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<string>(ms.ToArray(), schema));
     }
 
     // ──────────────── Dictionary page splitting (line 230) ────────────────
 
-    [Fact]
+    [Test]
     public void Dictionary_RowsPerPage_ExactBoundary()
     {
         // Exactly rowsPerPage rows → should produce one data page
@@ -128,10 +128,10 @@ public class EncodingPageSplitTests
         col.Serialize(values);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<int>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(ms.ToArray(), schema));
     }
 
-    [Fact]
+    [Test]
     public void Dictionary_RowsPerPage_ForcedSplitAtExactBoundary()
     {
         // rowsPerPage=10, 20 values → exactly 2 pages (tests >= boundary)
@@ -149,12 +149,12 @@ public class EncodingPageSplitTests
         col.Serialize(values);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<int>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(ms.ToArray(), schema));
     }
 
     // ──────────────── Optional column page splitting (line 434) ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalFloat_WithPageSizer_MultiplePages()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Float,
@@ -182,10 +182,10 @@ public class EncodingPageSplitTests
                 foreach (var v in page.Values.Span)
                     results.Add(v);
         }
-        Assert.Equal(values, results.ToArray());
+        ClassicAssert.AreEqual(values, results.ToArray());
     }
 
-    [Fact]
+    [Test]
     public void OptionalInt32_WithPageSizer_ExactBoundary()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32,
@@ -213,12 +213,12 @@ public class EncodingPageSplitTests
                 foreach (var v in page.Values.Span)
                     results.Add(v);
         }
-        Assert.Equal(values, results.ToArray());
+        ClassicAssert.AreEqual(values, results.ToArray());
     }
 
     // ──────────────── Dictionary sort order (line 842-846) ────────────────
 
-    [Fact]
+    [Test]
     public void Dictionary_AscendingValues_SortedAscending()
     {
         // Values that only appear in ascending order → dictionary should be Ascending
@@ -232,10 +232,10 @@ public class EncodingPageSplitTests
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
         // Just verify roundtrip — dictionary sort order is encoded but verified by reader
-        Assert.Equal(values, ReadAll<int>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(ms.ToArray(), schema));
     }
 
-    [Fact]
+    [Test]
     public void Dictionary_DescendingValues_SortedDescending()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32,
@@ -247,10 +247,10 @@ public class EncodingPageSplitTests
         col.Serialize(values);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<int>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(ms.ToArray(), schema));
     }
 
-    [Fact]
+    [Test]
     public void Dictionary_UnsortedValues_NotSorted()
     {
         var schema = new ParquetSchema([new Column("v", ParquetPhysicalType.Int32,
@@ -262,10 +262,10 @@ public class EncodingPageSplitTests
         col.Serialize(values);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<int>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<int>(ms.ToArray(), schema));
     }
 
-    [Fact]
+    [Test]
     public void Dictionary_StringAscending_SortedByUtf8()
     {
         // String dictionary sorted by UTF-8 comparison (exercises line 842 with string values)
@@ -278,7 +278,7 @@ public class EncodingPageSplitTests
         col.Serialize(values);
         writer.StartRowGroup().Write(col);
         writer.CloseFile();
-        Assert.Equal(values, ReadAll<string>(ms.ToArray(), schema));
+        ClassicAssert.AreEqual(values, ReadAll<string>(ms.ToArray(), schema));
     }
 
     // ──────────────── TargetPageSizeStrategy helper ────────────────

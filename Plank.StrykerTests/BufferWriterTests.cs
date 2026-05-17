@@ -9,50 +9,50 @@ public class BufferWriterTests
 
     // ──────────────── IsInitialized ────────────────
 
-    [Fact]
+    [Test]
     public void IsInitialized_AfterConstruction_IsTrue()
     {
         var bw = Make();
-        Assert.True(bw.IsInitialized);
+        ClassicAssert.IsTrue(bw.IsInitialized);
     }
 
-    [Fact]
+    [Test]
     public void Default_IsNotInitialized()
     {
         var bw = default(BufferWriter);
-        Assert.False(bw.IsInitialized);
+        ClassicAssert.IsFalse(bw.IsInitialized);
     }
 
     // ──────────────── WrittenLength ────────────────
 
-    [Fact]
+    [Test]
     public void WrittenLength_InitiallyZero()
     {
         var bw = Make();
-        Assert.Equal(0, bw.WrittenLength);
+        ClassicAssert.AreEqual(0, bw.WrittenLength);
     }
 
-    [Fact]
+    [Test]
     public void WrittenLength_AfterWrite_MatchesBytesWritten()
     {
         var bw = Make();
         var data = new byte[] { 1, 2, 3, 4, 5 };
         bw.Write(data);
-        Assert.Equal(5, bw.WrittenLength);
+        ClassicAssert.AreEqual(5, bw.WrittenLength);
     }
 
-    [Fact]
+    [Test]
     public void WrittenLength_AfterMultipleWrites_Accumulates()
     {
         var bw = Make();
         bw.Write(new byte[] { 1, 2, 3 });
         bw.Write(new byte[] { 4, 5 });
-        Assert.Equal(5, bw.WrittenLength);
+        ClassicAssert.AreEqual(5, bw.WrittenLength);
     }
 
     // ──────────────── Write + CopyTo ────────────────
 
-    [Fact]
+    [Test]
     public void Write_SmallData_CopyToReturnsExact()
     {
         var bw = Make(chunk: 256, initial: 256);
@@ -60,64 +60,64 @@ public class BufferWriterTests
         bw.Write(data);
         var dest = new byte[20];
         bw.CopyTo(dest);
-        Assert.Equal(data, dest);
+        ClassicAssert.AreEqual(data, dest);
     }
 
-    [Fact]
+    [Test]
     public void Write_ExactlyChunkSize_Works()
     {
         var bw = Make(chunk: 16, initial: 16);
         var data = new byte[16];
         for (var i = 0; i < 16; i++) data[i] = (byte)(i + 1);
         bw.Write(data);
-        Assert.Equal(16, bw.WrittenLength);
+        ClassicAssert.AreEqual(16, bw.WrittenLength);
         var dest = new byte[16];
         bw.CopyTo(dest);
-        Assert.Equal(data, dest);
+        ClassicAssert.AreEqual(data, dest);
     }
 
-    [Fact]
+    [Test]
     public void Write_LargerThanChunk_SpansMultipleSegments()
     {
         var bw = Make(chunk: 8, initial: 8);
         var data = Enumerable.Range(0, 32).Select(i => (byte)(i + 10)).ToArray();
         bw.Write(data);
-        Assert.Equal(32, bw.WrittenLength);
+        ClassicAssert.AreEqual(32, bw.WrittenLength);
         var dest = new byte[32];
         bw.CopyTo(dest);
-        Assert.Equal(data, dest);
+        ClassicAssert.AreEqual(data, dest);
     }
 
-    [Fact]
+    [Test]
     public void Write_Empty_DoesNothing()
     {
         var bw = Make();
         bw.Write(ReadOnlySpan<byte>.Empty);
-        Assert.Equal(0, bw.WrittenLength);
+        ClassicAssert.AreEqual(0, bw.WrittenLength);
     }
 
     // ──────────────── TryGetSingleWrittenSpan ────────────────
 
-    [Fact]
+    [Test]
     public void TryGetSingleWrittenSpan_Empty_ReturnsEmptySpanAndTrue()
     {
         var bw = Make(chunk: 256, initial: 256);
-        Assert.True(bw.TryGetSingleWrittenSpan(out var span));
-        Assert.Equal(0, span.Length);
+        ClassicAssert.IsTrue(bw.TryGetSingleWrittenSpan(out var span));
+        ClassicAssert.AreEqual(0, span.Length);
     }
 
-    [Fact]
+    [Test]
     public void TryGetSingleWrittenSpan_SmallWrite_ReturnsDataAndTrue()
     {
         var bw = Make(chunk: 256, initial: 256);
         var data = new byte[] { 10, 20, 30 };
         bw.Write(data);
-        Assert.True(bw.TryGetSingleWrittenSpan(out var span));
-        Assert.Equal(3, span.Length);
-        Assert.Equal(data, span.ToArray());
+        ClassicAssert.IsTrue(bw.TryGetSingleWrittenSpan(out var span));
+        ClassicAssert.AreEqual(3, span.Length);
+        ClassicAssert.AreEqual(data, span.ToArray());
     }
 
-    [Fact]
+    [Test]
     public void TryGetSingleWrittenSpan_MultiSegment_ReturnsFalse()
     {
         var bw = Make(chunk: 8, initial: 8);
@@ -131,40 +131,40 @@ public class BufferWriterTests
 
     // ──────────────── Reset ────────────────
 
-    [Fact]
+    [Test]
     public void Reset_ClearsWrittenLength()
     {
         var bw = Make();
         bw.Write(new byte[] { 1, 2, 3 });
         bw.Reset();
-        Assert.Equal(0, bw.WrittenLength);
+        ClassicAssert.AreEqual(0, bw.WrittenLength);
     }
 
-    [Fact]
+    [Test]
     public void Reset_AllowsReuse()
     {
         var bw = Make(chunk: 256, initial: 256);
         bw.Write(new byte[] { 1, 2 });
         bw.Reset();
         bw.Write(new byte[] { 99, 88, 77 });
-        Assert.Equal(3, bw.WrittenLength);
+        ClassicAssert.AreEqual(3, bw.WrittenLength);
         var dest = new byte[3];
         bw.CopyTo(dest);
-        Assert.Equal(new byte[] { 99, 88, 77 }, dest);
+        ClassicAssert.AreEqual(new byte[] { 99, 88, 77 }, dest);
     }
 
     // ──────────────── WriteTo (Stream) ────────────────
 
-    [Fact]
+    [Test]
     public void WriteTo_EmptyBuffer_WritesNothing()
     {
         var bw = Make();
         var ms = new MemoryStream();
         bw.WriteTo(ms);
-        Assert.Equal(0, ms.Length);
+        ClassicAssert.AreEqual(0, ms.Length);
     }
 
-    [Fact]
+    [Test]
     public void WriteTo_WithData_StreamContainsExactData()
     {
         var bw = Make(chunk: 256, initial: 256);
@@ -172,10 +172,10 @@ public class BufferWriterTests
         bw.Write(data);
         var ms = new MemoryStream();
         bw.WriteTo(ms);
-        Assert.Equal(data, ms.ToArray());
+        ClassicAssert.AreEqual(data, ms.ToArray());
     }
 
-    [Fact]
+    [Test]
     public void WriteTo_MultipleSegments_AllDataWritten()
     {
         var bw = Make(chunk: 8, initial: 8);
@@ -183,22 +183,22 @@ public class BufferWriterTests
         bw.Write(data);
         var ms = new MemoryStream();
         bw.WriteTo(ms);
-        Assert.Equal(data, ms.ToArray());
+        ClassicAssert.AreEqual(data, ms.ToArray());
     }
 
     // ──────────────── CopyFrom ────────────────
 
-    [Fact]
+    [Test]
     public void CopyFrom_EmptySource_DoesNothing()
     {
         var src = Make();
         var dst = Make(chunk: 256, initial: 256);
         dst.Write(new byte[] { 1 });
         dst.CopyFrom(ref src);
-        Assert.Equal(1, dst.WrittenLength);
+        ClassicAssert.AreEqual(1, dst.WrittenLength);
     }
 
-    [Fact]
+    [Test]
     public void CopyFrom_WithData_AppendsData()
     {
         var src = Make(chunk: 256, initial: 256);
@@ -206,15 +206,15 @@ public class BufferWriterTests
         var dst = Make(chunk: 256, initial: 256);
         dst.Write(new byte[] { 1, 2 });
         dst.CopyFrom(ref src);
-        Assert.Equal(5, dst.WrittenLength);
+        ClassicAssert.AreEqual(5, dst.WrittenLength);
         var dest = new byte[5];
         dst.CopyTo(dest);
-        Assert.Equal(new byte[] { 1, 2, 10, 20, 30 }, dest);
+        ClassicAssert.AreEqual(new byte[] { 1, 2, 10, 20, 30 }, dest);
     }
 
     // ──────────────── CopyTo edge cases ────────────────
 
-    [Fact]
+    [Test]
     public void CopyTo_DestinationTooSmall_Throws()
     {
         var bw = Make(chunk: 256, initial: 256);
@@ -223,7 +223,7 @@ public class BufferWriterTests
         Assert.Throws<ArgumentException>(() => bw.CopyTo(dest));
     }
 
-    [Fact]
+    [Test]
     public void CopyTo_LargerDestination_Works()
     {
         var bw = Make(chunk: 256, initial: 256);
@@ -231,12 +231,12 @@ public class BufferWriterTests
         bw.Write(data);
         var dest = new byte[10]; // larger than needed
         bw.CopyTo(dest.AsSpan(0, 3));
-        Assert.Equal(data, dest[..3]);
+        ClassicAssert.AreEqual(data, dest[..3]);
     }
 
     // ──────────────── Advance ────────────────
 
-    [Fact]
+    [Test]
     public void Advance_NegativeCount_Throws()
     {
         var bw = Make();
@@ -244,7 +244,7 @@ public class BufferWriterTests
         Assert.Throws<ArgumentOutOfRangeException>(() => bw.Advance(-1));
     }
 
-    [Fact]
+    [Test]
     public void GetSpanAndAdvance_TracksLength()
     {
         var bw = Make(chunk: 256, initial: 256);
@@ -252,9 +252,9 @@ public class BufferWriterTests
         span[0] = 42;
         span[1] = 43;
         bw.Advance(2);
-        Assert.Equal(2, bw.WrittenLength);
+        ClassicAssert.AreEqual(2, bw.WrittenLength);
         var dest = new byte[2];
         bw.CopyTo(dest);
-        Assert.Equal(new byte[] { 42, 43 }, dest);
+        ClassicAssert.AreEqual(new byte[] { 42, 43 }, dest);
     }
 }

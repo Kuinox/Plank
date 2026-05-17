@@ -42,7 +42,7 @@ public class EncodingPageBoundaryTests
 
     // ──────────────── line 155: pageBytes + rowBytes > targetPageBytes ────────────────
 
-    [Fact]
+    [Test]
     public void String_ExactByteBoundary_BothFitInOnePage()
     {
         // "hello" = 4 + 5 = 9 bytes; targetPageBytes = 18
@@ -52,10 +52,10 @@ public class EncodingPageBoundaryTests
         var col = new Column("v", ParquetPhysicalType.ByteArray,
             new ColumnOptions(encodings: [EncodingKind.Plain]), new LogicalType.String());
         var c = WriteColumnWithPageSizer(col, new string[] { "hello", "hello" }, targetBytes: 18);
-        Assert.Equal(1, CountDataPages(c));
+        ClassicAssert.AreEqual(1, CountDataPages(c));
     }
 
-    [Fact]
+    [Test]
     public void String_OneByteBeyondBoundary_SplitsIntoTwoPages()
     {
         // "hello" = 9 bytes; two values total 18 bytes; targetPageBytes = 17
@@ -63,10 +63,10 @@ public class EncodingPageBoundaryTests
         var col = new Column("v", ParquetPhysicalType.ByteArray,
             new ColumnOptions(encodings: [EncodingKind.Plain]), new LogicalType.String());
         var c = WriteColumnWithPageSizer(col, new string[] { "hello", "hello" }, targetBytes: 17);
-        Assert.Equal(2, CountDataPages(c));
+        ClassicAssert.AreEqual(2, CountDataPages(c));
     }
 
-    [Fact]
+    [Test]
     public void ByteArray_ExactByteBoundary_FitsInOnePage()
     {
         // byte[] [1,2,3] = 4 + 3 = 7 bytes; two values = 14; targetPageBytes = 14
@@ -75,10 +75,10 @@ public class EncodingPageBoundaryTests
             new ColumnOptions(encodings: [EncodingKind.Plain]));
         var vals = new byte[][] { new byte[] { 1, 2, 3 }, new byte[] { 4, 5, 6 } };
         var c = WriteColumnWithPageSizer(col, vals, targetBytes: 14);
-        Assert.Equal(1, CountDataPages(c));
+        ClassicAssert.AreEqual(1, CountDataPages(c));
     }
 
-    [Fact]
+    [Test]
     public void ByteArray_TinyTarget_EachValueOnOwnPage()
     {
         // targetPageBytes = 1 → each 7-byte value gets its own page
@@ -86,10 +86,10 @@ public class EncodingPageBoundaryTests
             new ColumnOptions(encodings: [EncodingKind.Plain]));
         var vals = new byte[][] { new byte[] { 1, 2, 3 }, new byte[] { 4, 5, 6 }, new byte[] { 7 } };
         var c = WriteColumnWithPageSizer(col, vals, targetBytes: 1);
-        Assert.Equal(3, CountDataPages(c));
+        ClassicAssert.AreEqual(3, CountDataPages(c));
     }
 
-    [Fact]
+    [Test]
     public void ByteArray_FirstRowExceedsTarget_StillOnSamePage()
     {
         // When the first row on an empty page exceeds targetPageBytes, it still goes on that page
@@ -101,13 +101,13 @@ public class EncodingPageBoundaryTests
         // 100-byte array + 4 byte length = 104 bytes, targetPageBytes = 10
         var c = WriteColumnWithPageSizer(col, new byte[][] { large }, targetBytes: 10);
         // Single large value still gets a page (not skipped)
-        Assert.Equal(1, CountDataPages(c));
-        Assert.Equal(1u, c.RowCount);
+        ClassicAssert.AreEqual(1, CountDataPages(c));
+        ClassicAssert.AreEqual(1u, c.RowCount);
     }
 
     // ──────────────── line 135: WriteFixedRowsDataPages exact multiples ────────────────
 
-    [Fact]
+    [Test]
     public void Int32_FixedRows_ExactMultipleOfRowsPerPage_TwoPages()
     {
         // rowsPerPage = targetPageBytes / sizeof(int) = 16/4 = 4 rows per page
@@ -115,32 +115,32 @@ public class EncodingPageBoundaryTests
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.Plain]));
         var c = WriteColumnWithPageSizer(col, Enumerable.Range(1, 8).ToArray(), targetBytes: 16);
-        Assert.Equal(2, CountDataPages(c));
+        ClassicAssert.AreEqual(2, CountDataPages(c));
     }
 
-    [Fact]
+    [Test]
     public void Int32_FixedRows_NonMultiple_RoundUpToExtraSmallerPage()
     {
         // 9 values with 4 per page → pages of [4, 4, 1]
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.Plain]));
         var c = WriteColumnWithPageSizer(col, Enumerable.Range(1, 9).ToArray(), targetBytes: 16);
-        Assert.Equal(3, CountDataPages(c));
+        ClassicAssert.AreEqual(3, CountDataPages(c));
     }
 
-    [Fact]
+    [Test]
     public void Int32_FixedRows_SinglePage_AllFit()
     {
         // 3 values × 4 bytes = 12 bytes; targetPageBytes = 100 → 25 rows per page; all fit
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.Plain]));
         var c = WriteColumnWithPageSizer(col, new int[] { 1, 2, 3 }, targetBytes: 100);
-        Assert.Equal(1, CountDataPages(c));
+        ClassicAssert.AreEqual(1, CountDataPages(c));
     }
 
     // ──────────────── line 100: WriteFixedRowsDataPages uses Math.Max(1, ...) ────────────────
 
-    [Fact]
+    [Test]
     public void Int32_TargetSmallerThanOneRow_StillGetsAtLeastOneRowPerPage()
     {
         // Even if targetPageBytes < sizeof(int)=4, we get Math.Max(1, ...) = 1 row per page
@@ -148,7 +148,7 @@ public class EncodingPageBoundaryTests
             new ColumnOptions(encodings: [EncodingKind.Plain]));
         var c = WriteColumnWithPageSizer(col, new int[] { 1, 2, 3 }, targetBytes: 1);
         // Math.Max(1, 1/4) = Math.Max(1, 0) = 1 → 3 pages (1 row each)
-        Assert.Equal(3, CountDataPages(c));
+        ClassicAssert.AreEqual(3, CountDataPages(c));
     }
 
     sealed class TargetByteSizeStrategy : IPageStrategy

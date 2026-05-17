@@ -44,7 +44,7 @@ public class ColumnChunkReaderExpandTests
 
     // ──────────────── DateTimeOffset? (line 1460) ────────────────
 
-    [Fact]
+    [Test]
     public void DateTimeOffset_Optional_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Int64,
@@ -54,14 +54,14 @@ public class ColumnChunkReaderExpandTests
         var values = new DateTimeOffset?[] { ts, null, DateTimeOffset.UnixEpoch, null };
         var data = WriteOptionalCol(col, values);
         var result = ReadOptional<DateTimeOffset>(data, col);
-        Assert.Equal(4, result.Length);
-        Assert.Equal(ts.UtcDateTime, result[0]?.UtcDateTime);
-        Assert.Null(result[1]);
-        Assert.Equal(DateTimeOffset.UnixEpoch.UtcDateTime, result[2]?.UtcDateTime);
-        Assert.Null(result[3]);
+        ClassicAssert.AreEqual(4, result.Length);
+        ClassicAssert.AreEqual(ts.UtcDateTime, result[0]?.UtcDateTime);
+        ClassicAssert.IsNull(result[1]);
+        ClassicAssert.AreEqual(DateTimeOffset.UnixEpoch.UtcDateTime, result[2]?.UtcDateTime);
+        ClassicAssert.IsNull(result[3]);
     }
 
-    [Fact]
+    [Test]
     public void DateTimeOffset_Optional_AllNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Int64,
@@ -70,10 +70,10 @@ public class ColumnChunkReaderExpandTests
         var values = new DateTimeOffset?[] { null, null };
         var data = WriteOptionalCol(col, values);
         var result = ReadOptional<DateTimeOffset>(data, col);
-        Assert.Equal(new DateTimeOffset?[] { null, null }, result);
+        ClassicAssert.AreEqual(new DateTimeOffset?[] { null, null }, result);
     }
 
-    [Fact]
+    [Test]
     public void DateTimeOffset_Optional_SingleValue()
     {
         var col = new Column("v", ParquetPhysicalType.Int64,
@@ -83,14 +83,14 @@ public class ColumnChunkReaderExpandTests
         var values = new DateTimeOffset?[] { null, ts, null };
         var data = WriteOptionalCol(col, values);
         var result = ReadOptional<DateTimeOffset>(data, col);
-        Assert.Null(result[0]);
-        Assert.Equal(ts.UtcDateTime, result[1]?.UtcDateTime);
-        Assert.Null(result[2]);
+        ClassicAssert.IsNull(result[0]);
+        ClassicAssert.AreEqual(ts.UtcDateTime, result[1]?.UtcDateTime);
+        ClassicAssert.IsNull(result[2]);
     }
 
     // ──────────────── More DateOnly? tests (to improve line coverage) ────────────────
 
-    [Fact]
+    [Test]
     public void DateOnly_Optional_ManyValues()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
@@ -101,21 +101,21 @@ public class ColumnChunkReaderExpandTests
             .ToArray();
         var data = WriteOptionalCol(col, values);
         var result = ReadOptional<DateOnly>(data, col);
-        Assert.Equal(16, result.Length);
+        ClassicAssert.AreEqual(16, result.Length);
         for (var i = 0; i < 16; i++)
         {
             if (i % 2 == 0)
             {
-                Assert.NotNull(result[i]);
-                Assert.Equal(new DateOnly(2024, 1, i + 1), result[i]);
+                ClassicAssert.IsNotNull(result[i]);
+                ClassicAssert.AreEqual(new DateOnly(2024, 1, i + 1), result[i]);
             }
-            else Assert.Null(result[i]);
+            else ClassicAssert.IsNull(result[i]);
         }
     }
 
     // ──────────────── More DateTime? tests ────────────────
 
-    [Fact]
+    [Test]
     public void DateTime_Optional_ManyValues()
     {
         var col = new Column("v", ParquetPhysicalType.Int64,
@@ -127,17 +127,17 @@ public class ColumnChunkReaderExpandTests
             .ToArray();
         var data = WriteOptionalCol(col, values);
         var result = ReadOptional<DateTime>(data, col);
-        Assert.Equal(10, result.Length);
+        ClassicAssert.AreEqual(10, result.Length);
         for (var i = 0; i < 10; i++)
         {
-            if (i % 3 == 0) Assert.Equal(ts.AddDays(i), result[i]);
-            else Assert.Null(result[i]);
+            if (i % 3 == 0) ClassicAssert.AreEqual(ts.AddDays(i), result[i]);
+            else ClassicAssert.IsNull(result[i]);
         }
     }
 
     // ──────────────── Large optional column — exercises definition level literal runs ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalInt32_50Values_InterleavedNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
@@ -148,12 +148,12 @@ public class ColumnChunkReaderExpandTests
             .ToArray();
         var data = WriteOptionalCol(col, values);
         var result = ReadOptional<int>(data, col);
-        Assert.Equal(50, result.Length);
+        ClassicAssert.AreEqual(50, result.Length);
         for (var i = 0; i < 50; i++)
-            Assert.Equal(i % 2 == 0 ? (int?)i : null, result[i]);
+            ClassicAssert.AreEqual(i % 2 == 0 ? (int?)i : null, result[i]);
     }
 
-    [Fact]
+    [Test]
     public void OptionalFloat_50Values_InterleavedNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Float,
@@ -163,14 +163,14 @@ public class ColumnChunkReaderExpandTests
             .ToArray();
         var data = WriteOptionalCol(col, values);
         var result = ReadOptional<float>(data, col);
-        Assert.Equal(50, result.Length);
+        ClassicAssert.AreEqual(50, result.Length);
         for (var i = 0; i < 50; i++)
-            Assert.Equal(i % 2 == 0 ? (float?)((float)i * 0.5f) : null, result[i]);
+            ClassicAssert.AreEqual(i % 2 == 0 ? (float?)((float)i * 0.5f) : null, result[i]);
     }
 
     // ──────────────── Compressed optional columns (exercises line 723) ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalInt64_Snappy_InterleavedNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Int64,
@@ -178,12 +178,12 @@ public class ColumnChunkReaderExpandTests
         var values = new long?[] { 100L, null, null, 200L, null, 300L };
         var data = WriteOptionalCol(col, values, CompressionKind.Snappy);
         var result = ReadOptional<long>(data, col);
-        Assert.Equal(values, result);
+        ClassicAssert.AreEqual(values, result);
     }
 
     // ──────────────── EncodeOptional with multiple fixed-size types ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalBool_ManyInterleavedNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Boolean,
@@ -193,8 +193,8 @@ public class ColumnChunkReaderExpandTests
             .ToArray();
         var data = WriteOptionalCol(col, values);
         var result = ReadOptional<bool>(data, col);
-        Assert.Equal(32, result.Length);
+        ClassicAssert.AreEqual(32, result.Length);
         for (var i = 0; i < 32; i++)
-            Assert.Equal(i % 3 == 0 ? (bool?)(i % 6 == 0) : null, result[i]);
+            ClassicAssert.AreEqual(i % 3 == 0 ? (bool?)(i % 6 == 0) : null, result[i]);
     }
 }

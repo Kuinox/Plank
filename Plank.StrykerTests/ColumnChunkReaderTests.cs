@@ -60,138 +60,138 @@ public class ColumnChunkReaderTests
 
     // ──────────────── DecodePlainInt32 for byte (line 791-795) ────────────────
 
-    [Fact]
+    [Test]
     public void Read_Byte_Plain_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.Plain]));
         var values = new byte[] { 0, 1, 127, 128, 255, 42 };
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<byte>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<byte>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void Read_Byte_Plain_SingleValue()
     {
         var col = new Column("v", ParquetPhysicalType.Int32);
         var data = WriteAndClose(col, new byte[] { 200 });
-        Assert.Equal(new byte[] { 200 }, ReadAll<byte>(data, col));
+        ClassicAssert.AreEqual(new byte[] { 200 }, ReadAll<byte>(data, col));
     }
 
     // ──────────────── DecodePlainInt32 for ushort (line 799-803) ────────────────
 
-    [Fact]
+    [Test]
     public void Read_UShort_Plain_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.Plain]));
         var values = new ushort[] { 0, 1, 1000, 65535, 32768 };
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<ushort>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<ushort>(data, col));
     }
 
     // ──────────────── DecodePlainInt32 for uint (line 807-810) ────────────────
 
-    [Fact]
+    [Test]
     public void Read_UInt_Plain_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.Int32, null,
             new LogicalType.Int(bitWidth: 32, isSigned: false));
         var values = new uint[] { 0, 1, 1_000_000, uint.MaxValue };
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<uint>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<uint>(data, col));
     }
 
     // ──────────────── DecodePlainBoolean — bitwise decoding (line 776) ────────────────
 
-    [Fact]
+    [Test]
     public void Read_Boolean_Plain_AllTrue()
     {
         var col = new Column("v", ParquetPhysicalType.Boolean);
         var values = new bool[] { true, true, true, true, true, true, true, true };
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<bool>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<bool>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void Read_Boolean_Plain_MixedPattern()
     {
         var col = new Column("v", ParquetPhysicalType.Boolean);
         // Tests that bit shifting (i & 7) and byte indexing (i >> 3) work correctly
         var values = new bool[] { true, false, true, false, true, false, true, false, true };
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<bool>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<bool>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void Read_Boolean_Plain_SingleTrue()
     {
         var col = new Column("v", ParquetPhysicalType.Boolean);
         var data = WriteAndClose(col, new bool[] { true });
-        Assert.Equal([true], ReadAll<bool>(data, col));
+        Assert.That(ReadAll<bool>(data, col), Is.EqualTo(new[] {true}));
     }
 
-    [Fact]
+    [Test]
     public void Read_Boolean_Plain_CrossByteBoundary()
     {
         // 9 values cross the byte boundary: bits 0-7 in byte 0, bit 8 in byte 1
         var col = new Column("v", ParquetPhysicalType.Boolean);
         var values = Enumerable.Range(0, 9).Select(i => i % 3 == 0).ToArray();
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<bool>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<bool>(data, col));
     }
 
     // ──────────────── ByteStreamSplit for byte (lines 983-989) ────────────────
 
-    [Fact]
+    [Test]
     public void Read_Byte_ByteStreamSplit_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.ByteStreamSplit]));
         var values = new byte[] { 10, 20, 30, 128, 255 };
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<byte>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<byte>(data, col));
     }
 
     // ──────────────── ByteStreamSplit for ushort (lines 991-996) ────────────────
 
-    [Fact]
+    [Test]
     public void Read_UShort_ByteStreamSplit_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.ByteStreamSplit]));
         var values = new ushort[] { 0, 256, 1000, 65535 };
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<ushort>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<ushort>(data, col));
     }
 
     // ──────────────── ByteStreamSplit for uint (lines 999-1004) ────────────────
 
-    [Fact]
+    [Test]
     public void Read_UInt_ByteStreamSplit_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.Int32, null,
             new LogicalType.Int(bitWidth: 32, isSigned: false));
         var values = new uint[] { 0, 1_000_000, uint.MaxValue / 2, uint.MaxValue };
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<uint>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<uint>(data, col));
     }
 
     // ──────────────── ByteStreamSplit for ulong (lines 1026-1033) ────────────────
 
-    [Fact]
+    [Test]
     public void Read_ULong_ByteStreamSplit_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.Int64, null,
             new LogicalType.Int(bitWidth: 64, isSigned: false));
         var values = new ulong[] { 0, 1_000_000, ulong.MaxValue / 2 };
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<ulong>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<ulong>(data, col));
     }
 
     // ──────────────── Optional columns with nulls (definition level paths) ────────────────
 
-    [Fact]
+    [Test]
     public void Read_OptionalInt32_WithNulls_Plain()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
@@ -203,10 +203,10 @@ public class ColumnChunkReaderTests
         c.Serialize([1, null, 3, null, 5]);
         writer.StartRowGroup().Write(c);
         writer.CloseFile();
-        Assert.Equal([1, null, 3, null, 5], ReadAllNullable<int>(ms.ToArray(), col));
+        Assert.That(ReadAllNullable<int>(ms.ToArray(), col), Is.EqualTo(new int?[] {1, null, 3, null, 5}));
     }
 
-    [Fact]
+    [Test]
     public void Read_OptionalFloat_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Float,
@@ -218,10 +218,10 @@ public class ColumnChunkReaderTests
         c.Serialize([1.5f, null, 3.5f]);
         writer.StartRowGroup().Write(c);
         writer.CloseFile();
-        Assert.Equal([1.5f, null, 3.5f], ReadAllNullable<float>(ms.ToArray(), col));
+        Assert.That(ReadAllNullable<float>(ms.ToArray(), col), Is.EqualTo(new float?[] {1.5f, null, 3.5f}));
     }
 
-    [Fact]
+    [Test]
     public void Read_OptionalDouble_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Double,
@@ -233,10 +233,10 @@ public class ColumnChunkReaderTests
         c.Serialize([1.5, null, null, 4.0]);
         writer.StartRowGroup().Write(c);
         writer.CloseFile();
-        Assert.Equal([1.5, null, null, 4.0], ReadAllNullable<double>(ms.ToArray(), col));
+        Assert.That(ReadAllNullable<double>(ms.ToArray(), col), Is.EqualTo(new double?[] {1.5, null, null, 4.0}));
     }
 
-    [Fact]
+    [Test]
     public void Read_OptionalBool_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Boolean,
@@ -248,10 +248,10 @@ public class ColumnChunkReaderTests
         c.Serialize([true, null, false, null, true]);
         writer.StartRowGroup().Write(c);
         writer.CloseFile();
-        Assert.Equal([true, null, false, null, true], ReadAllNullable<bool>(ms.ToArray(), col));
+        Assert.That(ReadAllNullable<bool>(ms.ToArray(), col), Is.EqualTo(new bool?[] {true, null, false, null, true}));
     }
 
-    [Fact]
+    [Test]
     public void Read_OptionalLong_WithNulls()
     {
         var col = new Column("v", ParquetPhysicalType.Int64,
@@ -263,12 +263,12 @@ public class ColumnChunkReaderTests
         c.Serialize([100L, null, -200L]);
         writer.StartRowGroup().Write(c);
         writer.CloseFile();
-        Assert.Equal([100L, null, -200L], ReadAllNullable<long>(ms.ToArray(), col));
+        Assert.That(ReadAllNullable<long>(ms.ToArray(), col), Is.EqualTo(new long?[] {100L, null, -200L}));
     }
 
     // ──────────────── Dictionary encoding with nulls ────────────────
 
-    [Fact]
+    [Test]
     public void Read_DictionaryEncoding_WithNulls_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
@@ -281,34 +281,34 @@ public class ColumnChunkReaderTests
         c.Serialize([1, null, 1, 2, null, 2, 1]);
         writer.StartRowGroup().Write(c);
         writer.CloseFile();
-        Assert.Equal(new int?[] { 1, null, 1, 2, null, 2, 1 }, ReadAllNullable<int>(ms.ToArray(), col));
+        ClassicAssert.AreEqual(new int?[] { 1, null, 1, 2, null, 2, 1 }, ReadAllNullable<int>(ms.ToArray(), col));
     }
 
     // ──────────────── DeltaBinaryPacked reading (decoder path) ────────────────
 
-    [Fact]
+    [Test]
     public void Read_DeltaBinaryPacked_Int32_NonMonotonic()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.DeltaBinaryPacked]));
         var values = new int[] { 100, 50, 200, 10, 300 }; // non-monotonic
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<int>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<int>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void Read_DeltaBinaryPacked_Int64_NonMonotonic()
     {
         var col = new Column("v", ParquetPhysicalType.Int64,
             new ColumnOptions(encodings: [EncodingKind.DeltaBinaryPacked]));
         var values = new long[] { 1000L, 500L, 2000L, 100L };
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<long>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<long>(data, col));
     }
 
     // ──────────────── DeltaByteArray reading ────────────────
 
-    [Fact]
+    [Test]
     public void Read_DeltaByteArray_ByteArray_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.ByteArray,
@@ -321,14 +321,14 @@ public class ColumnChunkReaderTests
         };
         var data = WriteAndClose(col, values);
         var result = ReadAll<byte[]>(data, col);
-        Assert.Equal(values.Length, result.Length);
+        ClassicAssert.AreEqual(values.Length, result.Length);
         for (var i = 0; i < values.Length; i++)
-            Assert.Equal(values[i], result[i]);
+            ClassicAssert.AreEqual(values[i], result[i]);
     }
 
     // ──────────────── DeltaLengthByteArray reading ────────────────
 
-    [Fact]
+    [Test]
     public void Read_DeltaLengthByteArray_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.ByteArray,
@@ -340,36 +340,36 @@ public class ColumnChunkReaderTests
         };
         var data = WriteAndClose(col, values);
         var result = ReadAll<byte[]>(data, col);
-        Assert.Equal(values.Length, result.Length);
+        ClassicAssert.AreEqual(values.Length, result.Length);
         for (var i = 0; i < values.Length; i++)
-            Assert.Equal(values[i], result[i]);
+            ClassicAssert.AreEqual(values[i], result[i]);
     }
 
     // ──────────────── ByteStreamSplit float and double (already in roundtrip but here targeted) ────────────────
 
-    [Fact]
+    [Test]
     public void Read_ByteStreamSplit_Float_Specific()
     {
         var col = new Column("v", ParquetPhysicalType.Float,
             new ColumnOptions(encodings: [EncodingKind.ByteStreamSplit]));
         var values = new float[] { 0.0f, 1.0f, -1.0f, float.MaxValue / 2 };
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<float>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<float>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void Read_ByteStreamSplit_Double_Specific()
     {
         var col = new Column("v", ParquetPhysicalType.Double,
             new ColumnOptions(encodings: [EncodingKind.ByteStreamSplit]));
         var values = new double[] { 0.0, 1.0, -1.0, double.MaxValue / 2 };
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<double>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<double>(data, col));
     }
 
     // ──────────────── Reader Reset path ────────────────
 
-    [Fact]
+    [Test]
     public void Read_ResetReader_SecondReadGivesSameData()
     {
         var col = new Column("v", ParquetPhysicalType.Int32);
@@ -399,13 +399,13 @@ public class ColumnChunkReaderTests
                     second.Add(v);
         }
 
-        Assert.Equal(values, first.ToArray());
-        Assert.Equal(values, second.ToArray());
+        ClassicAssert.AreEqual(values, first.ToArray());
+        ClassicAssert.AreEqual(values, second.ToArray());
     }
 
     // ──────────────── Read from Stream source (exercises FileReadSource/StreamReadSource paths) ────────────────
 
-    [Fact]
+    [Test]
     public void Read_FromStream_SameAsMemory()
     {
         var col = new Column("v", ParquetPhysicalType.Int32);
@@ -424,22 +424,22 @@ public class ColumnChunkReaderTests
                 foreach (var v in page.Values.Span)
                     results.Add(v);
         }
-        Assert.Equal(values, results.ToArray());
+        ClassicAssert.AreEqual(values, results.ToArray());
     }
 
     // ──────────────── Multiple encodings in one read session ────────────────
 
-    [Fact]
+    [Test]
     public void Read_LargeDataset_DeltaBinaryPacked()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.DeltaBinaryPacked]));
         var values = Enumerable.Range(0, 500).ToArray();
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<int>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<int>(data, col));
     }
 
-    [Fact]
+    [Test]
     public void Read_LargeDataset_RleDictionary()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
@@ -447,6 +447,6 @@ public class ColumnChunkReaderTests
         // Low cardinality: 5 values repeated many times
         var values = Enumerable.Range(0, 500).Select(i => i % 5).ToArray();
         var data = WriteAndClose(col, values);
-        Assert.Equal(values, ReadAll<int>(data, col));
+        ClassicAssert.AreEqual(values, ReadAll<int>(data, col));
     }
 }

@@ -31,7 +31,7 @@ public class ParquetReaderTests
 
     // ──────────────── Null checks for Stream constructor (lines 21-24) ────────────────
 
-    [Fact]
+    [Test]
     public void Stream_Constructor_NullStream_Throws()
     {
         var schema = Int32Schema();
@@ -41,7 +41,7 @@ public class ParquetReaderTests
         catch (Exception) { } // ArgumentNullException or other validation
     }
 
-    [Fact]
+    [Test]
     public void Stream_Constructor_NullSchema_Throws()
     {
         var data = CreateValidParquet();
@@ -50,12 +50,12 @@ public class ParquetReaderTests
         // Just verify the schema is non-null when accessing via Footer
         var schema = Int32Schema();
         using var reader = schema.CreateReader(ms);
-        Assert.Same(schema, reader.Schema);
+        Assert.That(reader.Schema, Is.SameAs(schema));
     }
 
     // ──────────────── Null checks for IParquetReadSource constructor (lines 38-41) ────────────────
 
-    [Fact]
+    [Test]
     public void Source_Constructor_NullSource_Throws()
     {
         var schema = Int32Schema();
@@ -65,7 +65,7 @@ public class ParquetReaderTests
 
     // ──────────────── Reset null check (lines 77-79) ────────────────
 
-    [Fact]
+    [Test]
     public void Reset_NullSource_Throws()
     {
         var data = CreateValidParquet();
@@ -76,7 +76,7 @@ public class ParquetReaderTests
         catch (ArgumentNullException) { }
     }
 
-    [Fact]
+    [Test]
     public void Reset_NullStream_Throws()
     {
         var data = CreateValidParquet();
@@ -90,7 +90,7 @@ public class ParquetReaderTests
 
     // ──────────────── CorruptParquetException for small stream (line 79) ────────────────
 
-    [Fact]
+    [Test]
     public void Reset_StreamTooSmall_Throws()
     {
         // Stream with < 12 bytes cannot contain a valid footer
@@ -102,7 +102,7 @@ public class ParquetReaderTests
 
     // ──────────────── CorruptParquetException for missing PAR1 magic ────────────────
 
-    [Fact]
+    [Test]
     public void Reset_MissingMagicBytes_Throws()
     {
         // Stream that's big enough but doesn't end with PAR1
@@ -115,7 +115,7 @@ public class ParquetReaderTests
 
     // ──────────────── CorruptParquetException for oversized footer (line 88) ────────────────
 
-    [Fact]
+    [Test]
     public void Reset_FooterLengthExceedsStream_Throws()
     {
         // Build a stream: magic "PAR1" + 4 bytes (huge footer length) + "PAR1"
@@ -135,17 +135,17 @@ public class ParquetReaderTests
 
     // ──────────────── Valid reader operations ────────────────
 
-    [Fact]
+    [Test]
     public void Schema_IsRetained()
     {
         var data = CreateValidParquet();
         var schema = Int32Schema();
         var src = new MemoryReadSource(data);
         using var reader = schema.CreateReader(src);
-        Assert.Same(schema, reader.Schema);
+        Assert.That(reader.Schema, Is.SameAs(schema));
     }
 
-    [Fact]
+    [Test]
     public void Metadata_IsAccessible()
     {
         var data = CreateValidParquet([10, 20, 30]);
@@ -153,10 +153,10 @@ public class ParquetReaderTests
         var src = new MemoryReadSource(data);
         using var reader = schema.CreateReader(src);
         var metadata = reader.Metadata;
-        Assert.True(metadata.FooterLength > 0);
+        ClassicAssert.IsTrue(metadata.FooterLength > 0);
     }
 
-    [Fact]
+    [Test]
     public void Footer_IsAccessible()
     {
         var data = CreateValidParquet([1, 2, 3]);
@@ -164,10 +164,10 @@ public class ParquetReaderTests
         var src = new MemoryReadSource(data);
         using var reader = schema.CreateReader(src);
         var footer = reader.Footer;
-        Assert.NotNull(footer);
+        ClassicAssert.IsNotNull(footer);
     }
 
-    [Fact]
+    [Test]
     public void EnumerateRowGroups_EmptySchema_Works()
     {
         // Edge case: schema with no columns
@@ -181,10 +181,10 @@ public class ParquetReaderTests
         var groups = new List<RowGroupToken>();
         foreach (var tok in reader.EnumerateRowGroups())
             groups.Add(tok);
-        Assert.Empty(groups);
+        ClassicAssert.IsEmpty(groups);
     }
 
-    [Fact]
+    [Test]
     public void Reset_SameSource_CanReadAgain()
     {
         var data = CreateValidParquet([1, 2, 3]);
@@ -195,11 +195,11 @@ public class ParquetReaderTests
         var first = CountRowGroups(reader, src);
         reader.Reset(src);
         var second = CountRowGroups(reader, src);
-        Assert.Equal(first, second);
-        Assert.True(first > 0);
+        ClassicAssert.AreEqual(first, second);
+        ClassicAssert.IsTrue(first > 0);
     }
 
-    [Fact]
+    [Test]
     public void Reset_Stream_CanReadAgain()
     {
         var data = CreateValidParquet([1, 2, 3]);
@@ -210,11 +210,11 @@ public class ParquetReaderTests
         var first = CountRowGroups(reader, ms);
         reader.Reset(ms);
         var second = CountRowGroups(reader, ms);
-        Assert.Equal(first, second);
-        Assert.True(first > 0);
+        ClassicAssert.AreEqual(first, second);
+        ClassicAssert.IsTrue(first > 0);
     }
 
-    [Fact]
+    [Test]
     public void Dispose_ThenOperation_Throws()
     {
         var data = CreateValidParquet();

@@ -41,7 +41,7 @@ public class ColumnChunkReaderBitPackingTests
 
     // ──────────────── 3-bit dictionary (5 unique values) ────────────────
 
-    [Fact]
+    [Test]
     public void Dictionary_3BitIndexes_MultiBytePacking()
     {
         // 5 unique values → GetBitWidthFromMaxValue(4) = 3 bits
@@ -49,34 +49,34 @@ public class ColumnChunkReaderBitPackingTests
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.RleDictionary]));
         var values = new int[] { 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 }; // 5 unique, 10 total
-        Assert.Equal(values, WriteAndRead(col, values));
+        ClassicAssert.AreEqual(values, WriteAndRead(col, values));
     }
 
-    [Fact]
+    [Test]
     public void Dictionary_3BitIndexes_ByteAligned_7Values()
     {
         // 7 unique values → 3 bits
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.RleDictionary]));
         var values = new int[] { 1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7, 1 };
-        Assert.Equal(values, WriteAndRead(col, values));
+        ClassicAssert.AreEqual(values, WriteAndRead(col, values));
     }
 
     // ──────────────── 8-bit dictionary (256 unique values) ────────────────
 
-    [Fact]
+    [Test]
     public void Dictionary_8BitIndexes_ManyUniqueValues()
     {
         // 256 unique values → 8 bits (all byte-aligned)
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.RleDictionary]));
         var values = Enumerable.Range(0, 256).ToArray(); // 256 unique → 8-bit indexes
-        Assert.Equal(values, WriteAndRead(col, values));
+        ClassicAssert.AreEqual(values, WriteAndRead(col, values));
     }
 
     // ──────────────── 9-bit dictionary (257-511 unique values) ────────────────
 
-    [Fact]
+    [Test]
     public void Dictionary_9BitIndexes_CrossByteBoundary()
     {
         // 300 unique values → GetBitWidthFromMaxValue(299) = 9 bits
@@ -85,24 +85,24 @@ public class ColumnChunkReaderBitPackingTests
             new ColumnOptions(encodings: [EncodingKind.RleDictionary]));
         // 300 distinct values
         var values = Enumerable.Range(0, 300).ToArray();
-        Assert.Equal(values, WriteAndRead(col, values));
+        ClassicAssert.AreEqual(values, WriteAndRead(col, values));
     }
 
     // ──────────────── Mixed: run + literal in same column ────────────────
 
-    [Fact]
+    [Test]
     public void DictBitPacking_RunThenLiterals_FullRoundTrip()
     {
         // 8 of value "A", then 8 distinct values — forces both RLE run and literal group
         var col = new Column("v", ParquetPhysicalType.Int32,
             new ColumnOptions(encodings: [EncodingKind.RleDictionary]));
         var values = new int[] { 999, 999, 999, 999, 999, 999, 999, 999, 1, 2, 3, 4, 5, 6, 7, 8 };
-        Assert.Equal(values, WriteAndRead(col, values));
+        ClassicAssert.AreEqual(values, WriteAndRead(col, values));
     }
 
     // ──────────────── Nullable reference type (string) null expansion (line 94) ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalString_WithNulls_NullExpansion()
     {
         // Nullable reference type (string) with actual nulls exercises needsNullExpansion path
@@ -126,10 +126,10 @@ public class ColumnChunkReaderBitPackingTests
                 foreach (var v in page.Values.Span)
                     results.Add(v);
         }
-        Assert.Equal(["hello", null, "world", null, "test"], results);
+        Assert.That(results, Is.EqualTo(new string?[] {"hello", null, "world", null, "test"}));
     }
 
-    [Fact]
+    [Test]
     public void OptionalString_WithoutNulls_NoExpansion()
     {
         // Nullable reference type (string) without nulls — exercises the non-null code path
@@ -153,12 +153,12 @@ public class ColumnChunkReaderBitPackingTests
                 foreach (var v in page.Values.Span)
                     results.Add(v);
         }
-        Assert.Equal(["a", "b", "c"], results);
+        Assert.That(results, Is.EqualTo(new[] {"a", "b", "c"}));
     }
 
     // ──────────────── ByteArray (byte[]) with nulls ────────────────
 
-    [Fact]
+    [Test]
     public void OptionalByteArray_WithNulls_NullExpansion()
     {
         var col = new Column("v", ParquetPhysicalType.ByteArray,
@@ -181,15 +181,15 @@ public class ColumnChunkReaderBitPackingTests
                 foreach (var v in page.Values.Span)
                     results.Add(v);
         }
-        Assert.Equal(3, results.Count);
-        Assert.Equal(new byte[] { 1, 2 }, results[0]);
-        Assert.Null(results[1]);
-        Assert.Equal(new byte[] { 3 }, results[2]);
+        ClassicAssert.AreEqual(3, results.Count);
+        ClassicAssert.AreEqual(new byte[] { 1, 2 }, results[0]);
+        ClassicAssert.IsNull(results[1]);
+        ClassicAssert.AreEqual(new byte[] { 3 }, results[2]);
     }
 
     // ──────────────── Multi-page with specific page strategy ────────────────
 
-    [Fact]
+    [Test]
     public void Dictionary_MultiPage_10RowsPerPage_RoundTrip()
     {
         var col = new Column("v", ParquetPhysicalType.Int32,
@@ -219,7 +219,7 @@ public class ColumnChunkReaderBitPackingTests
                 foreach (var v in page.Values.Span)
                     results.Add(v);
         }
-        Assert.Equal(values, results.ToArray());
+        ClassicAssert.AreEqual(values, results.ToArray());
     }
 
     sealed class FixedRowsPageStrategy : IPageStrategy

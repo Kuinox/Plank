@@ -10,147 +10,147 @@ public class WyHashingTests
 {
     // ──────────────── Length boundary 0-3 (lines 44-49) ────────────────
 
-    [Fact]
+    [Test]
     public void Hash_Empty_DoesNotThrow()
     {
         // Empty input, length=0 → data.Length <= 3 → v=0
         var result = WyHashing.Hash([]);
         // Can't know exact value, but must not throw and must be deterministic
-        Assert.Equal(WyHashing.Hash([]), result);
+        ClassicAssert.AreEqual(WyHashing.Hash([]), result);
     }
 
-    [Fact]
+    [Test]
     public void Hash_OneByte_Deterministic()
     {
         var result = WyHashing.Hash([0x41]);
-        Assert.Equal(WyHashing.Hash([0x41]), result);
+        ClassicAssert.AreEqual(WyHashing.Hash([0x41]), result);
         // Different byte → different hash
-        Assert.NotEqual(WyHashing.Hash([0x42]), result);
+        ClassicAssert.AreNotEqual(WyHashing.Hash([0x42]), result);
     }
 
-    [Fact]
+    [Test]
     public void Hash_TwoBytes_Deterministic()
     {
         var result = WyHashing.Hash([0x41, 0x42]);
-        Assert.Equal(WyHashing.Hash([0x41, 0x42]), result);
-        Assert.NotEqual(WyHashing.Hash([0x42, 0x41]), result); // different order
+        ClassicAssert.AreEqual(WyHashing.Hash([0x41, 0x42]), result);
+        ClassicAssert.AreNotEqual(WyHashing.Hash([0x42, 0x41]), result); // different order
     }
 
-    [Fact]
+    [Test]
     public void Hash_ThreeBytes_Deterministic()
     {
         var result = WyHashing.Hash([0x41, 0x42, 0x43]);
-        Assert.Equal(WyHashing.Hash([0x41, 0x42, 0x43]), result);
+        ClassicAssert.AreEqual(WyHashing.Hash([0x41, 0x42, 0x43]), result);
         // 3 bytes vs 4 bytes must differ (different code paths)
-        Assert.NotEqual(WyHashing.Hash([0x41, 0x42, 0x43, 0x44]), result);
+        ClassicAssert.AreNotEqual(WyHashing.Hash([0x41, 0x42, 0x43, 0x44]), result);
     }
 
     // ──────────────── Length boundary 4-8 (lines 52-56) ────────────────
 
-    [Fact]
+    [Test]
     public void Hash_FourBytes_DifferentFrom3Bytes()
     {
         // 4 bytes → uses ReadUnaligned<uint>, different from 3 bytes path
         var h3 = WyHashing.Hash([0x41, 0x42, 0x43]);
         var h4 = WyHashing.Hash([0x41, 0x42, 0x43, 0x44]);
-        Assert.NotEqual(h3, h4);
+        ClassicAssert.AreNotEqual(h3, h4);
     }
 
-    [Fact]
+    [Test]
     public void Hash_EightBytes_Deterministic()
     {
         var data = new byte[] { 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48 };
         var result = WyHashing.Hash(data);
-        Assert.Equal(WyHashing.Hash(data), result);
+        ClassicAssert.AreEqual(WyHashing.Hash(data), result);
         // 8 bytes vs 9 bytes must differ (different code paths)
-        Assert.NotEqual(WyHashing.Hash([0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49]), result);
+        ClassicAssert.AreNotEqual(WyHashing.Hash([0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49]), result);
     }
 
-    [Fact]
+    [Test]
     public void Hash_FourBytes_LastByteMatters()
     {
         var h1 = WyHashing.Hash([0x41, 0x42, 0x43, 0x44]);
         var h2 = WyHashing.Hash([0x41, 0x42, 0x43, 0x45]);
-        Assert.NotEqual(h1, h2);
+        ClassicAssert.AreNotEqual(h1, h2);
     }
 
     // ──────────────── Length boundary 9-16 (lines 59-63) ────────────────
 
-    [Fact]
+    [Test]
     public void Hash_NineBytes_DifferentFrom8Bytes()
     {
         // 9 bytes → uses ReadUnaligned<ulong> twice with overlap, different from 8 bytes path
         var h8 = WyHashing.Hash([0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48]);
         var h9 = WyHashing.Hash([0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49]);
-        Assert.NotEqual(h8, h9);
+        ClassicAssert.AreNotEqual(h8, h9);
     }
 
-    [Fact]
+    [Test]
     public void Hash_SixteenBytes_Deterministic()
     {
         var data = new byte[16];
         for (var i = 0; i < 16; i++) data[i] = (byte)(i + 1);
         var result = WyHashing.Hash(data);
-        Assert.Equal(WyHashing.Hash(data), result);
-        Assert.NotEqual(WyHashing.Hash(new byte[17]), result); // different path
+        ClassicAssert.AreEqual(WyHashing.Hash(data), result);
+        ClassicAssert.AreNotEqual(WyHashing.Hash(new byte[17]), result); // different path
     }
 
-    [Fact]
+    [Test]
     public void Hash_SixteenBytes_DifferentFrom17Bytes()
     {
         var h16 = WyHashing.Hash(new byte[16]);
         var h17 = WyHashing.Hash(new byte[17]);
-        Assert.NotEqual(h16, h17);
+        ClassicAssert.AreNotEqual(h16, h17);
     }
 
     // ──────────────── Length > 16 with loop (lines 66-90) ────────────────
 
-    [Fact]
+    [Test]
     public void Hash_SeventeenBytes_EntersLoop()
     {
         var data = new byte[17];
         for (var i = 0; i < 17; i++) data[i] = (byte)(i + 1);
         var result = WyHashing.Hash(data);
-        Assert.Equal(WyHashing.Hash(data), result);
+        ClassicAssert.AreEqual(WyHashing.Hash(data), result);
     }
 
-    [Fact]
+    [Test]
     public void Hash_ThirtyTwoBytes_ExactTwoLoopIterations()
     {
         // 32 bytes = exactly 2 iterations of the 16-byte loop, no tail
         var data = new byte[32];
         for (var i = 0; i < 32; i++) data[i] = (byte)(i + 1);
         var result = WyHashing.Hash(data);
-        Assert.Equal(WyHashing.Hash(data), result);
+        ClassicAssert.AreEqual(WyHashing.Hash(data), result);
     }
 
-    [Fact]
+    [Test]
     public void Hash_ThirtyThreeBytes_TailOf1()
     {
         // 33 bytes = 2 iterations + tail of 1 (≤8 bytes tail path)
         var data = new byte[33];
         for (var i = 0; i < 33; i++) data[i] = (byte)(i + 1);
         var result = WyHashing.Hash(data);
-        Assert.Equal(WyHashing.Hash(data), result);
+        ClassicAssert.AreEqual(WyHashing.Hash(data), result);
         // Must differ from 32-byte version
         var data32 = new byte[32];
         for (var i = 0; i < 32; i++) data32[i] = (byte)(i + 1);
-        Assert.NotEqual(WyHashing.Hash(data32), result);
+        ClassicAssert.AreNotEqual(WyHashing.Hash(data32), result);
     }
 
-    [Fact]
+    [Test]
     public void Hash_FortyOneBytes_TailOf9()
     {
         // 41 bytes = 2 iterations + tail of 9 (>8 bytes tail path, line 86-89)
         var data = new byte[41];
         for (var i = 0; i < 41; i++) data[i] = (byte)(i + 1);
         var result = WyHashing.Hash(data);
-        Assert.Equal(WyHashing.Hash(data), result);
+        ClassicAssert.AreEqual(WyHashing.Hash(data), result);
     }
 
     // ──────────────── Finalize function properties (lines 29-33) ────────────────
 
-    [Fact]
+    [Test]
     public void Hash_AllZeroes_DifferentLengths_DifferentResults()
     {
         // All-zero inputs of different lengths must give different hashes
@@ -158,26 +158,26 @@ public class WyHashingTests
         var hashes = Enumerable.Range(0, 10).Select(n => WyHashing.Hash(new byte[n])).ToArray();
         var distinct = new HashSet<int>(hashes);
         // At least most should be distinct (some collisions might happen but unlikely)
-        Assert.True(distinct.Count >= 8, $"Too many hash collisions among zero-byte arrays: {string.Join(",", hashes)}");
+        ClassicAssert.IsTrue(distinct.Count >= 8, $"Too many hash collisions among zero-byte arrays: {string.Join(",", hashes)}");
     }
 
-    [Fact]
+    [Test]
     public void Hash_SameContentDifferentLength_Differs()
     {
         // [0x41] vs [0x41, 0x00] should give different hashes (length affects seed)
-        Assert.NotEqual(WyHashing.Hash([0x41]), WyHashing.Hash([0x41, 0x00]));
+        ClassicAssert.AreNotEqual(WyHashing.Hash([0x41]), WyHashing.Hash([0x41, 0x00]));
     }
 
-    [Fact]
+    [Test]
     public void Hash_ReturnsNonZeroForTypicalInputs()
     {
         // If the finalize function is broken to return 0 always, this catches it
-        Assert.NotEqual(0, WyHashing.Hash([0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48]));
+        ClassicAssert.AreNotEqual(0, WyHashing.Hash([0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48]));
     }
 
     // ──────────────── Via ReusableDictionary with byte[] keys (covers Hash for bytes) ────────────────
 
-    [Fact]
+    [Test]
     public void ByteArray_DictionaryLookup_ShortKeys()
     {
         // Uses WyHashing for byte[] keys (1-3 bytes → first path in Hash)
@@ -185,12 +185,12 @@ public class WyHashingTests
         d.Reset(16, true, System.Collections.Generic.EqualityComparer<byte[]>.Default);
         var k1 = new byte[] { 0x41 };           // 1 byte → ≤3 path
         var k2 = new byte[] { 0x41, 0x42, 0x43 }; // 3 bytes → ≤3 path
-        Assert.Equal(0, d.GetOrAddIndex(k1));
-        Assert.Equal(1, d.GetOrAddIndex(k2));
-        Assert.Equal(0, d.GetOrAddIndex(k1)); // duplicate
+        ClassicAssert.AreEqual(0, d.GetOrAddIndex(k1));
+        ClassicAssert.AreEqual(1, d.GetOrAddIndex(k2));
+        ClassicAssert.AreEqual(0, d.GetOrAddIndex(k1)); // duplicate
     }
 
-    [Fact]
+    [Test]
     public void ByteArray_DictionaryLookup_MediumKeys()
     {
         // 4-8 byte keys → second path in Hash
@@ -198,12 +198,12 @@ public class WyHashingTests
         d.Reset(16, true, System.Collections.Generic.EqualityComparer<byte[]>.Default);
         var k4 = new byte[] { 1, 2, 3, 4 };       // 4 bytes → ≤8 path
         var k8 = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }; // 8 bytes → ≤8 path
-        Assert.Equal(0, d.GetOrAddIndex(k4));
-        Assert.Equal(1, d.GetOrAddIndex(k8));
-        Assert.Equal(0, d.GetOrAddIndex(k4)); // duplicate
+        ClassicAssert.AreEqual(0, d.GetOrAddIndex(k4));
+        ClassicAssert.AreEqual(1, d.GetOrAddIndex(k8));
+        ClassicAssert.AreEqual(0, d.GetOrAddIndex(k4)); // duplicate
     }
 
-    [Fact]
+    [Test]
     public void ByteArray_DictionaryLookup_LongKeys()
     {
         // 9+ byte keys → third path in Hash (≤16) and loop path (>16)
@@ -211,9 +211,9 @@ public class WyHashingTests
         d.Reset(16, true, System.Collections.Generic.EqualityComparer<byte[]>.Default);
         var k9 = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 };         // 9 bytes → ≤16
         var k17 = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17 }; // 17 → loop
-        Assert.Equal(0, d.GetOrAddIndex(k9));
-        Assert.Equal(1, d.GetOrAddIndex(k17));
-        Assert.Equal(0, d.GetOrAddIndex(k9)); // duplicate
-        Assert.Equal(1, d.GetOrAddIndex(k17)); // duplicate
+        ClassicAssert.AreEqual(0, d.GetOrAddIndex(k9));
+        ClassicAssert.AreEqual(1, d.GetOrAddIndex(k17));
+        ClassicAssert.AreEqual(0, d.GetOrAddIndex(k9)); // duplicate
+        ClassicAssert.AreEqual(1, d.GetOrAddIndex(k17)); // duplicate
     }
 }
