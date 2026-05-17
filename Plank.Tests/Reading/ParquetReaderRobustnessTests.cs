@@ -37,68 +37,25 @@ internal sealed class ParquetReaderRobustnessTests
         => AssertDoesNotCrash([0x00, 0x50, 0x41, 0x52, 0x31]);
 
     [Test]
-    public void ByteStreamSplitInt32PayloadTooShort_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("ByteStreamSplitInt32PayloadTooShort"));
-
-    [Test]
-    public void ColumnCountExceedsRemainingInput_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("ColumnCountExceedsRemainingInput"));
-
-    [Test]
-    public void Crash001_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("crash-001"));
-
-    [Test]
-    public void DefinitionLevelLiteralByteCountExceedsPayload_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("DefinitionLevelLiteralByteCountExceedsPayload"));
-
-    [Test]
-    public void DefinitionLevelLiteralGroupCountTooLarge_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("DefinitionLevelLiteralGroupCountTooLarge"));
-
-    [Test]
-    public void DictionaryIndexesNullsOutOfBounds_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("DictionaryIndexesNullsOutOfBounds"));
-
-    [Test]
-    public void DictionaryLiteralRunBeforeRleRun_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("DictionaryLiteralRunBeforeRleRun"));
-
-    [Test]
-    public void NegativeCompressedPageSize_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("NegativeCompressedPageSize"));
-
-    [Test]
-    public void NegativeI64OffsetInFooter_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("NegativeI64OffsetInFooter"));
-
-    [Test]
-    public void PlainDoublePayloadTooShort_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("PlainDoublePayloadTooShort"));
-
-    [Test]
-    public void PlainInt32PayloadTooShort_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("PlainInt32PayloadTooShort"));
-
-    [Test]
-    public void PlainInt64PayloadTooShort_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("PlainInt64PayloadTooShort"));
-
-    [Test]
-    public void RleBitPackedHybridZeroBitWidth_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("RleBitPackedHybridZeroBitWidth"));
-
-    [Test]
-    public void RowGroupCountOverflow_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("RowGroupCountOverflow"));
-
-    [Test]
-    public void SnappyDestinationTooSmall_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("SnappyDestinationTooSmall"));
-
-    [Test]
-    public void ThriftNestingDepthExceedsMaximum_DoesNotCrash()
-        => AssertDoesNotCrash(FixtureBytes("ThriftNestingDepthExceedsMaximum"));
+    [Arguments("ByteStreamSplitInt32PayloadTooShort.parquet")]
+    [Arguments("ColumnCountExceedsRemainingInput.parquet")]
+    [Arguments("crash-001.parquet")]
+    [Arguments("DefinitionLevelLiteralByteCountExceedsPayload.parquet")]
+    [Arguments("DefinitionLevelLiteralGroupCountTooLarge.parquet")]
+    [Arguments("DictionaryIndexesNullsOutOfBounds.parquet")]
+    [Arguments("DictionaryLiteralRunBeforeRleRun.parquet")]
+    [Arguments("DictionaryPageValueCountExceedsPayload.parquet")]
+    [Arguments("NegativeCompressedPageSize.parquet")]
+    [Arguments("NegativeI64OffsetInFooter.parquet")]
+    [Arguments("PlainDoublePayloadTooShort.parquet")]
+    [Arguments("PlainInt32PayloadTooShort.parquet")]
+    [Arguments("PlainInt64PayloadTooShort.parquet")]
+    [Arguments("RleBitPackedHybridZeroBitWidth.parquet")]
+    [Arguments("RowGroupCountOverflow.parquet")]
+    [Arguments("SnappyDestinationTooSmall.parquet")]
+    [Arguments("ThriftNestingDepthExceedsMaximum.parquet")]
+    public void Fixture_DoesNotCrash(string fileName)
+        => AssertDoesNotCrash(FixtureBytes(fileName));
 
     static void AssertDoesNotCrash(byte[] data)
     {
@@ -116,10 +73,7 @@ internal sealed class ParquetReaderRobustnessTests
                     DrainColumn(rowGroup, column);
             }
         }
-        catch (Exception ex) when (ex is CorruptParquetException
-            or InvalidOperationException
-            or NotSupportedException
-            or EndOfStreamException) { }
+        catch (CorruptParquetException) { }
     }
 
     static void DrainColumn(RowGroupReader rowGroup, Column column)
@@ -149,8 +103,8 @@ internal sealed class ParquetReaderRobustnessTests
         }
     }
 
-    static byte[] FixtureBytes(string name)
-        => File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Reading", "Fixtures", name + ".parquet"));
+    static byte[] FixtureBytes(string fileName)
+        => File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Reading", "Fixtures", fileName));
 
     static ParquetSchema Schema(params Column[] columns)
         => new(columns.ToImmutableArray());

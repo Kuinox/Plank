@@ -16,6 +16,9 @@ static class ColumnChunkReader
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(bufferPool);
+        if (columnChunk.TotalCompressedSize > source.Length)
+            throw new CorruptParquetException(
+                $"Column chunk size ({columnChunk.TotalCompressedSize}) exceeds source length ({source.Length}).");
         if (columnChunk.TotalCompressedSize > int.MaxValue)
             throw new NotSupportedException("Column chunks larger than Int32.MaxValue are not supported.");
 
@@ -26,8 +29,8 @@ static class ColumnChunkReader
     }
 
     internal static bool TryReadNextDataPage<T>(byte[] buffer, int bufferLength, ref int offset, Column column,
-        InternalColumnChunkMetadata columnChunk, ref Array? dictionary, ref T[]? dictionaryBuffer, ref T[]? valuesBuffer,
-        out ReadOnlyMemory<T> values, out EncodingKind encoding)
+        InternalColumnChunkMetadata columnChunk, ulong rowCount, ref Array? dictionary, ref T[]? dictionaryBuffer,
+        ref T[]? valuesBuffer, out ReadOnlyMemory<T> values, out EncodingKind encoding)
     {
         ArgumentNullException.ThrowIfNull(buffer);
         ArgumentNullException.ThrowIfNull(column);
@@ -62,6 +65,9 @@ static class ColumnChunkReader
                     if (header.NullCount > header.ValueCount)
                         throw new CorruptParquetException(
                             $"Page null count ({header.NullCount}) exceeds value count ({header.ValueCount}).");
+                    if (header.ValueCount > rowCount)
+                        throw new CorruptParquetException(
+                            $"Page value count ({header.ValueCount}) exceeds row group row count ({rowCount}).");
                     var totalValueCount = header.ValueCount;
                     var physicalValueCount = header.ValueCount - header.NullCount;
 
@@ -576,6 +582,10 @@ static class ColumnChunkReader
         var effectivePayload = compression == CompressionKind.None || header.CompressedPageSize == 0
             ? payload
             : ParquetDecompressor.Decompress(payload, header.UncompressedPageSize, compression);
+
+        if ((ulong)header.ValueCount > (ulong)effectivePayload.Length * 8)
+            throw new CorruptParquetException(
+                $"Dictionary page value count ({header.ValueCount}) cannot be encoded in {effectivePayload.Length} bytes.");
 
         if (physicalDecodeType == typeof(T) &&
             TryDecodeValuesIntoBuffer(effectivePayload, column, header.ValueCount, header.Encoding,

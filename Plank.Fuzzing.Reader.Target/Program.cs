@@ -15,6 +15,8 @@ static class Program
 
         if (Environment.GetEnvironmentVariable("FUZZ_OOP") == "1")
             Fuzzer.OutOfProcess.Run(action);
+        else if (Environment.GetEnvironmentVariable("FUZZ_SINGLE") == "1")
+            Fuzzer.RunOnce(action);
         else
             Fuzzer.Run(action);
     }

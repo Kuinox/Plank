@@ -64,7 +64,7 @@ sealed class RowGroupReadContext
             throw new CorruptParquetException(
                 $"Column '{column.Name}' (ordinal {columnOrdinal}) is not present in this row group ({_rowGroup.Columns.Length} columns).");
         return new(_source, column, _rowGroup.Columns[columnOrdinal],
-            GetPageReadState<T>(columnOrdinal), _reader.Options.BufferPool);
+            GetPageReadState<T>(columnOrdinal), _reader.Options.BufferPool, _rowGroup.RowCount);
     }
 
     ColumnPageReadState<T> GetPageReadState<T>(int columnOrdinal)
