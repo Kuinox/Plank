@@ -143,4 +143,94 @@ public class DeltaBinaryPackedDecoderTests
         var consumedBytes = DeltaBinaryPackedDecoder.ReadInt32(payload, Span<int>.Empty);
         Assert.True(consumedBytes > 0); // still consumed the header
     }
+
+    // ──────────────── ReadUInt32WithConsumedBytes ────────────────
+
+    [Fact]
+    public void ReadUInt32WithConsumedBytes_PositiveValues_RoundTrip()
+    {
+        var values = new int[] { 0, 1, 100, 255, 65535 };
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 4096, 4096);
+        DeltaBinaryPackedEncoding.WriteInt32(values, ref writer);
+        var payload = new byte[writer.WrittenLength];
+        writer.CopyTo(payload);
+
+        var (result, consumed) = DeltaBinaryPackedDecoder.ReadUInt32WithConsumedBytes(payload);
+        Assert.Equal((uint[])([0, 1, 100, 255, 65535]), result);
+        Assert.Equal(writer.WrittenLength, consumed);
+    }
+
+    [Fact]
+    public void ReadUInt32WithConsumedBytes_NegativeValue_Throws()
+    {
+        var values = new int[] { 1, -1, 3 }; // -1 encoded and decoded as -1, which is < 0
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 4096, 4096);
+        DeltaBinaryPackedEncoding.WriteInt32(values, ref writer);
+        var payload = new byte[writer.WrittenLength];
+        writer.CopyTo(payload);
+
+        Assert.Throws<CorruptParquetException>(() =>
+            DeltaBinaryPackedDecoder.ReadUInt32WithConsumedBytes(payload));
+    }
+
+    // ──────────────── Edge cases that target surviving conditional mutations ────────────────
+
+    [Fact]
+    public void Int32_TwoValues_ExactDiff()
+    {
+        // Tests the delta encoding/decoding path with just 2 values
+        var result = EncodeDecodeInt32([100, 200]);
+        Assert.Equal([100, 200], result);
+    }
+
+    [Fact]
+    public void Int32_LargeWideDeltas_RoundTrip()
+    {
+        // Forces wide bitwidth (large deltas between consecutive values)
+        var values = new int[] { 0, int.MaxValue / 2, 0, -(int.MaxValue / 2), 0 };
+        Assert.Equal(values, EncodeDecodeInt32(values));
+    }
+
+    [Fact]
+    public void Int32_AlternatingMinMax_RoundTrip()
+    {
+        // Values: int.MinValue, int.MaxValue, int.MinValue, int.MaxValue
+        var values = new int[] { int.MinValue, int.MaxValue, int.MinValue, int.MaxValue };
+        Assert.Equal(values, EncodeDecodeInt32(values));
+    }
+
+    [Fact]
+    public void Int64_LargeValues_RoundTrip()
+    {
+        // Large int64 timestamps
+        var values = new long[] { 1_000_000_000_000L, 1_000_001_000_000L, 1_000_002_000_000L };
+        Assert.Equal(values, EncodeDecodeInt64(values));
+    }
+
+    [Fact]
+    public void Int32_ExactlyTwoBlocks_RoundTrip()
+    {
+        // 256 values = exactly 2 blocks of 128
+        var values = Enumerable.Range(0, 256).ToArray();
+        Assert.Equal(values, EncodeDecodeInt32(values));
+    }
+
+    [Fact]
+    public void Int32_OneMoreThanBlock_RoundTrip()
+    {
+        // 129 values = 1 full block + 1 partial
+        var values = Enumerable.Range(10, 129).ToArray();
+        Assert.Equal(values, EncodeDecodeInt32(values));
+    }
+
+    [Fact]
+    public void Int64_EmptyIntoDestination_Succeeds()
+    {
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 4096, 4096);
+        DeltaBinaryPackedEncoding.WriteInt64([], ref writer);
+        var payload = new byte[writer.WrittenLength];
+        writer.CopyTo(payload);
+        var consumedBytes = DeltaBinaryPackedDecoder.ReadInt64(payload, Span<long>.Empty);
+        Assert.True(consumedBytes > 0);
+    }
 }
