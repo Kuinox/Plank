@@ -2,7 +2,7 @@ namespace Plank.Writing;
 
 internal readonly struct BufferWriterFactory
 {
-    readonly IParquetBufferPool _bufferPool;
+    internal readonly IParquetBufferPool BufferPool;
     readonly uint _bufferChunkSizeBytes;
     readonly uint _initialPageBufferBytes;
     readonly uint _initialColumnBufferBytes;
@@ -25,7 +25,7 @@ internal readonly struct BufferWriterFactory
             throw new ArgumentOutOfRangeException(nameof(initialMetadataBufferBytes), initialMetadataBufferBytes,
                 "Initial metadata buffer size must be greater than zero.");
 
-        _bufferPool = bufferPool;
+        BufferPool = bufferPool;
         _bufferChunkSizeBytes = bufferChunkSizeBytes;
         _initialPageBufferBytes = initialPageBufferBytes;
         _initialColumnBufferBytes = initialColumnBufferBytes;
@@ -33,17 +33,20 @@ internal readonly struct BufferWriterFactory
     }
 
     internal BufferWriter CreatePageBufferWriter()
-        => new(_bufferPool, _bufferChunkSizeBytes, _initialPageBufferBytes);
+        => new(BufferPool, _bufferChunkSizeBytes, _initialPageBufferBytes);
 
     internal BufferWriter CreateColumnBufferWriter()
-        => new(_bufferPool, _bufferChunkSizeBytes, _initialColumnBufferBytes);
+        => new(BufferPool, _bufferChunkSizeBytes, _initialColumnBufferBytes);
 
     internal BufferWriter CreateMetadataBufferWriter()
-        => new(_bufferPool, _bufferChunkSizeBytes, _initialMetadataBufferBytes);
+        => new(BufferPool, _bufferChunkSizeBytes, _initialMetadataBufferBytes);
+
+    internal T[] RentScratch<T>(uint minimumLength)
+        => BufferPool.Rent<T>(minimumLength);
 
     internal byte[] RentScratch(uint minimumLength)
-        => _bufferPool.Rent(minimumLength);
+        => RentScratch<byte>(minimumLength);
 
-    internal void ReturnScratch(byte[] buffer)
-        => _bufferPool.Return(buffer);
+    internal void ReturnScratch<T>(T[] buffer, bool clearArray = false)
+        => BufferPool.Return(buffer, clearArray);
 }

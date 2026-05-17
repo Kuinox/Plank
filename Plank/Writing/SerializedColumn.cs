@@ -269,7 +269,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeDateOnly(ReadOnlySpan<DateOnly> values)
     {
         RequireDateLogicalType(_column);
-        var rented = ArrayRenter<int>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<int>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -279,14 +279,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<int>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeNullableDateOnly(ReadOnlySpan<DateOnly?> values)
     {
         RequireDateLogicalType(_column);
-        var rented = ArrayRenter<int?>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<int?>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -296,13 +296,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<int?>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeByte(ReadOnlySpan<byte> values)
     {
-        var rented = ArrayRenter<int>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<int>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -314,13 +314,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<int>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeNullableByte(ReadOnlySpan<byte?> values)
     {
-        var rented = ArrayRenter<int?>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<int?>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -332,13 +332,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<int?>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeUInt16(ReadOnlySpan<ushort> values)
     {
-        var rented = ArrayRenter<int>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<int>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -350,13 +350,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<int>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeNullableUInt16(ReadOnlySpan<ushort?> values)
     {
-        var rented = ArrayRenter<int?>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<int?>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -368,13 +368,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<int?>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeUInt32(ReadOnlySpan<uint> values)
     {
-        var rented = ArrayRenter<int>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<int>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -386,13 +386,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<int>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeNullableUInt32(ReadOnlySpan<uint?> values)
     {
-        var rented = ArrayRenter<int?>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<int?>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -404,14 +404,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<int?>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeDateTime(ReadOnlySpan<DateTime> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
-        var rented = ArrayRenter<long>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -421,14 +421,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<long>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeNullableDateTime(ReadOnlySpan<DateTime?> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
-        var rented = ArrayRenter<long?>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -438,13 +438,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<long?>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeUInt64(ReadOnlySpan<ulong> values)
     {
-        var rented = ArrayRenter<long>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -456,13 +456,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<long>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeNullableUInt64(ReadOnlySpan<ulong?> values)
     {
-        var rented = ArrayRenter<long?>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -474,14 +474,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<long?>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeDateTimeOffset(ReadOnlySpan<DateTimeOffset> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
-        var rented = ArrayRenter<long>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -491,14 +491,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<long>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeNullableDateTimeOffset(ReadOnlySpan<DateTimeOffset?> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
-        var rented = ArrayRenter<long?>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -508,14 +508,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<long?>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeTimeOnly(ReadOnlySpan<TimeOnly> values)
     {
         var time = RequireTimeLogicalType(_column);
-        var rented = ArrayRenter<long>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -525,14 +525,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<long>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
     void SerializeNullableTimeOnly(ReadOnlySpan<TimeOnly?> values)
     {
         var time = RequireTimeLogicalType(_column);
-        var rented = ArrayRenter<long?>.Shared.Rent(values.Length);
+        var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
         try
         {
             var converted = rented.AsSpan(0, values.Length);
@@ -542,7 +542,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         finally
         {
-            ArrayRenter<long?>.Shared.Return(rented);
+            _owner.BufferWriters.ReturnScratch(rented);
         }
     }
 
@@ -593,7 +593,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
 
         Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, values, 0,
-            ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer);
+            ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
             AssignPageStatistics(values);
     }
@@ -627,7 +627,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = checked((uint)values.Length);
-        Statistics = ColumnStatistics.CreateOptional(_column, values);
+        Statistics = ColumnStatistics.CreateOptional(_column, values, _owner.BufferWriters.BufferPool);
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategy, Pages,
@@ -744,7 +744,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var pageRowCount = checked((int)page.RowCount);
             var pageRows = values.Slice(rowOffset, pageRowCount);
             page.Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, pageRows, page.NullCount,
-                ref page.StatisticsMinValueBuffer, ref page.StatisticsMaxValueBuffer);
+                ref page.StatisticsMinValueBuffer, ref page.StatisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
             rowOffset += pageRowCount;
         }
     }
@@ -776,7 +776,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 continue;
             var pageRowCount = checked((int)page.RowCount);
             var pageRows = values.Slice(rowOffset, pageRowCount);
-            page.Statistics = ColumnStatistics.CreateOptional(_column, pageRows);
+            page.Statistics = ColumnStatistics.CreateOptional(_column, pageRows, _owner.BufferWriters.BufferPool);
             rowOffset += pageRowCount;
         }
     }

@@ -229,7 +229,7 @@ public struct BufferWriter : IBufferWriter<byte>
             return;
 
         var minimumSize = Math.Max(_chunkSizeBytes, sizeHint);
-        var buffer = _pool.Rent(checked((uint)minimumSize));
+        var buffer = _pool.Rent<byte>(checked((uint)minimumSize));
         _segments[_currentSegmentIndex] = new Segment(buffer);
         _segmentCount = _currentSegmentIndex + 1;
     }

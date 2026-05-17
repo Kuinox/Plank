@@ -47,7 +47,16 @@ sealed class RowGroupReadContext
     }
 
     internal void Dispose()
-        => _disposed = true;
+    {
+        if (_disposed)
+            return;
+
+        for (var i = 0; i < _columnPageStates.Length; i++)
+            if (_columnPageStates[i] is IColumnPageReadState state)
+                state.ReleaseAll(_reader.Options.BufferPool);
+
+        _disposed = true;
+    }
 
     internal void ThrowIfDisposed()
     {

@@ -329,7 +329,7 @@ static class Encoding
             return;
 
         var presentCount = CountPresentValues(values);
-        var rentedValues = ArrayRenter<T>.Shared.Rent(presentCount);
+        var rentedValues = bufferWriters.RentScratch<T>(checked((uint)presentCount));
         var densePresentValues = rentedValues.AsSpan(0, presentCount);
         CopyPresentValues(values, densePresentValues);
         try
@@ -338,7 +338,7 @@ static class Encoding
         }
         finally
         {
-            ArrayRenter<T>.Shared.Return(rentedValues);
+            bufferWriters.ReturnScratch(rentedValues);
         }
     }
 
@@ -368,7 +368,7 @@ static class Encoding
             return;
         }
 
-        var rentedValues = ArrayRenter<T>.Shared.Rent(presentCount);
+        var rentedValues = bufferWriters.RentScratch<T>(checked((uint)presentCount));
         var densePresentValues = rentedValues.AsSpan(0, presentCount);
         CopyPresentValues(values, densePresentValues);
         try
@@ -377,7 +377,7 @@ static class Encoding
         }
         finally
         {
-            ArrayRenter<T>.Shared.Return(rentedValues, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
+            bufferWriters.ReturnScratch(rentedValues, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
         }
     }
 

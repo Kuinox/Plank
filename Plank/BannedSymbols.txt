@@ -1,1 +1,1 @@
-T:System.Buffers.ArrayPool`1;Use Plank.Writing.ArrayRenter<T> or IParquetBufferPool instead of direct ArrayPool<T>.
+T:System.Buffers.ArrayPool`1;Use IParquetBufferPool instead of direct ArrayPool<T>.

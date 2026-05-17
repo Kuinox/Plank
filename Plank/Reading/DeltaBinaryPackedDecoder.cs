@@ -23,6 +23,15 @@ static class DeltaBinaryPackedDecoder
     internal static int ReadInt64(ReadOnlySpan<byte> payload, Span<long> destination)
         => ReadInt64Core(payload, destination);
 
+    internal static int ReadNonNegativeInt32WithConsumedBytes(ReadOnlySpan<byte> payload, Span<int> destination)
+    {
+        var consumedBytes = ReadInt32Core(payload, destination);
+        for (var i = 0; i < destination.Length; i++)
+            if (destination[i] < 0)
+                throw new CorruptParquetException($"Delta encoded length {destination[i]} is negative.");
+        return consumedBytes;
+    }
+
     internal static (uint[] Values, int ConsumedBytes) ReadUInt32WithConsumedBytes(ReadOnlySpan<byte> payload)
     {
         var (signed, consumedBytes) = ReadInt32Core(payload);

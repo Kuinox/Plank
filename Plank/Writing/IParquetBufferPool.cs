@@ -2,7 +2,7 @@ namespace Plank.Writing;
 
 public interface IParquetBufferPool
 {
-    byte[] Rent(uint minimumLength);
+    T[] Rent<T>(uint minimumLength);
 
-    void Return(byte[] buffer);
+    void Return<T>(T[] buffer, bool clearArray = false);
 }

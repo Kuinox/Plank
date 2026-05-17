@@ -68,6 +68,11 @@ internal readonly struct ColumnStatistics
 
     internal static ColumnStatistics Create<T>(Column column, ReadOnlySpan<T> values, long nullCount)
         where T : notnull
+        => Create(column, values, nullCount, DefaultParquetBufferPool.Shared);
+
+    internal static ColumnStatistics Create<T>(Column column, ReadOnlySpan<T> values, long nullCount,
+        IParquetBufferPool bufferPool)
+        where T : notnull
     {
         if (column.Options.Repetition == ParquetRepetition.Repeated)
             return CreateRepeated(column, values, nullCount);
@@ -90,7 +95,7 @@ internal readonly struct ColumnStatistics
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
             return CreateMemory(AsAnySpan<T, ReadOnlyMemory<byte>>(values), nullCount);
         if (typeof(T) == typeof(string))
-            return CreateString(AsAnySpan<T, string>(values), nullCount);
+            return CreateString(AsAnySpan<T, string>(values), nullCount, bufferPool);
 
         return Empty(nullCount);
     }
@@ -98,15 +103,21 @@ internal readonly struct ColumnStatistics
     internal static ColumnStatistics CreateWithReusableBinaryBuffers<T>(Column column, ReadOnlySpan<T> values,
         long nullCount, ref byte[]? minBuffer, ref byte[]? maxBuffer)
         where T : notnull
+        => CreateWithReusableBinaryBuffers(column, values, nullCount, ref minBuffer, ref maxBuffer,
+            DefaultParquetBufferPool.Shared);
+
+    internal static ColumnStatistics CreateWithReusableBinaryBuffers<T>(Column column, ReadOnlySpan<T> values,
+        long nullCount, ref byte[]? minBuffer, ref byte[]? maxBuffer, IParquetBufferPool bufferPool)
+        where T : notnull
     {
         if (typeof(T) == typeof(byte[]))
             return CreateByteArray(column, AsAnySpan<T, byte[]>(values), nullCount, ref minBuffer, ref maxBuffer);
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
             return CreateMemory(AsAnySpan<T, ReadOnlyMemory<byte>>(values), nullCount, ref minBuffer, ref maxBuffer);
         if (typeof(T) == typeof(string))
-            return CreateString(AsAnySpan<T, string>(values), nullCount, ref minBuffer, ref maxBuffer);
+            return CreateString(AsAnySpan<T, string>(values), nullCount, ref minBuffer, ref maxBuffer, bufferPool);
 
-        return Create(column, values, nullCount);
+        return Create(column, values, nullCount, bufferPool);
     }
 
     static ColumnStatistics CreateRepeated<T>(Column column, ReadOnlySpan<T> values, long nullCount)
@@ -139,11 +150,16 @@ internal readonly struct ColumnStatistics
 
     internal static ColumnStatistics CreateOptional<T>(Column column, ReadOnlySpan<T> values)
         where T : class
+        => CreateOptional(column, values, DefaultParquetBufferPool.Shared);
+
+    internal static ColumnStatistics CreateOptional<T>(Column column, ReadOnlySpan<T> values,
+        IParquetBufferPool bufferPool)
+        where T : class
     {
         if (typeof(T) == typeof(byte[]))
             return CreateOptionalByteArray(column, AsAnySpan<T, byte[]>(values));
         if (typeof(T) == typeof(string))
-            return CreateOptionalString(AsAnySpan<T, string>(values));
+            return CreateOptionalString(AsAnySpan<T, string>(values), bufferPool);
 
         return Empty(CountNulls(values));
     }
@@ -786,7 +802,7 @@ internal readonly struct ColumnStatistics
         return min is null ? Empty(nullCount) : new ColumnStatistics(min, max, nullCount, true);
     }
 
-    static ColumnStatistics CreateString(ReadOnlySpan<string> values, long nullCount)
+    static ColumnStatistics CreateString(ReadOnlySpan<string> values, long nullCount, IParquetBufferPool bufferPool)
     {
         if (values.Length == 0)
             return Empty(nullCount);
@@ -796,9 +812,9 @@ internal readonly struct ColumnStatistics
         for (var i = 1; i < values.Length; i++)
         {
             var value = values[i] ?? throw new InvalidOperationException("Required string column does not support null values.");
-            if (CompareUtf8Strings(value, min) < 0)
+            if (CompareUtf8Strings(value, min, bufferPool) < 0)
                 min = value;
-            if (CompareUtf8Strings(value, max) > 0)
+            if (CompareUtf8Strings(value, max, bufferPool) > 0)
                 max = value;
         }
 
@@ -806,7 +822,7 @@ internal readonly struct ColumnStatistics
     }
 
     static ColumnStatistics CreateString(ReadOnlySpan<string> values, long nullCount, ref byte[]? minBuffer,
-        ref byte[]? maxBuffer)
+        ref byte[]? maxBuffer, IParquetBufferPool bufferPool)
     {
         if (values.Length == 0)
             return Empty(nullCount);
@@ -816,9 +832,9 @@ internal readonly struct ColumnStatistics
         for (var i = 1; i < values.Length; i++)
         {
             var value = values[i] ?? throw new InvalidOperationException("Required string column does not support null values.");
-            if (CompareUtf8Strings(value, min) < 0)
+            if (CompareUtf8Strings(value, min, bufferPool) < 0)
                 min = value;
-            if (CompareUtf8Strings(value, max) > 0)
+            if (CompareUtf8Strings(value, max, bufferPool) > 0)
                 max = value;
         }
 
@@ -827,7 +843,7 @@ internal readonly struct ColumnStatistics
         return new ColumnStatistics(minBuffer, minLength, maxBuffer, maxLength, nullCount, true);
     }
 
-    static ColumnStatistics CreateOptionalString(ReadOnlySpan<string> values)
+    static ColumnStatistics CreateOptionalString(ReadOnlySpan<string> values, IParquetBufferPool bufferPool)
     {
         string? min = null;
         string? max = null;
@@ -848,16 +864,16 @@ internal readonly struct ColumnStatistics
                 continue;
             }
 
-            if (CompareUtf8Strings(value, min) < 0)
+            if (CompareUtf8Strings(value, min, bufferPool) < 0)
                 min = value;
-            if (CompareUtf8Strings(value, max!) > 0)
+            if (CompareUtf8Strings(value, max!, bufferPool) > 0)
                 max = value;
         }
 
         return min is null ? Empty(nullCount) : new ColumnStatistics(Utf8.GetBytes(min), Utf8.GetBytes(max!), nullCount, true);
     }
 
-    static int CompareUtf8Strings(string left, string right)
+    static int CompareUtf8Strings(string left, string right, IParquetBufferPool bufferPool)
     {
         var length = Math.Min(left.Length, right.Length);
         for (var i = 0; i < length; i++)
@@ -865,7 +881,7 @@ internal readonly struct ColumnStatistics
             var leftChar = left[i];
             var rightChar = right[i];
             if (leftChar > 0x7F || rightChar > 0x7F)
-                return CompareUtf8StringsSlow(left, right);
+                return CompareUtf8StringsSlow(left, right, bufferPool);
             var comparison = leftChar.CompareTo(rightChar);
             if (comparison != 0)
                 return comparison;
@@ -874,12 +890,12 @@ internal readonly struct ColumnStatistics
         return left.Length.CompareTo(right.Length);
     }
 
-    static int CompareUtf8StringsSlow(string left, string right)
+    static int CompareUtf8StringsSlow(string left, string right, IParquetBufferPool bufferPool)
     {
         var leftByteCount = Utf8.GetByteCount(left);
         var rightByteCount = Utf8.GetByteCount(right);
-        var leftBytes = ArrayRenter<byte>.Shared.Rent(Math.Max(1, leftByteCount));
-        var rightBytes = ArrayRenter<byte>.Shared.Rent(Math.Max(1, rightByteCount));
+        var leftBytes = bufferPool.Rent<byte>(checked((uint)Math.Max(1, leftByteCount)));
+        var rightBytes = bufferPool.Rent<byte>(checked((uint)Math.Max(1, rightByteCount)));
         try
         {
             Utf8.GetBytes(left, leftBytes.AsSpan(0, leftByteCount));
@@ -888,8 +904,8 @@ internal readonly struct ColumnStatistics
         }
         finally
         {
-            ArrayRenter<byte>.Shared.Return(leftBytes);
-            ArrayRenter<byte>.Shared.Return(rightBytes);
+            bufferPool.Return(leftBytes);
+            bufferPool.Return(rightBytes);
         }
     }
 

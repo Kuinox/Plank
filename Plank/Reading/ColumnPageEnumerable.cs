@@ -74,7 +74,9 @@ public readonly struct ColumnPageEnumerable<T>
                 _readBuffer = true;
             }
             if (!ColumnChunkReader.TryReadNextDataPage(_state.Buffer!, _state.BufferLength, ref _offset, _column, _columnChunk,
-                    _rowCount, ref _state.Dictionary, ref _state.DictionaryBuffer, ref _state.ValuesBuffer, out var values, out var encoding))
+                    _rowCount, ref _state.Dictionary, ref _state.DictionaryBuffer, ref _state.ValuesBuffer, _bufferPool,
+                    ref _state.DeltaPrefixLengthsBuffer, ref _state.DeltaSuffixLengthsBuffer,
+                    out var values, out var encoding))
                 return false;
 
             Current = new ColumnPage<T>(values, encoding);
@@ -85,7 +87,7 @@ public readonly struct ColumnPageEnumerable<T>
         {
             _offset = 0;
             _readBuffer = false;
-            _state.Release(_bufferPool);
+            _state.ReleasePageBuffer(_bufferPool);
             Current = default;
         }
     }
