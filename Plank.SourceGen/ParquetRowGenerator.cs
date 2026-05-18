@@ -642,11 +642,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         {
             builder.Append("                if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
             builder.AppendLine("                {");
-            builder.Append("                    AdvanceColumn(ref _")
-                .Append(columns[i].PropertyName).Append("Pages, ref _").Append(columns[i].PropertyName)
-                .Append("Page, ref _").Append(columns[i].PropertyName).Append("PageArray, ref _")
-                .Append(columns[i].PropertyName).Append("PageIndex, \"")
-                .Append(Escape(columns[i].PropertyName)).AppendLine("\");");
+            AppendAdvanceColumnBody(builder, columns[i], "                    ");
             builder.AppendLine("                }");
         }
         builder.AppendLine("                _rowGroupRowsRemaining--;");
@@ -759,11 +755,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         {
             builder.Append("            if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
             builder.AppendLine("            {");
-            builder.Append("                AdvanceColumn(ref _")
-                .Append(columns[i].PropertyName).Append("Pages, ref _").Append(columns[i].PropertyName)
-                .Append("Page, ref _").Append(columns[i].PropertyName).Append("PageArray, ref _")
-                .Append(columns[i].PropertyName).Append("PageIndex, \"")
-                .Append(Escape(columns[i].PropertyName)).AppendLine("\");");
+            AppendAdvanceColumnBody(builder, columns[i], "                ");
             builder.AppendLine("            }");
         }
         builder.AppendLine("            _rowGroupRowsRemaining--;");
@@ -830,23 +822,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        {");
         builder.AppendLine("            if (_disposed)");
         builder.AppendLine("                throw new global::System.ObjectDisposedException(nameof(RowReader));");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        static void AdvanceColumn<T>(ref global::Plank.Reading.ColumnPageEnumerable<T>.Enumerator pages,");
-        builder.AppendLine("            ref global::System.ReadOnlyMemory<T> page, ref T[] pageArray, ref int pageIndex, string columnName)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            pageIndex++;");
-        builder.AppendLine("            while ((uint)pageIndex >= (uint)page.Length)");
-        builder.AppendLine("            {");
-        builder.AppendLine("                if (!pages.MoveNext())");
-        builder.AppendLine("                    throw new global::System.IO.InvalidDataException($\"Column '{columnName}' ended before the row group was complete.\");");
-        builder.AppendLine();
-        builder.AppendLine("                page = pages.Current.Values;");
-        builder.AppendLine("                pageArray = GetArray(page, columnName);");
-        builder.AppendLine("                pageIndex = 0;");
-        builder.AppendLine("                if (page.Length == 0)");
-        builder.AppendLine("                    pageIndex = -1;");
-        builder.AppendLine("            }");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        static T[] GetArray<T>(global::System.ReadOnlyMemory<T> memory, string columnName)");
@@ -1074,6 +1049,27 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         mapped = new MappedColumn(column.Name, ToIdentifier(column.RowPropertyName), column.ClrTypeName);
         return true;
+    }
+
+    static void AppendAdvanceColumnBody(StringBuilder builder, MappedColumn column, string indent)
+    {
+        var name = column.PropertyName;
+        builder.Append(indent).Append('_').Append(name).AppendLine("PageIndex++;");
+        builder.Append(indent).Append("while ((uint)_").Append(name).Append("PageIndex >= (uint)_")
+            .Append(name).AppendLine("Page.Length)");
+        builder.Append(indent).AppendLine("{");
+        builder.Append(indent).Append("    if (!_").Append(name).AppendLine("Pages.MoveNext())");
+        builder.Append(indent)
+            .Append("        throw new global::System.IO.InvalidDataException(\"Column '")
+            .Append(Escape(name)).AppendLine("' ended before the row group was complete.\");");
+        builder.AppendLine();
+        builder.Append(indent).Append("    _").Append(name).Append("Page = _").Append(name).AppendLine("Pages.Current.Values;");
+        builder.Append(indent).Append("    _").Append(name).Append("PageArray = GetArray(_").Append(name).Append("Page, \"")
+            .Append(Escape(name)).AppendLine("\");");
+        builder.Append(indent).Append("    _").Append(name).AppendLine("PageIndex = 0;");
+        builder.Append(indent).Append("    if (_").Append(name).AppendLine("Page.Length == 0)");
+        builder.Append(indent).Append("        _").Append(name).AppendLine("PageIndex = -1;");
+        builder.Append(indent).AppendLine("}");
     }
 
     static bool IsSupportedMapping(SchemaColumn column, string clrType)
