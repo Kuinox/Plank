@@ -93,6 +93,8 @@ public sealed class ParquetWriter
         ThrowIfStreamClosed();
         if (_rowGroupOpen)
             throw new InvalidOperationException("A row group is already open for this writer.");
+        if (_rowGroupCount == int.MaxValue)
+            throw new InvalidOperationException($"Cannot write more than {int.MaxValue} row groups to one file.");
 
         _rowGroupOpen = true;
         if (ColumnCount == 0)
