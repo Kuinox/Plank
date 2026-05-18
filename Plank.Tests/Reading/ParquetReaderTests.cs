@@ -90,6 +90,42 @@ internal sealed class ParquetReaderTests
     }
 
     [Test]
+    public async Task ReadsCompressedPlainColumnWhenUncompressedPageIsLargerThanRemainingCompressedChunk()
+    {
+        var path = GetTempPath();
+        var schema = new ParquetSchema([
+            new PlankColumn("Value", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
+        ]);
+        var values = CreateValues(4096);
+        try
+        {
+            using (var writeStream = File.Create(path))
+            {
+                var writer = schema.CreateWriter(writeStream, new ParquetWriterOptions
+                {
+                    Compression = CompressionKind.Gzip
+                });
+                var serialized = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+                serialized.Serialize(values);
+                writer.StartRowGroup().Write(serialized);
+                writer.CloseFile();
+            }
+
+            using var readStream = File.OpenRead(path);
+            using var reader = schema.CreateReader(readStream);
+            var token = EnumerateTokens(reader)[0];
+            using var rowGroup = reader.OpenRowGroup(readStream, token);
+
+            await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo(values);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
     public async Task ReadsWriterEncodingsForFlatColumns()
     {
         var path = GetTempPath();
@@ -128,6 +164,14 @@ internal sealed class ParquetReaderTests
         {
             File.Delete(path);
         }
+    }
+
+    static int[] CreateValues(int count)
+    {
+        var values = new int[count];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = i * 3;
+        return values;
     }
 
     [Test]

@@ -9,6 +9,16 @@ namespace Plank.Tests.Reading;
 [NotInParallel]
 internal sealed class ReaderAllocationTests
 {
+    static readonly CompressionKind[] _compressionKinds =
+    [
+        CompressionKind.None,
+        CompressionKind.Snappy,
+        CompressionKind.Gzip,
+        CompressionKind.Zstd,
+        CompressionKind.Lz4,
+        CompressionKind.Brotli
+    ];
+
     [Test]
     public void ReaderResetDoesNotAllocateAfterWarmup()
     {
@@ -237,6 +247,30 @@ internal sealed class ReaderAllocationTests
     }
 
     [Test]
+    public void CompressedColumnPageEnumerationDoesNotAllocateAfterWarmup()
+    {
+        var failures = new List<string>();
+        for (var i = 0; i < _compressionKinds.Length; i++)
+        {
+            var compression = _compressionKinds[i];
+            try
+            {
+                var allocated = MeasureCompressedColumnPageEnumerationAllocations(compression);
+                if (allocated != 0)
+                    failures.Add($"codec '{compression}' allocated {allocated} bytes.");
+            }
+            catch (CorruptParquetException ex)
+            {
+                failures.Add($"codec '{compression}' threw {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        if (failures.Count > 0)
+            throw new InvalidOperationException(
+                $"Expected zero allocations for steady-state compressed column page enumeration. Failures: {string.Join(' ', failures)}");
+    }
+
+    [Test]
     public void DeltaLengthByteArrayColumnPageEnumerationDoesNotAllocateAfterWarmup()
         => AssertByteArrayColumnPageEnumerationDoesNotAllocateAfterWarmup(EncodingKind.DeltaLengthByteArray);
 
@@ -280,12 +314,15 @@ internal sealed class ReaderAllocationTests
     }
 
     static string CreateFile(ParquetSchema schema, int[] values)
+        => CreateFile(schema, values, CompressionKind.None);
+
+    static string CreateFile(ParquetSchema schema, int[] values, CompressionKind compression)
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-reader-alloc-{Guid.NewGuid():N}.parquet");
         using var stream = File.Create(path);
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
-            Compression = CompressionKind.None
+            Compression = compression
         });
         var serialized = writer.CreateSerializedColumn<int>(schema.Columns[0]);
         serialized.Serialize(values);
@@ -394,6 +431,37 @@ internal sealed class ReaderAllocationTests
         while (reader.MoveNext())
             sum += reader.Current.Value;
         return sum;
+    }
+
+    static long MeasureCompressedColumnPageEnumerationAllocations(CompressionKind compression)
+    {
+        var schema = new ParquetSchema([
+            new Column("Value", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
+        ]);
+        var path = CreateFile(schema, CreateValues(4096), compression);
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = schema.CreateReader(stream);
+            var token = EnumerateTokens(reader)[0];
+            using var rowGroup = reader.OpenRowGroup(stream, token);
+            for (var i = 0; i < 8; i++)
+                _ = SumValues(rowGroup, schema.Columns[0]);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            _ = SumValues(rowGroup, schema.Columns[0]);
+            var after = GC.GetAllocatedBytesForCurrentThread();
+            return after - before;
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     static RowGroupToken[] EnumerateTokens(ParquetReader reader)
