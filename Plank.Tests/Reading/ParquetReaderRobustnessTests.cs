@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Plank.Fuzzing;
 using Plank.Reading;
 using Plank.Schema;
 
@@ -35,6 +36,14 @@ internal sealed class ParquetReaderRobustnessTests
     [Test]
     public void TruncatedMagic_DoesNotCrash()
         => AssertDoesNotCrash([0x00, 0x50, 0x41, 0x52, 0x31]);
+
+    [Test]
+    [MethodDataSource(nameof(CorpusFiles))]
+    public void CorpusFile_DoesNotCrash(string filePath)
+        => PlankReaderFuzzTarget.Execute(File.ReadAllBytes(filePath));
+
+    public static string[] CorpusFiles()
+        => Directory.GetFiles(Path.Combine(AppContext.BaseDirectory, "Reading", "Fixtures", "Corpus"), "*.bin");
 
     [Test]
     [Arguments("ByteStreamSplitInt32PayloadTooShort.parquet")]

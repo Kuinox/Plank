@@ -26,10 +26,14 @@
     <None Include="Reading\Fixtures\*.parquet">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="Reading\Fixtures\Corpus\*.bin">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Plank\Plank.csproj" />
+    <ProjectReference Include="..\Plank.Fuzzing\Plank.Fuzzing.csproj" />
     <ProjectReference Include="..\Plank.SourceGen\Plank.SourceGen.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 

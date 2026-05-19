@@ -296,7 +296,7 @@ static class ColumnChunkReader
                 {
                     LogicalType.Timestamp { Unit: TimeUnit.Millis } => DateTimeOffset.FromUnixTimeMilliseconds(raw),
                     LogicalType.Timestamp { Unit: TimeUnit.Micros } => DateTimeOffset.UnixEpoch.AddTicks(raw * 10),
-                    _ => throw new InvalidOperationException("DateTimeOffset projection requires a timestamp logical type.")
+                    _ => throw new CorruptParquetException("DateTimeOffset projection requires a timestamp logical type.")
                 };
             }
             values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
@@ -314,7 +314,7 @@ static class ColumnChunkReader
                 {
                     LogicalType.Timestamp { Unit: TimeUnit.Millis } => DateTimeOffset.FromUnixTimeMilliseconds(raw).UtcDateTime,
                     LogicalType.Timestamp { Unit: TimeUnit.Micros } => DateTimeOffset.UnixEpoch.AddTicks(raw * 10).UtcDateTime,
-                    _ => throw new InvalidOperationException("DateTime projection requires a timestamp logical type.")
+                    _ => throw new CorruptParquetException("DateTime projection requires a timestamp logical type.")
                 };
             }
             values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
@@ -867,7 +867,7 @@ static class ColumnChunkReader
     static Array DecodePlainBoolean(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
     {
         if (targetType != typeof(bool))
-            throw new InvalidOperationException($"Boolean column cannot be projected to '{targetType}'.");
+            throw new CorruptParquetException($"Boolean column cannot be projected to '{targetType}'.");
 
         if (valueCount > (uint)payload.Length * 8)
             throw new CorruptParquetException(
@@ -925,7 +925,7 @@ static class ColumnChunkReader
             return values;
         }
 
-        throw new InvalidOperationException($"Int32 column cannot be projected to '{targetType}'.");
+        throw new CorruptParquetException($"Int32 column cannot be projected to '{targetType}'.");
     }
 
     static Array DecodePlainInt64(ReadOnlySpan<byte> payload, uint valueCount, LogicalType? logicalType, Type targetType)
@@ -957,7 +957,7 @@ static class ColumnChunkReader
                 {
                     LogicalType.Timestamp { Unit: TimeUnit.Millis } => DateTimeOffset.FromUnixTimeMilliseconds(raw),
                     LogicalType.Timestamp { Unit: TimeUnit.Micros } => DateTimeOffset.UnixEpoch.AddTicks(raw * 10),
-                    _ => throw new InvalidOperationException("DateTimeOffset projection requires a timestamp logical type.")
+                    _ => throw new CorruptParquetException("DateTimeOffset projection requires a timestamp logical type.")
                 };
             }
             return values;
@@ -972,14 +972,14 @@ static class ColumnChunkReader
             return values;
         }
 
-        throw new InvalidOperationException($"Int64 column cannot be projected to '{targetType}'.");
+        throw new CorruptParquetException($"Int64 column cannot be projected to '{targetType}'.");
     }
 
     static Array DecodePlainFloat(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
     {
         ValidatePlainPayload(payload, valueCount, sizeof(float));
         if (targetType != typeof(float))
-            throw new InvalidOperationException($"Float column cannot be projected to '{targetType}'.");
+            throw new CorruptParquetException($"Float column cannot be projected to '{targetType}'.");
 
         var values = new float[valueCount];
         for (var i = 0; i < valueCount; i++)
@@ -994,7 +994,7 @@ static class ColumnChunkReader
     {
         ValidatePlainPayload(payload, valueCount, sizeof(double));
         if (targetType != typeof(double))
-            throw new InvalidOperationException($"Double column cannot be projected to '{targetType}'.");
+            throw new CorruptParquetException($"Double column cannot be projected to '{targetType}'.");
 
         var values = new double[valueCount];
         for (var i = 0; i < valueCount; i++)
@@ -1035,13 +1035,13 @@ static class ColumnChunkReader
             return values;
         }
 
-        throw new InvalidOperationException($"Byte-array column cannot be projected to '{targetType}'.");
+        throw new CorruptParquetException($"Byte-array column cannot be projected to '{targetType}'.");
     }
 
     static Array DecodeFixedLengthByteArray(ReadOnlySpan<byte> payload, uint valueCount, int valueLength, Type targetType)
     {
         if (targetType != typeof(byte[]))
-            throw new InvalidOperationException($"Fixed-length binary column cannot be projected to '{targetType}'.");
+            throw new CorruptParquetException($"Fixed-length binary column cannot be projected to '{targetType}'.");
 
         var values = new byte[valueCount][];
         var offset = 0;
@@ -1056,7 +1056,7 @@ static class ColumnChunkReader
     static Array DecodeBooleanRle(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
     {
         if (targetType != typeof(bool))
-            throw new InvalidOperationException($"Boolean column cannot be projected to '{targetType}'.");
+            throw new CorruptParquetException($"Boolean column cannot be projected to '{targetType}'.");
 
         var ints = ReadRleBitPackedHybrid(payload, valueCount, bitWidth: 1);
         var values = new bool[ints.Length];
@@ -1106,7 +1106,7 @@ static class ColumnChunkReader
                             (payload[((int)valueCount * 2) + i] << 16) | (payload[((int)valueCount * 3) + i] << 24)));
                     return values;
                 }
-                throw new InvalidOperationException($"Int32 column cannot be projected to '{targetType}'.");
+                throw new CorruptParquetException($"Int32 column cannot be projected to '{targetType}'.");
             }
             case ParquetPhysicalType.Int64:
             {
@@ -1137,14 +1137,14 @@ static class ColumnChunkReader
                     }
                     return values;
                 }
-                throw new InvalidOperationException($"Int64 column cannot be projected to '{targetType}'.");
+                throw new CorruptParquetException($"Int64 column cannot be projected to '{targetType}'.");
             }
             case ParquetPhysicalType.Float:
             {
                 var intValues = (int[])DecodeByteStreamSplit(payload, new Column(column.Name, ParquetPhysicalType.Int32),
                     valueCount, typeof(int));
                 if (targetType != typeof(float))
-                    throw new InvalidOperationException($"Float column cannot be projected to '{targetType}'.");
+                    throw new CorruptParquetException($"Float column cannot be projected to '{targetType}'.");
                 var values = new float[intValues.Length];
                 for (var i = 0; i < intValues.Length; i++)
                     values[i] = BitConverter.Int32BitsToSingle(intValues[i]);
@@ -1155,7 +1155,7 @@ static class ColumnChunkReader
                 var longValues = (long[])DecodeByteStreamSplit(payload, new Column(column.Name, ParquetPhysicalType.Int64),
                     valueCount, typeof(long));
                 if (targetType != typeof(double))
-                    throw new InvalidOperationException($"Double column cannot be projected to '{targetType}'.");
+                    throw new CorruptParquetException($"Double column cannot be projected to '{targetType}'.");
                 var values = new double[longValues.Length];
                 for (var i = 0; i < longValues.Length; i++)
                     values[i] = BitConverter.Int64BitsToDouble(longValues[i]);
@@ -1195,7 +1195,7 @@ static class ColumnChunkReader
                     projected[i] = unchecked((uint)values[i]);
                 return projected;
             }
-            throw new InvalidOperationException($"Int32 column cannot be projected to '{targetType}'.");
+            throw new CorruptParquetException($"Int32 column cannot be projected to '{targetType}'.");
         }
 
         if (column.PhysicalType == ParquetPhysicalType.Int64)
@@ -1210,7 +1210,7 @@ static class ColumnChunkReader
                     projected[i] = unchecked((ulong)values[i]);
                 return projected;
             }
-            throw new InvalidOperationException($"Int64 column cannot be projected to '{targetType}'.");
+            throw new CorruptParquetException($"Int64 column cannot be projected to '{targetType}'.");
         }
 
         throw new NotSupportedException(
