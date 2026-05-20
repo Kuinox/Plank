@@ -63,6 +63,7 @@ internal sealed class ParquetReaderRobustnessTests
     [Arguments("RowGroupCountOverflow.parquet")]
     [Arguments("SnappyDestinationTooSmall.parquet")]
     [Arguments("ThriftNestingDepthExceedsMaximum.parquet")]
+    [Arguments("BrotliInvalidOperationException.parquet")]
     public void Fixture_DoesNotCrash(string fileName)
         => AssertDoesNotCrash(FixtureBytes(fileName));
 

@@ -14,6 +14,9 @@ else
     echo "==> Mode: OutOfProcess everywhere (crash-safe)"
 end
 
+# Disable core dumps — system cores from kill -9 were filling /tmp
+ulimit -c 0
+
 # Kill any running fuzzers and orphaned target processes
 echo "==> Killing existing fuzzers..."
 pkill -9 -f afl-fuzz 2>/dev/null
@@ -35,7 +38,7 @@ if test -d $OUT
     set queue_count (find /tmp/afl-all-queues -maxdepth 1 -type f | wc -l | string trim)
     if test $queue_count -gt 0
         echo "==> Found $queue_count queue items across all workers"
-        env AFL_SKIP_BIN_CHECK=1 AFL_NO_FORKSRV=1 FUZZ_SINGLE=1 afl-cmin.bash -T all -i /tmp/afl-all-queues -o /tmp/afl-cmin-reader -t 1100 -- $BIN
+        env -u AFL_AUTORESUME AFL_SKIP_BIN_CHECK=1 AFL_NO_FORKSRV=1 FUZZ_SINGLE=1 afl-cmin.bash -T all -i /tmp/afl-all-queues -o /tmp/afl-cmin-reader -t 1100 -- $BIN
         or exit 1
         echo "==> cmin kept "(count /tmp/afl-cmin-reader/*)" files"
         rm -rf /tmp/afl-cmin-reader /tmp/afl-all-queues
@@ -47,22 +50,27 @@ if test -d $OUT
 end
 mkdir -p $OUT
 
-set worker_env "AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1"
+# Type=1 (mini) instead of 3 (full heap) — full dumps were filling /tmp (32GB tmpfs)
+set dump_env "DOTNET_DbgEnableMiniDump=1 DOTNET_DbgMiniDumpType=1 DOTNET_DbgMiniDumpName=/tmp/plank-crash-%p.dmp"
+
+set worker_env "AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 AFL_TMPDIR=/tmp $dump_env"
 if test $oop -eq 1
-    set worker_env "AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 FUZZ_OOP=1"
+    set worker_env "AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 AFL_TMPDIR=/tmp FUZZ_OOP=1 $dump_env"
 end
 
-# Workers with auto-restart
-echo "==> Starting 24 workers..."
-for i in (seq 1 23)
-    set name (string pad -w 2 -c 0 $i)
-    fish -c "while true; env $worker_env afl-fuzz -b $i -i $CORPUS -o $OUT -t 1100 -S worker-$name -- $BIN; sleep 2; end" &
-    disown
-end
-
-# Main always runs OOP so it never crashes and keeps coordinating
+# Main loop: respawns workers on every restart so pkill can't permanently kill them
 while true
-    env AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 FUZZ_OOP=1 afl-fuzz -b 0 -i $CORPUS -o $OUT -t 1100 -M main -- $BIN
+    # Ensure all workers are running (starts missing ones, ignores already-running)
+    # Workers on cores 1-21; core 0 (main/OOP, mostly idle) + cores 22-23 free for desktop
+    for i in (seq 1 21)
+        set name (string pad -w 2 -c 0 $i)
+        if not pgrep -f "worker-$name" > /dev/null 2>&1
+            fish -c "while true; env $worker_env afl-fuzz -b $i -i $CORPUS -o $OUT -t 1100 -S worker-$name -- $BIN > /dev/null 2>&1; sleep 2; end" &
+            disown
+        end
+    end
+
+    env AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 AFL_TMPDIR=/tmp FUZZ_OOP=1 $dump_env afl-fuzz -b 0 -i $CORPUS -o $OUT -t 1100 -M main -- $BIN > /dev/null 2>&1
     echo "==> main crashed, restarting in 2s..."
     sleep 2
 end

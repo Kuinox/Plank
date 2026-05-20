@@ -16,8 +16,7 @@ static class ParquetDecompressor
             {
                 CompressionKind.Gzip => DecompressWithStream(payload, expectedLength,
                     static s => new GZipStream(s, CompressionMode.Decompress, leaveOpen: true)),
-                CompressionKind.Brotli => DecompressWithStream(payload, expectedLength,
-                    static s => new BrotliStream(s, CompressionMode.Decompress, leaveOpen: true)),
+                CompressionKind.Brotli => DecompressBrotli(payload, expectedLength),
                 CompressionKind.Lz4 => DecompressLz4(payload, expectedLength),
                 CompressionKind.Zstd => DecompressZstd(payload, expectedLength),
                 CompressionKind.Snappy => DecompressSnappy(payload, expectedLength),
@@ -34,6 +33,20 @@ static class ParquetDecompressor
                 $"{compression} decompression produced {result.Length} bytes but {expectedLength} were expected.");
 
         return result;
+    }
+
+    static byte[] DecompressBrotli(ReadOnlySpan<byte> payload, uint expectedLength)
+    {
+        try
+        {
+            return DecompressWithStream(payload, expectedLength,
+                static s => new BrotliStream(s, CompressionMode.Decompress, leaveOpen: true));
+        }
+        catch (InvalidOperationException ex)
+        {
+            // BrotliStream throws InvalidOperationException (not InvalidDataException) on corrupt input
+            throw new CorruptParquetException("Brotli decompression failed due to invalid compressed data.", ex);
+        }
     }
 
     static byte[] DecompressWithStream(ReadOnlySpan<byte> payload, uint expectedLength, Func<MemoryStream, Stream> create)
