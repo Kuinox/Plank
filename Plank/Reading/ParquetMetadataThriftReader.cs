@@ -135,6 +135,7 @@ static class ParquetMetadataThriftReader
         var dataPageOffset = 0UL;
         var dictionaryPageOffset = 0UL;
         var totalCompressedSize = 0UL;
+        var totalUncompressedSize = 0UL;
         var columnIndexOffset = 0UL;
         var columnIndexLength = 0U;
         var offsetIndexOffset = 0UL;
@@ -150,8 +151,8 @@ static class ParquetMetadataThriftReader
                     dataPageOffset = reader.ReadI64AsU64();
                     break;
                 case 3:
-                    ReadColumnMetadata(ref reader, ref dictionaryPageOffset, ref totalCompressedSize, ref compression,
-                        ref encodings, previousEncodings);
+                    ReadColumnMetadata(ref reader, ref dictionaryPageOffset, ref totalCompressedSize,
+                        ref totalUncompressedSize, ref compression, ref encodings, previousEncodings);
                     break;
                 case 4:
                     offsetIndexOffset = reader.ReadI64AsU64();
@@ -171,13 +172,14 @@ static class ParquetMetadataThriftReader
             }
         }
 
-        return new InternalColumnChunkMetadata(dataPageOffset, dictionaryPageOffset, totalCompressedSize, compression,
-            encodings, columnIndexOffset, columnIndexLength, offsetIndexOffset, offsetIndexLength);
+        return new InternalColumnChunkMetadata(dataPageOffset, dictionaryPageOffset, totalCompressedSize,
+            totalUncompressedSize, compression, encodings, columnIndexOffset, columnIndexLength,
+            offsetIndexOffset, offsetIndexLength);
     }
 
     static void ReadColumnMetadata(ref CompactProtocolReader reader, ref ulong dictionaryPageOffset,
-        ref ulong totalCompressedSize, ref CompressionKind compression, ref EncodingKind[] encodings,
-        EncodingKind[] previousEncodings)
+        ref ulong totalCompressedSize, ref ulong totalUncompressedSize, ref CompressionKind compression,
+        ref EncodingKind[] encodings, EncodingKind[] previousEncodings)
     {
         var previousFieldId = 0;
         while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
@@ -189,6 +191,9 @@ static class ParquetMetadataThriftReader
                     break;
                 case 4:
                     compression = ReadCompression(reader.ReadI32());
+                    break;
+                case 6:
+                    totalUncompressedSize = reader.ReadI64AsU64();
                     break;
                 case 7:
                     totalCompressedSize = reader.ReadI64AsU64();

@@ -76,7 +76,7 @@ public readonly struct ColumnPageEnumerable<T>
             if (!ColumnChunkReader.TryReadNextDataPage(_state.Buffer!, _state.BufferLength, ref _offset, _column, _columnChunk,
                     _rowCount, ref _state.Dictionary, ref _state.DictionaryBuffer, ref _state.ValuesBuffer, _bufferPool,
                     ref _state.DeltaPrefixLengthsBuffer, ref _state.DeltaSuffixLengthsBuffer,
-                    out var values, out var encoding))
+                    ref _state.DecompressionBuffer, out var values, out var encoding))
                 return false;
 
             Current = new ColumnPage<T>(values, encoding);

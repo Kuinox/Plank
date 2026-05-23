@@ -27,7 +27,11 @@ internal static unsafe class AflPersistentHarness
     {
         if (!TryGetEnvInt("__AFL_SHM_ID", out int shmId))
         {
-            // Running outside AFL++ — execute once from stdin
+            // Running outside AFL++ — execute once from stdin.
+            // Pin a dummy bitmap so SharpFuzz instrumentation doesn't AV on null SharedMem.
+            var dummy = System.Runtime.InteropServices.GCHandle.Alloc(new byte[MapSize],
+                System.Runtime.InteropServices.GCHandleType.Pinned);
+            Trace.SharedMem = (byte*)dummy.AddrOfPinnedObject();
             using var ms = new MemoryStream();
             Console.OpenStandardInput().CopyTo(ms);
             execute(ms.ToArray());

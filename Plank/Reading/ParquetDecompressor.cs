@@ -9,81 +9,86 @@ static class ParquetDecompressor
 {
     internal static byte[] Decompress(ReadOnlySpan<byte> payload, uint expectedLength, CompressionKind compression)
     {
-        byte[] result;
+        var buffer = new byte[(int)expectedLength];
+        DecompressInto(payload, compression, buffer);
+        return buffer;
+    }
+
+    internal static void DecompressInto(ReadOnlySpan<byte> payload, CompressionKind compression, Span<byte> destination)
+    {
         try
         {
-            result = compression switch
+            switch (compression)
             {
-                CompressionKind.Gzip => DecompressWithStream(payload, expectedLength,
-                    static s => new GZipStream(s, CompressionMode.Decompress, leaveOpen: true)),
-                CompressionKind.Brotli => DecompressBrotli(payload, expectedLength),
-                CompressionKind.Lz4 => DecompressLz4(payload, expectedLength),
-                CompressionKind.Zstd => DecompressZstd(payload, expectedLength),
-                CompressionKind.Snappy => DecompressSnappy(payload, expectedLength),
-                _ => throw new NotSupportedException($"Compression '{compression}' is not supported.")
-            };
+                case CompressionKind.Gzip:
+                    DecompressGzipInto(payload, destination);
+                    break;
+                case CompressionKind.Brotli:
+                    DecompressBrotliInto(payload, destination);
+                    break;
+                case CompressionKind.Lz4:
+                    LZ4Codec.Decode(payload, destination);
+                    break;
+                case CompressionKind.Zstd:
+                    DecompressZstdInto(payload, destination);
+                    break;
+                case CompressionKind.Snappy:
+                    DecompressSnappyInto(payload, destination);
+                    break;
+                default:
+                    throw new NotSupportedException($"Compression '{compression}' is not supported.");
+            }
         }
         catch (Exception ex) when (ex is InvalidDataException or ArgumentException or EndOfStreamException)
         {
             throw new CorruptParquetException($"{compression} decompression failed due to invalid compressed data.", ex);
         }
-
-        if ((uint)result.Length != expectedLength)
-            throw new CorruptParquetException(
-                $"{compression} decompression produced {result.Length} bytes but {expectedLength} were expected.");
-
-        return result;
     }
 
-    static byte[] DecompressBrotli(ReadOnlySpan<byte> payload, uint expectedLength)
+    static void DecompressSnappyInto(ReadOnlySpan<byte> payload, Span<byte> destination)
     {
         try
         {
-            return DecompressWithStream(payload, expectedLength,
-                static s => new BrotliStream(s, CompressionMode.Decompress, leaveOpen: true));
+            Plank.Snappy.SnappyCodec.Decompress(payload, destination);
         }
         catch (InvalidOperationException ex)
         {
-            // BrotliStream throws InvalidOperationException (not InvalidDataException) on corrupt input
+            throw new CorruptParquetException("Snappy decompression failed due to invalid compressed data.", ex);
+        }
+    }
+
+    static void DecompressBrotliInto(ReadOnlySpan<byte> payload, Span<byte> destination)
+    {
+        try
+        {
+            if (!BrotliDecoder.TryDecompress(payload, destination, out var written) || written != destination.Length)
+                throw new CorruptParquetException("Brotli decompression failed due to invalid compressed data.");
+        }
+        catch (InvalidOperationException ex)
+        {
             throw new CorruptParquetException("Brotli decompression failed due to invalid compressed data.", ex);
         }
     }
 
-    static byte[] DecompressWithStream(ReadOnlySpan<byte> payload, uint expectedLength, Func<MemoryStream, Stream> create)
+    // Allocates: .NET has no span-based GZip API until .NET 11 (GZipDecoder.TryDecompress, dotnet/runtime#62113).
+    static void DecompressGzipInto(ReadOnlySpan<byte> payload, Span<byte> destination)
     {
         using var memory = new MemoryStream(payload.ToArray(), writable: false);
-        using var stream = create(memory);
-        var buffer = new byte[(int)expectedLength];
-        stream.ReadExactly(buffer);
-        return buffer;
+        using var stream = new GZipStream(memory, CompressionMode.Decompress, leaveOpen: true);
+        stream.ReadExactly(destination);
     }
 
-    static byte[] DecompressLz4(ReadOnlySpan<byte> payload, uint expectedLength)
-    {
-        var buffer = new byte[(int)expectedLength];
-        LZ4Codec.Decode(payload, buffer);
-        return buffer;
-    }
-
-    static byte[] DecompressZstd(ReadOnlySpan<byte> payload, uint expectedLength)
+    // Allocates: .NET has no built-in Zstd API until .NET 11 (ZstandardDecoder.TryDecompress, dotnet/runtime#59591).
+    static void DecompressZstdInto(ReadOnlySpan<byte> payload, Span<byte> destination)
     {
         using var decompressor = new Decompressor();
-        var buffer = new byte[(int)expectedLength];
         try
         {
-            decompressor.Unwrap(payload, buffer);
+            decompressor.Unwrap(payload, destination);
         }
         catch (ZstdException ex)
         {
             throw new CorruptParquetException("Zstd decompression failed.", ex);
         }
-        return buffer;
-    }
-
-    static byte[] DecompressSnappy(ReadOnlySpan<byte> payload, uint expectedLength)
-    {
-        var buffer = new byte[(int)expectedLength];
-        Plank.Snappy.SnappyCodec.Decompress(payload, buffer);
-        return buffer;
     }
 }

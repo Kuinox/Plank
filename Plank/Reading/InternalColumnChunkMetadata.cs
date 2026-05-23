@@ -6,12 +6,14 @@ namespace Plank.Reading;
 readonly struct InternalColumnChunkMetadata
 {
     internal InternalColumnChunkMetadata(ulong dataPageOffset, ulong dictionaryPageOffset, ulong totalCompressedSize,
-        CompressionKind compression, EncodingKind[] encodings, ulong columnIndexOffset = 0, uint columnIndexLength = 0,
-        ulong offsetIndexOffset = 0, uint offsetIndexLength = 0)
+        ulong totalUncompressedSize, CompressionKind compression, EncodingKind[] encodings,
+        ulong columnIndexOffset = 0, uint columnIndexLength = 0, ulong offsetIndexOffset = 0,
+        uint offsetIndexLength = 0)
     {
         DataPageOffset = dataPageOffset;
         DictionaryPageOffset = dictionaryPageOffset;
         TotalCompressedSize = totalCompressedSize;
+        TotalUncompressedSize = totalUncompressedSize;
         Compression = compression;
         Encodings = encodings ?? [];
         ColumnIndexOffset = columnIndexOffset;
@@ -25,6 +27,8 @@ readonly struct InternalColumnChunkMetadata
     internal ulong DictionaryPageOffset { get; }
 
     internal ulong TotalCompressedSize { get; }
+
+    internal ulong TotalUncompressedSize { get; }
 
     internal CompressionKind Compression { get; }
 

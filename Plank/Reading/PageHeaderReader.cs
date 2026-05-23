@@ -4,7 +4,7 @@ namespace Plank.Reading;
 
 static class PageHeaderReader
 {
-    internal static PageHeader Read(ReadOnlySpan<byte> buffer)
+    internal static PageHeader Read(ReadOnlySpan<byte> buffer, uint maxUncompressedPageSize = uint.MaxValue)
     {
         var reader = new CompactProtocolReader(buffer);
         var previousFieldId = 0;
@@ -26,7 +26,7 @@ static class PageHeaderReader
                     type = (PageHeaderType)reader.ReadI32();
                     break;
                 case 2:
-                    uncompressedPageSize = reader.ReadI32AsU32(max: reader.Remaining);
+                    uncompressedPageSize = reader.ReadI32AsU32(max: maxUncompressedPageSize);
                     break;
                 case 3:
                     compressedPageSize = reader.ReadI32AsU32(max: reader.Remaining);

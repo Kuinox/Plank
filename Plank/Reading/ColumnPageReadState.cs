@@ -7,6 +7,7 @@ sealed class ColumnPageReadState<T> : IColumnPageReadState
 {
     internal byte[]? Buffer;
     internal int BufferLength;
+    internal byte[]? DecompressionBuffer;
     internal Array? Dictionary;
     internal T[]? DictionaryBuffer;
     internal T[]? ValuesBuffer;
@@ -28,6 +29,12 @@ sealed class ColumnPageReadState<T> : IColumnPageReadState
     public void ReleaseAll(IParquetBufferPool bufferPool)
     {
         ReleasePageBuffer(bufferPool);
+
+        if (DecompressionBuffer is not null)
+        {
+            bufferPool.Return(DecompressionBuffer);
+            DecompressionBuffer = null;
+        }
 
         if (ValuesBuffer is not null)
         {

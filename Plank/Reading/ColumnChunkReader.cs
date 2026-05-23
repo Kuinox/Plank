@@ -31,7 +31,8 @@ static class ColumnChunkReader
     internal static bool TryReadNextDataPage<T>(byte[] buffer, int bufferLength, ref int offset, Column column,
         InternalColumnChunkMetadata columnChunk, ulong rowCount, ref Array? dictionary, ref T[]? dictionaryBuffer,
         ref T[]? valuesBuffer, IParquetBufferPool bufferPool, ref int[]? deltaPrefixLengthsBuffer,
-        ref int[]? deltaSuffixLengthsBuffer, out ReadOnlyMemory<T> values, out EncodingKind encoding)
+        ref int[]? deltaSuffixLengthsBuffer, ref byte[]? decompressionBuffer, out ReadOnlyMemory<T> values,
+        out EncodingKind encoding)
     {
         ArgumentNullException.ThrowIfNull(buffer);
         ArgumentNullException.ThrowIfNull(column);
@@ -41,7 +42,8 @@ static class ColumnChunkReader
 
         while (offset < bufferLength)
         {
-            var header = PageHeaderReader.Read(buffer.AsSpan(offset, bufferLength - offset));
+            var maxUncompressedPageSize = (uint)Math.Min(columnChunk.TotalUncompressedSize, uint.MaxValue);
+            var header = PageHeaderReader.Read(buffer.AsSpan(offset, bufferLength - offset), maxUncompressedPageSize);
             offset += header.HeaderLength;
 
             if (header.CompressedPageSize > (uint)(bufferLength - offset))
@@ -86,7 +88,9 @@ static class ColumnChunkReader
                             throw new CorruptParquetException(
                                 $"Level bytes ({levelBytes}) exceed uncompressed page size ({header.UncompressedPageSize}).");
                         var expectedUncompressedDataSize = header.UncompressedPageSize - levelBytes;
-                        effectiveData = ParquetDecompressor.Decompress(dataPayload, expectedUncompressedDataSize, columnChunk.Compression);
+                        var decompBuf = EnsureByteBuffer(ref decompressionBuffer, (int)expectedUncompressedDataSize, bufferPool);
+                        ParquetDecompressor.DecompressInto(dataPayload, columnChunk.Compression, decompBuf.AsSpan(0, (int)expectedUncompressedDataSize));
+                        effectiveData = decompBuf.AsSpan(0, (int)expectedUncompressedDataSize);
                     }
                     else
                     {
