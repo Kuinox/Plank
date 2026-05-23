@@ -44,6 +44,18 @@ internal static unsafe class AflPersistentHarness
         Trace.SharedMem = coveragePtr;
         SetupCoreCoverage(coveragePtr);
 
+        // afl-cmin passes AFL_NO_FORKSRV=1: no fork-server protocol, just run stdin once.
+        // Coverage is tracked via the already-mapped SHM bitmap.
+        if (Environment.GetEnvironmentVariable("AFL_NO_FORKSRV") == "1")
+        {
+            try { execute(Array.Empty<byte>()); } catch { }  // warm-up: fire cctors/JIT
+            new Span<byte>(coveragePtr, MapSize).Clear();
+            Trace.PrevLocation = 0;
+            try { execute(ReadStdin()); } catch { }
+            shmdt(coverageMem);
+            return;
+        }
+
         // Map shmem testcase buffer (AFL++ 4.x: [u32 len][data...])
         byte* fuzzPtr = null;
         IntPtr fuzzMem = IntPtr.Zero;

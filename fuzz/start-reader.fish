@@ -38,7 +38,7 @@ if test -d $OUT
     set queue_count (find /tmp/afl-all-queues -maxdepth 1 -type f | wc -l | string trim)
     if test $queue_count -gt 0
         echo "==> Found $queue_count queue items across all workers"
-        env -u AFL_AUTORESUME AFL_SKIP_BIN_CHECK=1 AFL_NO_FORKSRV=1 FUZZ_SINGLE=1 afl-cmin -T all -i /tmp/afl-all-queues -o /tmp/afl-cmin-reader -t 1100 -- $BIN
+        env -u AFL_AUTORESUME AFL_SKIP_BIN_CHECK=1 AFL_NO_FORKSRV=1 afl-cmin -T all -i /tmp/afl-all-queues -o /tmp/afl-cmin-reader -t 1100 -- $BIN
         or exit 1
         echo "==> cmin kept "(count /tmp/afl-cmin-reader/*)" files"
         rm -rf /tmp/afl-cmin-reader /tmp/afl-all-queues
