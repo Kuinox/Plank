@@ -5,13 +5,13 @@ set BIN $ROOT/Plank.Fuzzing.Reader.Target/bin/Release/net10.0/Plank.Fuzzing.Read
 set CORPUS $ROOT/fuzz/reader-corpus
 set OUT $ROOT/fuzz/reader-findings
 
-# --inline flag: run workers in inline/fast mode (default: OOP everywhere)
-set oop 1
-if contains -- --inline $argv
-    set oop 0
-    echo "==> Mode: main=OOP (stable), workers=inline/fast (auto-restart on crash)"
-else
+# --oop flag: run workers in OOP mode (default: main=OOP, workers=persistent/inline)
+set oop 0
+if contains -- --oop $argv
+    set oop 1
     echo "==> Mode: OutOfProcess everywhere (crash-safe)"
+else
+    echo "==> Mode: main=OOP (stable), workers=persistent (CPU-pinned, ~10x faster)"
 end
 
 # Disable core dumps — system cores from kill -9 were filling /tmp
@@ -38,7 +38,7 @@ if test -d $OUT
     set queue_count (find /tmp/afl-all-queues -maxdepth 1 -type f | wc -l | string trim)
     if test $queue_count -gt 0
         echo "==> Found $queue_count queue items across all workers"
-        env -u AFL_AUTORESUME AFL_SKIP_BIN_CHECK=1 AFL_NO_FORKSRV=1 FUZZ_SINGLE=1 afl-cmin.bash -T all -i /tmp/afl-all-queues -o /tmp/afl-cmin-reader -t 1100 -- $BIN
+        env -u AFL_AUTORESUME AFL_SKIP_BIN_CHECK=1 AFL_NO_FORKSRV=1 FUZZ_SINGLE=1 afl-cmin -T all -i /tmp/afl-all-queues -o /tmp/afl-cmin-reader -t 1100 -- $BIN
         or exit 1
         echo "==> cmin kept "(count /tmp/afl-cmin-reader/*)" files"
         rm -rf /tmp/afl-cmin-reader /tmp/afl-all-queues
@@ -62,15 +62,15 @@ end
 while true
     # Ensure all workers are running (starts missing ones, ignores already-running)
     # Workers on cores 1-21; core 0 (main/OOP, mostly idle) + cores 22-23 free for desktop
-    for i in (seq 1 21)
+    for i in (seq 1 19)
         set name (string pad -w 2 -c 0 $i)
         if not pgrep -f "worker-$name" > /dev/null 2>&1
-            fish -c "while true; env $worker_env afl-fuzz -b $i -i $CORPUS -o $OUT -t 1100 -S worker-$name -- $BIN > /dev/null 2>&1; sleep 2; end" &
+            fish -c "while true; nice -n 19 env $worker_env afl-fuzz -b $i -i $CORPUS -o $OUT -t 1100 -S worker-$name -- $BIN > /dev/null 2>&1; sleep 2; end" &
             disown
         end
     end
 
-    env AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 AFL_TMPDIR=/tmp FUZZ_OOP=1 $dump_env afl-fuzz -b 0 -i $CORPUS -o $OUT -t 1100 -M main -- $BIN > /dev/null 2>&1
+    nice -n 19 env AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 AFL_TMPDIR=/tmp FUZZ_OOP=1 $dump_env afl-fuzz -b 0 -i $CORPUS -o $OUT -t 1100 -M main -- $BIN > /dev/null 2>&1
     echo "==> main crashed, restarting in 2s..."
     sleep 2
 end

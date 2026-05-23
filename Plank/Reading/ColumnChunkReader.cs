@@ -496,18 +496,17 @@ static class ColumnChunkReader
         {
             var prefixLength = prefixLengths[i];
             var suffixLength = suffixLengths[i];
-            var totalLength = checked(prefixLength + suffixLength);
-            var value = EnsureExactByteArray(ref byteArrays[i], totalLength);
-            if (prefixLength > 0 && i > 0)
-            {
-                if (prefixLength > byteArrays[i - 1]!.Length)
-                    throw new CorruptParquetException(
-                        $"Delta byte array prefix length {prefixLength} exceeds previous value length {byteArrays[i - 1]!.Length}.");
-                byteArrays[i - 1]!.AsSpan(0, prefixLength).CopyTo(value);
-            }
+            var prevLength = i > 0 ? byteArrays[i - 1]!.Length : 0;
+            if (prefixLength > prevLength)
+                throw new CorruptParquetException(
+                    $"Delta byte array prefix length {prefixLength} exceeds previous value length {prevLength}.");
             if (suffixLength > suffixRemaining.Length)
                 throw new CorruptParquetException(
                     $"Delta byte array suffix length {suffixLength} exceeds remaining suffix bytes ({suffixRemaining.Length}).");
+            var totalLength = prefixLength + suffixLength;
+            var value = EnsureExactByteArray(ref byteArrays[i], totalLength);
+            if (prefixLength > 0)
+                byteArrays[i - 1]!.AsSpan(0, prefixLength).CopyTo(value);
             suffixRemaining[..suffixLength].CopyTo(value.AsSpan(prefixLength));
             suffixRemaining = suffixRemaining[suffixLength..];
         }
