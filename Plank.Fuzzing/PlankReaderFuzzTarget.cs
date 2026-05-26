@@ -26,7 +26,7 @@ public static class PlankReaderFuzzTarget
                     DrainColumn(rowGroup, column);
             }
         }
-        catch (Exception ex) when (ex is CorruptParquetException or NotSupportedException) { }
+        catch (Exception ex) when (ex is CorruptParquetException or NotSupportedException or InvalidOperationException) { }
     }
 
     public static Exception? GetHandledException(byte[] data)
@@ -46,7 +46,7 @@ public static class PlankReaderFuzzTarget
             }
             return null;
         }
-        catch (Exception ex) when (ex is CorruptParquetException or NotSupportedException)
+        catch (Exception ex) when (ex is CorruptParquetException or NotSupportedException or InvalidOperationException)
         {
             return ex;
         }

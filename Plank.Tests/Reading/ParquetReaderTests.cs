@@ -47,6 +47,60 @@ internal sealed class ParquetReaderTests
     }
 
     [Test]
+    public async Task ThrowsWhenRequestedColumnNameDoesNotMatchFileSchema()
+    {
+        using var stream = CreateInt32File("Actual");
+        var requested = new ParquetSchema([
+            new PlankColumn("Requested", ParquetPhysicalType.Int32)
+        ]);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Task.Run(() => requested.CreateReader(stream)).ConfigureAwait(false));
+    }
+
+    [Test]
+    public async Task ThrowsWhenRequestedPhysicalTypeDoesNotMatchFileSchema()
+    {
+        using var stream = CreateInt32File("Value");
+        var requested = new ParquetSchema([
+            new PlankColumn("Value", ParquetPhysicalType.Int64)
+        ]);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Task.Run(() => requested.CreateReader(stream)).ConfigureAwait(false));
+    }
+
+    [Test]
+    public async Task AllowsRequestedSchemaMismatchWhenStrictModeIsDisabled()
+    {
+        using var stream = CreateInt32File("Actual");
+        var requested = new ParquetSchema([
+            new PlankColumn("Requested", ParquetPhysicalType.Int64)
+        ]);
+
+        using var reader = requested.CreateReader(stream, new ParquetReaderOptions
+        {
+            Strict = false
+        });
+
+        await Assert.That(reader.Metadata.FooterLength).IsGreaterThan(0U);
+    }
+
+    [Test]
+    public async Task ResetThrowsWhenNewFileSchemaDoesNotMatchRequestedSchema()
+    {
+        var requested = new ParquetSchema([
+            new PlankColumn("Value", ParquetPhysicalType.Int32)
+        ]);
+        using var matching = CreateInt32File("Value");
+        using var mismatched = CreateInt32File("Other");
+        using var reader = requested.CreateReader(matching);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Task.Run(() => reader.Reset(mismatched)).ConfigureAwait(false));
+    }
+
+    [Test]
     public async Task ReadsPlainColumnsFromEachRowGroup()
     {
         var path = GetTempPath();
@@ -475,6 +529,21 @@ internal sealed class ParquetReaderTests
 
     static byte[] Bytes(params byte[] values)
         => values;
+
+    static MemoryStream CreateInt32File(string columnName)
+    {
+        var schema = new ParquetSchema([
+            new PlankColumn(columnName, ParquetPhysicalType.Int32)
+        ]);
+        var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream);
+        var rowGroup = writer.StartRowGroup();
+        var serialized = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
+        serialized.Serialize([1, 2, 3]);
+        rowGroup.Write(serialized);
+        writer.CloseFile();
+        return new MemoryStream(stream.ToArray());
+    }
 
     static T[] ReadAllPages<T>(ColumnPageEnumerable<T> pages)
     {

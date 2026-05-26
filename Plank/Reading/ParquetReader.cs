@@ -11,6 +11,7 @@ public sealed class ParquetReader : IDisposable
     readonly ParquetSchema _schema;
     readonly ParquetReaderOptions _options;
     InternalParquetFooter _footer;
+    InternalParquetFooter _footerScratch;
     ParquetFileMetadata _metadata;
     byte[] _footerBuffer;
     StreamReadSource? _streamSource;
@@ -26,6 +27,7 @@ public sealed class ParquetReader : IDisposable
         _schema = schema;
         _options = options;
         _footer = InternalParquetFooter.Empty;
+        _footerScratch = InternalParquetFooter.Empty;
         _metadata = default;
         _footerBuffer = [];
         _streamSource = new StreamReadSource(stream);
@@ -43,6 +45,7 @@ public sealed class ParquetReader : IDisposable
         _schema = schema;
         _options = options;
         _footer = InternalParquetFooter.Empty;
+        _footerScratch = InternalParquetFooter.Empty;
         _metadata = default;
         _footerBuffer = [];
         _streamSource = null;
@@ -98,7 +101,11 @@ public sealed class ParquetReader : IDisposable
         var footerBytes = _footerBuffer.AsSpan(0, footerLengthInt32);
         source.ReadExactly(footerOffset, footerBytes);
 
-        _footer = ParquetMetadataThriftReader.Read(footerBytes, footerOffset, _footer);
+        var parsedFooter = _options.Strict
+            ? ParquetMetadataThriftReader.Read(footerBytes, footerOffset, _footerScratch, _schema)
+            : ParquetMetadataThriftReader.Read(footerBytes, footerOffset, _footerScratch);
+        _footerScratch = _footer;
+        _footer = parsedFooter;
         _metadata = new ParquetFileMetadata(_schema, footerOffset, footerLength, _footer.Version);
     }
 

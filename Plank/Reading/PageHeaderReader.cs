@@ -29,7 +29,7 @@ static class PageHeaderReader
                     uncompressedPageSize = reader.ReadI32AsU32(max: maxUncompressedPageSize);
                     break;
                 case 3:
-                    compressedPageSize = reader.ReadI32AsU32(max: reader.Remaining);
+                    compressedPageSize = reader.ReadI32AsU32();
                     break;
                 case 7:
                     valueCount = ReadDictionaryHeader(ref reader);
@@ -88,10 +88,10 @@ static class PageHeaderReader
                     encoding = ParquetMetadataThriftReader.ReadEncoding(reader.ReadI32());
                     break;
                 case 5:
-                    definitionLevelsByteLength = reader.ReadI32AsU32(max: reader.Remaining);
+                    definitionLevelsByteLength = reader.ReadI32AsU32();
                     break;
                 case 6:
-                    repetitionLevelsByteLength = reader.ReadI32AsU32(max: reader.Remaining);
+                    repetitionLevelsByteLength = reader.ReadI32AsU32();
                     break;
                 case 7:
                     isCompressed = reader.ReadBool(inlineBool);

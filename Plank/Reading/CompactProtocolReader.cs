@@ -91,6 +91,15 @@ ref struct CompactProtocolReader
         };
     }
 
+    internal ReadOnlySpan<byte> ReadBinary()
+    {
+        var length = checked((int)ReadVarU32(max: Remaining));
+        EnsureAvailable(length);
+        var value = _buffer.Slice(_offset, length);
+        _offset += length;
+        return value;
+    }
+
     internal (uint Count, CompactProtocolType ElementType) ReadListHeader()
     {
         EnsureAvailable(1);

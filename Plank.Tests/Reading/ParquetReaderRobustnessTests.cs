@@ -83,7 +83,7 @@ internal sealed class ParquetReaderRobustnessTests
                     DrainColumn(rowGroup, column);
             }
         }
-        catch (CorruptParquetException) { }
+        catch (Exception ex) when (ex is CorruptParquetException or NotSupportedException or InvalidOperationException) { }
     }
 
     static void DrainColumn(RowGroupReader rowGroup, Column column)

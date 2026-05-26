@@ -12,6 +12,8 @@ public sealed class ParquetReaderOptions
 
     public int MaxReadAheadRowGroups { get; init; } = 1;
 
+    public bool Strict { get; init; } = true;
+
     internal void Validate()
     {
         ArgumentNullException.ThrowIfNull(BufferPool);
