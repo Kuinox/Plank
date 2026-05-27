@@ -4,12 +4,17 @@ namespace Plank.Schema;
 
 public sealed record ColumnOptions
 {
+    /// <param name="allowMissing">
+    /// Allows a requested column to be absent from older Parquet files. This is schema-evolution tolerance,
+    /// not Parquet nullability; use <paramref name="repetition"/> to control whether present values can be null.
+    /// </param>
     public ColumnOptions(ParquetRepetition repetition = ParquetRepetition.Unspecified,
-        ImmutableArray<EncodingKind> encodings = default, uint typeLength = 0)
+        ImmutableArray<EncodingKind> encodings = default, uint typeLength = 0, bool allowMissing = false)
     {
         Repetition = repetition;
         Encodings = encodings.IsDefault ? [] : encodings;
         TypeLength = typeLength;
+        AllowMissing = allowMissing;
     }
 
     public static readonly ColumnOptions Default = new();
@@ -20,6 +25,9 @@ public sealed record ColumnOptions
 
     public uint TypeLength { get; }
 
+    /// <inheritdoc cref="ColumnOptions(ParquetRepetition, ImmutableArray{EncodingKind}, uint, bool)" path="/param[@name='allowMissing']"/>
+    public bool AllowMissing { get; }
+
     public bool Equals(ColumnOptions? other)
     {
         if (ReferenceEquals(this, other))
@@ -29,6 +37,8 @@ public sealed record ColumnOptions
         if (Repetition != other.Repetition)
             return false;
         if (TypeLength != other.TypeLength)
+            return false;
+        if (AllowMissing != other.AllowMissing)
             return false;
         if (Encodings.Length != other.Encodings.Length)
             return false;
@@ -45,6 +55,7 @@ public sealed record ColumnOptions
         var hash = new HashCode();
         hash.Add(Repetition);
         hash.Add(TypeLength);
+        hash.Add(AllowMissing);
         foreach (var encoding in Encodings)
             hash.Add(encoding);
 

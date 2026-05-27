@@ -71,6 +71,99 @@ internal sealed class ParquetReaderTests
     }
 
     [Test]
+    public async Task ReadsRequestedProjectionWhenFileSchemaHasExtraColumns()
+    {
+        using var stream = CreateTwoColumnFile();
+        var requested = new ParquetSchema([
+            new PlankColumn("Value", ParquetPhysicalType.Int32)
+        ]);
+
+        using var reader = requested.CreateReader(stream);
+        var token = EnumerateTokens(reader)[0];
+        using var rowGroup = reader.OpenRowGroup(stream, token);
+
+        await Assert.That(ReadAllPages(rowGroup.Column<int>(requested.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3]);
+    }
+
+    [Test]
+    public async Task ReadsRequestedProjectionWhenFileSchemaOrderChanged()
+    {
+        var fileSchema = new ParquetSchema([
+            new PlankColumn("Other", ParquetPhysicalType.Int64),
+            new PlankColumn("Value", ParquetPhysicalType.Int32)
+        ]);
+        using var stream = CreateFile(fileSchema, rowGroup =>
+        {
+            var other = rowGroup.CreateSerializedColumn<long>(fileSchema.Columns[0]);
+            other.Serialize([10L, 20L, 30L]);
+            rowGroup.Write(other);
+
+            var value = rowGroup.CreateSerializedColumn<int>(fileSchema.Columns[1]);
+            value.Serialize([1, 2, 3]);
+            rowGroup.Write(value);
+        });
+        var requested = new ParquetSchema([
+            new PlankColumn("Value", ParquetPhysicalType.Int32),
+            new PlankColumn("Other", ParquetPhysicalType.Int64)
+        ]);
+
+        using var reader = requested.CreateReader(stream);
+        var token = EnumerateTokens(reader)[0];
+        using var rowGroupReader = reader.OpenRowGroup(stream, token);
+
+        await Assert.That(ReadAllPages(rowGroupReader.Column<int>(requested.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3]);
+        await Assert.That(ReadAllPages(rowGroupReader.Column<long>(requested.Columns[1]).Pages)).IsEquivalentTo([10L, 20L, 30L]);
+    }
+
+    [Test]
+    public async Task MissingEvolutionColumnReadsAsNulls()
+    {
+        using var stream = CreateInt32File("Value");
+        var requested = new ParquetSchema([
+            new PlankColumn("Value", ParquetPhysicalType.Int32),
+            new PlankColumn("Added", ParquetPhysicalType.Int32,
+                new ColumnOptions(ParquetRepetition.Required, allowMissing: true))
+        ]);
+
+        using var reader = requested.CreateReader(stream);
+        var token = EnumerateTokens(reader)[0];
+        using var rowGroup = reader.OpenRowGroup(stream, token);
+
+        await Assert.That(ReadAllPages(rowGroup.Column<int>(requested.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3]);
+        await Assert.That(ReadAllPages(rowGroup.Column<int?>(requested.Columns[1]).Pages))
+            .IsEquivalentTo(new int?[] { null, null, null });
+    }
+
+    [Test]
+    public async Task MissingEvolutionColumnThrowsForNonNullableProjection()
+    {
+        using var stream = CreateInt32File("Value");
+        var requested = new ParquetSchema([
+            new PlankColumn("Added", ParquetPhysicalType.Int32,
+                new ColumnOptions(ParquetRepetition.Required, allowMissing: true))
+        ]);
+
+        using var reader = requested.CreateReader(stream);
+        var token = EnumerateTokens(reader)[0];
+        using var rowGroup = reader.OpenRowGroup(stream, token);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Task.Run(() => rowGroup.Column<int>(requested.Columns[0])).ConfigureAwait(false));
+    }
+
+    [Test]
+    public async Task MissingNullableColumnThrowsWhenEvolutionMissingIsNotAllowed()
+    {
+        using var stream = CreateInt32File("Value");
+        var requested = new ParquetSchema([
+            new PlankColumn("Added", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
+        ]);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Task.Run(() => requested.CreateReader(stream)).ConfigureAwait(false));
+    }
+
+    [Test]
     public async Task AllowsRequestedSchemaMismatchWhenStrictModeIsDisabled()
     {
         using var stream = CreateInt32File("Actual");
@@ -177,6 +270,49 @@ internal sealed class ParquetReaderTests
         {
             File.Delete(path);
         }
+    }
+
+    [Test]
+    public async Task ReadsParquetSharpDataPageV1Columns()
+    {
+        var path = GetTempPath();
+        var schema = new ParquetSchema([
+            new PlankColumn("Required", ParquetPhysicalType.Int32),
+            new PlankColumn("Optional", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
+        ]);
+        int?[] optionalValues = [10, null, 30, null, 50];
+        try
+        {
+            WriteParquetSharpDataPageV1File(path, [1, 2, 3, 4, 5], optionalValues);
+
+            using var readStream = File.OpenRead(path);
+            using var reader = schema.CreateReader(readStream);
+            var token = EnumerateTokens(reader)[0];
+            using var rowGroup = reader.OpenRowGroup(readStream, token);
+
+            await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3, 4, 5]);
+            await Assert.That(ReadAllPages(rowGroup.Column<int?>(schema.Columns[1]).Pages)).IsEquivalentTo(optionalValues);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    static void WriteParquetSharpDataPageV1File(string path, int[] requiredValues, int?[] optionalValues)
+    {
+        using var properties = new ParquetSharp.WriterPropertiesBuilder()
+            .Compression(ParquetSharp.Compression.Uncompressed)
+            .Build();
+        using var stream = File.Create(path);
+        using var writer = new ParquetSharp.ParquetFileWriter(stream,
+            [new ParquetSharp.Column<int>("Required"), new ParquetSharp.Column<int?>("Optional")],
+            null, properties, null, true);
+        using var rowGroup = writer.AppendRowGroup();
+        using (var required = rowGroup.NextColumn().LogicalWriter<int>())
+            required.WriteBatch(requiredValues);
+        using (var optional = rowGroup.NextColumn().LogicalWriter<int?>())
+            optional.WriteBatch(optionalValues);
     }
 
     [Test]
@@ -535,12 +671,37 @@ internal sealed class ParquetReaderTests
         var schema = new ParquetSchema([
             new PlankColumn(columnName, ParquetPhysicalType.Int32)
         ]);
+        return CreateFile(schema, rowGroup =>
+        {
+            var serialized = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
+            serialized.Serialize([1, 2, 3]);
+            rowGroup.Write(serialized);
+        });
+    }
+
+    static MemoryStream CreateTwoColumnFile()
+    {
+        var schema = new ParquetSchema([
+            new PlankColumn("Value", ParquetPhysicalType.Int32),
+            new PlankColumn("Other", ParquetPhysicalType.Int64)
+        ]);
+        return CreateFile(schema, rowGroup =>
+        {
+            var value = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
+            value.Serialize([1, 2, 3]);
+            rowGroup.Write(value);
+
+            var other = rowGroup.CreateSerializedColumn<long>(schema.Columns[1]);
+            other.Serialize([10L, 20L, 30L]);
+            rowGroup.Write(other);
+        });
+    }
+
+    static MemoryStream CreateFile(ParquetSchema schema, Action<RowGroupWriter> writeRowGroup)
+    {
         var stream = new MemoryStream();
         var writer = schema.CreateWriter(stream);
-        var rowGroup = writer.StartRowGroup();
-        var serialized = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
-        serialized.Serialize([1, 2, 3]);
-        rowGroup.Write(serialized);
+        writeRowGroup(writer.StartRowGroup());
         writer.CloseFile();
         return new MemoryStream(stream.ToArray());
     }

@@ -6,7 +6,7 @@ readonly struct PageHeader
 {
     internal PageHeader(PageHeaderType type, uint uncompressedPageSize, uint compressedPageSize, uint valueCount,
         EncodingKind encoding, int headerLength, uint repetitionLevelsByteLength, uint definitionLevelsByteLength,
-        uint nullCount, bool isCompressed)
+        uint nullCount, bool isCompressed, EncodingKind repetitionLevelEncoding, EncodingKind definitionLevelEncoding)
     {
         Type = type;
         UncompressedPageSize = uncompressedPageSize;
@@ -18,6 +18,8 @@ readonly struct PageHeader
         DefinitionLevelsByteLength = definitionLevelsByteLength;
         NullCount = nullCount;
         IsCompressed = isCompressed;
+        RepetitionLevelEncoding = repetitionLevelEncoding;
+        DefinitionLevelEncoding = definitionLevelEncoding;
     }
 
     internal PageHeaderType Type { get; }
@@ -40,4 +42,8 @@ readonly struct PageHeader
 
     // DataPageV2 only: whether the values portion (after levels) is compressed.
     internal bool IsCompressed { get; }
+
+    internal EncodingKind RepetitionLevelEncoding { get; }
+
+    internal EncodingKind DefinitionLevelEncoding { get; }
 }

@@ -60,6 +60,14 @@ static class ColumnChunkReader
                     dictionary = DecodeDictionaryPage(payload, column, header, columnChunk.Compression,
                         ref dictionaryBuffer, GetPhysicalDecodeType<T>(), bufferPool);
                     break;
+                case PageHeaderType.DataPage:
+                {
+                    values = DecodeDataPageV1(payload, column, header, columnChunk.Compression, rowCount, dictionary,
+                        ref valuesBuffer, bufferPool, ref deltaPrefixLengthsBuffer, ref deltaSuffixLengthsBuffer,
+                        ref decompressionBuffer);
+                    encoding = header.Encoding;
+                    return true;
+                }
                 case PageHeaderType.DataPageV2:
                 {
                     var repLen = header.RepetitionLevelsByteLength;
@@ -152,6 +160,85 @@ static class ColumnChunkReader
         values = ReadOnlyMemory<T>.Empty;
         encoding = default;
         return false;
+    }
+
+    static ReadOnlyMemory<T> DecodeDataPageV1<T>(ReadOnlySpan<byte> payload, Column column, PageHeader header,
+        CompressionKind compression, ulong rowCount, Array? dictionary, ref T[]? valuesBuffer,
+        IParquetBufferPool bufferPool, ref int[]? deltaPrefixLengthsBuffer, ref int[]? deltaSuffixLengthsBuffer,
+        ref byte[]? decompressionBuffer)
+    {
+        if (header.ValueCount > rowCount)
+            throw new CorruptParquetException(
+                $"Page value count ({header.ValueCount}) exceeds row group row count ({rowCount}).");
+
+        ReadOnlySpan<byte> remaining;
+        if (compression != CompressionKind.None && payload.Length > 0)
+        {
+            var decompBuf = EnsureByteBuffer(ref decompressionBuffer, (int)header.UncompressedPageSize, bufferPool);
+            ParquetDecompressor.DecompressInto(payload, compression, decompBuf.AsSpan(0, (int)header.UncompressedPageSize));
+            remaining = decompBuf.AsSpan(0, (int)header.UncompressedPageSize);
+        }
+        else
+        {
+            remaining = payload;
+        }
+
+        var hasDefinitionLevels = column.Options.Repetition == ParquetRepetition.Optional;
+        var definitionPayload = ReadOnlySpan<byte>.Empty;
+        var physicalValueCount = header.ValueCount;
+        var nullCount = 0U;
+        if (hasDefinitionLevels)
+        {
+            if (header.DefinitionLevelEncoding != EncodingKind.Rle)
+                throw new NotSupportedException(
+                    $"DataPageV1 definition level encoding '{header.DefinitionLevelEncoding}' is not supported.");
+
+            var definitionLength = ReadLengthPrefixedLevelPayloadLength(remaining, "definition");
+            definitionPayload = remaining.Slice(sizeof(int), definitionLength);
+            remaining = remaining[(sizeof(int) + definitionLength)..];
+            _ = ReadDefinitionLevels(definitionPayload, header.ValueCount, out var nonNullCount);
+            physicalValueCount = checked((uint)nonNullCount);
+            nullCount = header.ValueCount - physicalValueCount;
+        }
+
+        var physicalDecodeType = GetPhysicalDecodeType<T>();
+        var isNullableValueType = physicalDecodeType != typeof(T);
+        var needsNullExpansion = isNullableValueType
+            || (!typeof(T).IsValueType && nullCount > 0 && hasDefinitionLevels);
+
+        if (dictionary is null)
+        {
+            if (needsNullExpansion)
+                return DecodeValuesWithNullExpansion<T>(remaining, definitionPayload, column, header.ValueCount,
+                    physicalValueCount, header.Encoding, nullCount > 0);
+            if (nullCount > 0 && hasDefinitionLevels)
+                return (T[])DecodeValues(remaining, column, physicalValueCount, header.Encoding, typeof(T));
+            if (TryDecodeValuesIntoBuffer(remaining, column, physicalValueCount, header.Encoding, ref valuesBuffer,
+                    bufferPool, ref deltaPrefixLengthsBuffer, ref deltaSuffixLengthsBuffer, out var values))
+                return values;
+            return (T[])DecodeValues(remaining, column, physicalValueCount, header.Encoding, typeof(T));
+        }
+
+        if (nullCount > 0 && hasDefinitionLevels)
+            return DecodeDictionaryIndexesWithNulls<T>(remaining, header.ValueCount, physicalValueCount, dictionary,
+                definitionPayload);
+
+        DecodeDictionaryIndexes(remaining, physicalValueCount, dictionary, ref valuesBuffer, bufferPool, out var decoded);
+        return decoded;
+    }
+
+    static int ReadLengthPrefixedLevelPayloadLength(ReadOnlySpan<byte> payload, string levelName)
+    {
+        if (payload.Length < sizeof(int))
+            throw new CorruptParquetException($"DataPageV1 {levelName} levels are missing their length prefix.");
+
+        var length = BinaryPrimitives.ReadUInt32LittleEndian(payload);
+        var remainingLength = payload.Length - sizeof(int);
+        if (length > (uint)remainingLength)
+            throw new CorruptParquetException(
+                $"DataPageV1 {levelName} levels claim {length} bytes but only {remainingLength} remain.");
+
+        return (int)length;
     }
 
     static bool TryDecodeValuesIntoBuffer<T>(ReadOnlySpan<byte> payload, Column column, uint valueCount,

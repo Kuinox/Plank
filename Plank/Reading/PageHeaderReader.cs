@@ -17,6 +17,8 @@ static class PageHeaderReader
         var definitionLevelsByteLength = 0U;
         var nullCount = 0U;
         var isCompressed = false;
+        var repetitionLevelEncoding = EncodingKind.Rle;
+        var definitionLevelEncoding = EncodingKind.Rle;
 
         while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var fieldType, out var inlineBool))
         {
@@ -30,6 +32,10 @@ static class PageHeaderReader
                     break;
                 case 3:
                     compressedPageSize = reader.ReadI32AsU32();
+                    break;
+                case 5:
+                    (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding)
+                        = ReadDataPageHeader(ref reader);
                     break;
                 case 7:
                     valueCount = ReadDictionaryHeader(ref reader);
@@ -45,7 +51,48 @@ static class PageHeaderReader
         }
 
         return new PageHeader(type, uncompressedPageSize, compressedPageSize, valueCount, encoding, reader.Offset,
-            repetitionLevelsByteLength, definitionLevelsByteLength, nullCount, isCompressed);
+            repetitionLevelsByteLength, definitionLevelsByteLength, nullCount, isCompressed, repetitionLevelEncoding,
+            definitionLevelEncoding);
+    }
+
+    static (uint ValueCount, EncodingKind Encoding, EncodingKind RepetitionLevelEncoding,
+        EncodingKind DefinitionLevelEncoding) ReadDataPageHeader(ref CompactProtocolReader reader)
+    {
+        var previousFieldId = 0;
+        var valueCount = 0U;
+        var encoding = EncodingKind.Plain;
+        var repetitionLevelEncoding = EncodingKind.Rle;
+        var definitionLevelEncoding = EncodingKind.Rle;
+
+        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var fieldType, out var inlineBool))
+        {
+            switch (fieldId)
+            {
+                case 1:
+                    valueCount = reader.ReadI32AsU32();
+                    break;
+                case 2:
+                    encoding = ParquetMetadataThriftReader.ReadEncoding(reader.ReadI32());
+                    break;
+                case 3:
+                    if (fieldType == CompactProtocolType.I32)
+                        definitionLevelEncoding = ParquetMetadataThriftReader.ReadEncoding(reader.ReadI32());
+                    else
+                        reader.Skip(fieldType, inlineBool);
+                    break;
+                case 4:
+                    if (fieldType == CompactProtocolType.I32)
+                        repetitionLevelEncoding = ParquetMetadataThriftReader.ReadEncoding(reader.ReadI32());
+                    else
+                        reader.Skip(fieldType, inlineBool);
+                    break;
+                default:
+                    reader.Skip(fieldType, inlineBool);
+                    break;
+            }
+        }
+
+        return (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding);
     }
 
     static uint ReadDictionaryHeader(ref CompactProtocolReader reader)

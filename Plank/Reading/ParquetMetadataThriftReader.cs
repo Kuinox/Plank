@@ -101,7 +101,7 @@ static class ParquetMetadataThriftReader
             switch (fieldId)
             {
                 case 1:
-                    columns = ReadColumns(ref reader, previousColumns, rowGroupOrdinal == 0 ? requestedSchema : null);
+                    columns = ReadColumns(ref reader, previousColumns, requestedSchema);
                     break;
                 case 3:
                     rowCount = reader.ReadI64AsU64();
@@ -129,22 +129,17 @@ static class ParquetMetadataThriftReader
             throw new CorruptParquetException("Expected row group columns to be encoded as a list of structs.");
         if (count > reader.Remaining)
             throw new CorruptParquetException($"Column count {count} exceeds remaining input bytes.");
-        if (requestedSchema is not null && requestedSchema.Columns.Length != count)
-            throw new InvalidOperationException(
-                $"Requested schema has {requestedSchema.Columns.Length} column(s), but file schema has {count}.");
-
         var columns = (uint)previous.Length == count ? previous : new InternalColumnChunkMetadata[(int)count];
         for (var i = 0U; i < count; i++)
         {
             var previousEncodings = columns[i].Encodings ?? [];
-            var requestedColumn = requestedSchema is null ? null : requestedSchema.Columns[checked((int)i)];
-            columns[i] = ReadColumn(ref reader, previousEncodings, requestedColumn);
+            columns[i] = ReadColumn(ref reader, previousEncodings, columns[i].Path);
         }
-        return columns;
+        return requestedSchema is null ? columns : AlignRequestedColumns(columns, requestedSchema);
     }
 
     static InternalColumnChunkMetadata ReadColumn(ref CompactProtocolReader reader, EncodingKind[] previousEncodings,
-        Column? requestedColumn)
+        string? previousPath)
     {
         var previousFieldId = 0;
         var dataPageOffset = 0UL;
@@ -157,6 +152,8 @@ static class ParquetMetadataThriftReader
         var offsetIndexLength = 0U;
         var compression = CompressionKind.None;
         EncodingKind[] encodings = [];
+        string? path = null;
+        ParquetPhysicalType? physicalType = null;
 
         while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
         {
@@ -166,8 +163,9 @@ static class ParquetMetadataThriftReader
                     dataPageOffset = reader.ReadI64AsU64();
                     break;
                 case 3:
-                    ReadColumnMetadata(ref reader, ref dictionaryPageOffset, ref totalCompressedSize,
-                        ref totalUncompressedSize, ref compression, ref encodings, previousEncodings, requestedColumn);
+                    ReadColumnMetadata(ref reader, ref dataPageOffset, ref dictionaryPageOffset, ref totalCompressedSize,
+                        ref totalUncompressedSize, ref compression, ref encodings, previousEncodings, previousPath,
+                        ref path, ref physicalType);
                     break;
                 case 4:
                     offsetIndexOffset = reader.ReadI64AsU64();
@@ -187,14 +185,20 @@ static class ParquetMetadataThriftReader
             }
         }
 
+        if (path is null)
+            throw new CorruptParquetException("Column chunk metadata is missing path_in_schema.");
+        if (physicalType is null)
+            throw new CorruptParquetException($"Column chunk '{path}' is missing a physical type.");
+
         return new InternalColumnChunkMetadata(dataPageOffset, dictionaryPageOffset, totalCompressedSize,
-            totalUncompressedSize, compression, encodings, columnIndexOffset, columnIndexLength,
+            totalUncompressedSize, compression, encodings, path, physicalType.Value, columnIndexOffset, columnIndexLength,
             offsetIndexOffset, offsetIndexLength);
     }
 
-    static void ReadColumnMetadata(ref CompactProtocolReader reader, ref ulong dictionaryPageOffset,
-        ref ulong totalCompressedSize, ref ulong totalUncompressedSize, ref CompressionKind compression,
-        ref EncodingKind[] encodings, EncodingKind[] previousEncodings, Column? requestedColumn)
+    static void ReadColumnMetadata(ref CompactProtocolReader reader, ref ulong dataPageOffset,
+        ref ulong dictionaryPageOffset, ref ulong totalCompressedSize, ref ulong totalUncompressedSize,
+        ref CompressionKind compression, ref EncodingKind[] encodings, EncodingKind[] previousEncodings,
+        string? previousPath, ref string? path, ref ParquetPhysicalType? physicalType)
     {
         var previousFieldId = 0;
         while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
@@ -202,16 +206,13 @@ static class ParquetMetadataThriftReader
             switch (fieldId)
             {
                 case 1:
-                    var physicalType = ReadPhysicalType(reader.ReadI32());
-                    if (requestedColumn is not null && requestedColumn.PhysicalType != physicalType)
-                        throw new InvalidOperationException(
-                            $"Requested schema column '{requestedColumn.Name}' has physical type {requestedColumn.PhysicalType}, but file schema has {physicalType}.");
+                    physicalType = ReadPhysicalType(reader.ReadI32());
                     break;
                 case 2:
                     encodings = ReadEncodings(ref reader, previousEncodings);
                     break;
                 case 3:
-                    ValidateOrSkipPath(ref reader, requestedColumn);
+                    path = ReadPath(ref reader, previousPath);
                     break;
                 case 4:
                     compression = ReadCompression(reader.ReadI32());
@@ -222,6 +223,9 @@ static class ParquetMetadataThriftReader
                 case 7:
                     totalCompressedSize = reader.ReadI64AsU64();
                     break;
+                case 9:
+                    dataPageOffset = reader.ReadI64AsU64();
+                    break;
                 case 11:
                     dictionaryPageOffset = reader.ReadI64AsU64();
                     break;
@@ -230,6 +234,62 @@ static class ParquetMetadataThriftReader
                     break;
             }
         }
+    }
+
+    static InternalColumnChunkMetadata[] AlignRequestedColumns(InternalColumnChunkMetadata[] fileColumns,
+        ParquetSchema requestedSchema)
+    {
+        var requestedColumns = requestedSchema.Columns;
+        if (requestedColumns.Length == fileColumns.Length)
+        {
+            var matchesInOrder = true;
+            for (var i = 0; i < requestedColumns.Length; i++)
+            {
+                if (requestedColumns[i].Name == fileColumns[i].Path &&
+                    requestedColumns[i].PhysicalType == fileColumns[i].PhysicalType)
+                    continue;
+
+                matchesInOrder = false;
+                break;
+            }
+
+            if (matchesInOrder)
+                return fileColumns;
+        }
+
+        var fileOrdinalByPath = new Dictionary<string, int>(fileColumns.Length, StringComparer.Ordinal);
+        for (var i = 0; i < fileColumns.Length; i++)
+        {
+            var path = fileColumns[i].Path;
+            if (!fileOrdinalByPath.TryAdd(path, i))
+                throw new CorruptParquetException($"File schema contains duplicate column path '{path}'.");
+        }
+
+        var projected = requestedColumns.Length == 0 ? [] : new InternalColumnChunkMetadata[requestedColumns.Length];
+        for (var i = 0; i < requestedColumns.Length; i++)
+        {
+            var requestedColumn = requestedColumns[i];
+            if (!fileOrdinalByPath.TryGetValue(requestedColumn.Name, out var fileOrdinal))
+            {
+                if (requestedColumn.Options.AllowMissing)
+                {
+                    projected[i] = InternalColumnChunkMetadata.Missing(requestedColumn);
+                    continue;
+                }
+
+                throw new InvalidOperationException(
+                    $"Requested schema column '{requestedColumn.Name}' is not present in the file schema.");
+            }
+
+            var fileColumn = fileColumns[fileOrdinal];
+            if (requestedColumn.PhysicalType != fileColumn.PhysicalType)
+                throw new InvalidOperationException(
+                    $"Requested schema column '{requestedColumn.Name}' has physical type {requestedColumn.PhysicalType}, but file schema has {fileColumn.PhysicalType}.");
+
+            projected[i] = fileColumn;
+        }
+
+        return projected;
     }
 
     static ParquetPhysicalType ReadPhysicalType(int type)
@@ -246,7 +306,7 @@ static class ParquetMetadataThriftReader
             _ => throw new NotSupportedException($"Physical type '{type}' is not supported.")
         };
 
-    static void ValidateOrSkipPath(ref CompactProtocolReader reader, Column? requestedColumn)
+    static string ReadPath(ref CompactProtocolReader reader, string? previousPath)
     {
         var (count, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.Binary)
@@ -254,39 +314,59 @@ static class ParquetMetadataThriftReader
         if (count > reader.Remaining)
             throw new CorruptParquetException($"Path segment count {count} exceeds remaining input bytes.");
 
-        if (requestedColumn is null)
-        {
-            for (var i = 0U; i < count; i++)
-                reader.Skip(CompactProtocolType.Binary);
-            return;
-        }
-
-        var name = requestedColumn.Name.AsSpan();
-        var nameOffset = 0;
+        StringBuilder? builder = null;
+        var previous = previousPath.AsSpan();
+        var previousOffset = 0;
+        var previousMatches = previousPath is not null;
         for (var i = 0U; i < count; i++)
         {
-            if (i > 0)
+            var segment = reader.ReadBinary();
+            if (previousMatches)
             {
-                if ((uint)nameOffset >= (uint)name.Length || name[nameOffset] != '.')
-                    throw CreatePathMismatch(requestedColumn);
-                nameOffset++;
+                if (i > 0)
+                {
+                    if ((uint)previousOffset >= (uint)previous.Length || previous[previousOffset] != '.')
+                        previousMatches = false;
+                    else
+                        previousOffset++;
+                }
+
+                var segmentStart = previousOffset;
+                var expectedSegment = ReadOnlySpan<char>.Empty;
+                if (previousMatches)
+                {
+                    var nextSeparator = previous[previousOffset..].IndexOf('.');
+                    expectedSegment = nextSeparator < 0 ? previous[previousOffset..] : previous.Slice(previousOffset, nextSeparator);
+                }
+
+                if (previousMatches && Utf8Equals(segment, expectedSegment))
+                {
+                    previousOffset += expectedSegment.Length;
+                    continue;
+                }
+
+                previousMatches = false;
+                builder = new StringBuilder();
+                if (i > 0)
+                {
+                    builder.Append(previous[..(segmentStart - 1)]);
+                    builder.Append('.');
+                }
+            }
+            else if (builder is not null && i > 0)
+            {
+                builder.Append('.');
             }
 
-            var segment = reader.ReadBinary();
-            var nextSeparator = name[nameOffset..].IndexOf('.');
-            var expectedSegment = nextSeparator < 0 ? name[nameOffset..] : name.Slice(nameOffset, nextSeparator);
-            if (!Utf8Equals(segment, expectedSegment))
-                throw CreatePathMismatch(requestedColumn);
-
-            nameOffset += expectedSegment.Length;
+            builder ??= new StringBuilder();
+            builder.Append(ReadUtf8PathSegment(segment));
         }
 
-        if (nameOffset != name.Length)
-            throw CreatePathMismatch(requestedColumn);
-    }
+        if (previousMatches && previousOffset == previous.Length)
+            return previousPath!;
 
-    static InvalidOperationException CreatePathMismatch(Column requestedColumn)
-        => new($"Requested schema column '{requestedColumn.Name}' does not match file column path.");
+        return builder?.ToString() ?? string.Empty;
+    }
 
     static bool Utf8Equals(ReadOnlySpan<byte> actual, ReadOnlySpan<char> expected)
     {
@@ -299,6 +379,14 @@ static class ParquetMetadataThriftReader
         Span<byte> expectedBytes = stackalloc byte[byteCount];
         Encoding.UTF8.GetBytes(expected, expectedBytes);
         return actual.SequenceEqual(expectedBytes);
+    }
+
+    static string ReadUtf8PathSegment(ReadOnlySpan<byte> segment)
+    {
+        if (segment.Length > 1024)
+            throw new NotSupportedException("Column path segments longer than 1024 UTF-8 bytes are not supported.");
+
+        return Encoding.UTF8.GetString(segment);
     }
 
     static EncodingKind[] ReadEncodings(ref CompactProtocolReader reader, EncodingKind[] previous)

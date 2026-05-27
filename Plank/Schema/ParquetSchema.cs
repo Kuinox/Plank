@@ -156,7 +156,8 @@ public sealed record ParquetSchema
                         : nodeOptional ? ParquetRepetition.Optional : ParquetRepetition.Required;
                     var options = node.Options ?? ColumnOptions.Default;
                     if (options.Repetition != repetition)
-                        options = new ColumnOptions(repetition, options.Encodings, options.TypeLength);
+                        options = new ColumnOptions(repetition, options.Encodings, options.TypeLength,
+                            options.AllowMissing);
                     var path = pathBuffer.ToArray().ToImmutableArray();
                     var columnName = string.Join(".", path);
                     columnsBuilder.Add(new Column(columnName, node.PhysicalType.Value, options, node.LogicalType));

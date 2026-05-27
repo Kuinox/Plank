@@ -41,6 +41,7 @@ public readonly struct ColumnPageEnumerable<T>
         readonly IParquetBufferPool _bufferPool;
         int _offset;
         bool _readBuffer;
+        bool _missingPageEmitted;
 
         readonly ulong _rowCount;
 
@@ -60,6 +61,7 @@ public readonly struct ColumnPageEnumerable<T>
             _rowCount = rowCount;
             _offset = 0;
             _readBuffer = false;
+            _missingPageEmitted = false;
             _state.Dictionary = null;
             Current = default;
         }
@@ -68,6 +70,18 @@ public readonly struct ColumnPageEnumerable<T>
 
         public bool MoveNext()
         {
+            if (_columnChunk.IsMissing)
+            {
+                if (_missingPageEmitted || _rowCount == 0)
+                    return false;
+                if (_rowCount > int.MaxValue)
+                    throw new NotSupportedException("Synthetic missing-column pages larger than Int32.MaxValue are not supported.");
+
+                Current = new ColumnPage<T>(new T[(int)_rowCount], EncodingKind.Plain);
+                _missingPageEmitted = true;
+                return true;
+            }
+
             if (!_readBuffer)
             {
                 _state.BufferLength = ColumnChunkReader.ReadChunkBuffer(_source, _columnChunk, ref _state.Buffer, _bufferPool);
@@ -87,6 +101,7 @@ public readonly struct ColumnPageEnumerable<T>
         {
             _offset = 0;
             _readBuffer = false;
+            _missingPageEmitted = false;
             _state.ReleasePageBuffer(_bufferPool);
             Current = default;
         }
