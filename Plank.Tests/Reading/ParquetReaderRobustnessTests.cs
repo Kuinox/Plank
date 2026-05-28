@@ -78,12 +78,12 @@ internal sealed class ParquetReaderRobustnessTests
             using var reader = schema.CreateReader(source);
             foreach (var token in reader.EnumerateRowGroups())
             {
-                using var rowGroup = reader.OpenRowGroup(source, token);
-                foreach (var column in schema.Columns)
+                using var rowGroup = reader.OpenRowGroup(token);
+                foreach (var column in reader.Schema.Columns)
                     DrainColumn(rowGroup, column);
             }
         }
-        catch (Exception ex) when (ex is CorruptParquetException or NotSupportedException or InvalidOperationException) { }
+        catch (Exception ex) when (ex is CorruptParquetException or NotSupportedException or InvalidOperationException or ArgumentException) { }
     }
 
     static void DrainColumn(RowGroupReader rowGroup, Column column)

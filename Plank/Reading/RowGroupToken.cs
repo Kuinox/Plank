@@ -2,7 +2,8 @@ namespace Plank.Reading;
 
 public readonly struct RowGroupToken
 {
-    public RowGroupToken(int rowGroupOrdinal, ulong metadataOffset, ulong columnChunkOffset)
+    internal RowGroupToken(int rowGroupOrdinal, ulong metadataOffset, ulong columnChunkOffset, int footerRowGroupOffset,
+        int footerVersion)
     {
         if (rowGroupOrdinal < 0)
             throw new ArgumentOutOfRangeException(nameof(rowGroupOrdinal), rowGroupOrdinal,
@@ -11,6 +12,8 @@ public readonly struct RowGroupToken
         RowGroupOrdinal = rowGroupOrdinal;
         MetadataOffset = metadataOffset;
         ColumnChunkOffset = columnChunkOffset;
+        FooterRowGroupOffset = footerRowGroupOffset;
+        FooterVersion = footerVersion;
     }
 
     public int RowGroupOrdinal { get; }
@@ -18,4 +21,8 @@ public readonly struct RowGroupToken
     public ulong MetadataOffset { get; }
 
     public ulong ColumnChunkOffset { get; }
+
+    internal int FooterRowGroupOffset { get; }
+
+    internal int FooterVersion { get; }
 }

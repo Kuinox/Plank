@@ -47,150 +47,57 @@ internal sealed class ParquetReaderTests
     }
 
     [Test]
-    public async Task ThrowsWhenRequestedColumnNameDoesNotMatchFileSchema()
-    {
-        using var stream = CreateInt32File("Actual");
-        var requested = new ParquetSchema([
-            new PlankColumn("Requested", ParquetPhysicalType.Int32)
-        ]);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await Task.Run(() => requested.CreateReader(stream)).ConfigureAwait(false));
-    }
-
-    [Test]
-    public async Task ThrowsWhenRequestedPhysicalTypeDoesNotMatchFileSchema()
-    {
-        using var stream = CreateInt32File("Value");
-        var requested = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int64)
-        ]);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await Task.Run(() => requested.CreateReader(stream)).ConfigureAwait(false));
-    }
-
-    [Test]
-    public async Task ReadsRequestedProjectionWhenFileSchemaHasExtraColumns()
+    public async Task DiscoversSchemaWhenOpeningWithoutRequestedSchema()
     {
         using var stream = CreateTwoColumnFile();
-        var requested = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32)
-        ]);
 
-        using var reader = requested.CreateReader(stream);
+        using var reader = ParquetReader.Open(stream);
+
+        await Assert.That(reader.Schema.Columns.Length).IsEqualTo(2);
+        await Assert.That(reader.Schema.Columns[0].Name).IsEqualTo("Value");
+        await Assert.That(reader.Schema.Columns[0].PhysicalType).IsEqualTo(ParquetPhysicalType.Int32);
+        await Assert.That(reader.Schema.Columns[1].Name).IsEqualTo("Other");
+        await Assert.That(reader.Schema.Columns[1].PhysicalType).IsEqualTo(ParquetPhysicalType.Int64);
+    }
+
+    [Test]
+    public async Task ReadsDiscoveredColumns()
+    {
+        using var stream = CreateTwoColumnFile();
+
+        using var reader = ParquetReader.Open(stream);
         var token = EnumerateTokens(reader)[0];
-        using var rowGroup = reader.OpenRowGroup(stream, token);
+        using var rowGroup = reader.OpenRowGroup(token);
 
-        await Assert.That(ReadAllPages(rowGroup.Column<int>(requested.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3]);
+        await Assert.That(ReadAllPages(rowGroup.Column<int>(reader.Schema.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3]);
+        await Assert.That(ReadAllPages(rowGroup.Column<long>(reader.Schema.Columns[1]).Pages)).IsEquivalentTo([10L, 20L, 30L]);
     }
 
     [Test]
-    public async Task ReadsRequestedProjectionWhenFileSchemaOrderChanged()
+    public async Task ResetUpdatesDiscoveredSchema()
     {
-        var fileSchema = new ParquetSchema([
-            new PlankColumn("Other", ParquetPhysicalType.Int64),
-            new PlankColumn("Value", ParquetPhysicalType.Int32)
-        ]);
-        using var stream = CreateFile(fileSchema, rowGroup =>
-        {
-            var other = rowGroup.CreateSerializedColumn<long>(fileSchema.Columns[0]);
-            other.Serialize([10L, 20L, 30L]);
-            rowGroup.Write(other);
+        using var first = CreateInt32File("Value");
+        using var second = CreateInt32File("Other");
+        using var reader = ParquetReader.Open(first);
 
-            var value = rowGroup.CreateSerializedColumn<int>(fileSchema.Columns[1]);
-            value.Serialize([1, 2, 3]);
-            rowGroup.Write(value);
-        });
-        var requested = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32),
-            new PlankColumn("Other", ParquetPhysicalType.Int64)
-        ]);
+        await Assert.That(reader.Schema.Columns[0].Name).IsEqualTo("Value");
 
-        using var reader = requested.CreateReader(stream);
-        var token = EnumerateTokens(reader)[0];
-        using var rowGroupReader = reader.OpenRowGroup(stream, token);
-
-        await Assert.That(ReadAllPages(rowGroupReader.Column<int>(requested.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3]);
-        await Assert.That(ReadAllPages(rowGroupReader.Column<long>(requested.Columns[1]).Pages)).IsEquivalentTo([10L, 20L, 30L]);
+        reader.Reset(second);
+        await Assert.That(reader.Schema.Columns[0].Name).IsEqualTo("Other");
     }
 
     [Test]
-    public async Task MissingEvolutionColumnReadsAsNulls()
+    public async Task OldTokenIsInvalidAfterReset()
     {
-        using var stream = CreateInt32File("Value");
-        var requested = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32),
-            new PlankColumn("Added", ParquetPhysicalType.Int32,
-                new ColumnOptions(ParquetRepetition.Required, allowMissing: true))
-        ]);
+        using var first = CreateInt32File("Value");
+        using var second = CreateInt32File("Other");
+        using var reader = ParquetReader.Open(first);
+        var oldToken = EnumerateTokens(reader)[0];
 
-        using var reader = requested.CreateReader(stream);
-        var token = EnumerateTokens(reader)[0];
-        using var rowGroup = reader.OpenRowGroup(stream, token);
+        reader.Reset(second);
 
-        await Assert.That(ReadAllPages(rowGroup.Column<int>(requested.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3]);
-        await Assert.That(ReadAllPages(rowGroup.Column<int?>(requested.Columns[1]).Pages))
-            .IsEquivalentTo(new int?[] { null, null, null });
-    }
-
-    [Test]
-    public async Task MissingEvolutionColumnThrowsForNonNullableProjection()
-    {
-        using var stream = CreateInt32File("Value");
-        var requested = new ParquetSchema([
-            new PlankColumn("Added", ParquetPhysicalType.Int32,
-                new ColumnOptions(ParquetRepetition.Required, allowMissing: true))
-        ]);
-
-        using var reader = requested.CreateReader(stream);
-        var token = EnumerateTokens(reader)[0];
-        using var rowGroup = reader.OpenRowGroup(stream, token);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await Task.Run(() => rowGroup.Column<int>(requested.Columns[0])).ConfigureAwait(false));
-    }
-
-    [Test]
-    public async Task MissingNullableColumnThrowsWhenEvolutionMissingIsNotAllowed()
-    {
-        using var stream = CreateInt32File("Value");
-        var requested = new ParquetSchema([
-            new PlankColumn("Added", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
-        ]);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await Task.Run(() => requested.CreateReader(stream)).ConfigureAwait(false));
-    }
-
-    [Test]
-    public async Task AllowsRequestedSchemaMismatchWhenStrictModeIsDisabled()
-    {
-        using var stream = CreateInt32File("Actual");
-        var requested = new ParquetSchema([
-            new PlankColumn("Requested", ParquetPhysicalType.Int64)
-        ]);
-
-        using var reader = requested.CreateReader(stream, new ParquetReaderOptions
-        {
-            Strict = false
-        });
-
-        await Assert.That(reader.Metadata.FooterLength).IsGreaterThan(0U);
-    }
-
-    [Test]
-    public async Task ResetThrowsWhenNewFileSchemaDoesNotMatchRequestedSchema()
-    {
-        var requested = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32)
-        ]);
-        using var matching = CreateInt32File("Value");
-        using var mismatched = CreateInt32File("Other");
-        using var reader = requested.CreateReader(matching);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await Task.Run(() => reader.Reset(mismatched)).ConfigureAwait(false));
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await Task.Run(() => reader.OpenRowGroup(oldToken)).ConfigureAwait(false));
     }
 
     [Test]
@@ -216,14 +123,14 @@ internal sealed class ParquetReaderTests
             using var reader = schema.CreateReader(readStream);
             var tokens = EnumerateTokens(reader);
 
-            using (var rowGroup = reader.OpenRowGroup(readStream, tokens[0]))
+            using (var rowGroup = reader.OpenRowGroup(tokens[0]))
             {
                 await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([1, 2]);
                 await Assert.That(ReadAllPages(rowGroup.Column<double>(schema.Columns[1]).Pages)).IsEquivalentTo([1.5, 2.5]);
                 await AssertByteArraysEqual(ReadAllPages(rowGroup.Column<byte[]>(schema.Columns[2]).Pages), [Bytes(1), Bytes(2)]);
             }
 
-            using (var rowGroup = reader.OpenRowGroup(readStream, tokens[1]))
+            using (var rowGroup = reader.OpenRowGroup(tokens[1]))
             {
                 await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([3]);
                 await Assert.That(ReadAllPages(rowGroup.Column<double>(schema.Columns[1]).Pages)).IsEquivalentTo([3.5]);
@@ -262,7 +169,7 @@ internal sealed class ParquetReaderTests
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(readStream, token);
+            using var rowGroup = reader.OpenRowGroup(token);
 
             await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo(values);
         }
@@ -288,7 +195,7 @@ internal sealed class ParquetReaderTests
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(readStream, token);
+            using var rowGroup = reader.OpenRowGroup(token);
 
             await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3, 4, 5]);
             await Assert.That(ReadAllPages(rowGroup.Column<int?>(schema.Columns[1]).Pages)).IsEquivalentTo(optionalValues);
@@ -342,7 +249,7 @@ internal sealed class ParquetReaderTests
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(readStream, token);
+            using var rowGroup = reader.OpenRowGroup(token);
 
             await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([10, 20, 30]);
             await Assert.That(ReadAllPages(rowGroup.Column<double>(schema.Columns[1]).Pages)).IsEquivalentTo([1.25, 2.25, 3.25]);
@@ -423,7 +330,7 @@ internal sealed class ParquetReaderTests
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(readStream, token);
+            using var rowGroup = reader.OpenRowGroup(token);
 
             await Assert.That(ReadAllPages(rowGroup.Column<byte>(schema.Columns[0]).Pages)).IsEquivalentTo(byteValues);
             await Assert.That(ReadAllPages(rowGroup.Column<ushort>(schema.Columns[1]).Pages)).IsEquivalentTo(ushortValues);
@@ -484,7 +391,7 @@ internal sealed class ParquetReaderTests
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup2 = reader.OpenRowGroup(readStream, token);
+            using var rowGroup2 = reader.OpenRowGroup(token);
 
             await Assert.That(ReadAllPages(rowGroup2.Column<int?>(schema.Columns[0]).Pages)).IsEquivalentTo(intValues);
             await Assert.That(ReadAllPages(rowGroup2.Column<long?>(schema.Columns[1]).Pages)).IsEquivalentTo(longValues);
@@ -530,7 +437,7 @@ internal sealed class ParquetReaderTests
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup2 = reader.OpenRowGroup(readStream, token);
+            using var rowGroup2 = reader.OpenRowGroup(token);
 
             var actualStr = ReadAllPages(rowGroup2.Column<string>(schema.Columns[0]).Pages);
             await Assert.That(actualStr).IsEquivalentTo(strValues);
@@ -575,7 +482,7 @@ internal sealed class ParquetReaderTests
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup2 = reader.OpenRowGroup(readStream, token);
+            using var rowGroup2 = reader.OpenRowGroup(token);
 
             await Assert.That(ReadAllPages(rowGroup2.Column<int?>(schema.Columns[0]).Pages)).IsEquivalentTo(values);
         }
@@ -610,7 +517,7 @@ internal sealed class ParquetReaderTests
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup2 = reader.OpenRowGroup(readStream, token);
+            using var rowGroup2 = reader.OpenRowGroup(token);
 
             await Assert.That(ReadAllPages(rowGroup2.Column<int?>(schema.Columns[0]).Pages)).IsEquivalentTo(values);
         }

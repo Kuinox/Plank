@@ -212,8 +212,7 @@ internal sealed class ColumnStatisticsTests
                 writer.CloseFile();
             }
 
-            var footer = ReadFooter(path);
-            var columns = footer.RowGroups[0].Columns;
+            var columns = ReadFirstRowGroupColumns(path);
             var fileBytes = File.ReadAllBytes(path);
             AssertPageIndexMetadata(fileBytes, columns[0], expectedPageCount: 3);
             AssertPageIndexMetadata(fileBytes, columns[1], expectedPageCount: 3);
@@ -280,8 +279,7 @@ internal sealed class ColumnStatisticsTests
                 writer.CloseFile();
             }
 
-            var footer = ReadFooter(path);
-            var columns = footer.RowGroups[0].Columns;
+            var columns = ReadFirstRowGroupColumns(path);
             var fileBytes = File.ReadAllBytes(path);
             AssertPageIndexMetadata(fileBytes, columns[0], expectedPageCount: 3);
             AssertPageIndexMetadata(fileBytes, columns[1], expectedPageCount: 3);
@@ -460,13 +458,17 @@ internal sealed class ColumnStatisticsTests
                 $"Offset index page count mismatch. Expected {expectedPageCount}, got {actualPageCount}.");
     }
 
-    static InternalParquetFooter ReadFooter(string path)
+    static InternalColumnChunkMetadata[] ReadFirstRowGroupColumns(string path)
     {
-        var bytes = File.ReadAllBytes(path);
-        var trailer = bytes.AsSpan(bytes.Length - 8, 8);
-        var footerLength = BinaryPrimitives.ReadInt32LittleEndian(trailer[..4]);
-        var footerOffset = (ulong)(bytes.Length - 8 - footerLength);
-        return ParquetMetadataThriftReader.Read(bytes.AsSpan((int)footerOffset, footerLength), footerOffset);
+        using var stream = File.OpenRead(path);
+        using var reader = ParquetReader.Open(stream);
+        foreach (var token in reader.EnumerateRowGroups())
+        {
+            using var rowGroup = reader.OpenRowGroup(token);
+            return rowGroup.PreviousColumns;
+        }
+
+        throw new InvalidOperationException("Expected at least one row group.");
     }
 
     static int ReadColumnIndexPageCount(byte[] fileBytes, long offset, int length)

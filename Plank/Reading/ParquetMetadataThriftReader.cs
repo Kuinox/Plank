@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text;
 using Plank.Schema;
 using Plank.Writing;
@@ -6,22 +7,15 @@ namespace Plank.Reading;
 
 static class ParquetMetadataThriftReader
 {
-    internal static InternalParquetFooter Read(ReadOnlySpan<byte> buffer, ulong footerOffset)
-        => Read(buffer, footerOffset, InternalParquetFooter.Empty, null);
-
-    internal static InternalParquetFooter Read(ReadOnlySpan<byte> buffer, ulong footerOffset, ParquetSchema requestedSchema)
-        => Read(buffer, footerOffset, InternalParquetFooter.Empty, requestedSchema);
-
-    internal static InternalParquetFooter Read(ReadOnlySpan<byte> buffer, ulong footerOffset, InternalParquetFooter previous)
-        => Read(buffer, footerOffset, previous, null);
-
-    internal static InternalParquetFooter Read(ReadOnlySpan<byte> buffer, ulong footerOffset, InternalParquetFooter previous,
-        ParquetSchema? requestedSchema)
+    internal static InternalParquetFooter Read(ReadOnlySpan<byte> buffer)
     {
         var reader = new CompactProtocolReader(buffer);
         var previousFieldId = 0;
         var version = 0;
-        InternalRowGroupMetadata[] rowGroups = [];
+        var rowGroupCount = 0U;
+        var rowGroupsOffset = 0;
+        var rowGroupsEndOffset = 0;
+        ParquetSchema? schema = null;
 
         while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
         {
@@ -30,8 +24,11 @@ static class ParquetMetadataThriftReader
                 case 1:
                     version = reader.ReadI32();
                     break;
+                case 2:
+                    schema = ReadSchema(ref reader);
+                    break;
                 case 4:
-                    rowGroups = ReadRowGroups(ref reader, footerOffset, previous.RowGroups, requestedSchema);
+                    (rowGroupCount, rowGroupsOffset, rowGroupsEndOffset) = ReadRowGroupListPosition(ref reader);
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -39,7 +36,40 @@ static class ParquetMetadataThriftReader
             }
         }
 
-        return new InternalParquetFooter(version, rowGroups);
+        return new InternalParquetFooter(version,
+            schema ?? throw new CorruptParquetException("File metadata is missing schema."), rowGroupCount,
+            rowGroupsOffset, rowGroupsEndOffset);
+    }
+
+    internal static InternalRowGroupMetadata ReadRowGroup(ReadOnlySpan<byte> footer, ulong footerOffset,
+        RowGroupToken token, InternalColumnChunkMetadata[] previousColumns, ParquetSchema schema)
+    {
+        if ((uint)token.FooterRowGroupOffset >= (uint)footer.Length)
+            throw new ArgumentException("Row group token does not belong to this reader.", nameof(token));
+
+        var reader = new CompactProtocolReader(footer[token.FooterRowGroupOffset..]);
+        var rowGroup = ReadRowGroup(ref reader, token.RowGroupOrdinal,
+            footerOffset + (ulong)token.FooterRowGroupOffset, previousColumns, schema);
+        return new InternalRowGroupMetadata(rowGroup.RowGroupOrdinal, rowGroup.MetadataOffset,
+            rowGroup.ColumnChunkOffset, rowGroup.RowCount, rowGroup.Columns, token.FooterRowGroupOffset,
+            token.FooterVersion);
+    }
+
+    internal static bool TryReadNextRowGroupToken(ReadOnlySpan<byte> footer, ulong footerOffset, int rowGroupsEndOffset,
+        int ordinal, ref int rowGroupOffset, out RowGroupToken token, int footerVersion)
+    {
+        if ((uint)rowGroupOffset >= (uint)rowGroupsEndOffset)
+        {
+            token = default;
+            return false;
+        }
+
+        var reader = new CompactProtocolReader(footer[rowGroupOffset..]);
+        var metadataOffset = footerOffset + (ulong)rowGroupOffset;
+        var columnChunkOffset = ReadRowGroupToken(ref reader);
+        token = new RowGroupToken(ordinal, metadataOffset, columnChunkOffset, rowGroupOffset, footerVersion);
+        rowGroupOffset += reader.Offset;
+        return true;
     }
 
     internal static CompressionKind ReadCompression(int compression)
@@ -69,8 +99,7 @@ static class ParquetMetadataThriftReader
             _ => throw new NotSupportedException($"Encoding '{encoding}' is not supported.")
         };
 
-    static InternalRowGroupMetadata[] ReadRowGroups(ref CompactProtocolReader reader, ulong footerOffset,
-        InternalRowGroupMetadata[] previous, ParquetSchema? requestedSchema)
+    static (uint Count, int Offset, int EndOffset) ReadRowGroupListPosition(ref CompactProtocolReader reader)
     {
         var (count, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.Struct)
@@ -78,18 +107,261 @@ static class ParquetMetadataThriftReader
         if (count > reader.Remaining)
             throw new CorruptParquetException($"Row group count {count} exceeds remaining input bytes.");
 
-        var rowGroups = (uint)previous.Length == count ? previous : new InternalRowGroupMetadata[(int)count];
+        var offset = reader.Offset;
         for (var i = 0U; i < count; i++)
+            reader.Skip(elementType);
+        return (count, offset, reader.Offset);
+    }
+
+    static ulong ReadRowGroupToken(ref CompactProtocolReader reader)
+    {
+        var previousFieldId = 0;
+        var firstColumnChunkOffset = 0UL;
+        var rowGroupColumnChunkOffset = 0UL;
+
+        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
         {
-            var previousColumns = rowGroups[i].Columns ?? [];
-            rowGroups[i] = ReadRowGroup(ref reader, checked((int)i), footerOffset + (ulong)reader.Offset, previousColumns,
-                requestedSchema);
+            switch (fieldId)
+            {
+                case 1:
+                    firstColumnChunkOffset = ReadFirstColumnChunkOffset(ref reader);
+                    break;
+                case 5:
+                    rowGroupColumnChunkOffset = reader.ReadI64AsU64();
+                    break;
+                default:
+                    reader.Skip(type, inlineBool);
+                    break;
+            }
         }
-        return rowGroups;
+
+        return rowGroupColumnChunkOffset == 0 ? firstColumnChunkOffset : rowGroupColumnChunkOffset;
+    }
+
+    static ulong ReadFirstColumnChunkOffset(ref CompactProtocolReader reader)
+    {
+        var (count, elementType) = reader.ReadListHeader();
+        if (elementType != CompactProtocolType.Struct)
+            throw new CorruptParquetException("Expected row group columns to be encoded as a list of structs.");
+        if (count > reader.Remaining)
+            throw new CorruptParquetException($"Column count {count} exceeds remaining input bytes.");
+        if (count == 0)
+            return 0;
+
+        var firstColumnChunkOffset = ReadColumnChunkOffset(ref reader);
+        for (var i = 1U; i < count; i++)
+            reader.Skip(elementType);
+        return firstColumnChunkOffset;
+    }
+
+    static ulong ReadColumnChunkOffset(ref CompactProtocolReader reader)
+    {
+        var previousFieldId = 0;
+        var dataPageOffset = 0UL;
+        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
+        {
+            switch (fieldId)
+            {
+                case 2:
+                    dataPageOffset = reader.ReadI64AsU64();
+                    break;
+                case 3:
+                    dataPageOffset = ReadColumnMetadataOffset(ref reader, dataPageOffset);
+                    break;
+                default:
+                    reader.Skip(type, inlineBool);
+                    break;
+            }
+        }
+
+        return dataPageOffset;
+    }
+
+    static ulong ReadColumnMetadataOffset(ref CompactProtocolReader reader, ulong dataPageOffset)
+    {
+        var previousFieldId = 0;
+        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
+        {
+            if (fieldId == 9)
+                dataPageOffset = reader.ReadI64AsU64();
+            else
+                reader.Skip(type, inlineBool);
+        }
+
+        return dataPageOffset;
+    }
+
+    static ParquetSchema ReadSchema(ref CompactProtocolReader reader)
+    {
+        var (count, elementType) = reader.ReadListHeader();
+        if (elementType != CompactProtocolType.Struct)
+            throw new CorruptParquetException("Expected schema to be encoded as a list of structs.");
+        if (count == 0)
+            throw new CorruptParquetException("Parquet schema must contain a root node.");
+
+        var nodes = ImmutableArray.CreateBuilder<SchemaNode>(checked((int)count));
+        for (var i = 0U; i < count; i++)
+            nodes.Add(ReadSchemaNode(ref reader));
+
+        var root = nodes[0];
+        if (root.Children < 0)
+            throw new CorruptParquetException("Parquet schema root must define a non-negative child count.");
+
+        var index = 1;
+        var definitions = ImmutableArray.CreateBuilder<ColumnDefinition>(root.Children);
+        var immutableNodes = nodes.MoveToImmutable();
+        for (var i = 0; i < root.Children; i++)
+            definitions.Add(BuildDefinition(immutableNodes, ref index));
+
+        if (index != immutableNodes.Length)
+            throw new CorruptParquetException("Parquet schema contains unreferenced nodes.");
+
+        return new ParquetSchema(definitions.MoveToImmutable());
+    }
+
+    static SchemaNode ReadSchemaNode(ref CompactProtocolReader reader)
+    {
+        var previousFieldId = 0;
+        ParquetPhysicalType? physicalType = null;
+        ParquetRepetition repetition = ParquetRepetition.Required;
+        string? name = null;
+        var children = -1;
+        var typeLength = 0U;
+        LogicalType? logicalType = null;
+        int? convertedType = null;
+        int? scale = null;
+        int? precision = null;
+
+        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
+        {
+            switch (fieldId)
+            {
+                case 1:
+                    physicalType = ReadPhysicalType(reader.ReadI32());
+                    break;
+                case 2:
+                    typeLength = reader.ReadI32AsU32();
+                    break;
+                case 3:
+                    repetition = ReadRepetition(reader.ReadI32());
+                    break;
+                case 4:
+                    name = ReadUtf8PathSegment(reader.ReadBinary());
+                    break;
+                case 5:
+                    children = reader.ReadI32();
+                    break;
+                case 6:
+                    convertedType = reader.ReadI32();
+                    break;
+                case 7:
+                    scale = reader.ReadI32();
+                    break;
+                case 8:
+                    precision = reader.ReadI32();
+                    break;
+                case 10:
+                    logicalType = ReadLogicalType(ref reader);
+                    break;
+                default:
+                    reader.Skip(type, inlineBool);
+                    break;
+            }
+        }
+
+        if (name is null)
+            throw new CorruptParquetException("Schema node is missing a name.");
+
+        logicalType ??= ReadConvertedLogicalType(convertedType, precision, scale);
+        return new SchemaNode(name, physicalType, repetition, children, typeLength, logicalType, convertedType);
+    }
+
+    static ColumnDefinition BuildDefinition(ImmutableArray<SchemaNode> nodes, ref int index)
+    {
+        if ((uint)index >= (uint)nodes.Length)
+            throw new CorruptParquetException("Parquet schema child count exceeds schema node count.");
+
+        var node = nodes[index++];
+        if (node.PhysicalType is { } physicalType)
+        {
+            var options = new ColumnOptions(node.Repetition, typeLength: node.TypeLength);
+            return new ColumnDefinition
+            {
+                Name = node.Name,
+                Kind = NodeKind.Leaf,
+                Repetition = node.Repetition,
+                PhysicalType = physicalType,
+                LogicalType = node.LogicalType,
+                Options = options,
+                Children = []
+            };
+        }
+
+        if (node.Children < 0)
+            throw new CorruptParquetException($"Group schema node '{node.Name}' is missing num_children.");
+
+        if (IsListNode(node))
+            return BuildListDefinition(nodes, ref index, node);
+        if (IsMapNode(node))
+            return BuildMapDefinition(nodes, ref index, node);
+
+        var children = ImmutableArray.CreateBuilder<ColumnDefinition>(node.Children);
+        for (var i = 0; i < node.Children; i++)
+            children.Add(BuildDefinition(nodes, ref index));
+        return new ColumnDefinition
+        {
+            Name = node.Name,
+            Kind = NodeKind.Group,
+            Repetition = node.Repetition,
+            Children = children.MoveToImmutable()
+        };
+    }
+
+    static ColumnDefinition BuildListDefinition(ImmutableArray<SchemaNode> nodes, ref int index, SchemaNode node)
+    {
+        if (node.Children != 1)
+            throw new CorruptParquetException($"LIST schema node '{node.Name}' must contain exactly one repeated list child.");
+        if ((uint)index >= (uint)nodes.Length)
+            throw new CorruptParquetException($"LIST schema node '{node.Name}' is missing its repeated list child.");
+
+        var repeated = nodes[index++];
+        if (repeated.Children != 1)
+            throw new CorruptParquetException($"LIST schema node '{node.Name}' repeated child must contain exactly one element.");
+
+        var element = BuildDefinition(nodes, ref index) with { Name = "element" };
+        return new ColumnDefinition
+        {
+            Name = node.Name,
+            Kind = NodeKind.List,
+            Repetition = node.Repetition,
+            Children = [element]
+        };
+    }
+
+    static ColumnDefinition BuildMapDefinition(ImmutableArray<SchemaNode> nodes, ref int index, SchemaNode node)
+    {
+        if (node.Children != 1)
+            throw new CorruptParquetException($"MAP schema node '{node.Name}' must contain exactly one key_value child.");
+        if ((uint)index >= (uint)nodes.Length)
+            throw new CorruptParquetException($"MAP schema node '{node.Name}' is missing its key_value child.");
+
+        var keyValue = nodes[index++];
+        if (keyValue.Children != 2)
+            throw new CorruptParquetException($"MAP schema node '{node.Name}' key_value child must contain key and value.");
+
+        var key = BuildDefinition(nodes, ref index) with { Name = "key" };
+        var value = BuildDefinition(nodes, ref index) with { Name = "value" };
+        return new ColumnDefinition
+        {
+            Name = node.Name,
+            Kind = NodeKind.Map,
+            Repetition = node.Repetition,
+            Children = [key, value]
+        };
     }
 
     static InternalRowGroupMetadata ReadRowGroup(ref CompactProtocolReader reader, int rowGroupOrdinal, ulong metadataOffset,
-        InternalColumnChunkMetadata[] previousColumns, ParquetSchema? requestedSchema)
+        InternalColumnChunkMetadata[] previousColumns, ParquetSchema? schema)
     {
         var previousFieldId = 0;
         var columnChunkOffset = 0UL;
@@ -101,7 +373,7 @@ static class ParquetMetadataThriftReader
             switch (fieldId)
             {
                 case 1:
-                    columns = ReadColumns(ref reader, previousColumns, requestedSchema);
+                    columns = ReadColumns(ref reader, previousColumns, schema);
                     break;
                 case 3:
                     rowCount = reader.ReadI64AsU64();
@@ -122,20 +394,21 @@ static class ParquetMetadataThriftReader
     }
 
     static InternalColumnChunkMetadata[] ReadColumns(ref CompactProtocolReader reader, InternalColumnChunkMetadata[] previous,
-        ParquetSchema? requestedSchema)
+        ParquetSchema? schema)
     {
         var (count, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.Struct)
             throw new CorruptParquetException("Expected row group columns to be encoded as a list of structs.");
         if (count > reader.Remaining)
             throw new CorruptParquetException($"Column count {count} exceeds remaining input bytes.");
+
         var columns = (uint)previous.Length == count ? previous : new InternalColumnChunkMetadata[(int)count];
         for (var i = 0U; i < count; i++)
         {
             var previousEncodings = columns[i].Encodings ?? [];
             columns[i] = ReadColumn(ref reader, previousEncodings, columns[i].Path);
         }
-        return requestedSchema is null ? columns : AlignRequestedColumns(columns, requestedSchema);
+        return schema is null ? columns : AlignColumns(columns, schema);
     }
 
     static InternalColumnChunkMetadata ReadColumn(ref CompactProtocolReader reader, EncodingKind[] previousEncodings,
@@ -236,61 +509,226 @@ static class ParquetMetadataThriftReader
         }
     }
 
-    static InternalColumnChunkMetadata[] AlignRequestedColumns(InternalColumnChunkMetadata[] fileColumns,
-        ParquetSchema requestedSchema)
+    static InternalColumnChunkMetadata[] AlignColumns(InternalColumnChunkMetadata[] fileColumns, ParquetSchema schema)
     {
-        var requestedColumns = requestedSchema.Columns;
-        if (requestedColumns.Length == fileColumns.Length)
+        var columns = schema.Columns;
+        if (columns.Length == fileColumns.Length)
         {
-            var matchesInOrder = true;
-            for (var i = 0; i < requestedColumns.Length; i++)
+            var matches = true;
+            for (var i = 0; i < columns.Length; i++)
             {
-                if (requestedColumns[i].Name == fileColumns[i].Path &&
-                    requestedColumns[i].PhysicalType == fileColumns[i].PhysicalType)
+                if (columns[i].Name == fileColumns[i].Path && columns[i].PhysicalType == fileColumns[i].PhysicalType)
                     continue;
 
-                matchesInOrder = false;
+                matches = false;
                 break;
             }
 
-            if (matchesInOrder)
+            if (matches)
                 return fileColumns;
         }
 
-        var fileOrdinalByPath = new Dictionary<string, int>(fileColumns.Length, StringComparer.Ordinal);
-        for (var i = 0; i < fileColumns.Length; i++)
+        var projected = columns.Length == 0 ? [] : new InternalColumnChunkMetadata[columns.Length];
+        for (var i = 0; i < columns.Length; i++)
         {
-            var path = fileColumns[i].Path;
-            if (!fileOrdinalByPath.TryAdd(path, i))
-                throw new CorruptParquetException($"File schema contains duplicate column path '{path}'.");
-        }
-
-        var projected = requestedColumns.Length == 0 ? [] : new InternalColumnChunkMetadata[requestedColumns.Length];
-        for (var i = 0; i < requestedColumns.Length; i++)
-        {
-            var requestedColumn = requestedColumns[i];
-            if (!fileOrdinalByPath.TryGetValue(requestedColumn.Name, out var fileOrdinal))
+            var found = false;
+            for (var j = 0; j < fileColumns.Length; j++)
             {
-                if (requestedColumn.Options.AllowMissing)
-                {
-                    projected[i] = InternalColumnChunkMetadata.Missing(requestedColumn);
+                if (columns[i].Name != fileColumns[j].Path)
                     continue;
-                }
+                if (columns[i].PhysicalType != fileColumns[j].PhysicalType)
+                    throw new CorruptParquetException(
+                        $"File schema column '{columns[i].Name}' has physical type {columns[i].PhysicalType}, but row group metadata has {fileColumns[j].PhysicalType}.");
 
-                throw new InvalidOperationException(
-                    $"Requested schema column '{requestedColumn.Name}' is not present in the file schema.");
+                projected[i] = fileColumns[j];
+                found = true;
+                break;
             }
 
-            var fileColumn = fileColumns[fileOrdinal];
-            if (requestedColumn.PhysicalType != fileColumn.PhysicalType)
-                throw new InvalidOperationException(
-                    $"Requested schema column '{requestedColumn.Name}' has physical type {requestedColumn.PhysicalType}, but file schema has {fileColumn.PhysicalType}.");
-
-            projected[i] = fileColumn;
+            if (!found)
+                throw new CorruptParquetException($"Row group metadata is missing schema column '{columns[i].Name}'.");
         }
 
         return projected;
     }
+
+    static LogicalType? ReadLogicalType(ref CompactProtocolReader reader)
+    {
+        var previousFieldId = 0;
+        LogicalType? logicalType = null;
+        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
+        {
+            switch (fieldId)
+            {
+                case 1:
+                    reader.Skip(type, inlineBool);
+                    logicalType = new LogicalType.String();
+                    break;
+                case 5:
+                    logicalType = ReadDecimalLogicalType(ref reader);
+                    break;
+                case 6:
+                    reader.Skip(type, inlineBool);
+                    logicalType = new LogicalType.Date();
+                    break;
+                case 7:
+                    logicalType = ReadTimeLogicalType(ref reader);
+                    break;
+                case 8:
+                    logicalType = ReadTimestampLogicalType(ref reader);
+                    break;
+                case 10:
+                    logicalType = ReadIntegerLogicalType(ref reader);
+                    break;
+                case 12:
+                    reader.Skip(type, inlineBool);
+                    logicalType = new LogicalType.Json();
+                    break;
+                case 14:
+                    reader.Skip(type, inlineBool);
+                    logicalType = new LogicalType.Uuid();
+                    break;
+                default:
+                    reader.Skip(type, inlineBool);
+                    break;
+            }
+        }
+
+        return logicalType;
+    }
+
+    static LogicalType.Decimal ReadDecimalLogicalType(ref CompactProtocolReader reader)
+    {
+        var previousFieldId = 0;
+        var scale = 0;
+        var precision = 0;
+        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
+        {
+            switch (fieldId)
+            {
+                case 1:
+                    scale = reader.ReadI32();
+                    break;
+                case 2:
+                    precision = reader.ReadI32();
+                    break;
+                default:
+                    reader.Skip(type, inlineBool);
+                    break;
+            }
+        }
+
+        return new LogicalType.Decimal(precision, scale);
+    }
+
+    static LogicalType.Int ReadIntegerLogicalType(ref CompactProtocolReader reader)
+    {
+        var previousFieldId = 0;
+        var bitWidth = (byte)0;
+        var isSigned = true;
+        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
+        {
+            switch (fieldId)
+            {
+                case 1:
+                    bitWidth = reader.ReadByte();
+                    break;
+                case 2:
+                    isSigned = reader.ReadBool(inlineBool);
+                    break;
+                default:
+                    reader.Skip(type, inlineBool);
+                    break;
+            }
+        }
+
+        return new LogicalType.Int(bitWidth, isSigned);
+    }
+
+    static LogicalType.Time ReadTimeLogicalType(ref CompactProtocolReader reader)
+    {
+        var previousFieldId = 0;
+        var adjusted = false;
+        var unit = TimeUnit.Millis;
+        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
+        {
+            switch (fieldId)
+            {
+                case 1:
+                    adjusted = reader.ReadBool(inlineBool);
+                    break;
+                case 2:
+                    unit = ReadTimeUnit(ref reader);
+                    break;
+                default:
+                    reader.Skip(type, inlineBool);
+                    break;
+            }
+        }
+
+        return new LogicalType.Time(unit, adjusted);
+    }
+
+    static LogicalType.Timestamp ReadTimestampLogicalType(ref CompactProtocolReader reader)
+    {
+        var previousFieldId = 0;
+        var adjusted = false;
+        var unit = TimeUnit.Millis;
+        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
+        {
+            switch (fieldId)
+            {
+                case 1:
+                    adjusted = reader.ReadBool(inlineBool);
+                    break;
+                case 2:
+                    unit = ReadTimeUnit(ref reader);
+                    break;
+                default:
+                    reader.Skip(type, inlineBool);
+                    break;
+            }
+        }
+
+        return new LogicalType.Timestamp(unit, adjusted);
+    }
+
+    static TimeUnit ReadTimeUnit(ref CompactProtocolReader reader)
+    {
+        var previousFieldId = 0;
+        TimeUnit? unit = null;
+        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
+        {
+            reader.Skip(type, inlineBool);
+            unit = fieldId switch
+            {
+                1 => TimeUnit.Millis,
+                2 => TimeUnit.Micros,
+                3 => TimeUnit.Nanos,
+                _ => throw new NotSupportedException($"Time unit field '{fieldId}' is not supported.")
+            };
+        }
+
+        return unit ?? throw new CorruptParquetException("Logical time unit is missing.");
+    }
+
+    static LogicalType? ReadConvertedLogicalType(int? convertedType, int? precision, int? scale)
+        => convertedType switch
+        {
+            0 => new LogicalType.String(),
+            5 => new LogicalType.Decimal(precision.GetValueOrDefault(), scale.GetValueOrDefault()),
+            6 => new LogicalType.Date(),
+            7 => new LogicalType.Time(TimeUnit.Millis, false),
+            8 => new LogicalType.Time(TimeUnit.Micros, false),
+            9 => new LogicalType.Timestamp(TimeUnit.Millis, false),
+            10 => new LogicalType.Timestamp(TimeUnit.Micros, false),
+            11 => new LogicalType.Int(8, false),
+            12 => new LogicalType.Int(16, false),
+            13 => new LogicalType.Int(32, false),
+            14 => new LogicalType.Int(64, false),
+            19 => new LogicalType.Json(),
+            _ => null
+        };
 
     static ParquetPhysicalType ReadPhysicalType(int type)
         => type switch
@@ -304,6 +742,15 @@ static class ParquetMetadataThriftReader
             6 => ParquetPhysicalType.ByteArray,
             7 => ParquetPhysicalType.FixedLenByteArray,
             _ => throw new NotSupportedException($"Physical type '{type}' is not supported.")
+        };
+
+    static ParquetRepetition ReadRepetition(int repetition)
+        => repetition switch
+        {
+            0 => ParquetRepetition.Required,
+            1 => ParquetRepetition.Optional,
+            2 => ParquetRepetition.Repeated,
+            _ => throw new NotSupportedException($"Repetition type '{repetition}' is not supported.")
         };
 
     static string ReadPath(ref CompactProtocolReader reader, string? previousPath)
@@ -402,4 +849,13 @@ static class ParquetMetadataThriftReader
             encodings[i] = ReadEncoding(reader.ReadI32());
         return encodings;
     }
+
+    static bool IsListNode(SchemaNode node)
+        => node.ConvertedType == 3 || node.LogicalType is null && false;
+
+    static bool IsMapNode(SchemaNode node)
+        => node.ConvertedType == 1;
+
+    readonly record struct SchemaNode(string Name, ParquetPhysicalType? PhysicalType, ParquetRepetition Repetition,
+        int Children, uint TypeLength, LogicalType? LogicalType, int? ConvertedType);
 }

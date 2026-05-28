@@ -150,7 +150,7 @@ public static class PlankWriterFuzzTarget
 
         for (var rowGroupIndex = 0; rowGroupIndex < tokens.Length; rowGroupIndex++)
         {
-            using var rowGroup = reader.OpenRowGroup(stream, tokens[rowGroupIndex]);
+            using var rowGroup = reader.OpenRowGroup(tokens[rowGroupIndex]);
             for (var columnIndex = 0; columnIndex < fuzzCase.Columns.Count; columnIndex++)
             {
                 var actual = ReadPlankColumn(rowGroup, fuzzCase.Columns[columnIndex]);

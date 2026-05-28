@@ -20,7 +20,7 @@ internal sealed class ReaderAllocationTests
     ];
 
     [Test]
-    public void ReaderResetDoesNotAllocateAfterWarmup()
+    public void RowGroupEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
             new Column("Value", ParquetPhysicalType.Int32,
@@ -30,23 +30,22 @@ internal sealed class ReaderAllocationTests
         try
         {
             using var stream = File.OpenRead(path);
-            using var reader = schema.CreateReader(stream);
-
+            using var reader = ParquetReader.Open(stream);
             for (var i = 0; i < 8; i++)
-                reader.Reset(stream);
+                _ = CountRowGroups(reader);
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            reader.Reset(stream);
+            _ = CountRowGroups(reader);
             var after = GC.GetAllocatedBytesForCurrentThread();
             var allocated = after - before;
 
             if (allocated != 0)
                 throw new InvalidOperationException(
-                    $"Expected zero allocations for steady-state reader reset but saw {allocated} bytes.");
+                    $"Expected zero allocations for steady-state row group enumeration but saw {allocated} bytes.");
         }
         finally
         {
@@ -67,7 +66,7 @@ internal sealed class ReaderAllocationTests
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(stream, token);
+            using var rowGroup = reader.OpenRowGroup(token);
             for (var i = 0; i < 8; i++)
                 _ = SumValues(rowGroup, schema.Columns[0]);
 
@@ -108,7 +107,7 @@ internal sealed class ReaderAllocationTests
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(stream, token);
+            using var rowGroup = reader.OpenRowGroup(token);
             for (var i = 0; i < 8; i++)
                 _ = SumValues(rowGroup, schema.Columns[0]);
 
@@ -144,7 +143,7 @@ internal sealed class ReaderAllocationTests
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(stream, token);
+            using var rowGroup = reader.OpenRowGroup(token);
             var firstPage = rowGroup.Column<int>(schema.Columns[0]).Pages.GetEnumerator();
             if (!firstPage.MoveNext() || firstPage.Current.Encoding != EncodingKind.DeltaBinaryPacked)
                 throw new InvalidOperationException("Expected delta binary packed test data.");
@@ -185,7 +184,7 @@ internal sealed class ReaderAllocationTests
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(stream, token);
+            using var rowGroup = reader.OpenRowGroup(token);
 
             for (var i = 0; i < 8; i++)
                 _ = CountTrueValues(rowGroup, schema.Columns[0]);
@@ -222,7 +221,7 @@ internal sealed class ReaderAllocationTests
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(stream, token);
+            using var rowGroup = reader.OpenRowGroup(token);
 
             for (var i = 0; i < 8; i++)
                 _ = SumValues(rowGroup, schema.Columns[0]);
@@ -405,7 +404,7 @@ internal sealed class ReaderAllocationTests
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(stream, token);
+            using var rowGroup = reader.OpenRowGroup(token);
 
             for (var i = 0; i < 8; i++)
                 _ = SumByteLengths(rowGroup, schema.Columns[0]);
@@ -449,7 +448,7 @@ internal sealed class ReaderAllocationTests
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
             var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(stream, token);
+            using var rowGroup = reader.OpenRowGroup(token);
             for (var i = 0; i < 8; i++)
                 _ = SumValues(rowGroup, schema.Columns[0]);
 
@@ -474,6 +473,14 @@ internal sealed class ReaderAllocationTests
         foreach (var token in reader.EnumerateRowGroups())
             tokens.Add(token);
         return tokens.ToArray();
+    }
+
+    static int CountRowGroups(ParquetReader reader)
+    {
+        var count = 0;
+        foreach (var _ in reader.EnumerateRowGroups())
+            count++;
+        return count;
     }
 
     static int[] CreateValues(int count)

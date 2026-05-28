@@ -6,11 +6,6 @@ public sealed class RowGroupReader : IDisposable
 {
     readonly RowGroupReadContext _context;
 
-    internal RowGroupReader(ParquetReader reader, IParquetReadSource source, InternalRowGroupMetadata rowGroup)
-        : this(reader.CreateRowGroupReadContext(), reader, source, rowGroup)
-    {
-    }
-
     internal RowGroupReader(RowGroupReadContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -18,20 +13,14 @@ public sealed class RowGroupReader : IDisposable
         _context = context;
     }
 
-    internal RowGroupReader(RowGroupReadContext context, ParquetReader reader, IParquetReadSource source,
-        InternalRowGroupMetadata rowGroup)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-
-        _context = context;
-        Reset(reader, source, rowGroup);
-    }
-
-    internal void Reset(ParquetReader reader, IParquetReadSource source, InternalRowGroupMetadata rowGroup)
-        => _context.Reset(reader, source, rowGroup);
+    internal void Reset(ParquetReader reader, InternalRowGroupMetadata rowGroup)
+        => _context.Reset(reader, rowGroup);
 
     internal IParquetReadSource Source
         => _context.Source;
+
+    internal InternalColumnChunkMetadata[] PreviousColumns
+        => _context.PreviousColumns;
 
     public RowGroupToken Token
         => _context.Token;
@@ -44,6 +33,17 @@ public sealed class RowGroupReader : IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(column);
         var ordinal = _context.GetColumnOrdinal(column);
+        if (_context.IsColumnMissing(ordinal) && !IsNullableProjection<T>())
+            throw new InvalidOperationException(
+                $"Requested schema column '{column.Name}' is not present in the file schema and must be read with a nullable projection type.");
+
+        return new RowGroupColumn<T>(this, column, ordinal);
+    }
+
+    public RowGroupColumn<T> Column<T>(int ordinal)
+    {
+        ThrowIfDisposed();
+        var column = _context.GetColumn(ordinal);
         if (_context.IsColumnMissing(ordinal) && !IsNullableProjection<T>())
             throw new InvalidOperationException(
                 $"Requested schema column '{column.Name}' is not present in the file schema and must be read with a nullable projection type.");
