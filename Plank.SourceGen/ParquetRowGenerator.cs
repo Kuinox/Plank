@@ -805,35 +805,41 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        bool IsProjected(Projection column)");
         builder.AppendLine("            => (_projection & column) != 0;");
         builder.AppendLine();
-        builder.AppendLine("        void ValidateSchema()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            var fileColumns = _reader.Schema.Columns;");
+        builder.AppendLine(
+            """
+                    void ValidateSchema()
+                    {
+                        var fileColumns = _reader.Schema.Columns;
+            """);
         for (var i = 0; i < columns.Length; i++)
             builder.Append("            _").Append(columns[i].PropertyName).Append("Ordinal = ResolveColumnOrdinal(fileColumns, Schema.Columns[")
                 .Append(i).Append("], \"").Append(Escape(columns[i].Name)).AppendLine("\");");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        static int ResolveColumnOrdinal(global::System.Collections.Immutable.ImmutableArray<global::Plank.Schema.Column> fileColumns, global::Plank.Schema.Column expected, string columnName)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            for (var i = 0; i < fileColumns.Length; i++)");
-        builder.AppendLine("            {");
-        builder.AppendLine("                var actual = fileColumns[i];");
-        builder.AppendLine("                if (actual.Name != expected.Name)");
-        builder.AppendLine("                    continue;");
-        builder.AppendLine("                if (actual.PhysicalType != expected.PhysicalType)");
-        builder.AppendLine("                    throw new global::System.InvalidOperationException($\"Column '{columnName}' has physical type {actual.PhysicalType}, expected {expected.PhysicalType}.\");");
-        builder.AppendLine("                if (actual.LogicalType != expected.LogicalType)");
-        builder.AppendLine("                    throw new global::System.InvalidOperationException($\"Column '{columnName}' has a different logical type than the generated schema.\");");
-        builder.AppendLine("                var actualRepetition = actual.Options.Repetition == global::Plank.Schema.ParquetRepetition.Unspecified ? global::Plank.Schema.ParquetRepetition.Required : actual.Options.Repetition;");
-        builder.AppendLine("                var expectedRepetition = expected.Options.Repetition == global::Plank.Schema.ParquetRepetition.Unspecified ? global::Plank.Schema.ParquetRepetition.Required : expected.Options.Repetition;");
-        builder.AppendLine("                if (actualRepetition != expectedRepetition)");
-        builder.AppendLine("                    throw new global::System.InvalidOperationException($\"Column '{columnName}' has repetition {actualRepetition}, expected {expectedRepetition}.\");");
-        builder.AppendLine("                return i;");
-        builder.AppendLine("            }");
-        builder.AppendLine();
-        builder.AppendLine("            throw new global::System.InvalidOperationException($\"Column '{columnName}' was not found in the file schema.\");");
-        builder.AppendLine("        }");
-        builder.AppendLine();
+        builder.AppendLine(
+            """
+                    }
+
+                    static int ResolveColumnOrdinal(global::System.Collections.Immutable.ImmutableArray<global::Plank.Schema.Column> fileColumns, global::Plank.Schema.Column expected, string columnName)
+                    {
+                        for (var i = 0; i < fileColumns.Length; i++)
+                        {
+                            var actual = fileColumns[i];
+                            if (actual.Name != expected.Name)
+                                continue;
+                            if (actual.PhysicalType != expected.PhysicalType)
+                                throw new global::System.InvalidOperationException($"Column '{columnName}' has physical type {actual.PhysicalType}, expected {expected.PhysicalType}.");
+                            if (actual.LogicalType != expected.LogicalType)
+                                throw new global::System.InvalidOperationException($"Column '{columnName}' has a different logical type than the generated schema.");
+                            var actualRepetition = actual.Options.Repetition == global::Plank.Schema.ParquetRepetition.Unspecified ? global::Plank.Schema.ParquetRepetition.Required : actual.Options.Repetition;
+                            var expectedRepetition = expected.Options.Repetition == global::Plank.Schema.ParquetRepetition.Unspecified ? global::Plank.Schema.ParquetRepetition.Required : expected.Options.Repetition;
+                            if (actualRepetition != expectedRepetition)
+                                throw new global::System.InvalidOperationException($"Column '{columnName}' has repetition {actualRepetition}, expected {expectedRepetition}.");
+                            return i;
+                        }
+
+                        throw new global::System.InvalidOperationException($"Column '{columnName}' was not found in the file schema.");
+                    }
+
+            """);
         builder.AppendLine("        void EnsureStarted()");
         builder.AppendLine("        {");
         builder.AppendLine("            if (_started)");
