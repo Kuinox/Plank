@@ -42,8 +42,7 @@ sealed class RowGroupReadContext
         EnsureColumnCapacity(reader.Schema.Columns.Length);
         _reader = reader;
         _rowGroup = rowGroup;
-        _token = new RowGroupToken(rowGroup.RowGroupOrdinal, rowGroup.MetadataOffset, rowGroup.ColumnChunkOffset,
-            rowGroup.FooterRowGroupOffset, rowGroup.FooterVersion);
+        _token = new RowGroupToken(reader, rowGroup);
         _disposed = false;
     }
 

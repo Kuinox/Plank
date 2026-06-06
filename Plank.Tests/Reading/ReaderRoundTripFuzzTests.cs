@@ -34,20 +34,22 @@ internal sealed class ReaderRoundTripFuzzTests
 
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
-            var tokens = EnumerateTokens(reader);
-            if (tokens.Length != expected.Length)
-                throw new InvalidOperationException(
-                    $"Seed {seed} produced {expected.Length} row groups but reader enumerated {tokens.Length}.");
-
-            for (var rowGroupIndex = 0; rowGroupIndex < tokens.Length; rowGroupIndex++)
+            using var rowGroup = reader.CreateReusableRowGroupReader();
+            var rowGroupIndex = 0;
+            foreach (var token in reader.EnumerateRowGroups())
             {
-                using var rowGroup = reader.OpenRowGroup(tokens[rowGroupIndex]);
+                reader.OpenRowGroup(token, rowGroup);
                 for (var columnIndex = 0; columnIndex < specs.Length; columnIndex++)
                 {
                     var actual = ReadColumn(rowGroup, specs[columnIndex]);
                     AssertArraysEqual(seed, rowGroupIndex, specs[columnIndex], expected[rowGroupIndex][columnIndex], actual);
                 }
+                rowGroupIndex++;
             }
+
+            if (rowGroupIndex != expected.Length)
+                throw new InvalidOperationException(
+                    $"Seed {seed} produced {expected.Length} row groups but reader enumerated {rowGroupIndex}.");
         }
         finally
         {
@@ -325,14 +327,6 @@ internal sealed class ReaderRoundTripFuzzTests
             if (!Equals(actual.GetValue(i), expected.GetValue(i)))
                 throw new InvalidOperationException(
                     $"Seed {seed}, row group {rowGroupIndex}, column '{spec.Column.Name}' ({Describe(spec)}) mismatch at index {i}. Expected '{expected.GetValue(i)}', got '{actual.GetValue(i)}'.");
-    }
-
-    static RowGroupToken[] EnumerateTokens(ParquetReader reader)
-    {
-        var tokens = new List<RowGroupToken>();
-        foreach (var token in reader.EnumerateRowGroups())
-            tokens.Add(token);
-        return tokens.ToArray();
     }
 
     static string Describe(ColumnSpec spec)

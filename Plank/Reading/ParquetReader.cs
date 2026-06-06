@@ -14,6 +14,8 @@ public sealed class ParquetReader : IDisposable
     ParquetFileMetadata _metadata;
     byte[] _footerBuffer;
     int _footerLength;
+    ulong _rowGroupsMetadataOffset;
+    InternalColumnChunkMetadata[] _rowGroupEnumerationColumns;
     IParquetReadSource _source;
     StreamReadSource? _streamSource;
     int _footerVersion;
@@ -31,6 +33,8 @@ public sealed class ParquetReader : IDisposable
         _metadata = default;
         _footerBuffer = [];
         _footerLength = 0;
+        _rowGroupsMetadataOffset = 0;
+        _rowGroupEnumerationColumns = [];
         _source = source;
         _streamSource = streamSource;
         _footerVersion = 0;
@@ -66,11 +70,11 @@ public sealed class ParquetReader : IDisposable
     internal ReadOnlySpan<byte> FooterBytes
         => _footerBuffer.AsSpan(0, _footerLength);
 
-    internal ulong FooterOffset
-        => _metadata.FooterOffset;
+    internal ulong RowGroupsMetadataOffset
+        => _rowGroupsMetadataOffset;
 
     internal int RowGroupsOffset
-        => _footer.RowGroupsOffset;
+        => 0;
 
     internal int FooterVersion
         => _footerVersion;
@@ -115,7 +119,16 @@ public sealed class ParquetReader : IDisposable
         var footerBytes = _footerBuffer.AsSpan(0, _footerLength);
         source.ReadExactly(footerOffset, footerBytes);
 
-        _footer = ParquetMetadataThriftReader.Read(footerBytes);
+        var footer = ParquetMetadataThriftReader.Read(footerBytes);
+        var rowGroupsLength = footer.RowGroupsEndOffset - footer.RowGroupsOffset;
+        if (rowGroupsLength < 0)
+            throw new CorruptParquetException("Footer row group range is invalid.");
+        if (rowGroupsLength > 0)
+            footerBytes.Slice(footer.RowGroupsOffset, rowGroupsLength).CopyTo(_footerBuffer);
+
+        _footerLength = rowGroupsLength;
+        _rowGroupsMetadataOffset = footerOffset + (ulong)footer.RowGroupsOffset;
+        _footer = new InternalParquetFooter(footer.Version, footer.Schema, footer.RowGroupCount, 0, rowGroupsLength);
         _schema = _footer.Schema;
         _metadata = new ParquetFileMetadata(_schema, footerOffset, footerLength, _footer.Version);
         _footerVersion++;
@@ -142,25 +155,21 @@ public sealed class ParquetReader : IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(reusable);
 
-        var rowGroup = GetRowGroup(token, reusable.PreviousColumns);
-        reusable.Reset(this, rowGroup);
+        ValidateRowGroupToken(token);
+        reusable.Reset(this, token.Metadata);
         return reusable;
     }
 
-    InternalRowGroupMetadata GetRowGroup(RowGroupToken token, InternalColumnChunkMetadata[] previousColumns)
+    void ValidateRowGroupToken(RowGroupToken token)
     {
+        if (!ReferenceEquals(token.Reader, this))
+            throw new ArgumentException("Row group token does not belong to this reader.", nameof(token));
         if (token.RowGroupOrdinal < 0)
             throw new ArgumentOutOfRangeException(nameof(token), token.RowGroupOrdinal, "Row group ordinal must be non-negative.");
         if ((uint)token.RowGroupOrdinal >= _footer.RowGroupCount)
             throw new ArgumentOutOfRangeException(nameof(token), token.RowGroupOrdinal, "Row group ordinal is outside the parsed footer.");
         if (token.FooterVersion != _footerVersion)
             throw new ArgumentException("Row group token does not belong to the current reader state.", nameof(token));
-
-        var rowGroup = ParquetMetadataThriftReader.ReadRowGroup(FooterBytes, _metadata.FooterOffset, token, previousColumns, _schema);
-        if (rowGroup.MetadataOffset != token.MetadataOffset || rowGroup.ColumnChunkOffset != token.ColumnChunkOffset)
-            throw new ArgumentException("Row group token does not belong to this reader.", nameof(token));
-
-        return rowGroup;
     }
 
     public void Dispose()
@@ -186,8 +195,17 @@ public sealed class ParquetReader : IDisposable
             return false;
         }
 
-        return ParquetMetadataThriftReader.TryReadNextRowGroupToken(FooterBytes, _metadata.FooterOffset,
-            _footer.RowGroupsEndOffset, ordinal, ref offset, out token, _footerVersion);
+        if (!ParquetMetadataThriftReader.TryReadNextRowGroup(FooterBytes, _rowGroupsMetadataOffset,
+                _footer.RowGroupsEndOffset, ordinal, ref offset, _rowGroupEnumerationColumns, _schema, _footerVersion,
+                out var rowGroup))
+        {
+            token = default;
+            return false;
+        }
+
+        _rowGroupEnumerationColumns = rowGroup.Columns;
+        token = new RowGroupToken(this, rowGroup);
+        return true;
     }
 
     internal int GetColumnOrdinal(Column column)

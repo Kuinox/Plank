@@ -41,33 +41,22 @@ static class ParquetMetadataThriftReader
             rowGroupsOffset, rowGroupsEndOffset);
     }
 
-    internal static InternalRowGroupMetadata ReadRowGroup(ReadOnlySpan<byte> footer, ulong footerOffset,
-        RowGroupToken token, InternalColumnChunkMetadata[] previousColumns, ParquetSchema schema)
-    {
-        if ((uint)token.FooterRowGroupOffset >= (uint)footer.Length)
-            throw new ArgumentException("Row group token does not belong to this reader.", nameof(token));
-
-        var reader = new CompactProtocolReader(footer[token.FooterRowGroupOffset..]);
-        var rowGroup = ReadRowGroup(ref reader, token.RowGroupOrdinal,
-            footerOffset + (ulong)token.FooterRowGroupOffset, previousColumns, schema);
-        return new InternalRowGroupMetadata(rowGroup.RowGroupOrdinal, rowGroup.MetadataOffset,
-            rowGroup.ColumnChunkOffset, rowGroup.RowCount, rowGroup.Columns, token.FooterRowGroupOffset,
-            token.FooterVersion);
-    }
-
-    internal static bool TryReadNextRowGroupToken(ReadOnlySpan<byte> footer, ulong footerOffset, int rowGroupsEndOffset,
-        int ordinal, ref int rowGroupOffset, out RowGroupToken token, int footerVersion)
+    internal static bool TryReadNextRowGroup(ReadOnlySpan<byte> rowGroups, ulong rowGroupsMetadataOffset,
+        int rowGroupsEndOffset, int ordinal, ref int rowGroupOffset, InternalColumnChunkMetadata[] previousColumns,
+        ParquetSchema schema, int footerVersion, out InternalRowGroupMetadata rowGroup)
     {
         if ((uint)rowGroupOffset >= (uint)rowGroupsEndOffset)
         {
-            token = default;
+            rowGroup = default;
             return false;
         }
 
-        var reader = new CompactProtocolReader(footer[rowGroupOffset..]);
-        var metadataOffset = footerOffset + (ulong)rowGroupOffset;
-        var columnChunkOffset = ReadRowGroupToken(ref reader);
-        token = new RowGroupToken(ordinal, metadataOffset, columnChunkOffset, rowGroupOffset, footerVersion);
+        var footerRowGroupOffset = rowGroupOffset;
+        var reader = new CompactProtocolReader(rowGroups[rowGroupOffset..]);
+        var metadataOffset = rowGroupsMetadataOffset + (ulong)rowGroupOffset;
+        rowGroup = ReadRowGroup(ref reader, ordinal, metadataOffset, previousColumns, schema);
+        rowGroup = new InternalRowGroupMetadata(rowGroup.RowGroupOrdinal, rowGroup.MetadataOffset,
+            rowGroup.ColumnChunkOffset, rowGroup.RowCount, rowGroup.Columns, footerRowGroupOffset, footerVersion);
         rowGroupOffset += reader.Offset;
         return true;
     }
@@ -111,84 +100,6 @@ static class ParquetMetadataThriftReader
         for (var i = 0U; i < count; i++)
             reader.Skip(elementType);
         return (count, offset, reader.Offset);
-    }
-
-    static ulong ReadRowGroupToken(ref CompactProtocolReader reader)
-    {
-        var previousFieldId = 0;
-        var firstColumnChunkOffset = 0UL;
-        var rowGroupColumnChunkOffset = 0UL;
-
-        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
-        {
-            switch (fieldId)
-            {
-                case 1:
-                    firstColumnChunkOffset = ReadFirstColumnChunkOffset(ref reader);
-                    break;
-                case 5:
-                    rowGroupColumnChunkOffset = reader.ReadI64AsU64();
-                    break;
-                default:
-                    reader.Skip(type, inlineBool);
-                    break;
-            }
-        }
-
-        return rowGroupColumnChunkOffset == 0 ? firstColumnChunkOffset : rowGroupColumnChunkOffset;
-    }
-
-    static ulong ReadFirstColumnChunkOffset(ref CompactProtocolReader reader)
-    {
-        var (count, elementType) = reader.ReadListHeader();
-        if (elementType != CompactProtocolType.Struct)
-            throw new CorruptParquetException("Expected row group columns to be encoded as a list of structs.");
-        if (count > reader.Remaining)
-            throw new CorruptParquetException($"Column count {count} exceeds remaining input bytes.");
-        if (count == 0)
-            return 0;
-
-        var firstColumnChunkOffset = ReadColumnChunkOffset(ref reader);
-        for (var i = 1U; i < count; i++)
-            reader.Skip(elementType);
-        return firstColumnChunkOffset;
-    }
-
-    static ulong ReadColumnChunkOffset(ref CompactProtocolReader reader)
-    {
-        var previousFieldId = 0;
-        var dataPageOffset = 0UL;
-        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
-        {
-            switch (fieldId)
-            {
-                case 2:
-                    dataPageOffset = reader.ReadI64AsU64();
-                    break;
-                case 3:
-                    dataPageOffset = ReadColumnMetadataOffset(ref reader, dataPageOffset);
-                    break;
-                default:
-                    reader.Skip(type, inlineBool);
-                    break;
-            }
-        }
-
-        return dataPageOffset;
-    }
-
-    static ulong ReadColumnMetadataOffset(ref CompactProtocolReader reader, ulong dataPageOffset)
-    {
-        var previousFieldId = 0;
-        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
-        {
-            if (fieldId == 9)
-                dataPageOffset = reader.ReadI64AsU64();
-            else
-                reader.Skip(type, inlineBool);
-        }
-
-        return dataPageOffset;
     }
 
     static ParquetSchema ReadSchema(ref CompactProtocolReader reader)

@@ -121,21 +121,27 @@ internal sealed class ParquetReaderTests
 
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
-            var tokens = EnumerateTokens(reader);
-
-            using (var rowGroup = reader.OpenRowGroup(tokens[0]))
+            using var reusable = reader.CreateReusableRowGroupReader();
+            var rowGroupIndex = 0;
+            foreach (var token in reader.EnumerateRowGroups())
             {
-                await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([1, 2]);
-                await Assert.That(ReadAllPages(rowGroup.Column<double>(schema.Columns[1]).Pages)).IsEquivalentTo([1.5, 2.5]);
-                await AssertByteArraysEqual(ReadAllPages(rowGroup.Column<byte[]>(schema.Columns[2]).Pages), [Bytes(1), Bytes(2)]);
+                reader.OpenRowGroup(token, reusable);
+                if (rowGroupIndex == 0)
+                {
+                    await Assert.That(ReadAllPages(reusable.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([1, 2]);
+                    await Assert.That(ReadAllPages(reusable.Column<double>(schema.Columns[1]).Pages)).IsEquivalentTo([1.5, 2.5]);
+                    await AssertByteArraysEqual(ReadAllPages(reusable.Column<byte[]>(schema.Columns[2]).Pages), [Bytes(1), Bytes(2)]);
+                }
+                else
+                {
+                    await Assert.That(ReadAllPages(reusable.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([3]);
+                    await Assert.That(ReadAllPages(reusable.Column<double>(schema.Columns[1]).Pages)).IsEquivalentTo([3.5]);
+                    await AssertByteArraysEqual(ReadAllPages(reusable.Column<byte[]>(schema.Columns[2]).Pages), [Bytes(3)]);
+                }
+                rowGroupIndex++;
             }
 
-            using (var rowGroup = reader.OpenRowGroup(tokens[1]))
-            {
-                await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([3]);
-                await Assert.That(ReadAllPages(rowGroup.Column<double>(schema.Columns[1]).Pages)).IsEquivalentTo([3.5]);
-                await AssertByteArraysEqual(ReadAllPages(rowGroup.Column<byte[]>(schema.Columns[2]).Pages), [Bytes(3)]);
-            }
+            await Assert.That(rowGroupIndex).IsEqualTo(2);
         }
         finally
         {
