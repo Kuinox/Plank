@@ -449,6 +449,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        bool _hasCurrent;");
         builder.AppendLine("        bool _disposed;");
         for (var i = 0; i < columns.Length; i++)
+            builder.Append("        int _").Append(columns[i].PropertyName).AppendLine("Ordinal;");
+        for (var i = 0; i < columns.Length; i++)
         {
             builder.Append("        global::Plank.Reading.ColumnPageEnumerable<").Append(columns[i].ClrTypeName)
                 .Append(">.Enumerator _").Append(columns[i].PropertyName).AppendLine("Pages;");
@@ -471,7 +473,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            _source = source ?? throw new global::System.ArgumentNullException(nameof(source));");
         builder.AppendLine("            _ = options ?? throw new global::System.ArgumentNullException(nameof(options));");
         builder.AppendLine("            _projection = projection;");
-        builder.AppendLine("            _reader = Schema.CreateReader(source, options);");
+        builder.AppendLine("            _reader = global::Plank.Reading.ParquetReader.Open(source, options);");
         builder.AppendLine("            _streamSource = source as global::Plank.Reading.StreamReadSource;");
         builder.AppendLine("            _rowGroups = default;");
         builder.AppendLine("            _rowGroup = _reader.CreateReusableRowGroupReader();");
@@ -490,6 +492,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append("            _").Append(columns[i].PropertyName).Append("Projected = IsProjected(Projection.")
                 .Append(columns[i].PropertyName).AppendLine(");");
         }
+        builder.AppendLine("            ValidateSchema();");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        public Enumerator GetEnumerator()");
@@ -515,6 +518,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            DisposeColumnReaders();");
         builder.AppendLine("            _rowGroup.Dispose();");
         builder.AppendLine("            _reader.Reset(source);");
+        builder.AppendLine("            ValidateSchema();");
         builder.AppendLine("            _rowGroups = default;");
         builder.AppendLine("            _rowGroupRowsRemaining = 0;");
         builder.AppendLine("            _started = false;");
@@ -558,6 +562,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            bool _hasCurrent;");
         builder.AppendLine("            bool _disposed;");
         for (var i = 0; i < columns.Length; i++)
+            builder.Append("            readonly int _").Append(columns[i].PropertyName).AppendLine("Ordinal;");
+        for (var i = 0; i < columns.Length; i++)
         {
             builder.Append("            global::Plank.Reading.ColumnPageEnumerable<").Append(columns[i].ClrTypeName)
                 .Append(">.Enumerator _").Append(columns[i].PropertyName).AppendLine("Pages;");
@@ -590,6 +596,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append("                _").Append(columns[i].PropertyName).AppendLine("PagesOpen = false;");
             builder.Append("                _").Append(columns[i].PropertyName).Append("Projected = IsProjected(Projection.")
                 .Append(columns[i].PropertyName).AppendLine(");");
+            builder.Append("                _").Append(columns[i].PropertyName).Append("Ordinal = ResolveColumnOrdinal(reader.Schema.Columns, Schema.Columns[")
+                .Append(i).Append("], \"").Append(Escape(columns[i].Name)).AppendLine("\");");
         }
         builder.AppendLine("            }");
         builder.AppendLine();
@@ -661,7 +669,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("                        return false;");
         builder.AppendLine("                    }");
         builder.AppendLine();
-        builder.AppendLine("                    _rowGroup = _reader.OpenRowGroup(_source, _rowGroups.Current);");
+        builder.AppendLine("                    _rowGroup = _reader.OpenRowGroup(_rowGroups.Current);");
         builder.AppendLine("                    _rowGroupRowsRemaining = _rowGroup.RowCount;");
         builder.AppendLine("                    if (_rowGroupRowsRemaining == 0)");
         builder.AppendLine("                        continue;");
@@ -670,7 +678,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append("                    if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
             builder.AppendLine("                    {");
             builder.Append("                        _").Append(columns[i].PropertyName).Append("Pages = _rowGroup.Column<")
-                .Append(columns[i].ClrTypeName).Append(">(Schema.Columns[").Append(i).AppendLine("]).Pages.GetEnumerator();");
+                .Append(columns[i].ClrTypeName).Append(">(_").Append(columns[i].PropertyName).AppendLine("Ordinal).Pages.GetEnumerator();");
             builder.Append("                        _").Append(columns[i].PropertyName).AppendLine("PagesOpen = true;");
             builder.AppendLine("                    }");
             builder.Append("                    _").Append(columns[i].PropertyName).AppendLine("Page = default;");
@@ -773,7 +781,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("                    return false;");
         builder.AppendLine("                }");
         builder.AppendLine();
-        builder.AppendLine("                _reader.OpenRowGroup(_source, _rowGroups.Current, _rowGroup);");
+        builder.AppendLine("                _reader.OpenRowGroup(_rowGroups.Current, _rowGroup);");
         builder.AppendLine("                _rowGroupRowsRemaining = _rowGroup.RowCount;");
         builder.AppendLine("                if (_rowGroupRowsRemaining == 0)");
         builder.AppendLine("                    continue;");
@@ -782,7 +790,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append("                if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
             builder.AppendLine("                {");
             builder.Append("                    _").Append(columns[i].PropertyName).Append("Pages = _rowGroup.Column<")
-                .Append(columns[i].ClrTypeName).Append(">(Schema.Columns[").Append(i).AppendLine("]).Pages.GetEnumerator();");
+                .Append(columns[i].ClrTypeName).Append(">(_").Append(columns[i].PropertyName).AppendLine("Ordinal).Pages.GetEnumerator();");
             builder.Append("                    _").Append(columns[i].PropertyName).AppendLine("PagesOpen = true;");
             builder.AppendLine("                }");
             builder.Append("                _").Append(columns[i].PropertyName).AppendLine("Page = default;");
@@ -797,6 +805,41 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        bool IsProjected(Projection column)");
         builder.AppendLine("            => (_projection & column) != 0;");
         builder.AppendLine();
+        builder.AppendLine(
+            """
+                    void ValidateSchema()
+                    {
+                        var fileColumns = _reader.Schema.Columns;
+            """);
+        for (var i = 0; i < columns.Length; i++)
+            builder.Append("            _").Append(columns[i].PropertyName).Append("Ordinal = ResolveColumnOrdinal(fileColumns, Schema.Columns[")
+                .Append(i).Append("], \"").Append(Escape(columns[i].Name)).AppendLine("\");");
+        builder.AppendLine(
+            """
+                    }
+
+                    static int ResolveColumnOrdinal(global::System.Collections.Immutable.ImmutableArray<global::Plank.Schema.Column> fileColumns, global::Plank.Schema.Column expected, string columnName)
+                    {
+                        for (var i = 0; i < fileColumns.Length; i++)
+                        {
+                            var actual = fileColumns[i];
+                            if (actual.Name != expected.Name)
+                                continue;
+                            if (actual.PhysicalType != expected.PhysicalType)
+                                throw new global::System.InvalidOperationException($"Column '{columnName}' has physical type {actual.PhysicalType}, expected {expected.PhysicalType}.");
+                            if (actual.LogicalType != expected.LogicalType)
+                                throw new global::System.InvalidOperationException($"Column '{columnName}' has a different logical type than the generated schema.");
+                            var actualRepetition = actual.Options.Repetition == global::Plank.Schema.ParquetRepetition.Unspecified ? global::Plank.Schema.ParquetRepetition.Required : actual.Options.Repetition;
+                            var expectedRepetition = expected.Options.Repetition == global::Plank.Schema.ParquetRepetition.Unspecified ? global::Plank.Schema.ParquetRepetition.Required : expected.Options.Repetition;
+                            if (actualRepetition != expectedRepetition)
+                                throw new global::System.InvalidOperationException($"Column '{columnName}' has repetition {actualRepetition}, expected {expectedRepetition}.");
+                            return i;
+                        }
+
+                        throw new global::System.InvalidOperationException($"Column '{columnName}' was not found in the file schema.");
+                    }
+
+            """);
         builder.AppendLine("        void EnsureStarted()");
         builder.AppendLine("        {");
         builder.AppendLine("            if (_started)");

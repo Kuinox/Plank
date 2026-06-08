@@ -2,7 +2,7 @@ using Plank.Schema;
 
 namespace Plank.Reading;
 
-public abstract class RowReaderBase<TSlot> : IDisposable
+abstract class RowReaderBase<TSlot> : IDisposable
     where TSlot : class
 {
     bool _disposed;
@@ -12,7 +12,7 @@ public abstract class RowReaderBase<TSlot> : IDisposable
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(schema);
 
-        Reader = schema.CreateReader(stream, options ?? ParquetReaderOptions.Default);
+        Reader = ParquetReader.Open(stream, options ?? ParquetReaderOptions.Default);
         _disposed = false;
     }
 

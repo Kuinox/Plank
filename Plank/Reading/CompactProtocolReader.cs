@@ -14,6 +14,9 @@ ref struct CompactProtocolReader
     internal int Offset
         => _offset;
 
+    internal ReadOnlySpan<byte> Buffer
+        => _buffer;
+
     internal uint Remaining
         => (uint)(_buffer.Length - _offset);
 
@@ -89,6 +92,12 @@ ref struct CompactProtocolReader
             (byte)CompactProtocolType.BooleanFalse => false,
             _ => throw new CorruptParquetException($"Invalid compact protocol boolean value '{value}'.")
         };
+    }
+
+    internal byte ReadByte()
+    {
+        EnsureAvailable(1);
+        return _buffer[_offset++];
     }
 
     internal ReadOnlySpan<byte> ReadBinary()

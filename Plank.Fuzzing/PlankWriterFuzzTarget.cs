@@ -143,29 +143,23 @@ public static class PlankWriterFuzzTarget
     {
         using var stream = File.OpenRead(path);
         using var reader = fuzzCase.Schema.CreateReader(stream);
-        var tokens = EnumerateTokens(reader);
-        if (tokens.Length != fuzzCase.RowGroups.Count)
-            throw new InvalidOperationException(
-                $"Plank row-group count mismatch. Expected {fuzzCase.RowGroups.Count}, got {tokens.Length}.");
-
-        for (var rowGroupIndex = 0; rowGroupIndex < tokens.Length; rowGroupIndex++)
+        using var rowGroup = reader.CreateReusableRowGroupReader();
+        var rowGroupIndex = 0;
+        foreach (var token in reader.EnumerateRowGroups())
         {
-            using var rowGroup = reader.OpenRowGroup(stream, tokens[rowGroupIndex]);
+            reader.OpenRowGroup(token, rowGroup);
             for (var columnIndex = 0; columnIndex < fuzzCase.Columns.Count; columnIndex++)
             {
                 var actual = ReadPlankColumn(rowGroup, fuzzCase.Columns[columnIndex]);
                 AssertArraysEqual("Plank", fuzzCase, rowGroupIndex, columnIndex,
                     fuzzCase.RowGroups[rowGroupIndex][columnIndex], actual);
             }
+            rowGroupIndex++;
         }
-    }
 
-    static RowGroupToken[] EnumerateTokens(PlankReader reader)
-    {
-        var tokens = new List<RowGroupToken>();
-        foreach (var token in reader.EnumerateRowGroups())
-            tokens.Add(token);
-        return tokens.ToArray();
+        if (rowGroupIndex != fuzzCase.RowGroups.Count)
+            throw new InvalidOperationException(
+                $"Plank row-group count mismatch. Expected {fuzzCase.RowGroups.Count}, got {rowGroupIndex}.");
     }
 
     static Array ReadPlankColumn(Plank.Reading.RowGroupReader rowGroup, ColumnSpec spec)

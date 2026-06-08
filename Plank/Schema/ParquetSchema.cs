@@ -42,10 +42,10 @@ public sealed record ParquetSchema
     public ImmutableDictionary<string, IPageStrategy> PageStrategiesByColumnName { get; init; } = EmptyPageStrategies;
 
     public ParquetReader CreateReader(Stream stream, ParquetReaderOptions? options = null)
-        => new(stream, this, options ?? ParquetReaderOptions.Default);
+        => ParquetReader.Open(stream, options ?? ParquetReaderOptions.Default);
 
     public ParquetReader CreateReader(IParquetReadSource source, ParquetReaderOptions? options = null)
-        => new(source, this, options ?? ParquetReaderOptions.Default);
+        => ParquetReader.Open(source, options ?? ParquetReaderOptions.Default);
 
     public ParquetWriter CreateWriter(Stream stream, ParquetWriterOptions? options = null)
         => new(stream, this, options ?? ParquetWriterOptions.Default);
