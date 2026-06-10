@@ -5,26 +5,6 @@ namespace Plank.Reading;
 
 readonly struct InternalColumnChunkMetadata
 {
-    internal static InternalColumnChunkMetadata Missing(Column column)
-        => new(column.Name, column.PhysicalType, isMissing: true);
-
-    InternalColumnChunkMetadata(string path, ParquetPhysicalType physicalType, bool isMissing)
-    {
-        Path = path;
-        PhysicalType = physicalType;
-        IsMissing = isMissing;
-        DataPageOffset = 0;
-        DictionaryPageOffset = 0;
-        TotalCompressedSize = 0;
-        TotalUncompressedSize = 0;
-        Compression = CompressionKind.None;
-        Encodings = [];
-        ColumnIndexOffset = 0;
-        ColumnIndexLength = 0;
-        OffsetIndexOffset = 0;
-        OffsetIndexLength = 0;
-    }
-
     internal InternalColumnChunkMetadata(ulong dataPageOffset, ulong dictionaryPageOffset, ulong totalCompressedSize,
         ulong totalUncompressedSize, CompressionKind compression, EncodingKind[] encodings, string path,
         ParquetPhysicalType physicalType,
@@ -33,7 +13,6 @@ readonly struct InternalColumnChunkMetadata
     {
         Path = path;
         PhysicalType = physicalType;
-        IsMissing = false;
         DataPageOffset = dataPageOffset;
         DictionaryPageOffset = dictionaryPageOffset;
         TotalCompressedSize = totalCompressedSize;
@@ -49,8 +28,6 @@ readonly struct InternalColumnChunkMetadata
     internal string Path { get; }
 
     internal ParquetPhysicalType PhysicalType { get; }
-
-    internal bool IsMissing { get; }
 
     internal ulong DataPageOffset { get; }
 

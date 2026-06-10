@@ -76,14 +76,6 @@ sealed class RowGroupReadContext
         return columns[columnOrdinal];
     }
 
-    internal bool IsColumnMissing(int columnOrdinal)
-    {
-        if ((uint)columnOrdinal >= (uint)_rowGroup.Columns.Length)
-            throw new CorruptParquetException(
-                $"Column ordinal {columnOrdinal} is outside this row group's projected column count ({_rowGroup.Columns.Length}).");
-        return _rowGroup.Columns[columnOrdinal].IsMissing;
-    }
-
     internal ColumnPageEnumerable<T> EnumeratePages<T>(Column column, int columnOrdinal)
     {
         if ((uint)columnOrdinal >= (uint)_rowGroup.Columns.Length)

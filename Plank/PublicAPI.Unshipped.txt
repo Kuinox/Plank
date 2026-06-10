@@ -1,1 +1,4 @@
 ﻿#nullable enable
+*REMOVED*Plank.Schema.ColumnOptions.AllowMissing.get -> bool
+*REMOVED*Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0, bool allowMissing = false) -> void
+Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0) -> void

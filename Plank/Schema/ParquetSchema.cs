@@ -42,10 +42,13 @@ public sealed record ParquetSchema
     public ImmutableDictionary<string, IPageStrategy> PageStrategiesByColumnName { get; init; } = EmptyPageStrategies;
 
     public ParquetReader CreateReader(Stream stream, ParquetReaderOptions? options = null)
-        => ParquetReader.Open(stream, options ?? ParquetReaderOptions.Default);
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        return ParquetReader.Open(new StreamReadSource(stream), this, options ?? ParquetReaderOptions.Default);
+    }
 
     public ParquetReader CreateReader(IParquetReadSource source, ParquetReaderOptions? options = null)
-        => ParquetReader.Open(source, options ?? ParquetReaderOptions.Default);
+        => ParquetReader.Open(source, this, options ?? ParquetReaderOptions.Default);
 
     public ParquetWriter CreateWriter(Stream stream, ParquetWriterOptions? options = null)
         => new(stream, this, options ?? ParquetWriterOptions.Default);
@@ -156,8 +159,7 @@ public sealed record ParquetSchema
                         : nodeOptional ? ParquetRepetition.Optional : ParquetRepetition.Required;
                     var options = node.Options ?? ColumnOptions.Default;
                     if (options.Repetition != repetition)
-                        options = new ColumnOptions(repetition, options.Encodings, options.TypeLength,
-                            options.AllowMissing);
+                        options = new ColumnOptions(repetition, options.Encodings, options.TypeLength);
                     var path = pathBuffer.ToArray().ToImmutableArray();
                     var columnName = string.Join(".", path);
                     columnsBuilder.Add(new Column(columnName, node.PhysicalType.Value, options, node.LogicalType));

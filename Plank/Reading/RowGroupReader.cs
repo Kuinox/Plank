@@ -32,23 +32,13 @@ public sealed class RowGroupReader : IDisposable
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(column);
-        var ordinal = _context.GetColumnOrdinal(column);
-        if (_context.IsColumnMissing(ordinal) && !IsNullableProjection<T>())
-            throw new InvalidOperationException(
-                $"Requested schema column '{column.Name}' is not present in the file schema and must be read with a nullable projection type.");
-
-        return new RowGroupColumn<T>(this, column, ordinal);
+        return new RowGroupColumn<T>(this, column, _context.GetColumnOrdinal(column));
     }
 
-    public RowGroupColumn<T> Column<T>(int ordinal)
+    public RowGroupColumn<T> Column<T>(int columnOrdinal)
     {
         ThrowIfDisposed();
-        var column = _context.GetColumn(ordinal);
-        if (_context.IsColumnMissing(ordinal) && !IsNullableProjection<T>())
-            throw new InvalidOperationException(
-                $"Requested schema column '{column.Name}' is not present in the file schema and must be read with a nullable projection type.");
-
-        return new RowGroupColumn<T>(this, column, ordinal);
+        return new RowGroupColumn<T>(this, _context.GetColumn(columnOrdinal), columnOrdinal);
     }
 
     public void Dispose()
@@ -59,7 +49,4 @@ public sealed class RowGroupReader : IDisposable
 
     internal ColumnPageEnumerable<T> EnumeratePages<T>(Column column, int columnOrdinal)
         => _context.EnumeratePages<T>(column, columnOrdinal);
-
-    static bool IsNullableProjection<T>()
-        => !typeof(T).IsValueType || Nullable.GetUnderlyingType(typeof(T)) is not null;
 }

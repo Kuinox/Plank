@@ -55,6 +55,12 @@ ref struct CompactProtocolReader
     internal long ReadI64()
         => DecodeZigZag64(ReadVarUInt64());
 
+    internal byte ReadByte()
+    {
+        EnsureAvailable(1);
+        return _buffer[_offset++];
+    }
+
     internal uint ReadVarU32(uint max = uint.MaxValue)
     {
         var value = ReadVarUInt32();
@@ -92,12 +98,6 @@ ref struct CompactProtocolReader
             (byte)CompactProtocolType.BooleanFalse => false,
             _ => throw new CorruptParquetException($"Invalid compact protocol boolean value '{value}'.")
         };
-    }
-
-    internal byte ReadByte()
-    {
-        EnsureAvailable(1);
-        return _buffer[_offset++];
     }
 
     internal ReadOnlySpan<byte> ReadBinary()

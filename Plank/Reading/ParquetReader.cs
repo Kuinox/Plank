@@ -9,6 +9,7 @@ public sealed class ParquetReader : IDisposable
         => "PAR1"u8;
 
     readonly ParquetReaderOptions _options;
+    readonly ParquetSchema? _requestedSchema;
     ParquetSchema _schema;
     InternalParquetFooter _footer;
     ParquetFileMetadata _metadata;
@@ -21,13 +22,15 @@ public sealed class ParquetReader : IDisposable
     int _footerVersion;
     bool _disposed;
 
-    ParquetReader(IParquetReadSource source, StreamReadSource? streamSource, ParquetReaderOptions options)
+    ParquetReader(IParquetReadSource source, StreamReadSource? streamSource, ParquetReaderOptions options,
+        ParquetSchema? requestedSchema = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
 
         _options = options;
+        _requestedSchema = requestedSchema;
         _schema = new ParquetSchema(System.Collections.Immutable.ImmutableArray<Column>.Empty);
         _footer = InternalParquetFooter.Empty;
         _metadata = default;
@@ -51,6 +54,14 @@ public sealed class ParquetReader : IDisposable
 
     public static ParquetReader Open(IParquetReadSource source, ParquetReaderOptions? options = null)
         => new(source, source as StreamReadSource, options ?? ParquetReaderOptions.Default);
+
+    internal static ParquetReader Open(IParquetReadSource source, ParquetSchema requestedSchema,
+        ParquetReaderOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(requestedSchema);
+        return new ParquetReader(source, source as StreamReadSource, options ?? ParquetReaderOptions.Default,
+            requestedSchema);
+    }
 
     public ParquetSchema Schema
         => _schema;
@@ -120,6 +131,9 @@ public sealed class ParquetReader : IDisposable
         source.ReadExactly(footerOffset, footerBytes);
 
         var footer = ParquetMetadataThriftReader.Read(footerBytes);
+        if (_options.Strict && _requestedSchema is not null)
+            ValidateRequestedSchema(_requestedSchema, footer.Schema);
+
         var rowGroupsLength = footer.RowGroupsEndOffset - footer.RowGroupsOffset;
         if (rowGroupsLength < 0)
             throw new CorruptParquetException("Footer row group range is invalid.");
@@ -129,8 +143,8 @@ public sealed class ParquetReader : IDisposable
         _footerLength = rowGroupsLength;
         _rowGroupsMetadataOffset = footerOffset + (ulong)footer.RowGroupsOffset;
         _footer = new InternalParquetFooter(footer.Version, footer.Schema, footer.RowGroupCount, 0, rowGroupsLength);
-        _schema = _footer.Schema;
-        _metadata = new ParquetFileMetadata(_schema, footerOffset, footerLength, _footer.Version);
+        _schema = _requestedSchema ?? _footer.Schema;
+        _metadata = new ParquetFileMetadata(_footer.Schema, footerOffset, footerLength, _footer.Version);
         _footerVersion++;
     }
 
@@ -220,4 +234,69 @@ public sealed class ParquetReader : IDisposable
 
         throw new ArgumentException("Column does not belong to this schema.", nameof(column));
     }
+
+    static void ValidateRequestedSchema(ParquetSchema requestedSchema, ParquetSchema fileSchema)
+    {
+        var fileColumns = fileSchema.Columns;
+        var fileColumnByPath = new Dictionary<string, Column>(fileColumns.Length, StringComparer.Ordinal);
+        for (var i = 0; i < fileColumns.Length; i++)
+            if (!fileColumnByPath.TryAdd(fileColumns[i].Name, fileColumns[i]))
+                throw new CorruptParquetException($"File schema contains duplicate leaf path '{fileColumns[i].Name}'.");
+
+        var requestedColumns = requestedSchema.Columns;
+        for (var i = 0; i < requestedColumns.Length; i++)
+        {
+            var requestedColumn = requestedColumns[i];
+            if (!fileColumnByPath.TryGetValue(requestedColumn.Name, out var fileColumn))
+                throw new InvalidOperationException(
+                    $"Requested schema column '{requestedColumn.Name}' is not present in the file schema.");
+
+            ValidateRequestedColumn(requestedColumn, fileColumn);
+        }
+    }
+
+    static void ValidateRequestedColumn(Column requestedColumn, Column fileColumn)
+    {
+        if (requestedColumn.PhysicalType != fileColumn.PhysicalType)
+            throw new InvalidOperationException(
+                $"Requested schema column '{requestedColumn.Name}' has physical type {requestedColumn.PhysicalType}, but file schema has {fileColumn.PhysicalType}.");
+
+        var requestedRepetition = NormalizeRepetition(requestedColumn.Options.Repetition);
+        var fileRepetition = NormalizeRepetition(fileColumn.Options.Repetition);
+        if (fileRepetition == ParquetRepetition.Optional && requestedRepetition == ParquetRepetition.Required)
+            throw new InvalidOperationException(
+                $"Requested schema column '{requestedColumn.Name}' is required, but the file schema column is optional.");
+        if ((fileRepetition == ParquetRepetition.Repeated || requestedRepetition == ParquetRepetition.Repeated) &&
+            fileRepetition != requestedRepetition)
+            throw new InvalidOperationException(
+                $"Requested schema column '{requestedColumn.Name}' has repetition {requestedRepetition}, but file schema has {fileRepetition}.");
+
+        if (requestedColumn.PhysicalType == ParquetPhysicalType.FixedLenByteArray &&
+            requestedColumn.Options.TypeLength != fileColumn.Options.TypeLength)
+            throw new InvalidOperationException(
+                $"Requested schema column '{requestedColumn.Name}' has fixed length {requestedColumn.Options.TypeLength}, but file schema has {fileColumn.Options.TypeLength}.");
+
+        if (!AreLogicalTypesCompatible(requestedColumn, fileColumn.LogicalType))
+            throw new InvalidOperationException(
+                $"Requested schema column '{requestedColumn.Name}' has logical type {DescribeLogicalType(requestedColumn.LogicalType)}, but file schema has {DescribeLogicalType(fileColumn.LogicalType)}.");
+    }
+
+    static ParquetRepetition NormalizeRepetition(ParquetRepetition repetition)
+        => repetition == ParquetRepetition.Unspecified ? ParquetRepetition.Required : repetition;
+
+    static bool AreLogicalTypesCompatible(Column requestedColumn, LogicalType? fileLogicalType)
+    {
+        if (Equals(requestedColumn.LogicalType, fileLogicalType))
+            return true;
+
+        if (requestedColumn.LogicalType is null && fileLogicalType is LogicalType.Int integer && integer.IsSigned)
+            return (requestedColumn.PhysicalType, integer.BitWidth) is
+                (ParquetPhysicalType.Int32, 32) or
+                (ParquetPhysicalType.Int64, 64);
+
+        return false;
+    }
+
+    static string DescribeLogicalType(LogicalType? logicalType)
+        => logicalType?.ToString() ?? "none";
 }

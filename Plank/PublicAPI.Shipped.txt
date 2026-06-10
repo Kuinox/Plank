@@ -131,8 +131,6 @@ Plank.Schema.ColumnDefinition.PhysicalType.init -> void
 Plank.Schema.ColumnDefinition.Repetition.get -> Plank.Schema.ParquetRepetition
 Plank.Schema.ColumnDefinition.Repetition.init -> void
 Plank.Schema.ColumnOptions
-Plank.Schema.ColumnOptions.AllowMissing.get -> bool
-Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0, bool allowMissing = false) -> void
 Plank.Schema.ColumnOptions.Encodings.get -> System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>
 Plank.Schema.ColumnOptions.Equals(Plank.Schema.ColumnOptions other) -> bool
 Plank.Schema.ColumnOptions.Repetition.get -> Plank.Schema.ParquetRepetition
