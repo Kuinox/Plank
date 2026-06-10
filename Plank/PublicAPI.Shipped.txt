@@ -59,9 +59,6 @@ Plank.Reading.ParquetReader.Dispose() -> void
 Plank.Reading.ParquetReader.EnumerateRowGroups() -> Plank.Reading.RowGroupTokenEnumerable
 Plank.Reading.ParquetReader.Footer.get -> Plank.Reading.ParquetFooter
 Plank.Reading.ParquetReader.Metadata.get -> Plank.Reading.ParquetFileMetadata
-Plank.Reading.ParquetReader.OpenRowGroup(Plank.Reading.IParquetReadSource source, Plank.Reading.RowGroupToken token) -> Plank.Reading.RowGroupReader
-Plank.Reading.ParquetReader.OpenRowGroup(Plank.Reading.IParquetReadSource source, Plank.Reading.RowGroupToken token, Plank.Reading.RowGroupReader reusable) -> Plank.Reading.RowGroupReader
-Plank.Reading.ParquetReader.OpenRowGroup(System.IO.Stream stream, Plank.Reading.RowGroupToken token) -> Plank.Reading.RowGroupReader
 Plank.Reading.ParquetReader.Reset(Plank.Reading.IParquetReadSource source) -> void
 Plank.Reading.ParquetReader.Reset(System.IO.Stream stream) -> void
 Plank.Reading.ParquetReader.Schema.get -> Plank.Schema.ParquetSchema
@@ -89,7 +86,6 @@ Plank.Reading.RowGroupToken.ColumnChunkOffset.get -> ulong
 Plank.Reading.RowGroupToken.MetadataOffset.get -> ulong
 Plank.Reading.RowGroupToken.RowGroupOrdinal.get -> int
 Plank.Reading.RowGroupToken.RowGroupToken() -> void
-Plank.Reading.RowGroupToken.RowGroupToken(int rowGroupOrdinal, ulong metadataOffset, ulong columnChunkOffset) -> void
 Plank.Reading.RowGroupTokenEnumerable
 Plank.Reading.RowGroupTokenEnumerable.Enumerator
 Plank.Reading.RowGroupTokenEnumerable.Enumerator.Current.get -> Plank.Reading.RowGroupToken
@@ -97,12 +93,6 @@ Plank.Reading.RowGroupTokenEnumerable.Enumerator.Enumerator() -> void
 Plank.Reading.RowGroupTokenEnumerable.Enumerator.MoveNext() -> bool
 Plank.Reading.RowGroupTokenEnumerable.GetEnumerator() -> Plank.Reading.RowGroupTokenEnumerable.Enumerator
 Plank.Reading.RowGroupTokenEnumerable.RowGroupTokenEnumerable() -> void
-Plank.Reading.RowReaderBase<TSlot>
-Plank.Reading.RowReaderBase<TSlot>.Dispose() -> void
-Plank.Reading.RowReaderBase<TSlot>.EnumerateRowGroups() -> Plank.Reading.RowGroupTokenEnumerable
-Plank.Reading.RowReaderBase<TSlot>.Metadata.get -> Plank.Reading.ParquetFileMetadata
-Plank.Reading.RowReaderBase<TSlot>.Reader.get -> Plank.Reading.ParquetReader
-Plank.Reading.RowReaderBase<TSlot>.RowReaderBase(System.IO.Stream stream, Plank.Schema.ParquetSchema schema, Plank.Reading.ParquetReaderOptions options = null) -> void
 Plank.Reading.StreamReadSource
 Plank.Reading.StreamReadSource.Length.get -> ulong
 Plank.Reading.StreamReadSource.ReadExactly(ulong offset, System.Span<byte> destination) -> void

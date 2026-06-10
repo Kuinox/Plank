@@ -4,6 +4,13 @@ using Plank.Schema;
 
 internal sealed class GeneratedRowReaderE2ETests
 {
+    static readonly Plank.Reading.ParquetSchemaEvolutionOptions MissingColumnEvolution = new()
+    {
+        MissingColumns = Plank.Reading.MissingColumnEvolutionBehavior.MaterializeDefault,
+        Repetition = Plank.Reading.RepetitionEvolutionBehavior.AllowRequiredToOptional,
+        LogicalTypes = Plank.Reading.SchemaTypeEvolutionBehavior.AllowCompatible
+    };
+
     [Test]
     public async Task GeneratedRowReaderReadsProjectedColumnsAcrossRowGroups()
     {
@@ -35,6 +42,92 @@ internal sealed class GeneratedRowReaderE2ETests
             if (File.Exists(path))
                 File.Delete(path);
         }
+    }
+
+    [Test]
+    public async Task GeneratedRowReaderMaterializesAddedLaterColumn()
+    {
+        using var stream = CreateEvolvingFile(includeAdded: false, addedOptional: false, idPhysicalType: Plank.Schema.ParquetPhysicalType.Int32,
+            maybeOptional: true);
+        using var reader = EvolvingRowSchema.CreateRowReader(stream,
+            EvolvingRowSchema.Projection.Id | EvolvingRowSchema.Projection.Added, schemaEvolution: MissingColumnEvolution);
+
+        var ids = new List<int>();
+        var added = new List<int>();
+
+        while (reader.MoveNext())
+        {
+            var row = reader.Current;
+            ids.Add(row.Id);
+            added.Add(row.Added);
+        }
+
+        await Assert.That(ids).IsEquivalentTo([1, 2, 3]);
+        await Assert.That(added).IsEquivalentTo([0, 0, 0]);
+    }
+
+    [Test]
+    public async Task GeneratedRowReaderAllowsRequiredFileColumnForOptionalGeneratedColumn()
+    {
+        using var stream = CreateEvolvingFile(includeAdded: true, addedOptional: false, idPhysicalType: Plank.Schema.ParquetPhysicalType.Int32,
+            maybeOptional: false);
+        using var reader = EvolvingRowSchema.CreateRowReader(stream,
+            EvolvingRowSchema.Projection.Maybe, schemaEvolution: MissingColumnEvolution);
+
+        var values = new List<int?>();
+        while (reader.MoveNext())
+            values.Add(reader.Current.Maybe);
+
+        await Assert.That(values).IsEquivalentTo(new int?[] { 10, 20, 30 });
+    }
+
+    [Test]
+    public async Task GeneratedRowReaderRejectsUnsafeOptionalToRequiredChange()
+    {
+        using var stream = CreateEvolvingFile(includeAdded: true, addedOptional: true, idPhysicalType: Plank.Schema.ParquetPhysicalType.Int32,
+            maybeOptional: true);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Task.Run(() => EvolvingRowSchema.CreateRowReader(stream,
+                EvolvingRowSchema.Projection.Added,
+                schemaEvolution: new Plank.Reading.ParquetSchemaEvolutionOptions
+                {
+                    Repetition = Plank.Reading.RepetitionEvolutionBehavior.AllowRequiredToOptionalAndOptionalToRequired
+                })).ConfigureAwait(false));
+    }
+
+    [Test]
+    public async Task GeneratedRowReaderRejectsPhysicalShapeChange()
+    {
+        using var stream = CreateEvolvingFile(includeAdded: true, addedOptional: false, idPhysicalType: Plank.Schema.ParquetPhysicalType.Int64,
+            maybeOptional: true);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Task.Run(() => EvolvingRowSchema.CreateRowReader(stream,
+                EvolvingRowSchema.Projection.Id,
+                schemaEvolution: new Plank.Reading.ParquetSchemaEvolutionOptions
+                {
+                    PhysicalTypes = Plank.Reading.SchemaTypeEvolutionBehavior.AllowCompatible,
+                    MaterializedTypes = Plank.Reading.SchemaTypeEvolutionBehavior.AllowCompatible
+                })).ConfigureAwait(false));
+    }
+
+    [Test]
+    public async Task GeneratedRowReaderResetsAcrossMixedSchemaFiles()
+    {
+        using var oldFile = CreateEvolvingFile(includeAdded: false, addedOptional: false, idPhysicalType: Plank.Schema.ParquetPhysicalType.Int32,
+            maybeOptional: true);
+        using var newFile = CreateEvolvingFile(includeAdded: true, addedOptional: false, idPhysicalType: Plank.Schema.ParquetPhysicalType.Int32,
+            maybeOptional: true);
+        using var reader = EvolvingRowSchema.CreateRowReader(oldFile,
+            EvolvingRowSchema.Projection.Id | EvolvingRowSchema.Projection.Added, schemaEvolution: MissingColumnEvolution);
+
+        var first = ReadEvolvingRows(reader);
+        reader.Reset(newFile, EvolvingRowSchema.Projection.Id | EvolvingRowSchema.Projection.Added);
+        var second = ReadEvolvingRows(reader);
+
+        await Assert.That(first).IsEquivalentTo([(1, 0), (2, 0), (3, 0)]);
+        await Assert.That(second).IsEquivalentTo([(1, 100), (2, 200), (3, 300)]);
     }
 
     [Test]
@@ -141,6 +234,89 @@ internal sealed class GeneratedRowReaderE2ETests
             if (File.Exists(path))
                 File.Delete(path);
         }
+    }
+
+    static List<(int Id, int Added)> ReadEvolvingRows(EvolvingRowSchema.RowReader reader)
+    {
+        var rows = new List<(int Id, int Added)>();
+        while (reader.MoveNext())
+        {
+            var row = reader.Current;
+            rows.Add((row.Id, row.Added));
+        }
+
+        return rows;
+    }
+
+    static MemoryStream CreateEvolvingFile(bool includeAdded, bool addedOptional, Plank.Schema.ParquetPhysicalType idPhysicalType,
+        bool maybeOptional)
+    {
+        var columns = new List<Plank.Schema.Column>
+        {
+            new("id", idPhysicalType)
+        };
+        if (includeAdded)
+        {
+            var repetition = addedOptional ? Plank.Schema.ParquetRepetition.Optional : Plank.Schema.ParquetRepetition.Required;
+            columns.Add(new Plank.Schema.Column("added", Plank.Schema.ParquetPhysicalType.Int32,
+                new Plank.Schema.ColumnOptions(repetition)));
+        }
+
+        columns.Add(new Plank.Schema.Column("maybe", Plank.Schema.ParquetPhysicalType.Int32,
+            new Plank.Schema.ColumnOptions(maybeOptional ? Plank.Schema.ParquetRepetition.Optional : Plank.Schema.ParquetRepetition.Required)));
+
+        var schema = new Plank.Schema.ParquetSchema([.. columns]);
+        var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream);
+        var rowGroup = writer.StartRowGroup();
+
+        if (idPhysicalType == Plank.Schema.ParquetPhysicalType.Int64)
+        {
+            var id = rowGroup.CreateSerializedColumn<long>(schema.Columns[0]);
+            id.Serialize([1L, 2L, 3L]);
+            rowGroup.Write(id);
+        }
+        else
+        {
+            var id = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
+            id.Serialize([1, 2, 3]);
+            rowGroup.Write(id);
+        }
+
+        var maybeOrdinal = 1;
+        if (includeAdded)
+        {
+            if (addedOptional)
+            {
+                var added = rowGroup.CreateSerializedColumn<int?>(schema.Columns[1]);
+                added.Serialize([100, null, 300]);
+                rowGroup.Write(added);
+            }
+            else
+            {
+                var added = rowGroup.CreateSerializedColumn<int>(schema.Columns[1]);
+                added.Serialize([100, 200, 300]);
+                rowGroup.Write(added);
+            }
+
+            maybeOrdinal = 2;
+        }
+
+        if (maybeOptional)
+        {
+            var maybe = rowGroup.CreateSerializedColumn<int?>(schema.Columns[maybeOrdinal]);
+            maybe.Serialize([10, null, 30]);
+            rowGroup.Write(maybe);
+        }
+        else
+        {
+            var maybe = rowGroup.CreateSerializedColumn<int>(schema.Columns[maybeOrdinal]);
+            maybe.Serialize([10, 20, 30]);
+            rowGroup.Write(maybe);
+        }
+
+        writer.CloseFile();
+        return new MemoryStream(stream.ToArray());
     }
 
     static void WriteEncodedRows(string path)

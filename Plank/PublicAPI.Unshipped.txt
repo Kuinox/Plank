@@ -1,4 +1,43 @@
 ﻿#nullable enable
+*REMOVED*Plank.Reading.ParquetReader.OpenRowGroup(Plank.Reading.IParquetReadSource source, Plank.Reading.RowGroupToken token) -> Plank.Reading.RowGroupReader
+*REMOVED*Plank.Reading.ParquetReader.OpenRowGroup(Plank.Reading.IParquetReadSource source, Plank.Reading.RowGroupToken token, Plank.Reading.RowGroupReader reusable) -> Plank.Reading.RowGroupReader
+*REMOVED*Plank.Reading.ParquetReader.OpenRowGroup(System.IO.Stream stream, Plank.Reading.RowGroupToken token) -> Plank.Reading.RowGroupReader
+*REMOVED*Plank.Reading.RowGroupToken.RowGroupToken(int rowGroupOrdinal, ulong metadataOffset, ulong columnChunkOffset) -> void
+*REMOVED*Plank.Reading.RowReaderBase<TSlot>
+*REMOVED*Plank.Reading.RowReaderBase<TSlot>.Dispose() -> void
+*REMOVED*Plank.Reading.RowReaderBase<TSlot>.EnumerateRowGroups() -> Plank.Reading.RowGroupTokenEnumerable
+*REMOVED*Plank.Reading.RowReaderBase<TSlot>.Metadata.get -> Plank.Reading.ParquetFileMetadata
+*REMOVED*Plank.Reading.RowReaderBase<TSlot>.Reader.get -> Plank.Reading.ParquetReader
+*REMOVED*Plank.Reading.RowReaderBase<TSlot>.RowReaderBase(System.IO.Stream stream, Plank.Schema.ParquetSchema schema, Plank.Reading.ParquetReaderOptions options = null) -> void
 *REMOVED*Plank.Schema.ColumnOptions.AllowMissing.get -> bool
 *REMOVED*Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0, bool allowMissing = false) -> void
+Plank.Reading.MissingColumnEvolutionBehavior
+Plank.Reading.MissingColumnEvolutionBehavior.MaterializeDefault = 1 -> Plank.Reading.MissingColumnEvolutionBehavior
+Plank.Reading.MissingColumnEvolutionBehavior.Reject = 0 -> Plank.Reading.MissingColumnEvolutionBehavior
+Plank.Reading.ParquetSchemaEvolutionOptions
+static Plank.Reading.ParquetSchemaEvolutionOptions.Default.get -> Plank.Reading.ParquetSchemaEvolutionOptions
+Plank.Reading.ParquetSchemaEvolutionOptions.LogicalTypes.get -> Plank.Reading.SchemaTypeEvolutionBehavior
+Plank.Reading.ParquetSchemaEvolutionOptions.LogicalTypes.init -> void
+Plank.Reading.ParquetSchemaEvolutionOptions.MaterializedTypes.get -> Plank.Reading.SchemaTypeEvolutionBehavior
+Plank.Reading.ParquetSchemaEvolutionOptions.MaterializedTypes.init -> void
+Plank.Reading.ParquetSchemaEvolutionOptions.MissingColumns.get -> Plank.Reading.MissingColumnEvolutionBehavior
+Plank.Reading.ParquetSchemaEvolutionOptions.MissingColumns.init -> void
+Plank.Reading.ParquetSchemaEvolutionOptions.ParquetSchemaEvolutionOptions() -> void
+Plank.Reading.ParquetSchemaEvolutionOptions.PhysicalTypes.get -> Plank.Reading.SchemaTypeEvolutionBehavior
+Plank.Reading.ParquetSchemaEvolutionOptions.PhysicalTypes.init -> void
+Plank.Reading.ParquetSchemaEvolutionOptions.Repetition.get -> Plank.Reading.RepetitionEvolutionBehavior
+Plank.Reading.ParquetSchemaEvolutionOptions.Repetition.init -> void
+static Plank.Reading.ParquetReader.Open(Plank.Reading.IParquetReadSource source, Plank.Reading.ParquetReaderOptions options = null) -> Plank.Reading.ParquetReader
+static Plank.Reading.ParquetReader.Open(System.IO.Stream stream, Plank.Reading.ParquetReaderOptions options = null) -> Plank.Reading.ParquetReader
+Plank.Reading.ParquetReader.OpenRowGroup(Plank.Reading.RowGroupToken token) -> Plank.Reading.RowGroupReader
+Plank.Reading.ParquetReader.OpenRowGroup(Plank.Reading.RowGroupToken token, Plank.Reading.RowGroupReader reusable) -> Plank.Reading.RowGroupReader
+Plank.Reading.RepetitionEvolutionBehavior
+Plank.Reading.RepetitionEvolutionBehavior.AllowRequiredToOptional = 1 -> Plank.Reading.RepetitionEvolutionBehavior
+Plank.Reading.RepetitionEvolutionBehavior.AllowRequiredToOptionalAndOptionalToRequired = 2 -> Plank.Reading.RepetitionEvolutionBehavior
+Plank.Reading.RepetitionEvolutionBehavior.Reject = 0 -> Plank.Reading.RepetitionEvolutionBehavior
+Plank.Reading.RowGroupReader.Column<T>(int columnOrdinal) -> Plank.Reading.RowGroupColumn<T>
+Plank.Reading.RowGroupToken.RowCount.get -> ulong
+Plank.Reading.SchemaTypeEvolutionBehavior
+Plank.Reading.SchemaTypeEvolutionBehavior.AllowCompatible = 1 -> Plank.Reading.SchemaTypeEvolutionBehavior
+Plank.Reading.SchemaTypeEvolutionBehavior.Reject = 0 -> Plank.Reading.SchemaTypeEvolutionBehavior
 Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0) -> void
