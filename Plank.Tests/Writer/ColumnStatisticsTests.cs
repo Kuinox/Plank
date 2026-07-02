@@ -3,6 +3,9 @@ using System.Collections.Immutable;
 using DuckDB.NET.Data;
 using ParquetSharp;
 using Plank.Reading;
+using Plank.Reading.Row;
+using Plank.Reading.Typed;
+using Plank.Reading.Typed.Internal;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
@@ -96,7 +99,7 @@ internal sealed class ColumnStatisticsTests
                 writer.CloseFile();
             }
 
-            using var reader = new ParquetFileReader(path);
+            using var reader = new ParquetSharp.ParquetFileReader(path);
             using var rowGroupMetadata = reader.RowGroup(0);
             AssertInt32Statistics(rowGroupMetadata, columnIndex: 0, min: 10, max: 30, nullCount: 0);
             AssertInt32Statistics(rowGroupMetadata, columnIndex: 1, min: 1, max: 3, nullCount: 1);
@@ -130,7 +133,7 @@ internal sealed class ColumnStatisticsTests
                 writer.CloseFile();
             }
 
-            using var reader = new ParquetFileReader(path);
+            using var reader = new ParquetSharp.ParquetFileReader(path);
             using var rowGroupMetadata = reader.RowGroup(0);
             AssertNoMinMaxStatistics(rowGroupMetadata, columnIndex: 0, nullCount: 3);
         }
@@ -169,7 +172,7 @@ internal sealed class ColumnStatisticsTests
                 writer.CloseFile();
             }
 
-            using var reader = new ParquetFileReader(path);
+            using var reader = new ParquetSharp.ParquetFileReader(path);
             using var rowGroupMetadata = reader.RowGroup(0);
             AssertInt32Statistics(rowGroupMetadata, columnIndex: 0, min: 1, max: 9, nullCount: 1);
         }
@@ -217,7 +220,7 @@ internal sealed class ColumnStatisticsTests
             AssertPageIndexMetadata(fileBytes, columns[0], expectedPageCount: 3);
             AssertPageIndexMetadata(fileBytes, columns[1], expectedPageCount: 3);
 
-            using var reader = new ParquetFileReader(path);
+            using var reader = new ParquetSharp.ParquetFileReader(path);
             using var rowGroupMetadata = reader.RowGroup(0);
             AssertInt32Statistics(rowGroupMetadata, columnIndex: 0, min: 10, max: 50, nullCount: 0);
             AssertInt32Statistics(rowGroupMetadata, columnIndex: 1, min: 1, max: 4, nullCount: 2);
@@ -474,8 +477,8 @@ internal sealed class ColumnStatisticsTests
     static int ReadColumnIndexPageCount(byte[] fileBytes, long offset, int length)
     {
         var reader = new CompactProtocolReader(fileBytes.AsSpan(checked((int)offset), length));
-        var previousFieldId = 0;
-        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
+        reader.BeginStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId != 1)
             {
@@ -497,8 +500,8 @@ internal sealed class ColumnStatisticsTests
     static int ReadOffsetIndexPageCount(byte[] fileBytes, long offset, int length)
     {
         var reader = new CompactProtocolReader(fileBytes.AsSpan(checked((int)offset), length));
-        var previousFieldId = 0;
-        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var type, out var inlineBool))
+        reader.BeginStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId != 1)
             {

@@ -2,6 +2,9 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Plank.Reading;
 
+/// <summary>
+/// Provides random-access reads over a file-backed Parquet source without allocating a <see cref="FileStream"/>.
+/// </summary>
 public sealed class FileReadSource : IParquetReadSource, IDisposable
 {
     readonly SafeFileHandle _handle;

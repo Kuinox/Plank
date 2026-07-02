@@ -1,0 +1,46 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "src": "..",
+          "files": [
+            "Plank/Plank.csproj"
+          ]
+        }
+      ],
+      "dest": "api",
+      "namespaceLayout": "nested",
+      "memberLayout": "samePage"
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": [
+          "*.md",
+          "toc.yml",
+          "articles/**.md"
+        ]
+      },
+      {
+        "files": [
+          "api/**.yml",
+          "api/index.md"
+        ]
+      }
+    ],
+    "output": "_site",
+    "template": [
+      "default",
+      "modern"
+    ],
+    "globalMetadata": {
+      "_appName": "Plank",
+      "_appTitle": "Plank Documentation",
+      "_enableSearch": true,
+      "_disableContribution": true,
+      "titleSuffix": "Plank"
+    }
+  }
+}

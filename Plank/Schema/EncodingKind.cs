@@ -1,6 +1,6 @@
 namespace Plank.Schema;
 
-public enum EncodingKind
+public enum EncodingKind : ushort
 {
     Plain = 0,
     PlainDictionary = 1,

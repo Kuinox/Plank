@@ -1,10 +1,13 @@
 using System.Collections.Immutable;
 using ParquetSharp;
 using Plank.Reading;
+using Plank.Reading.Row;
+using Plank.Reading.Typed;
 using Plank.Schema;
 using Plank.Writing;
 using PlankColumn = Plank.Schema.Column;
-using PlankReader = Plank.Reading.ParquetReader;
+using PlankReader = Plank.Reading.Row.ParquetReader;
+using PlankRowGroupReader = Plank.Reading.Row.RowGroupReader;
 using PlankRowGroupWriter = Plank.Writing.RowGroupWriter;
 using PlankSchema = Plank.Schema.ParquetSchema;
 using PlankWriter = Plank.Writing.ParquetWriter;
@@ -162,7 +165,7 @@ public static class PlankWriterFuzzTarget
                 $"Plank row-group count mismatch. Expected {fuzzCase.RowGroups.Count}, got {rowGroupIndex}.");
     }
 
-    static Array ReadPlankColumn(Plank.Reading.RowGroupReader rowGroup, ColumnSpec spec)
+    static Array ReadPlankColumn(PlankRowGroupReader rowGroup, ColumnSpec spec)
         => spec.ClrType == typeof(bool) ? ReadAllPages(rowGroup.Column<bool>(spec.Column).Pages)
         : spec.ClrType == typeof(int) ? ReadAllPages(rowGroup.Column<int>(spec.Column).Pages)
         : spec.ClrType == typeof(long) ? ReadAllPages(rowGroup.Column<long>(spec.Column).Pages)
@@ -171,7 +174,7 @@ public static class PlankWriterFuzzTarget
 
     static void AssertParquetSharpCanRead(string path, FuzzCase fuzzCase)
     {
-        using var reader = new ParquetFileReader(path);
+        using var reader = new ParquetSharp.ParquetFileReader(path);
         var rowGroupCount = checked((int)reader.FileMetaData.NumRowGroups);
         if (rowGroupCount != fuzzCase.RowGroups.Count)
             throw new InvalidOperationException(

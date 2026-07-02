@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
 using Plank.Reading;
+using Plank.Reading.Row;
+using Plank.Reading.Typed;
 using Plank.Schema;
 
 namespace Plank.Fuzzing;

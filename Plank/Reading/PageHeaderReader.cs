@@ -7,7 +7,6 @@ static class PageHeaderReader
     internal static PageHeader Read(ReadOnlySpan<byte> buffer, uint maxUncompressedPageSize = uint.MaxValue)
     {
         var reader = new CompactProtocolReader(buffer);
-        var previousFieldId = 0;
         var type = PageHeaderType.DataPage;
         var uncompressedPageSize = 0U;
         var compressedPageSize = 0U;
@@ -20,7 +19,9 @@ static class PageHeaderReader
         var repetitionLevelEncoding = EncodingKind.Rle;
         var definitionLevelEncoding = EncodingKind.Rle;
 
-        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var fieldType, out var inlineBool))
+        reader.BeginStruct();
+
+        while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
             switch (fieldId)
             {
@@ -58,13 +59,14 @@ static class PageHeaderReader
     static (uint ValueCount, EncodingKind Encoding, EncodingKind RepetitionLevelEncoding,
         EncodingKind DefinitionLevelEncoding) ReadDataPageHeader(ref CompactProtocolReader reader)
     {
-        var previousFieldId = 0;
         var valueCount = 0U;
         var encoding = EncodingKind.Plain;
         var repetitionLevelEncoding = EncodingKind.Rle;
         var definitionLevelEncoding = EncodingKind.Rle;
 
-        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var fieldType, out var inlineBool))
+        reader.BeginStruct();
+
+        while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
             switch (fieldId)
             {
@@ -72,17 +74,17 @@ static class PageHeaderReader
                     valueCount = reader.ReadI32AsU32();
                     break;
                 case 2:
-                    encoding = ParquetMetadataThriftReader.ReadEncoding(reader.ReadI32());
+                    encoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32());
                     break;
                 case 3:
                     if (fieldType == CompactProtocolType.I32)
-                        definitionLevelEncoding = ParquetMetadataThriftReader.ReadEncoding(reader.ReadI32());
+                        definitionLevelEncoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32());
                     else
                         reader.Skip(fieldType, inlineBool);
                     break;
                 case 4:
                     if (fieldType == CompactProtocolType.I32)
-                        repetitionLevelEncoding = ParquetMetadataThriftReader.ReadEncoding(reader.ReadI32());
+                        repetitionLevelEncoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32());
                     else
                         reader.Skip(fieldType, inlineBool);
                     break;
@@ -97,9 +99,9 @@ static class PageHeaderReader
 
     static uint ReadDictionaryHeader(ref CompactProtocolReader reader)
     {
-        var previousFieldId = 0;
         var valueCount = 0U;
-        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var fieldType, out var inlineBool))
+        reader.BeginStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
             if (fieldId == 1)
                 valueCount = reader.ReadI32AsU32();
@@ -113,7 +115,6 @@ static class PageHeaderReader
     static (uint ValueCount, EncodingKind Encoding, uint NullCount, uint RepetitionLevelsByteLength,
         uint DefinitionLevelsByteLength, bool IsCompressed) ReadDataPageV2Header(ref CompactProtocolReader reader)
     {
-        var previousFieldId = 0;
         var valueCount = 0U;
         var encoding = EncodingKind.Plain;
         var nullCount = 0U;
@@ -121,7 +122,9 @@ static class PageHeaderReader
         var definitionLevelsByteLength = 0U;
         var isCompressed = true; // spec default
 
-        while (reader.TryReadFieldHeader(ref previousFieldId, out var fieldId, out var fieldType, out var inlineBool))
+        reader.BeginStruct();
+
+        while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
             switch (fieldId)
             {
@@ -132,7 +135,7 @@ static class PageHeaderReader
                     nullCount = reader.ReadI32AsU32();
                     break;
                 case 4:
-                    encoding = ParquetMetadataThriftReader.ReadEncoding(reader.ReadI32());
+                    encoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32());
                     break;
                 case 5:
                     definitionLevelsByteLength = reader.ReadI32AsU32();

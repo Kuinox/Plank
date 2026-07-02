@@ -243,7 +243,7 @@ static class EncodingActualEncodingAudit
 
     static string ReadColumnEncodings(string path)
     {
-        using var reader = new ParquetFileReader(path);
+        using var reader = new ParquetSharp.ParquetFileReader(path);
         using var rowGroup = reader.RowGroup(0);
         using var column = rowGroup.MetaData.GetColumnChunkMetaData(0);
         return string.Join("|", column.Encodings.Select(static e => e.ToString()).Order(StringComparer.Ordinal));

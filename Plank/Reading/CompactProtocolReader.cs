@@ -1,14 +1,23 @@
+using System.Runtime.CompilerServices;
+
 namespace Plank.Reading;
 
 ref struct CompactProtocolReader
 {
+    const int MaxStructDepth = 64;
+
     readonly ReadOnlySpan<byte> _buffer;
+    FieldIdStack _fieldIdStack;
     int _offset;
+    int _lastFieldId;
+    int _depth;
 
     internal CompactProtocolReader(ReadOnlySpan<byte> buffer)
     {
         _buffer = buffer;
         _offset = 0;
+        _lastFieldId = 0;
+        _depth = 0;
     }
 
     internal int Offset
@@ -20,13 +29,18 @@ ref struct CompactProtocolReader
     internal uint Remaining
         => (uint)(_buffer.Length - _offset);
 
-    internal bool TryReadFieldHeader(ref int previousFieldId, out int fieldId, out CompactProtocolType type,
-        out bool? inlineBool)
+    internal void BeginStruct()
+    {
+        PushStruct();
+    }
+
+    internal bool TryReadFieldHeader(out int fieldId, out CompactProtocolType type, out bool? inlineBool)
     {
         EnsureAvailable(1);
         var header = _buffer[_offset++];
         if (header == 0)
         {
+            PopStruct();
             fieldId = 0;
             type = CompactProtocolType.Stop;
             inlineBool = null;
@@ -35,8 +49,8 @@ ref struct CompactProtocolReader
 
         type = (CompactProtocolType)(header & 0x0F);
         var delta = header >> 4;
-        fieldId = delta == 0 ? ReadI16() : previousFieldId + delta;
-        previousFieldId = fieldId;
+        fieldId = delta == 0 ? ReadI16() : _lastFieldId + delta;
+        _lastFieldId = fieldId;
         inlineBool = type switch
         {
             CompactProtocolType.BooleanTrue => true,
@@ -152,8 +166,8 @@ ref struct CompactProtocolReader
             }
             case CompactProtocolType.Struct:
             {
-                var previousFieldId = 0;
-                while (TryReadFieldHeader(ref previousFieldId, out _, out var nestedType, out var nestedInlineBool))
+                BeginStruct();
+                while (TryReadFieldHeader(out _, out var nestedType, out var nestedInlineBool))
                     Skip(nestedType, nestedInlineBool, remainingDepth - 1);
                 return;
             }
@@ -210,9 +224,30 @@ ref struct CompactProtocolReader
             throw new CorruptParquetException("Unexpected end of compact protocol payload.");
     }
 
+    void PushStruct()
+    {
+        if (_depth >= MaxStructDepth)
+            throw new CorruptParquetException("Compact protocol nesting depth exceeds maximum.");
+
+        _fieldIdStack[_depth++] = _lastFieldId;
+        _lastFieldId = 0;
+    }
+
+    void PopStruct()
+    {
+        if (_depth > 0)
+            _lastFieldId = _fieldIdStack[--_depth];
+    }
+
     static int DecodeZigZag32(uint value)
         => (int)(value >> 1) ^ -((int)value & 1);
 
     static long DecodeZigZag64(ulong value)
         => (long)(value >> 1) ^ -((long)value & 1L);
+
+    [InlineArray(MaxStructDepth)]
+    struct FieldIdStack
+    {
+        int _element0;
+    }
 }

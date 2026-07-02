@@ -34,10 +34,3 @@ public abstract record LogicalType
 
     public sealed record Decimal(int Precision, int Scale) : LogicalType;
 }
-
-public enum TimeUnit
-{
-    Millis = 0,
-    Micros = 1,
-    Nanos = 2
-}

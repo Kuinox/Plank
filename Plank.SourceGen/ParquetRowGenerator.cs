@@ -234,11 +234,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("    public static PipelineWriter CreateRowWriter(global::System.IO.Stream stream, uint maxParallelism, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(stream, maxParallelism, onFlush, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
         builder.AppendLine();
-        builder.AppendLine("    public static RowReader CreateRowReader(global::System.IO.Stream stream, Projection projection = Projection.All, global::Plank.Reading.ParquetReaderOptions? options = null, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
-        builder.AppendLine("        => new(stream, projection, options ?? global::Plank.Reading.ParquetReaderOptions.Default, schemaEvolution);");
+        builder.AppendLine("    public static RowReader CreateRowReader(global::System.IO.Stream stream, Projection projection = Projection.All, global::Plank.Reading.Row.ParquetReaderOptions? options = null, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
+        builder.AppendLine("        => new(stream, projection, options ?? global::Plank.Reading.Row.ParquetReaderOptions.Default, schemaEvolution);");
         builder.AppendLine();
-        builder.AppendLine("    public static RowReader CreateRowReader(global::Plank.Reading.IParquetReadSource source, Projection projection = Projection.All, global::Plank.Reading.ParquetReaderOptions? options = null, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
-        builder.AppendLine("        => new(source, projection, options ?? global::Plank.Reading.ParquetReaderOptions.Default, schemaEvolution);");
+        builder.AppendLine("    public static RowReader CreateRowReader(global::Plank.Reading.IParquetReadSource source, Projection projection = Projection.All, global::Plank.Reading.Row.ParquetReaderOptions? options = null, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
+        builder.AppendLine("        => new(source, projection, options ?? global::Plank.Reading.Row.ParquetReaderOptions.Default, schemaEvolution);");
         builder.AppendLine();
         builder.AppendLine("    [global::System.Flags]");
         builder.AppendLine("    public enum Projection : ulong");
@@ -440,11 +440,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("    {");
         builder.AppendLine("        global::Plank.Reading.IParquetReadSource _source;");
         builder.AppendLine("        Projection _projection;");
-        builder.AppendLine("        readonly global::Plank.Reading.ParquetReader _reader;");
+        builder.AppendLine("        readonly global::Plank.Reading.Row.ParquetReader _reader;");
         builder.AppendLine("        global::Plank.Reading.ParquetSchemaEvolutionOptions? _schemaEvolution;");
         builder.AppendLine("        global::Plank.Reading.StreamReadSource? _streamSource;");
-        builder.AppendLine("        global::Plank.Reading.RowGroupTokenEnumerable.Enumerator _rowGroups;");
-        builder.AppendLine("        readonly global::Plank.Reading.RowGroupReader _rowGroup;");
+        builder.AppendLine("        global::Plank.Reading.Row.RowGroupTokenEnumerable.Enumerator _rowGroups;");
+        builder.AppendLine("        readonly global::Plank.Reading.Row.RowGroupReader _rowGroup;");
         builder.AppendLine("        ulong _rowGroupRowsRemaining;");
         builder.AppendLine("        bool _started;");
         builder.AppendLine("        bool _hasCurrent;");
@@ -458,7 +458,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append("        static readonly ").Append(columns[i].ClrTypeName).Append("[] s_missing")
                 .Append(columns[i].PropertyName).Append(" = new ").Append(columns[i].ClrTypeName)
                 .AppendLine("[] { default! };");
-            builder.Append("        global::Plank.Reading.ColumnPageEnumerable<").Append(columns[i].ClrTypeName)
+            builder.Append("        global::Plank.Reading.Typed.ColumnPageEnumerable<").Append(columns[i].ClrTypeName)
                 .Append(">.Enumerator _").Append(columns[i].PropertyName).AppendLine("Pages;");
             builder.Append("        global::System.ReadOnlyMemory<").Append(columns[i].ClrTypeName)
                 .Append("> _").Append(columns[i].PropertyName).AppendLine("Page;");
@@ -469,18 +469,18 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append("        bool _").Append(columns[i].PropertyName).AppendLine("Projected;");
         }
         builder.AppendLine();
-        builder.AppendLine("        internal RowReader(global::System.IO.Stream stream, Projection projection, global::Plank.Reading.ParquetReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
+        builder.AppendLine("        internal RowReader(global::System.IO.Stream stream, Projection projection, global::Plank.Reading.Row.ParquetReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
         builder.AppendLine("            : this(new global::Plank.Reading.StreamReadSource(stream), projection, options, schemaEvolution)");
         builder.AppendLine("        {");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        internal RowReader(global::Plank.Reading.IParquetReadSource source, Projection projection, global::Plank.Reading.ParquetReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
+        builder.AppendLine("        internal RowReader(global::Plank.Reading.IParquetReadSource source, Projection projection, global::Plank.Reading.Row.ParquetReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
         builder.AppendLine("        {");
         builder.AppendLine("            _source = source ?? throw new global::System.ArgumentNullException(nameof(source));");
         builder.AppendLine("            _ = options ?? throw new global::System.ArgumentNullException(nameof(options));");
         builder.AppendLine("            _projection = projection;");
         builder.AppendLine("            _schemaEvolution = schemaEvolution;");
-        builder.AppendLine("            _reader = global::Plank.Reading.ParquetReader.Open(source, CreateLooseReaderOptions(options));");
+        builder.AppendLine("            _reader = global::Plank.Reading.Row.ParquetReader.Open(source, CreateLooseReaderOptions(options));");
         builder.AppendLine("            _streamSource = source as global::Plank.Reading.StreamReadSource;");
         builder.AppendLine("            _rowGroups = default;");
         builder.AppendLine("            _rowGroup = _reader.CreateReusableRowGroupReader();");
@@ -569,9 +569,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        {");
         builder.AppendLine("            readonly global::Plank.Reading.IParquetReadSource _source;");
         builder.AppendLine("            readonly Projection _projection;");
-        builder.AppendLine("            readonly global::Plank.Reading.ParquetReader _reader;");
-        builder.AppendLine("            global::Plank.Reading.RowGroupTokenEnumerable.Enumerator _rowGroups;");
-        builder.AppendLine("            global::Plank.Reading.RowGroupReader? _rowGroup;");
+        builder.AppendLine("            readonly global::Plank.Reading.Row.ParquetReader _reader;");
+        builder.AppendLine("            global::Plank.Reading.Row.RowGroupTokenEnumerable.Enumerator _rowGroups;");
+        builder.AppendLine("            global::Plank.Reading.Row.RowGroupReader? _rowGroup;");
         builder.AppendLine("            ulong _rowGroupRowsRemaining;");
         builder.AppendLine("            bool _hasCurrent;");
         builder.AppendLine("            bool _disposed;");
@@ -579,7 +579,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append("            readonly int _").Append(columns[i].PropertyName).AppendLine("Ordinal;");
         for (var i = 0; i < columns.Length; i++)
         {
-            builder.Append("            global::Plank.Reading.ColumnPageEnumerable<").Append(columns[i].ClrTypeName)
+            builder.Append("            global::Plank.Reading.Typed.ColumnPageEnumerable<").Append(columns[i].ClrTypeName)
                 .Append(">.Enumerator _").Append(columns[i].PropertyName).AppendLine("Pages;");
             builder.Append("            global::System.ReadOnlyMemory<").Append(columns[i].ClrTypeName)
                 .Append("> _").Append(columns[i].PropertyName).AppendLine("Page;");
@@ -590,7 +590,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append("            bool _").Append(columns[i].PropertyName).AppendLine("Projected;");
         }
         builder.AppendLine();
-        builder.AppendLine("            internal LocalEnumerator(global::Plank.Reading.IParquetReadSource source, Projection projection, global::Plank.Reading.ParquetReader reader)");
+        builder.AppendLine("            internal LocalEnumerator(global::Plank.Reading.IParquetReadSource source, Projection projection, global::Plank.Reading.Row.ParquetReader reader)");
         builder.AppendLine("            {");
         builder.AppendLine("                _source = source ?? throw new global::System.ArgumentNullException(nameof(source));");
         builder.AppendLine("                _reader = reader ?? throw new global::System.ArgumentNullException(nameof(reader));");
@@ -825,7 +825,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        bool IsProjected(Projection column)");
         builder.AppendLine("            => (_projection & column) != 0;");
         builder.AppendLine();
-        builder.AppendLine("        static global::Plank.Reading.ParquetReaderOptions CreateLooseReaderOptions(global::Plank.Reading.ParquetReaderOptions options)");
+        builder.AppendLine("        static global::Plank.Reading.Row.ParquetReaderOptions CreateLooseReaderOptions(global::Plank.Reading.Row.ParquetReaderOptions options)");
         builder.AppendLine("            => new()");
         builder.AppendLine("            {");
         builder.AppendLine("                BufferPool = options.BufferPool,");
@@ -1494,7 +1494,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static bool TryGetEncodingName(TypedConstant constant, out string encoding)
     {
         encoding = string.Empty;
-        if (constant.Value is not int enumValue)
+        if (!TryGetEnumValue(constant, out var enumValue))
             return false;
 
         encoding = enumValue switch
@@ -1516,7 +1516,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static bool TryGetPhysicalTypeName(TypedConstant constant, out string physicalType)
     {
         physicalType = string.Empty;
-        if (constant.Value is not int enumValue)
+        if (!TryGetEnumValue(constant, out var enumValue))
             return false;
 
         physicalType = enumValue switch
@@ -1538,7 +1538,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static bool TryGetLogicalTypeSpec(TypedConstant constant, out LogicalTypeSpec? logicalType)
     {
         logicalType = null;
-        if (constant.Value is not int enumValue)
+        if (!TryGetEnumValue(constant, out var enumValue))
             return false;
 
         logicalType = enumValue switch
@@ -1551,6 +1551,31 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         };
 
         return enumValue is >= 0 and <= 3;
+    }
+
+    static bool TryGetEnumValue(TypedConstant constant, out int value)
+    {
+        switch (constant.Value)
+        {
+            case byte byteValue:
+                value = byteValue;
+                return true;
+            case sbyte sbyteValue:
+                value = sbyteValue;
+                return true;
+            case short shortValue:
+                value = shortValue;
+                return true;
+            case ushort ushortValue:
+                value = ushortValue;
+                return true;
+            case int intValue:
+                value = intValue;
+                return true;
+            default:
+                value = 0;
+                return false;
+        }
     }
 
     static bool TryInferDefaults(string clrTypeName, out string physicalType, out LogicalTypeSpec? logicalType)

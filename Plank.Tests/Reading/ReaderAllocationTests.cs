@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
 using Plank.Reading;
+using Plank.Reading.Physical;
+using Plank.Reading.Row;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
@@ -46,6 +48,45 @@ internal sealed class ReaderAllocationTests
             if (allocated != 0)
                 throw new InvalidOperationException(
                     $"Expected zero allocations for steady-state row group enumeration but saw {allocated} bytes.");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public void PhysicalReaderMetadataAndPageIterationDoNotAllocateAfterWarmup()
+    {
+        var schema = new ParquetSchema([
+            new Column("Value", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
+        ]);
+        var path = CreateFile(schema, CreateValues(4096));
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = new ParquetFileReader();
+            for (var i = 0; i < 8; i++)
+            {
+                reader.Reset(stream);
+                _ = ReadPhysicalPayloadBytes(reader);
+            }
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var bytes = ReadPhysicalPayloadBytes(reader);
+            var after = GC.GetAllocatedBytesForCurrentThread();
+            var allocated = after - before;
+
+            if (bytes == 0)
+                throw new InvalidOperationException("Expected at least one physical page payload.");
+            if (allocated != 0)
+                throw new InvalidOperationException(
+                    $"Expected physical metadata access and page iteration to allocate zero bytes but saw {allocated} bytes.");
         }
         finally
         {
@@ -434,6 +475,17 @@ internal sealed class ReaderAllocationTests
         while (reader.MoveNext())
             sum += reader.Current.Value;
         return sum;
+    }
+
+    static int ReadPhysicalPayloadBytes(ParquetFileReader reader)
+    {
+        var column = reader.ColumnSchema(0);
+        var rowGroup = reader.RowGroup(0);
+        var total = column.PathSegmentUtf8(0).Length;
+        using var cursor = rowGroup.OpenPages(0);
+        while (cursor.MoveNext())
+            total += cursor.CurrentPayload.Length;
+        return total;
     }
 
     static long MeasureCompressedColumnPageEnumerationAllocations(CompressionKind compression)

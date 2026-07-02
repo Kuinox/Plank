@@ -16,6 +16,9 @@ riderModule.iml
 /.tools/
 /artifacts/
 /benchmarks/report/
+/docs/_site/
+/docs/api/.manifest
+/docs/api/*.yml
 __pycache__
 /fuzz/findings/
 /fuzz/findings-noninstru/
