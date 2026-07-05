@@ -1,6 +1,4 @@
-using Plank.Reading.Row;
-
-namespace Plank.Reading.Typed;
+namespace Plank.Reading.Logical;
 
 public readonly struct ParquetFooter
 {

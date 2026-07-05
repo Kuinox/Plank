@@ -2,8 +2,9 @@ using System.Text;
 using Plank.Reading.Physical;
 using Plank.Schema;
 using Plank.Writing;
+using PhysicalFileMetadata = Plank.Reading.Physical.ParquetFileMetadata;
 
-namespace Plank.Reading.Typed.Internal;
+namespace Plank.Reading.Logical.Internal;
 
 static class PhysicalSchemaBinder
 {
@@ -18,19 +19,20 @@ static class PhysicalSchemaBinder
                 .AsSpan(0, requestedColumns.Length);
         try
         {
+            var metadata = physicalReader.Metadata;
             if (strict)
-                BuildStrictProjection(physicalReader, requestedSchema, projectedOrdinals, bufferPool);
+                BuildStrictProjection(metadata, requestedSchema, projectedOrdinals, bufferPool);
             else
                 for (var i = 0; i < projectedOrdinals.Length; i++)
-                    projectedOrdinals[i] = i < physicalReader.ColumnCount ? i : -1;
+                    projectedOrdinals[i] = i < metadata.ColumnCount ? i : -1;
 
-            var rowGroupCount = physicalReader.RowGroupCount;
+            var rowGroupCount = metadata.RowGroupCount;
             var rowGroups = previous.RowGroups.Length == rowGroupCount
                 ? previous.RowGroups
                 : new InternalRowGroupMetadata[rowGroupCount];
             for (var rowGroupOrdinal = 0; rowGroupOrdinal < rowGroupCount; rowGroupOrdinal++)
             {
-                var physicalRowGroup = physicalReader.RowGroup(rowGroupOrdinal);
+                var physicalRowGroup = metadata.RowGroup(rowGroupOrdinal);
                 var columnCount = strict ? requestedColumns.Length : physicalRowGroup.ColumnCount;
                 var previousColumns = rowGroups[rowGroupOrdinal].Columns ?? [];
                 var columns = previousColumns.Length == columnCount
@@ -46,7 +48,7 @@ static class PhysicalSchemaBinder
                         throw new CorruptParquetException(
                             $"Row group {rowGroupOrdinal} contains {physicalRowGroup.ColumnCount} columns, but file schema column {fileOrdinal} was requested.");
 
-                    var physicalChunk = physicalRowGroup.ColumnChunk(fileOrdinal);
+                    var physicalChunk = metadata.ColumnChunk(rowGroupOrdinal, fileOrdinal);
                     var path = columnOrdinal < requestedColumns.Length ? requestedColumns[columnOrdinal].Name : string.Empty;
                     var encodings = ReuseEncodings(columns[columnOrdinal].Encodings, physicalChunk);
                     columns[columnOrdinal] = new InternalColumnChunkMetadata(physicalChunk, encodings, path);
@@ -56,7 +58,7 @@ static class PhysicalSchemaBinder
                     physicalRowGroup.ColumnChunkOffset, physicalRowGroup.RowCount, columns);
             }
 
-            return new InternalParquetFooter(physicalReader.FileVersion, rowGroups);
+            return new InternalParquetFooter(metadata.FileVersion, rowGroups);
         }
         finally
         {
@@ -65,7 +67,7 @@ static class PhysicalSchemaBinder
         }
     }
 
-    static void BuildStrictProjection(ParquetFileReader physicalReader, ParquetSchema requestedSchema,
+    static void BuildStrictProjection(PhysicalFileMetadata metadata, ParquetSchema requestedSchema,
         Span<int> projectedOrdinals, IParquetBufferPool bufferPool)
     {
         var requestedColumns = requestedSchema.Columns;
@@ -73,10 +75,10 @@ static class PhysicalSchemaBinder
         {
             var requested = requestedColumns[requestedOrdinal];
             var match = -1;
-            for (var fileOrdinal = 0; fileOrdinal < physicalReader.ColumnCount; fileOrdinal++)
+            for (var fileOrdinal = 0; fileOrdinal < metadata.ColumnCount; fileOrdinal++)
             {
-                var fileColumn = physicalReader.ColumnSchema(fileOrdinal);
-                if (!PathEquals(fileColumn, requested.Name, bufferPool))
+                var fileColumn = metadata.ColumnSchema(fileOrdinal);
+                if (!PathEquals(metadata, fileColumn, requested.Name, bufferPool))
                     continue;
                 if (match >= 0)
                     throw new CorruptParquetException(
@@ -88,7 +90,7 @@ static class PhysicalSchemaBinder
                 throw new InvalidOperationException(
                     $"Requested schema column '{requested.Name}' is not present in the file schema.");
 
-            var physicalType = physicalReader.ColumnSchema(match).PhysicalType;
+            var physicalType = metadata.ColumnSchema(match).PhysicalType;
             if (requested.PhysicalType != physicalType)
                 throw new InvalidOperationException(
                     $"Requested schema column '{requested.Name}' has physical type {requested.PhysicalType}, but file schema has {physicalType}.");
@@ -96,7 +98,8 @@ static class PhysicalSchemaBinder
         }
     }
 
-    static bool PathEquals(ParquetColumnSchemaInfo column, string requestedPath, IParquetBufferPool bufferPool)
+    static bool PathEquals(PhysicalFileMetadata metadata, ParquetColumnSchemaInfo column, string requestedPath,
+        IParquetBufferPool bufferPool)
     {
         var byteCount = Encoding.UTF8.GetByteCount(requestedPath);
         byte[]? rented = null;
@@ -109,7 +112,7 @@ static class PhysicalSchemaBinder
             var offset = 0;
             for (var segmentOrdinal = 0; segmentOrdinal < column.PathSegmentCount; segmentOrdinal++)
             {
-                var segment = column.PathSegmentUtf8(segmentOrdinal);
+                var segment = metadata.ColumnPathSegmentUtf8(column.Ordinal, segmentOrdinal);
                 if (segmentOrdinal > 0)
                 {
                     if ((uint)offset >= (uint)requestedBytes.Length || requestedBytes[offset++] != (byte)'.')

@@ -5,7 +5,7 @@ using System.Text;
 using Plank.Schema;
 using Plank.Writing;
 
-namespace Plank.Reading.Typed.Internal;
+namespace Plank.Reading.Logical.Internal;
 
 static class ColumnChunkReader
 {

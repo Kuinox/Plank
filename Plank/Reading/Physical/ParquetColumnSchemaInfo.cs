@@ -1,32 +1,25 @@
 using Plank.Schema;
-using Plank.Reading.Physical.Internal;
 
 namespace Plank.Reading.Physical;
 
 public readonly struct ParquetColumnSchemaInfo
 {
-    readonly ParquetFileReader _owner;
-    readonly int _version;
+    internal readonly int NodeOrdinal;
 
-    internal ParquetColumnSchemaInfo(ParquetFileReader owner, int version, int ordinal)
+    internal ParquetColumnSchemaInfo(int ordinal, int nodeOrdinal, int pathSegmentCount,
+        ParquetPhysicalType physicalType, uint typeLength, LogicalTypeInfo logicalType)
     {
-        _owner = owner;
-        _version = version;
         Ordinal = ordinal;
+        NodeOrdinal = nodeOrdinal;
+        PathSegmentCount = pathSegmentCount;
+        PhysicalType = physicalType;
+        TypeLength = typeLength;
+        LogicalType = logicalType;
     }
 
     public int Ordinal { get; }
-    public ParquetPhysicalType PhysicalType => Node.PhysicalType!.Value;
-    public uint TypeLength => Node.TypeLength;
-    public LogicalTypeInfo LogicalType => Node.LogicalType;
-    public int PathSegmentCount => Column.PathSegmentCount;
-
-    public ReadOnlySpan<byte> PathSegmentUtf8(int segmentOrdinal)
-        => _owner.GetName(_version, _owner.GetPathNodeOrdinal(_version, Ordinal, segmentOrdinal));
-
-    PhysicalColumnSchema Column
-        => _owner.GetColumnSchema(_version, Ordinal);
-
-    PhysicalSchemaNode Node
-        => _owner.GetSchemaNode(_version, Column.NodeOrdinal);
+    public int PathSegmentCount { get; }
+    public ParquetPhysicalType PhysicalType { get; }
+    public uint TypeLength { get; }
+    public LogicalTypeInfo LogicalType { get; }
 }

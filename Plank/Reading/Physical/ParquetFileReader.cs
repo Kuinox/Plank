@@ -11,90 +11,56 @@ public sealed class ParquetFileReader : IDisposable
         => "PAR1"u8;
 
     readonly ParquetFileReaderOptions _options;
-    PhysicalMetadataStore _metadata;
-    PhysicalMetadataStore _scratch;
-    StreamReadSource? _streamSource;
-    StreamReadSource? _streamSourceScratch;
+    readonly ParquetFileMetadata _metadata = new();
     IParquetReadSource? _source;
-    int _version;
+    int _generation;
     bool _disposed;
 
     public ParquetFileReader(ParquetFileReaderOptions? options = null)
     {
         _options = options ?? ParquetFileReaderOptions.Default;
         _options.Validate();
-        _metadata = new PhysicalMetadataStore(_options.BufferPool);
-        _scratch = new PhysicalMetadataStore(_options.BufferPool);
     }
 
-    public int FileVersion
+    public ParquetFileMetadata Metadata
     {
         get
         {
             ThrowIfDisposed();
-            return _metadata.FileVersion;
+            return _metadata;
         }
     }
 
-    public ulong FooterOffset
-    {
-        get
-        {
-            ThrowIfDisposed();
-            return _metadata.FooterOffset;
-        }
-    }
-
-    public uint FooterLength
-    {
-        get
-        {
-            ThrowIfDisposed();
-            return _metadata.FooterLength;
-        }
-    }
-
-    public int SchemaNodeCount
-    {
-        get
-        {
-            ThrowIfDisposed();
-            return _metadata.SchemaNodeCount;
-        }
-    }
-
-    public int ColumnCount
-    {
-        get
-        {
-            ThrowIfDisposed();
-            return _metadata.ColumnCount;
-        }
-    }
-
-    public int RowGroupCount
-    {
-        get
-        {
-            ThrowIfDisposed();
-            return _metadata.RowGroupCount;
-        }
-    }
-
+    /// <summary>
+    /// Reads the parquet footer from <paramref name="stream"/> and makes it the current source for page reads.
+    /// </summary>
+    /// <param name="stream">The stream containing a parquet file.</param>
+    /// <remarks>
+    /// Resetting the reader invalidates page cursors created from an earlier source. After the first stream reset,
+    /// the reader keeps the same stream wrapper. Metadata buffers come from the configured pool, so reset does not
+    /// allocate them when the pool already has arrays big enough.
+    /// </remarks>
     public void Reset(Stream stream)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(stream);
-        if (_streamSourceScratch is null)
-            _streamSourceScratch = new StreamReadSource(stream);
+        if (_source is not StreamReadSource source)
+            source = new StreamReadSource(stream);
         else
-            _streamSourceScratch.Reset(stream);
+            source.Reset(stream);
 
-        ResetCore(_streamSourceScratch);
-        (_streamSource, _streamSourceScratch) = (_streamSourceScratch, _streamSource);
-        _source = _streamSource;
+        ResetCore(source);
+        _source = source;
     }
 
+    /// <summary>
+    /// Reads the parquet footer from <paramref name="source"/> and makes it the current source for page reads.
+    /// </summary>
+    /// <param name="source">The random-access parquet source to read from.</param>
+    /// <remarks>
+    /// Resetting the reader invalidates page cursors created from an earlier source. Metadata buffers come from the
+    /// configured pool, so reset does not allocate them when the pool already has arrays big enough.
+    /// </remarks>
     public void Reset(IParquetReadSource source)
     {
         ThrowIfDisposed();
@@ -103,22 +69,11 @@ public sealed class ParquetFileReader : IDisposable
         _source = source;
     }
 
-    public ParquetSchemaNodeInfo SchemaNode(int nodeOrdinal)
+    public ParquetPageCursor OpenPages(int rowGroupOrdinal, int columnOrdinal)
     {
-        ValidateOrdinal(nodeOrdinal, _metadata.SchemaNodeCount, nameof(nodeOrdinal));
-        return new ParquetSchemaNodeInfo(this, _version, nodeOrdinal);
-    }
-
-    public ParquetColumnSchemaInfo ColumnSchema(int columnOrdinal)
-    {
-        ValidateOrdinal(columnOrdinal, _metadata.ColumnCount, nameof(columnOrdinal));
-        return new ParquetColumnSchemaInfo(this, _version, columnOrdinal);
-    }
-
-    public ParquetRowGroupInfo RowGroup(int rowGroupOrdinal)
-    {
+        ValidateGeneration(_generation);
         ValidateOrdinal(rowGroupOrdinal, _metadata.RowGroupCount, nameof(rowGroupOrdinal));
-        return new ParquetRowGroupInfo(this, _version, rowGroupOrdinal);
+        return new ParquetPageCursor(this, _generation, rowGroupOrdinal, columnOrdinal);
     }
 
     public void Dispose()
@@ -127,39 +82,48 @@ public sealed class ParquetFileReader : IDisposable
             return;
 
         _disposed = true;
-        _version++;
-        _metadata.Dispose();
-        _scratch.Dispose();
+        _generation++;
+        ReturnMetadataBuffers();
         _source = null;
     }
 
     void ResetCore(IParquetReadSource source)
     {
-        if (source.Length < 12)
-            throw new CorruptParquetException("Stream is too small to contain a Parquet footer.");
+        _generation++;
+        _source = null;
+        ReturnMetadataBuffers();
 
-        Span<byte> trailer = stackalloc byte[8];
-        source.ReadExactly(source.Length - (ulong)trailer.Length, trailer);
-        if (!trailer[4..].SequenceEqual(FileMagic))
-            throw new CorruptParquetException("Stream does not end with the PAR1 footer marker.");
+        try
+        {
+            if (source.Length < 12)
+                throw new CorruptParquetException("Stream is too small to contain a Parquet footer.");
 
-        var footerLength = BinaryPrimitives.ReadUInt32LittleEndian(trailer);
-        if (footerLength > source.Length - (ulong)trailer.Length)
-            throw new CorruptParquetException("Footer length exceeds stream size.");
+            Span<byte> trailer = stackalloc byte[8];
+            source.ReadExactly(source.Length - (ulong)trailer.Length, trailer);
+            if (!trailer[4..].SequenceEqual(FileMagic))
+                throw new CorruptParquetException("Stream does not end with the PAR1 footer marker.");
 
-        var footerOffset = source.Length - (ulong)trailer.Length - footerLength;
-        if (footerOffset < 4)
-            throw new CorruptParquetException("Footer offset is invalid for this stream.");
+            var footerLength = BinaryPrimitives.ReadUInt32LittleEndian(trailer);
+            if (footerLength > source.Length - (ulong)trailer.Length)
+                throw new CorruptParquetException("Footer length exceeds stream size.");
 
-        _scratch.Clear();
-        _scratch.FooterOffset = footerOffset;
-        _scratch.FooterLength = footerLength;
-        var footerBytes = _scratch.PrepareFooter(footerLength);
-        source.ReadExactly(footerOffset, footerBytes);
-        PhysicalMetadataThriftReader.Read(_scratch);
+            var footerOffset = source.Length - (ulong)trailer.Length - footerLength;
+            if (footerOffset < 4)
+                throw new CorruptParquetException("Footer offset is invalid for this stream.");
 
-        (_metadata, _scratch) = (_scratch, _metadata);
-        _version++;
+            _metadata.FooterOffset = footerOffset;
+            _metadata.FooterLength = footerLength;
+            _metadata.FooterBuffer = Rent<byte>(footerLength);
+            _metadata.FooterByteCount = checked((int)footerLength);
+            var footerBytes = _metadata.FooterBuffer.AsSpan(0, _metadata.FooterByteCount);
+            source.ReadExactly(footerOffset, footerBytes);
+            PhysicalMetadataThriftReader.Read(_metadata, _options.BufferPool);
+        }
+        catch
+        {
+            ReturnMetadataBuffers();
+            throw;
+        }
     }
 
     internal IParquetBufferPool BufferPool
@@ -174,58 +138,16 @@ public sealed class ParquetFileReader : IDisposable
         }
     }
 
-    internal int Version
-        => _version;
+    T[] Rent<T>(uint count)
+        => count == 0 ? [] : _options.BufferPool.Rent<T>(count);
 
-    internal ReadOnlySpan<byte> FooterBytes
-        => _metadata.FooterBytes.AsSpan(0, _metadata.FooterByteCount);
+    void ReturnMetadataBuffers()
+        => _metadata.ReturnBuffers(_options.BufferPool);
 
-    internal PhysicalSchemaNode GetSchemaNode(int version, int ordinal)
-    {
-        ValidateHandle(version);
-        return _metadata.SchemaNodes[ordinal];
-    }
-
-    internal PhysicalColumnSchema GetColumnSchema(int version, int ordinal)
-    {
-        ValidateHandle(version);
-        return _metadata.Columns[ordinal];
-    }
-
-    internal PhysicalRowGroup GetRowGroup(int version, int ordinal)
-    {
-        ValidateHandle(version);
-        return _metadata.RowGroups[ordinal];
-    }
-
-    internal ParquetColumnChunkInfo GetColumnChunk(int version, int rowGroupOrdinal, int columnOrdinal)
-    {
-        ValidateHandle(version);
-        var rowGroup = _metadata.RowGroups[rowGroupOrdinal];
-        ValidateOrdinal(columnOrdinal, rowGroup.ColumnCount, nameof(columnOrdinal));
-        return _metadata.ColumnChunks[rowGroup.ColumnStart + columnOrdinal];
-    }
-
-    internal ReadOnlySpan<byte> GetName(int version, int nodeOrdinal)
-    {
-        var node = GetSchemaNode(version, nodeOrdinal);
-        return FooterBytes.Slice(node.NameOffset, node.NameLength);
-    }
-
-    internal int GetPathNodeOrdinal(int version, int columnOrdinal, int segmentOrdinal)
-    {
-        var column = GetColumnSchema(version, columnOrdinal);
-        ValidateOrdinal(segmentOrdinal, column.PathSegmentCount, nameof(segmentOrdinal));
-        var nodeOrdinal = column.NodeOrdinal;
-        for (var i = column.PathSegmentCount - 1; i > segmentOrdinal; i--)
-            nodeOrdinal = _metadata.SchemaNodes[nodeOrdinal].ParentOrdinal;
-        return nodeOrdinal;
-    }
-
-    internal void ValidateHandle(int version)
+    internal void ValidateGeneration(int generation)
     {
         ThrowIfDisposed();
-        if (version != _version)
+        if (generation != _generation)
             throw new InvalidOperationException("The reader handle is stale because the reader was reset.");
     }
 

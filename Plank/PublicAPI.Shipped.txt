@@ -18,6 +18,22 @@ Plank.ParquetWorkerContext.WorkerCount.get -> int
 Plank.ParquetWorkerContext.WorkerCount.init -> void
 Plank.ParquetWorkerContext.WorkerIndex.get -> int
 Plank.ParquetWorkerContext.WorkerIndex.init -> void
+Plank.Reading.MissingColumnEvolutionBehavior
+Plank.Reading.MissingColumnEvolutionBehavior.MaterializeDefault = 1 -> Plank.Reading.MissingColumnEvolutionBehavior
+Plank.Reading.MissingColumnEvolutionBehavior.Reject = 0 -> Plank.Reading.MissingColumnEvolutionBehavior
+Plank.Reading.ParquetSchemaEvolutionOptions
+static Plank.Reading.ParquetSchemaEvolutionOptions.Default.get -> Plank.Reading.ParquetSchemaEvolutionOptions!
+Plank.Reading.ParquetSchemaEvolutionOptions.LogicalTypes.get -> Plank.Reading.SchemaTypeEvolutionBehavior
+Plank.Reading.ParquetSchemaEvolutionOptions.LogicalTypes.init -> void
+Plank.Reading.ParquetSchemaEvolutionOptions.MaterializedTypes.get -> Plank.Reading.SchemaTypeEvolutionBehavior
+Plank.Reading.ParquetSchemaEvolutionOptions.MaterializedTypes.init -> void
+Plank.Reading.ParquetSchemaEvolutionOptions.MissingColumns.get -> Plank.Reading.MissingColumnEvolutionBehavior
+Plank.Reading.ParquetSchemaEvolutionOptions.MissingColumns.init -> void
+Plank.Reading.ParquetSchemaEvolutionOptions.ParquetSchemaEvolutionOptions() -> void
+Plank.Reading.ParquetSchemaEvolutionOptions.PhysicalTypes.get -> Plank.Reading.SchemaTypeEvolutionBehavior
+Plank.Reading.ParquetSchemaEvolutionOptions.PhysicalTypes.init -> void
+Plank.Reading.ParquetSchemaEvolutionOptions.Repetition.get -> Plank.Reading.RepetitionEvolutionBehavior
+Plank.Reading.ParquetSchemaEvolutionOptions.Repetition.init -> void
 Plank.Reading.Physical.LogicalTypeInfo
 Plank.Reading.Physical.LogicalTypeInfo.BitWidth.get -> byte
 Plank.Reading.Physical.LogicalTypeInfo.BitWidth.init -> void
@@ -69,6 +85,65 @@ Plank.Reading.Physical.ParquetColumnChunkEncodings
 Plank.Reading.Physical.ParquetColumnChunkEncodings.Count.get -> int
 Plank.Reading.Physical.ParquetColumnChunkEncodings.ParquetColumnChunkEncodings() -> void
 Plank.Reading.Physical.ParquetColumnChunkEncodings.this[int ordinal].get -> Plank.Schema.EncodingKind
+Plank.Reading.Physical.ParquetColumnSchemaInfo
+Plank.Reading.Physical.ParquetColumnSchemaInfo.LogicalType.get -> Plank.Reading.Physical.LogicalTypeInfo
+Plank.Reading.Physical.ParquetColumnSchemaInfo.Ordinal.get -> int
+Plank.Reading.Physical.ParquetColumnSchemaInfo.ParquetColumnSchemaInfo() -> void
+Plank.Reading.Physical.ParquetColumnSchemaInfo.PathSegmentCount.get -> int
+Plank.Reading.Physical.ParquetColumnSchemaInfo.PhysicalType.get -> Plank.Schema.ParquetPhysicalType
+Plank.Reading.Physical.ParquetColumnSchemaInfo.TypeLength.get -> uint
+Plank.Reading.Physical.ParquetFileMetadata
+Plank.Reading.Physical.ParquetFileMetadata.ColumnChunk(int rowGroupOrdinal, int columnOrdinal) -> Plank.Reading.Physical.ParquetColumnChunkInfo
+Plank.Reading.Physical.ParquetFileMetadata.ColumnChunks.get -> System.ReadOnlySpan<Plank.Reading.Physical.ParquetColumnChunkInfo>
+Plank.Reading.Physical.ParquetFileMetadata.ColumnCount.get -> int
+Plank.Reading.Physical.ParquetFileMetadata.ColumnPathSegmentUtf8(int columnOrdinal, int segmentOrdinal) -> System.ReadOnlySpan<byte>
+Plank.Reading.Physical.ParquetFileMetadata.ColumnSchema(int columnOrdinal) -> Plank.Reading.Physical.ParquetColumnSchemaInfo
+Plank.Reading.Physical.ParquetFileMetadata.Columns.get -> System.ReadOnlySpan<Plank.Reading.Physical.ParquetColumnSchemaInfo>
+Plank.Reading.Physical.ParquetFileMetadata.FileVersion.get -> int
+Plank.Reading.Physical.ParquetFileMetadata.FooterLength.get -> uint
+Plank.Reading.Physical.ParquetFileMetadata.FooterOffset.get -> ulong
+Plank.Reading.Physical.ParquetFileMetadata.ParquetFileMetadata() -> void
+Plank.Reading.Physical.ParquetFileMetadata.RowGroup(int rowGroupOrdinal) -> Plank.Reading.Physical.ParquetRowGroupInfo
+Plank.Reading.Physical.ParquetFileMetadata.RowGroupCount.get -> int
+Plank.Reading.Physical.ParquetFileMetadata.RowGroups.get -> System.ReadOnlySpan<Plank.Reading.Physical.ParquetRowGroupInfo>
+Plank.Reading.Physical.ParquetFileMetadata.SchemaNodeCount.get -> int
+Plank.Reading.Physical.ParquetFileMetadata.SchemaNodeNameUtf8(int nodeOrdinal) -> System.ReadOnlySpan<byte>
+Plank.Reading.Physical.ParquetFileMetadata.SchemaNodes.get -> System.ReadOnlySpan<Plank.Reading.Physical.ParquetSchemaNodeInfo>
+Plank.Reading.Physical.ParquetFileReader
+Plank.Reading.Physical.ParquetFileReader.Dispose() -> void
+Plank.Reading.Physical.ParquetFileReader.Metadata.get -> Plank.Reading.Physical.ParquetFileMetadata!
+Plank.Reading.Physical.ParquetFileReader.OpenPages(int rowGroupOrdinal, int columnOrdinal) -> Plank.Reading.Physical.ParquetPageCursor
+Plank.Reading.Physical.ParquetFileReader.ParquetFileReader(Plank.Reading.Physical.ParquetFileReaderOptions? options = null) -> void
+Plank.Reading.Physical.ParquetFileReader.Reset(Plank.Reading.IParquetReadSource! source) -> void
+Plank.Reading.Physical.ParquetFileReader.Reset(System.IO.Stream! stream) -> void
+Plank.Reading.Physical.ParquetFileReaderOptions
+static Plank.Reading.Physical.ParquetFileReaderOptions.Default.get -> Plank.Reading.Physical.ParquetFileReaderOptions!
+Plank.Reading.Physical.ParquetFileReaderOptions.BufferPool.get -> Plank.Writing.IParquetBufferPool!
+Plank.Reading.Physical.ParquetFileReaderOptions.BufferPool.init -> void
+Plank.Reading.Physical.ParquetFileReaderOptions.ParquetFileReaderOptions() -> void
+Plank.Reading.Physical.ParquetPageCursor
+Plank.Reading.Physical.ParquetPageCursor.CurrentHeader.get -> Plank.Reading.PageHeader
+Plank.Reading.Physical.ParquetPageCursor.CurrentPayload.get -> System.ReadOnlySpan<byte>
+Plank.Reading.Physical.ParquetPageCursor.Dispose() -> void
+Plank.Reading.Physical.ParquetPageCursor.MoveNext() -> bool
+Plank.Reading.Physical.ParquetPageCursor.ParquetPageCursor() -> void
+Plank.Reading.Physical.ParquetRowGroupInfo
+Plank.Reading.Physical.ParquetRowGroupInfo.ColumnChunkOffset.get -> ulong
+Plank.Reading.Physical.ParquetRowGroupInfo.ColumnCount.get -> int
+Plank.Reading.Physical.ParquetRowGroupInfo.MetadataOffset.get -> ulong
+Plank.Reading.Physical.ParquetRowGroupInfo.Ordinal.get -> int
+Plank.Reading.Physical.ParquetRowGroupInfo.ParquetRowGroupInfo() -> void
+Plank.Reading.Physical.ParquetRowGroupInfo.RowCount.get -> ulong
+Plank.Reading.Physical.ParquetSchemaNodeInfo
+Plank.Reading.Physical.ParquetSchemaNodeInfo.ChildCount.get -> int
+Plank.Reading.Physical.ParquetSchemaNodeInfo.Kind.get -> Plank.Schema.NodeKind
+Plank.Reading.Physical.ParquetSchemaNodeInfo.LogicalType.get -> Plank.Reading.Physical.LogicalTypeInfo
+Plank.Reading.Physical.ParquetSchemaNodeInfo.Ordinal.get -> int
+Plank.Reading.Physical.ParquetSchemaNodeInfo.ParentOrdinal.get -> int
+Plank.Reading.Physical.ParquetSchemaNodeInfo.ParquetSchemaNodeInfo() -> void
+Plank.Reading.Physical.ParquetSchemaNodeInfo.PhysicalType.get -> Plank.Schema.ParquetPhysicalType?
+Plank.Reading.Physical.ParquetSchemaNodeInfo.Repetition.get -> Plank.Schema.ParquetRepetition
+Plank.Reading.Physical.ParquetSchemaNodeInfo.TypeLength.get -> uint
 Plank.Reading.FileReadSource
 Plank.Reading.FileReadSource.Dispose() -> void
 Plank.Reading.FileReadSource.FileReadSource(string! path) -> void
@@ -113,11 +188,31 @@ Plank.Reading.PageHeaderType.DataPage = 0 -> Plank.Reading.PageHeaderType
 Plank.Reading.PageHeaderType.DataPageV2 = 3 -> Plank.Reading.PageHeaderType
 Plank.Reading.PageHeaderType.DictionaryPage = 2 -> Plank.Reading.PageHeaderType
 Plank.Reading.PageHeaderType.IndexPage = 1 -> Plank.Reading.PageHeaderType
+Plank.Reading.RepetitionEvolutionBehavior
+Plank.Reading.RepetitionEvolutionBehavior.AllowRequiredToOptional = 1 -> Plank.Reading.RepetitionEvolutionBehavior
+Plank.Reading.RepetitionEvolutionBehavior.AllowRequiredToOptionalAndOptionalToRequired = 2 -> Plank.Reading.RepetitionEvolutionBehavior
+Plank.Reading.RepetitionEvolutionBehavior.Reject = 0 -> Plank.Reading.RepetitionEvolutionBehavior
+Plank.Reading.SchemaTypeEvolutionBehavior
+Plank.Reading.SchemaTypeEvolutionBehavior.AllowCompatible = 1 -> Plank.Reading.SchemaTypeEvolutionBehavior
+Plank.Reading.SchemaTypeEvolutionBehavior.Reject = 0 -> Plank.Reading.SchemaTypeEvolutionBehavior
+Plank.Reading.StreamReadSource
+Plank.Reading.StreamReadSource.Length.get -> ulong
+Plank.Reading.StreamReadSource.ReadExactly(ulong offset, System.Span<byte> destination) -> void
+Plank.Reading.StreamReadSource.Reset(System.IO.Stream! stream) -> void
+Plank.Reading.StreamReadSource.StreamReadSource(System.IO.Stream! stream) -> void
+Plank.Reading.Logical.ParquetFileMetadata
+Plank.Reading.Logical.ParquetFileMetadata.FooterLength.get -> uint
+Plank.Reading.Logical.ParquetFileMetadata.FooterOffset.get -> ulong
+Plank.Reading.Logical.ParquetFileMetadata.ParquetFileMetadata() -> void
+Plank.Reading.Logical.ParquetFileMetadata.ParquetFileMetadata(Plank.Schema.ParquetSchema! schema) -> void
+Plank.Reading.Logical.ParquetFileMetadata.Schema.get -> Plank.Schema.ParquetSchema!
+Plank.Reading.Logical.ParquetFileMetadata.Version.get -> int
 Plank.Schema.ColumnOptions
-Plank.Schema.ColumnOptions.AllowMissing.get -> bool
-Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0, bool allowMissing = false) -> void
 Plank.Schema.ColumnOptions.Encodings.get -> System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>
 Plank.Schema.ColumnOptions.Equals(Plank.Schema.ColumnOptions? other) -> bool
 Plank.Schema.ColumnOptions.Repetition.get -> Plank.Schema.ParquetRepetition
 Plank.Schema.ColumnOptions.TypeLength.get -> uint
+Plank.Writing.IParquetBufferPool
+Plank.Writing.IParquetBufferPool.Rent<T>(uint minimumLength) -> T[]!
+Plank.Writing.IParquetBufferPool.Return<T>(T[]! buffer, bool clearArray = false) -> void
 static readonly Plank.Schema.ColumnOptions.Default -> Plank.Schema.ColumnOptions!

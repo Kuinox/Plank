@@ -1,4 +1,4 @@
-namespace Plank.Reading.Typed.Internal;
+namespace Plank.Reading.Logical.Internal;
 
 readonly struct InternalParquetFooter
 {

@@ -1,7 +1,6 @@
-using Plank.Reading.Typed;
 using Plank.Schema;
 
-namespace Plank.Reading.Row;
+namespace Plank.Reading.Logical;
 
 public readonly struct RowGroupColumn<T>
 {

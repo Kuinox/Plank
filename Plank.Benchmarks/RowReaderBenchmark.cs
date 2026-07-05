@@ -7,7 +7,6 @@ using Plank.Reading;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
-using ParquetSchema = Parquet.Schema.ParquetSchema;
 using PlankColumn = Plank.Schema.Column;
 using PlankSchema = Plank.Schema.ParquetSchema;
 
@@ -21,8 +20,6 @@ public class RowReaderBenchmark
     static readonly DataField<long> _parquetNetTimestampField = new("timestamp");
     static readonly DataField<double> _parquetNetValueField = new("value");
     static readonly DataField<int> _parquetNetCategoryField = new("category");
-    static readonly ParquetSchema _parquetNetSchema = new(_parquetNetIdField, _parquetNetTimestampField,
-        _parquetNetValueField, _parquetNetCategoryField);
 
     byte[] _fileBytes = [];
     MemoryReadSource _fileSource = null!;

@@ -1,8 +1,8 @@
-using Plank.Reading.Typed;
-using Plank.Reading.Typed.Internal;
+using Plank.Reading.Logical;
+using Plank.Reading.Logical.Internal;
 using Plank.Schema;
 
-namespace Plank.Reading.Row.Internal;
+namespace Plank.Reading.Logical.Internal;
 
 sealed class RowGroupReadContext
 {

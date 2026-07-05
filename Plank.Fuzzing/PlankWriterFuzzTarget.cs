@@ -1,13 +1,12 @@
 using System.Collections.Immutable;
 using ParquetSharp;
 using Plank.Reading;
-using Plank.Reading.Row;
-using Plank.Reading.Typed;
+using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing;
 using PlankColumn = Plank.Schema.Column;
-using PlankReader = Plank.Reading.Row.ParquetReader;
-using PlankRowGroupReader = Plank.Reading.Row.RowGroupReader;
+using PlankReader = Plank.Reading.Logical.ParquetReader;
+using PlankRowGroupReader = Plank.Reading.Logical.RowGroupReader;
 using PlankRowGroupWriter = Plank.Writing.RowGroupWriter;
 using PlankSchema = Plank.Schema.ParquetSchema;
 using PlankWriter = Plank.Writing.ParquetWriter;

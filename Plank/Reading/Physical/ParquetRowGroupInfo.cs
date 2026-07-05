@@ -1,31 +1,23 @@
-using Plank.Reading.Physical.Internal;
-
 namespace Plank.Reading.Physical;
 
 public readonly struct ParquetRowGroupInfo
 {
-    readonly ParquetFileReader _owner;
-    readonly int _version;
+    internal readonly int ColumnStart;
 
-    internal ParquetRowGroupInfo(ParquetFileReader owner, int version, int ordinal)
+    internal ParquetRowGroupInfo(int ordinal, ulong metadataOffset, ulong columnChunkOffset, ulong rowCount,
+        int columnStart, int columnCount)
     {
-        _owner = owner;
-        _version = version;
         Ordinal = ordinal;
+        MetadataOffset = metadataOffset;
+        ColumnChunkOffset = columnChunkOffset;
+        RowCount = rowCount;
+        ColumnStart = columnStart;
+        ColumnCount = columnCount;
     }
 
     public int Ordinal { get; }
-    public ulong RowCount => RowGroup.RowCount;
-    public ulong MetadataOffset => RowGroup.MetadataOffset;
-    public ulong ColumnChunkOffset => RowGroup.ColumnChunkOffset;
-    public int ColumnCount => RowGroup.ColumnCount;
-
-    public ParquetColumnChunkInfo ColumnChunk(int columnOrdinal)
-        => _owner.GetColumnChunk(_version, Ordinal, columnOrdinal);
-
-    public ParquetPageCursor OpenPages(int columnOrdinal)
-        => new(_owner, _version, Ordinal, columnOrdinal);
-
-    PhysicalRowGroup RowGroup
-        => _owner.GetRowGroup(_version, Ordinal);
+    public ulong MetadataOffset { get; }
+    public ulong ColumnChunkOffset { get; }
+    public ulong RowCount { get; }
+    public int ColumnCount { get; }
 }

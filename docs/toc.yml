@@ -1,19 +1,8 @@
 - name: Overview
   href: index.md
-- name: Guides
-  items:
-    - name: Getting started
-      href: articles/getting-started.md
-    - name: Writing
-      href: articles/writing.md
-    - name: Reading
-      href: articles/reading/index.md
-      items:
-        - name: Physical reader
-          href: articles/reading/physical.md
-        - name: Typed column reader
-          href: articles/reading/typed.md
-        - name: Generated row reader
-          href: articles/reading/generated.md
+- name: Reading
+  href: articles/reading/index.md
+- name: Writing
+  href: articles/writing.md
 - name: API reference
   href: api/

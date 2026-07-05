@@ -3,7 +3,7 @@ using System.Text;
 using Plank.Schema;
 using Plank.Writing;
 
-namespace Plank.Reading.Typed.Internal;
+namespace Plank.Reading.Logical.Internal;
 
 static class ParquetMetadataThriftReader
 {
@@ -52,12 +52,11 @@ static class ParquetMetadataThriftReader
             return false;
         }
 
-        var footerRowGroupOffset = rowGroupOffset;
         var reader = new CompactProtocolReader(rowGroups[rowGroupOffset..]);
         var metadataOffset = rowGroupsMetadataOffset + (ulong)rowGroupOffset;
         rowGroup = ReadRowGroup(ref reader, ordinal, metadataOffset, previousColumns, schema);
         rowGroup = new InternalRowGroupMetadata(rowGroup.RowGroupOrdinal, rowGroup.MetadataOffset,
-            rowGroup.ColumnChunkOffset, rowGroup.RowCount, rowGroup.Columns, footerRowGroupOffset, footerVersion);
+            rowGroup.ColumnChunkOffset, rowGroup.RowCount, rowGroup.Columns, footerVersion);
         rowGroupOffset += reader.Offset;
         return true;
     }

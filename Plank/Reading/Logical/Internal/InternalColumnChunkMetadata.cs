@@ -2,7 +2,7 @@ using Plank.Reading.Physical;
 using Plank.Schema;
 using Plank.Writing;
 
-namespace Plank.Reading.Typed.Internal;
+namespace Plank.Reading.Logical.Internal;
 
 readonly struct InternalColumnChunkMetadata
 {

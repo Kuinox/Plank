@@ -1,8 +1,8 @@
-using Plank.Reading.Typed.Internal;
+using Plank.Reading.Logical.Internal;
 using Plank.Schema;
 using Plank.Writing;
 
-namespace Plank.Reading.Typed;
+namespace Plank.Reading.Logical;
 
 public readonly struct ColumnPageEnumerable<T>
 {

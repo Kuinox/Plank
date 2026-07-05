@@ -1,6 +1,6 @@
 using Plank.Reading;
-using Plank.Reading.Typed;
-using Plank.Reading.Typed.Internal;
+using Plank.Reading.Logical;
+using Plank.Reading.Logical.Internal;
 using Plank.Writing;
 using Plank.Writing.Encoding;
 

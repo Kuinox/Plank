@@ -1,10 +1,8 @@
 using System.Buffers.Binary;
-using Plank.Reading.Row.Internal;
-using Plank.Reading.Typed;
-using Plank.Reading.Typed.Internal;
+using Plank.Reading.Logical.Internal;
 using Plank.Schema;
 
-namespace Plank.Reading.Row;
+namespace Plank.Reading.Logical;
 
 public sealed class ParquetReader : IDisposable
 {
@@ -84,14 +82,8 @@ public sealed class ParquetReader : IDisposable
     internal ReadOnlySpan<byte> FooterBytes
         => _footerBuffer.AsSpan(0, _footerLength);
 
-    internal ulong RowGroupsMetadataOffset
-        => _rowGroupsMetadataOffset;
-
     internal int RowGroupsOffset
         => 0;
-
-    internal int FooterVersion
-        => _footerVersion;
 
     public void Reset(Stream stream)
     {

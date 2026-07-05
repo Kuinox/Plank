@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using Plank.Reading;
-using Plank.Reading.Row;
-using Plank.Reading.Typed;
+using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing;
 

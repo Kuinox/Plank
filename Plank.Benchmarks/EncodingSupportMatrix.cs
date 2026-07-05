@@ -17,17 +17,6 @@ static class EncodingSupportMatrix
         }
     }
 
-    internal static IEnumerable<EncodingBenchmarkCase> ComparisonCases
-    {
-        get
-        {
-            foreach (var dataType in DataTypes)
-                foreach (var encoding in Encodings)
-                    if (IsParquetSupported(dataType, encoding) && IsParquetNetSupported(dataType, encoding))
-                        yield return new EncodingBenchmarkCase(dataType, encoding);
-        }
-    }
-
     internal static IEnumerable<EncodingBenchmarkCase> GetSelectedCases()
     {
         var selectedCase = Environment.GetEnvironmentVariable("PLANK_ENCODING_CASE");

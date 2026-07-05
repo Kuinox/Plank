@@ -1,6 +1,6 @@
 using Plank.Schema;
 
-namespace Plank.Reading.Typed;
+namespace Plank.Reading.Logical;
 
 public readonly struct ParquetFileMetadata
 {

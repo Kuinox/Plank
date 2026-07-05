@@ -23,9 +23,6 @@ ref struct CompactProtocolReader
     internal int Offset
         => _offset;
 
-    internal ReadOnlySpan<byte> Buffer
-        => _buffer;
-
     internal uint Remaining
         => (uint)(_buffer.Length - _offset);
 

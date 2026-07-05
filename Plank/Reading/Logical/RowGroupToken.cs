@@ -1,6 +1,6 @@
-namespace Plank.Reading.Row;
+namespace Plank.Reading.Logical;
 
-using Plank.Reading.Typed.Internal;
+using Plank.Reading.Logical.Internal;
 
 public readonly struct RowGroupToken
 {

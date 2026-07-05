@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using Plank.Reading;
 using Plank.Reading.Physical;
-using Plank.Reading.Row;
+using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
@@ -479,10 +479,11 @@ internal sealed class ReaderAllocationTests
 
     static int ReadPhysicalPayloadBytes(ParquetFileReader reader)
     {
-        var column = reader.ColumnSchema(0);
-        var rowGroup = reader.RowGroup(0);
-        var total = column.PathSegmentUtf8(0).Length;
-        using var cursor = rowGroup.OpenPages(0);
+        var metadata = reader.Metadata;
+        var column = metadata.ColumnSchema(0);
+        var rowGroup = metadata.RowGroup(0);
+        var total = metadata.ColumnPathSegmentUtf8(column.Ordinal, 0).Length;
+        using var cursor = reader.OpenPages(rowGroup.Ordinal, 0);
         while (cursor.MoveNext())
             total += cursor.CurrentPayload.Length;
         return total;

@@ -1,9 +1,7 @@
-using Plank.Reading.Row.Internal;
-using Plank.Reading.Typed;
-using Plank.Reading.Typed.Internal;
+using Plank.Reading.Logical.Internal;
 using Plank.Schema;
 
-namespace Plank.Reading.Row;
+namespace Plank.Reading.Logical;
 
 public sealed class RowGroupReader : IDisposable
 {
@@ -18,9 +16,6 @@ public sealed class RowGroupReader : IDisposable
 
     internal void Reset(ParquetReader reader, InternalRowGroupMetadata rowGroup)
         => _context.Reset(reader, rowGroup);
-
-    internal IParquetReadSource Source
-        => _context.Source;
 
     internal InternalColumnChunkMetadata[] PreviousColumns
         => _context.PreviousColumns;

@@ -1,4 +1,4 @@
-namespace Plank.Reading.Row;
+namespace Plank.Reading.Logical;
 
 public readonly struct RowGroupTokenEnumerable
 {

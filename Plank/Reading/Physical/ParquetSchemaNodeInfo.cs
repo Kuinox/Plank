@@ -1,29 +1,34 @@
 using Plank.Schema;
-using Plank.Reading.Physical.Internal;
 
 namespace Plank.Reading.Physical;
 
 public readonly struct ParquetSchemaNodeInfo
 {
-    readonly ParquetFileReader _owner;
-    readonly int _version;
+    internal readonly int NameOffset;
+    internal readonly int NameLength;
 
-    internal ParquetSchemaNodeInfo(ParquetFileReader owner, int version, int ordinal)
+    internal ParquetSchemaNodeInfo(int ordinal, int parentOrdinal, NodeKind kind, ParquetRepetition repetition,
+        ParquetPhysicalType? physicalType, uint typeLength, LogicalTypeInfo logicalType, int nameOffset, int nameLength,
+        int childCount)
     {
-        _owner = owner;
-        _version = version;
         Ordinal = ordinal;
+        ParentOrdinal = parentOrdinal;
+        Kind = kind;
+        Repetition = repetition;
+        PhysicalType = physicalType;
+        TypeLength = typeLength;
+        LogicalType = logicalType;
+        NameOffset = nameOffset;
+        NameLength = nameLength;
+        ChildCount = childCount;
     }
 
     public int Ordinal { get; }
-    public int ParentOrdinal => Node.ParentOrdinal;
-    public NodeKind Kind => Node.Kind;
-    public ParquetRepetition Repetition => Node.Repetition;
-    public ParquetPhysicalType? PhysicalType => Node.PhysicalType;
-    public uint TypeLength => Node.TypeLength;
-    public LogicalTypeInfo LogicalType => Node.LogicalType;
-    public ReadOnlySpan<byte> NameUtf8 => _owner.GetName(_version, Ordinal);
-
-    PhysicalSchemaNode Node
-        => _owner.GetSchemaNode(_version, Ordinal);
+    public int ParentOrdinal { get; }
+    public NodeKind Kind { get; }
+    public ParquetRepetition Repetition { get; }
+    public ParquetPhysicalType? PhysicalType { get; }
+    public uint TypeLength { get; }
+    public LogicalTypeInfo LogicalType { get; }
+    public int ChildCount { get; }
 }

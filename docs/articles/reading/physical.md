@@ -1,45 +1,57 @@
-# Physical reader
+# Physical read layer
 
-The physical reader is the lowest user-facing reader layer. It exposes parquet metadata, schema nodes, row groups, column chunks, page headers, and page payloads without binding the file to a requested `ParquetSchema`.
+The physical read layer is the lowest-level reader in Plank. It reads parquet file metadata and exposes encoded column data as raw bytes, without decoding it into C# values.
 
-Use it when you are building inspection tools, custom decoders, diagnostics, or allocation-sensitive integrations that need direct access to parquet structure.
+Use it when you need direct access to the raw structure of a parquet file, for example when building a parquet viewer, analyzer, diagnostics tool, or custom reader.
+
+## Open a file
 
 ```csharp
-using Plank.Reading;
+using Plank.Reading.Physical;
 
 using var stream = File.OpenRead("events.parquet");
 using var reader = new ParquetFileReader();
 
 reader.Reset(stream);
+```
 
-for (var rowGroupOrdinal = 0; rowGroupOrdinal < reader.RowGroupCount; rowGroupOrdinal++)
+[`ParquetFileReader`](xref:Plank.Reading.Physical.ParquetFileReader) is reusable. [`Reset(Stream)`](xref:Plank.Reading.Physical.ParquetFileReader.Reset(System.IO.Stream)) attaches it to a file, reads the footer, and makes the parsed metadata available.
+
+Call `Reset` again to reuse the same reader for another file.
+
+After the first stream reset, the reader keeps the same stream wrapper. Metadata buffers come from the configured pool, so reset does not allocate them when the pool already has arrays big enough.
+
+Existing page cursors become invalid after a reset.
+
+## Inspect metadata
+
+```csharp
+var metadata = reader.Metadata;
+
+for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroupOrdinal++)
 {
-    var rowGroup = reader.RowGroup(rowGroupOrdinal);
+    var rowGroup = metadata.RowGroup(rowGroupOrdinal);
 
     for (var columnOrdinal = 0; columnOrdinal < rowGroup.ColumnCount; columnOrdinal++)
     {
-        var chunk = rowGroup.ColumnChunk(columnOrdinal);
-        using var pages = rowGroup.OpenPages(columnOrdinal);
-
-        while (pages.MoveNext())
-        {
-            var header = pages.CurrentHeader;
-            var payload = pages.CurrentPayload;
-        }
+        var column = metadata.ColumnSchema(columnOrdinal);
+        var chunk = metadata.ColumnChunk(rowGroupOrdinal, columnOrdinal);
     }
 }
 ```
 
-Use `ParquetFileReaderOptions` to provide a custom buffer pool when integrating with an existing allocation strategy.
+[`Metadata`](xref:Plank.Reading.Physical.ParquetFileReader.Metadata) returns file-level metadata. It describes the schema, row groups, and column chunks, but it does not read column values.
+
+## Read page bytes
 
 ```csharp
-using Plank.Reading;
-using Plank.Writing;
-
-var options = new ParquetFileReaderOptions
+foreach (var page in reader.OpenPages(rowGroupOrdinal, columnOrdinal))
 {
-    BufferPool = DefaultParquetBufferPool.Shared
-};
+    var header = page.Header;
+    var payload = page.Payload;
+}
 ```
 
-This layer does not project a logical application schema. It tells you what is physically present in the file.
+[`OpenPages`](xref:Plank.Reading.Physical.ParquetFileReader.OpenPages(System.Int32,System.Int32)) returns a [`ParquetPageCursor`](xref:Plank.Reading.Physical.ParquetPageCursor) for one row-group column.
+
+Each page exposes a parsed `PageHeader` and a payload byte span. The payload is still parquet-encoded column data; dictionary encoding, levels, and values are decoded by the logical read layer.

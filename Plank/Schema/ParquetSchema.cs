@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
 using Plank.Reading;
-using Plank.Reading.Row;
+using Plank.Reading.Logical;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
 

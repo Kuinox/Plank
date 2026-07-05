@@ -1,8 +1,7 @@
 using System.Collections.Immutable;
 using Plank.Fuzzing;
 using Plank.Reading;
-using Plank.Reading.Row;
-using Plank.Reading.Typed;
+using Plank.Reading.Logical;
 using Plank.Schema;
 
 namespace Plank.Tests.Reading;
