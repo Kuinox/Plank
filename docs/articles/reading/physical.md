@@ -17,7 +17,7 @@ reader.Reset(stream);
 
 [`ParquetFileReader`](xref:Plank.Reading.Physical.ParquetFileReader) is reusable. [`Reset(Stream)`](xref:Plank.Reading.Physical.ParquetFileReader.Reset(System.IO.Stream)) attaches it to a file, reads the footer, and makes the parsed metadata available.
 
-Call `Reset` again to reuse the same reader for another file.
+Call [`Reset`](xref:Plank.Reading.Physical.ParquetFileReader.Reset*) again to reuse the same reader for another file.
 
 After the first stream reset, the reader keeps the same stream wrapper. Metadata buffers come from the configured pool, so reset does not allocate them when the pool already has arrays big enough.
 
