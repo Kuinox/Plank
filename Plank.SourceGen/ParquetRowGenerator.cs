@@ -256,6 +256,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("    }");
         builder.AppendLine();
+        AppendRowApiColumnDescriptors(builder, columns);
+        builder.AppendLine();
         builder.AppendLine("    public static SchemaWriter CreateWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(stream, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
         builder.AppendLine();
@@ -311,50 +313,28 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("    public struct Writer");
         builder.AppendLine("    {");
-        builder.AppendLine("        readonly global::Plank.Writing.RowGroupWriter _rowGroupWriter;");
-        builder.AppendLine("        readonly BufferSlot _slot;");
-        builder.AppendLine("        bool _written;");
+        builder.AppendLine("        readonly global::Plank.RowApi.RowGroupWriterCore<BufferSlot> _core;");
 
         builder.AppendLine();
         builder.AppendLine("        internal Writer(global::Plank.Writing.RowGroupWriter rowGroupWriter, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("        {");
-        builder.AppendLine("            _rowGroupWriter = rowGroupWriter ?? throw new global::System.ArgumentNullException(nameof(rowGroupWriter));");
-        builder.AppendLine("            options = options ?? throw new global::System.ArgumentNullException(nameof(options));");
-        builder.AppendLine("            _slot = new BufferSlot(rowGroupWriter, DefaultRowBatchSize);");
-        builder.AppendLine("            _written = false;");
+        builder.AppendLine("            _ = options ?? throw new global::System.ArgumentNullException(nameof(options));");
+        builder.AppendLine("            var slot = new BufferSlot(rowGroupWriter, DefaultRowBatchSize);");
+        builder.AppendLine("            _core = new global::Plank.RowApi.RowGroupWriterCore<BufferSlot>(rowGroupWriter, slot);");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        public Row GetRow()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (_written)");
-        builder.AppendLine("                throw new global::System.InvalidOperationException(\"Rows are already written for this row group.\");");
-        builder.AppendLine("            return _slot.GetRow();");
-        builder.AppendLine("        }");
+        builder.AppendLine("            => _core.GetSlotForRow().GetRow();");
         builder.AppendLine();
         builder.AppendLine("        public void Next()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (_written)");
-        builder.AppendLine("                throw new global::System.InvalidOperationException(\"Rows are already written for this row group.\");");
-        builder.AppendLine("            _slot.Next();");
-        builder.AppendLine("        }");
+        builder.AppendLine("            => _core.Next();");
         builder.AppendLine();
         builder.AppendLine("        public void Write()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (_written)");
-        builder.AppendLine("                throw new global::System.InvalidOperationException(\"This row writer was already written.\");");
-        builder.AppendLine("            _slot.SerializeColumns();");
-        builder.AppendLine("            _slot.WriteSerialized(_rowGroupWriter);");
-        builder.AppendLine("            _written = true;");
-        builder.AppendLine("        }");
+        builder.AppendLine("            => _core.Write();");
         builder.AppendLine("    }");
         builder.AppendLine();
-        builder.AppendLine("    public sealed class PipelineWriter : global::Plank.Writing.RowWriterBase<BufferSlot>");
+        builder.AppendLine("    public sealed class PipelineWriter : global::Plank.RowApi.PipelineRowWriterBase<BufferSlot>");
         builder.AppendLine("    {");
-        builder.AppendLine("        readonly int _rowBatchSize;");
-        builder.AppendLine("        readonly global::System.Action<int>? _onFlush;");
-        builder.AppendLine("        BufferSlot _active;");
-        builder.AppendLine("        bool _completed;");
-        builder.AppendLine();
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, options.RowApiMaxParallelism, null, options)");
         builder.AppendLine("        {");
@@ -371,711 +351,47 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, uint maxParallelism, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
-        builder.AppendLine("            : base(stream, Schema, maxParallelism, options)");
+        builder.Append("            : base(stream, Schema, maxParallelism, onFlush, options, DefaultRowBatchSize, \"Plank")
+            .Append(Escape(schemaType.Name))
+            .AppendLine("RowApiWorker\")");
         builder.AppendLine("        {");
-        builder.AppendLine("            _ = stream ?? throw new global::System.ArgumentNullException(nameof(stream));");
-        builder.AppendLine("            _ = options ?? throw new global::System.ArgumentNullException(nameof(options));");
-        builder.AppendLine("            if (maxParallelism == 0)");
-        builder.AppendLine("                throw new global::System.ArgumentOutOfRangeException(nameof(maxParallelism), maxParallelism, \"Max parallelism must be greater than zero.\");");
-        builder.AppendLine();
-        builder.AppendLine("            _rowBatchSize = DefaultRowBatchSize;");
-        builder.AppendLine("            _onFlush = onFlush;");
-        builder.AppendLine("            InitializeSlots();");
-        builder.AppendLine("            _active = TakeInitialSlot();");
-        builder.AppendLine("            _completed = false;");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        protected override BufferSlot CreateSlot(global::Plank.Writing.ParquetWriter writer)");
-        builder.AppendLine("            => new(writer, _rowBatchSize);");
-        builder.AppendLine();
-        builder.AppendLine("        protected override void SerializeSlot(BufferSlot slot)");
-        builder.AppendLine("            => slot.SerializeColumns();");
-        builder.AppendLine();
-        builder.AppendLine("        protected override void WriteSerializedSlot(BufferSlot slot, global::Plank.Writing.RowGroupWriter rowGroupWriter)");
-        builder.AppendLine("            => slot.WriteSerialized(rowGroupWriter);");
-        builder.AppendLine();
-        builder.AppendLine("        protected override void OnSlotWritten(BufferSlot slot)");
-        builder.AppendLine("            => _onFlush?.Invoke(slot.Count);");
-        builder.AppendLine();
-        builder.AppendLine("        protected override void ResetSlotForReuse(BufferSlot slot)");
-        builder.AppendLine("            => slot.ResetForReuse();");
-        builder.AppendLine();
-        builder.Append("        protected override string WorkerThreadNamePrefix => \"Plank")
-            .Append(Escape(schemaType.Name))
-            .AppendLine("RowApiWorker\";");
+        builder.AppendLine("            => new(writer, RowBatchSize);");
         builder.AppendLine();
         builder.AppendLine("        public Row GetRow()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            ThrowIfFaulted();");
-        builder.AppendLine("            if (_completed)");
-        builder.AppendLine("                throw new global::System.InvalidOperationException(\"Pipeline writer is already completed.\");");
-        builder.AppendLine("            return _active.GetRow();");
-        builder.AppendLine("        }");
+        builder.AppendLine("            => GetSlotForRow().GetRow();");
         builder.AppendLine();
         builder.AppendLine("        public void Next()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            ThrowIfFaulted();");
-        builder.AppendLine("            if (_completed)");
-        builder.AppendLine("                throw new global::System.InvalidOperationException(\"Pipeline writer is already completed.\");");
-        builder.AppendLine();
-        builder.AppendLine("            _active.Next();");
-        builder.AppendLine("            if (!_active.IsFull)");
-        builder.AppendLine("                return;");
-        builder.AppendLine();
-        builder.AppendLine("            _active = EnqueueAndTakeFree(_active);");
-        builder.AppendLine("        }");
+        builder.AppendLine("            => NextRow();");
         builder.AppendLine();
         builder.AppendLine("        public void Complete()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            ThrowIfFaulted();");
-        builder.AppendLine("            if (_completed)");
-        builder.AppendLine("                return;");
-        builder.AppendLine();
-        builder.AppendLine("            Complete(_active, !_active.IsEmpty);");
-        builder.AppendLine("            _completed = true;");
-        builder.AppendLine("        }");
+        builder.AppendLine("            => CompleteWriter();");
         builder.AppendLine("    }");
         builder.AppendLine();
-        builder.AppendLine("    public sealed class RowReader : global::System.IDisposable");
+        AppendRowReader(builder, columns);
+        builder.AppendLine();
+        builder.AppendLine("    public sealed class BufferSlot : global::Plank.RowApi.RowBufferSlot");
         builder.AppendLine("    {");
-        builder.AppendLine("        global::Plank.Reading.IParquetReadSource _source;");
-        builder.AppendLine("        Projection _projection;");
-        builder.AppendLine("        readonly global::Plank.Reading.Logical.ParquetReader _reader;");
-        builder.AppendLine("        global::Plank.Reading.ParquetSchemaEvolutionOptions? _schemaEvolution;");
-        builder.AppendLine("        global::Plank.Reading.StreamReadSource? _streamSource;");
-        builder.AppendLine("        global::Plank.Reading.Logical.RowGroupTokenEnumerable.Enumerator _rowGroups;");
-        builder.AppendLine("        readonly global::Plank.Reading.Logical.RowGroupReader _rowGroup;");
-        builder.AppendLine("        ulong _rowGroupRowsRemaining;");
-        builder.AppendLine("        bool _started;");
-        builder.AppendLine("        bool _hasCurrent;");
-        builder.AppendLine("        bool _disposed;");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("        int _").Append(columns[i].PropertyName).AppendLine("Ordinal;");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("        bool _").Append(columns[i].PropertyName).AppendLine("Materialized;");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("        static readonly ").Append(columns[i].ClrTypeName).Append("[] s_missing")
-                .Append(columns[i].PropertyName).Append(" = new ").Append(columns[i].ClrTypeName)
-                .AppendLine("[] { default! };");
-            builder.Append("        global::Plank.Reading.Logical.ColumnPageEnumerable<").Append(columns[i].ClrTypeName)
-                .Append(">.Enumerator _").Append(columns[i].PropertyName).AppendLine("Pages;");
-            builder.Append("        global::System.ReadOnlyMemory<").Append(columns[i].ClrTypeName)
-                .Append("> _").Append(columns[i].PropertyName).AppendLine("Page;");
-            builder.Append("        ").Append(columns[i].ClrTypeName).Append("[] _")
-                .Append(columns[i].PropertyName).AppendLine("PageArray;");
-            builder.Append("        int _").Append(columns[i].PropertyName).AppendLine("PageIndex;");
-            builder.Append("        bool _").Append(columns[i].PropertyName).AppendLine("PagesOpen;");
-            builder.Append("        bool _").Append(columns[i].PropertyName).AppendLine("Projected;");
-        }
-        builder.AppendLine();
-        builder.AppendLine("        internal RowReader(global::System.IO.Stream stream, Projection projection, global::Plank.Reading.Logical.ParquetReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
-        builder.AppendLine("            : this(new global::Plank.Reading.StreamReadSource(stream), projection, options, schemaEvolution)");
-        builder.AppendLine("        {");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal RowReader(global::Plank.Reading.IParquetReadSource source, Projection projection, global::Plank.Reading.Logical.ParquetReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            _source = source ?? throw new global::System.ArgumentNullException(nameof(source));");
-        builder.AppendLine("            _ = options ?? throw new global::System.ArgumentNullException(nameof(options));");
-        builder.AppendLine("            _projection = projection;");
-        builder.AppendLine("            _schemaEvolution = schemaEvolution;");
-        builder.AppendLine("            _reader = global::Plank.Reading.Logical.ParquetReader.Open(source, CreateLooseReaderOptions(options));");
-        builder.AppendLine("            _streamSource = source as global::Plank.Reading.StreamReadSource;");
-        builder.AppendLine("            _rowGroups = default;");
-        builder.AppendLine("            _rowGroup = _reader.CreateReusableRowGroupReader();");
-        builder.AppendLine("            _rowGroupRowsRemaining = 0;");
-        builder.AppendLine("            _started = false;");
-        builder.AppendLine("            _hasCurrent = false;");
-        builder.AppendLine("            _disposed = false;");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("            _").Append(columns[i].PropertyName).AppendLine("Pages = default;");
-            builder.Append("            _").Append(columns[i].PropertyName).AppendLine("Page = default;");
-            builder.Append("            _").Append(columns[i].PropertyName).Append("PageArray = global::System.Array.Empty<")
-                .Append(columns[i].ClrTypeName).AppendLine(">();");
-            builder.Append("            _").Append(columns[i].PropertyName).AppendLine("PageIndex = -1;");
-            builder.Append("            _").Append(columns[i].PropertyName).AppendLine("PagesOpen = false;");
-            builder.Append("            _").Append(columns[i].PropertyName).Append("Projected = IsProjected(Projection.")
-                .Append(columns[i].PropertyName).AppendLine(");");
-            builder.Append("            _").Append(columns[i].PropertyName).AppendLine("Ordinal = -1;");
-            builder.Append("            _").Append(columns[i].PropertyName).AppendLine("Materialized = false;");
-        }
-        builder.AppendLine("            ResolveFileSchema();");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        public Enumerator GetEnumerator()");
-        builder.AppendLine("            => new(this);");
-        builder.AppendLine();
-        builder.AppendLine("        public void Reset(global::System.IO.Stream stream, Projection projection = Projection.All, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (_streamSource is null)");
-        builder.AppendLine("                _streamSource = new global::Plank.Reading.StreamReadSource(stream);");
-        builder.AppendLine("            else");
-        builder.AppendLine("                _streamSource.Reset(stream);");
-        builder.AppendLine("            Reset(_streamSource, projection, schemaEvolution);");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        public void Reset(global::Plank.Reading.IParquetReadSource source, Projection projection = Projection.All, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            ThrowIfDisposed();");
-        builder.AppendLine("            _source = source ?? throw new global::System.ArgumentNullException(nameof(source));");
-        builder.AppendLine("            _projection = projection;");
-        builder.AppendLine("            if (schemaEvolution is not null)");
-        builder.AppendLine("                _schemaEvolution = schemaEvolution;");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("            _").Append(columns[i].PropertyName).Append("Projected = IsProjected(Projection.")
-                .Append(columns[i].PropertyName).AppendLine(");");
-            builder.Append("            _").Append(columns[i].PropertyName).AppendLine("Materialized = false;");
-        }
-        builder.AppendLine("            DisposeColumnReaders();");
-        builder.AppendLine("            _rowGroup.Dispose();");
-        builder.AppendLine("            _reader.Reset(source);");
-        builder.AppendLine("            _rowGroups = default;");
-        builder.AppendLine("            _rowGroupRowsRemaining = 0;");
-        builder.AppendLine("            _started = false;");
-        builder.AppendLine("            _hasCurrent = false;");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("            _").Append(columns[i].PropertyName).AppendLine("Pages = default;");
-            builder.Append("            _").Append(columns[i].PropertyName).AppendLine("Page = default;");
-            builder.Append("            _").Append(columns[i].PropertyName).Append("PageArray = global::System.Array.Empty<")
-                .Append(columns[i].ClrTypeName).AppendLine(">();");
-            builder.Append("            _").Append(columns[i].PropertyName).AppendLine("PageIndex = -1;");
-            builder.Append("            _").Append(columns[i].PropertyName).AppendLine("PagesOpen = false;");
-        }
-        builder.AppendLine("            ResolveFileSchema();");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        public readonly struct Enumerator : global::System.IDisposable");
-        builder.AppendLine("        {");
-        builder.AppendLine("            readonly RowReader _reader;");
-        builder.AppendLine();
-        builder.AppendLine("            internal Enumerator(RowReader reader)");
-        builder.AppendLine("                => _reader = reader ?? throw new global::System.ArgumentNullException(nameof(reader));");
-        builder.AppendLine();
-        builder.AppendLine("            public Row Current => _reader.Current;");
-        builder.AppendLine();
-        builder.AppendLine("            public bool MoveNext()");
-        builder.AppendLine("                => _reader.MoveNext();");
-        builder.AppendLine();
-        builder.AppendLine("            public void Dispose()");
-        builder.AppendLine("            {");
-        builder.AppendLine("            }");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        struct LocalEnumerator : global::System.IDisposable");
-        builder.AppendLine("        {");
-        builder.AppendLine("            readonly global::Plank.Reading.IParquetReadSource _source;");
-        builder.AppendLine("            readonly Projection _projection;");
-        builder.AppendLine("            readonly global::Plank.Reading.Logical.ParquetReader _reader;");
-        builder.AppendLine("            global::Plank.Reading.Logical.RowGroupTokenEnumerable.Enumerator _rowGroups;");
-        builder.AppendLine("            global::Plank.Reading.Logical.RowGroupReader? _rowGroup;");
-        builder.AppendLine("            ulong _rowGroupRowsRemaining;");
-        builder.AppendLine("            bool _hasCurrent;");
-        builder.AppendLine("            bool _disposed;");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("            readonly int _").Append(columns[i].PropertyName).AppendLine("Ordinal;");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("            global::Plank.Reading.Logical.ColumnPageEnumerable<").Append(columns[i].ClrTypeName)
-                .Append(">.Enumerator _").Append(columns[i].PropertyName).AppendLine("Pages;");
-            builder.Append("            global::System.ReadOnlyMemory<").Append(columns[i].ClrTypeName)
-                .Append("> _").Append(columns[i].PropertyName).AppendLine("Page;");
-            builder.Append("            ").Append(columns[i].ClrTypeName).Append("[] _")
-                .Append(columns[i].PropertyName).AppendLine("PageArray;");
-            builder.Append("            int _").Append(columns[i].PropertyName).AppendLine("PageIndex;");
-            builder.Append("            bool _").Append(columns[i].PropertyName).AppendLine("PagesOpen;");
-            builder.Append("            bool _").Append(columns[i].PropertyName).AppendLine("Projected;");
-        }
-        builder.AppendLine();
-        builder.AppendLine("            internal LocalEnumerator(global::Plank.Reading.IParquetReadSource source, Projection projection, global::Plank.Reading.Logical.ParquetReader reader)");
-        builder.AppendLine("            {");
-        builder.AppendLine("                _source = source ?? throw new global::System.ArgumentNullException(nameof(source));");
-        builder.AppendLine("                _reader = reader ?? throw new global::System.ArgumentNullException(nameof(reader));");
-        builder.AppendLine("                _projection = projection;");
-        builder.AppendLine("                _rowGroups = reader.EnumerateRowGroups().GetEnumerator();");
-        builder.AppendLine("                _rowGroup = null;");
-        builder.AppendLine("                _rowGroupRowsRemaining = 0;");
-        builder.AppendLine("                _hasCurrent = false;");
-        builder.AppendLine("                _disposed = false;");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("                _").Append(columns[i].PropertyName).AppendLine("Pages = default;");
-            builder.Append("                _").Append(columns[i].PropertyName).AppendLine("Page = default;");
-            builder.Append("                _").Append(columns[i].PropertyName).Append("PageArray = global::System.Array.Empty<")
-                .Append(columns[i].ClrTypeName).AppendLine(">();");
-            builder.Append("                _").Append(columns[i].PropertyName).AppendLine("PageIndex = -1;");
-            builder.Append("                _").Append(columns[i].PropertyName).AppendLine("PagesOpen = false;");
-            builder.Append("                _").Append(columns[i].PropertyName).Append("Projected = IsProjected(Projection.")
-                .Append(columns[i].PropertyName).AppendLine(");");
-            builder.Append("                _").Append(columns[i].PropertyName).Append("Ordinal = ResolveColumnOrdinal(reader.Schema.Columns, Schema.Columns[")
-                .Append(i).Append("], \"").Append(Escape(columns[i].Name)).AppendLine("\");");
-        }
-        builder.AppendLine("            }");
-        builder.AppendLine();
-        builder.AppendLine("            public readonly Row Current");
-        builder.AppendLine("            {");
-        builder.AppendLine("                get");
-        builder.AppendLine("                {");
-        builder.AppendLine("                    ThrowIfDisposed();");
-        builder.AppendLine("                    if (!_hasCurrent)");
-        builder.AppendLine("                        throw new global::System.InvalidOperationException(\"The row reader is not positioned on a row.\");");
-        builder.Append("                    return new Row(");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            if (i > 0)
-                builder.Append(", ");
-            builder.Append('_').Append(columns[i].PropertyName).Append("PageArray, _")
-                .Append(columns[i].PropertyName).Append("PageIndex");
-        }
-        builder.AppendLine(");");
-        builder.AppendLine("                }");
-        builder.AppendLine("            }");
-        builder.AppendLine();
-        builder.AppendLine("            public bool MoveNext()");
-        builder.AppendLine("            {");
-        builder.AppendLine("                ThrowIfDisposed();");
-        builder.AppendLine("                _hasCurrent = ReadNextRow();");
-        builder.AppendLine("                return _hasCurrent;");
-        builder.AppendLine("            }");
-        builder.AppendLine();
-        builder.AppendLine("            public void Dispose()");
-        builder.AppendLine("            {");
-        builder.AppendLine("                if (_disposed)");
-        builder.AppendLine("                    return;");
-        builder.AppendLine();
-        builder.AppendLine("                DisposeColumnReaders();");
-        builder.AppendLine("                _rowGroup?.Dispose();");
-        builder.AppendLine("                _disposed = true;");
-        builder.AppendLine("            }");
-        builder.AppendLine();
-        builder.AppendLine("            bool ReadNextRow()");
-        builder.AppendLine("            {");
-        builder.AppendLine("                while (_rowGroupRowsRemaining == 0)");
-        builder.AppendLine("                    if (!OpenNextRowGroup())");
-        builder.AppendLine("                    {");
-        builder.AppendLine("                        _hasCurrent = false;");
-        builder.AppendLine("                        return false;");
-        builder.AppendLine("                    }");
-        builder.AppendLine();
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("                if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
-            builder.AppendLine("                {");
-            AppendAdvanceColumnBody(builder, columns[i], "                    ");
-            builder.AppendLine("                }");
-        }
-        builder.AppendLine("                _rowGroupRowsRemaining--;");
-        builder.AppendLine("                return true;");
-        builder.AppendLine("            }");
-        builder.AppendLine();
-        builder.AppendLine("            bool OpenNextRowGroup()");
-        builder.AppendLine("            {");
-        builder.AppendLine("                while (true)");
-        builder.AppendLine("                {");
-        builder.AppendLine("                    DisposeColumnReaders();");
-        builder.AppendLine("                    _rowGroup?.Dispose();");
-        builder.AppendLine("                    if (!_rowGroups.MoveNext())");
-        builder.AppendLine("                    {");
-        builder.AppendLine("                        _rowGroup = null;");
-        builder.AppendLine("                        return false;");
-        builder.AppendLine("                    }");
-        builder.AppendLine();
-        builder.AppendLine("                    _rowGroup = _reader.OpenRowGroup(_rowGroups.Current);");
-        builder.AppendLine("                    _rowGroupRowsRemaining = _rowGroup.RowCount;");
-        builder.AppendLine("                    if (_rowGroupRowsRemaining == 0)");
-        builder.AppendLine("                        continue;");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("                    if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
-            builder.AppendLine("                    {");
-            builder.Append("                        _").Append(columns[i].PropertyName).Append("Pages = _rowGroup.Column<")
-                .Append(columns[i].ClrTypeName).Append(">(_").Append(columns[i].PropertyName).AppendLine("Ordinal).Pages.GetEnumerator();");
-            builder.Append("                        _").Append(columns[i].PropertyName).AppendLine("PagesOpen = true;");
-            builder.AppendLine("                    }");
-            builder.Append("                    _").Append(columns[i].PropertyName).AppendLine("Page = default;");
-            builder.Append("                    _").Append(columns[i].PropertyName).Append("PageArray = global::System.Array.Empty<")
-                .Append(columns[i].ClrTypeName).AppendLine(">();");
-            builder.Append("                    _").Append(columns[i].PropertyName).AppendLine("PageIndex = -1;");
-        }
-        builder.AppendLine("                    return true;");
-        builder.AppendLine("                }");
-        builder.AppendLine("            }");
-        builder.AppendLine();
-        builder.AppendLine("            readonly bool IsProjected(Projection column)");
-        builder.AppendLine("                => (_projection & column) != 0;");
-        builder.AppendLine();
-        builder.AppendLine("            void DisposeColumnReaders()");
-        builder.AppendLine("            {");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("                if (_").Append(columns[i].PropertyName).AppendLine("PagesOpen)");
-            builder.AppendLine("                {");
-            builder.Append("                    _").Append(columns[i].PropertyName).AppendLine("Pages.Dispose();");
-            builder.Append("                    _").Append(columns[i].PropertyName).AppendLine("PagesOpen = false;");
-            builder.AppendLine("                }");
-        }
-        builder.AppendLine("            }");
-        builder.AppendLine();
-        builder.AppendLine("            readonly void ThrowIfDisposed()");
-        builder.AppendLine("            {");
-        builder.AppendLine("                if (_disposed)");
-        builder.AppendLine("                    throw new global::System.ObjectDisposedException(nameof(Enumerator));");
-        builder.AppendLine("            }");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        public Row Current");
-        builder.AppendLine("        {");
-        builder.AppendLine("            get");
-        builder.AppendLine("            {");
-        builder.AppendLine("                ThrowIfDisposed();");
-        builder.AppendLine("                if (!_hasCurrent)");
-        builder.AppendLine("                    throw new global::System.InvalidOperationException(\"The row reader is not positioned on a row.\");");
-        builder.Append("                return new Row(");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            if (i > 0)
-                builder.Append(", ");
-            builder.Append('_').Append(columns[i].PropertyName).Append("PageArray, _")
-                .Append(columns[i].PropertyName).Append("PageIndex");
-        }
-        builder.AppendLine(");");
-        builder.AppendLine("            }");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        public bool MoveNext()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            ThrowIfDisposed();");
-        builder.AppendLine("            EnsureStarted();");
-        builder.AppendLine("            _hasCurrent = ReadNextRow();");
-        builder.AppendLine("            return _hasCurrent;");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        public void Dispose()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (_disposed)");
-        builder.AppendLine("                return;");
-        builder.AppendLine();
-        builder.AppendLine("            DisposeColumnReaders();");
-        builder.AppendLine("            _rowGroup.Dispose();");
-        builder.AppendLine("            _reader.Dispose();");
-        builder.AppendLine("            _disposed = true;");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        bool ReadNextRow()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            while (_rowGroupRowsRemaining == 0)");
-        builder.AppendLine("                if (!OpenNextRowGroup())");
-        builder.AppendLine("                {");
-        builder.AppendLine("                    _hasCurrent = false;");
-        builder.AppendLine("                    return false;");
-        builder.AppendLine("                }");
-        builder.AppendLine();
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("            if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
-            builder.AppendLine("            {");
-            AppendAdvanceColumnBody(builder, columns[i], "                ");
-            builder.AppendLine("            }");
-        }
-        builder.AppendLine("            _rowGroupRowsRemaining--;");
-        builder.AppendLine("            return true;");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        bool OpenNextRowGroup()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            while (true)");
-        builder.AppendLine("            {");
-        builder.AppendLine("                DisposeColumnReaders();");
-        builder.AppendLine("                _rowGroup.Dispose();");
-        builder.AppendLine("                if (!_rowGroups.MoveNext())");
-        builder.AppendLine("                {");
-        builder.AppendLine("                    return false;");
-        builder.AppendLine("                }");
-        builder.AppendLine();
-        builder.AppendLine("                _reader.OpenRowGroup(_rowGroups.Current, _rowGroup);");
-        builder.AppendLine("                _rowGroupRowsRemaining = _rowGroup.RowCount;");
-        builder.AppendLine("                if (_rowGroupRowsRemaining == 0)");
-        builder.AppendLine("                    continue;");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("                if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
-            builder.AppendLine("                {");
-            builder.Append("                    _").Append(columns[i].PropertyName).Append("Pages = _rowGroup.Column<")
-                .Append(columns[i].ClrTypeName).Append(">(_").Append(columns[i].PropertyName).AppendLine("Ordinal).Pages.GetEnumerator();");
-            builder.Append("                    _").Append(columns[i].PropertyName).AppendLine("PagesOpen = true;");
-            builder.AppendLine("                }");
-            builder.Append("                _").Append(columns[i].PropertyName).AppendLine("Page = default;");
-            builder.Append("                _").Append(columns[i].PropertyName).Append("PageArray = global::System.Array.Empty<")
-                .Append(columns[i].ClrTypeName).AppendLine(">();");
-            builder.Append("                _").Append(columns[i].PropertyName).AppendLine("PageIndex = -1;");
-            builder.Append("                if (_").Append(columns[i].PropertyName).AppendLine("Materialized)");
-            builder.AppendLine("                {");
-            builder.Append("                    _").Append(columns[i].PropertyName).Append("PageArray = s_missing")
-                .Append(columns[i].PropertyName).AppendLine(";");
-            builder.Append("                    _").Append(columns[i].PropertyName).AppendLine("PageIndex = 0;");
-            builder.AppendLine("                }");
-        }
-        builder.AppendLine("                return true;");
-        builder.AppendLine("            }");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        bool IsProjected(Projection column)");
-        builder.AppendLine("            => (_projection & column) != 0;");
-        builder.AppendLine();
-        builder.AppendLine("        static global::Plank.Reading.Logical.ParquetReaderOptions CreateLooseReaderOptions(global::Plank.Reading.Logical.ParquetReaderOptions options)");
-        builder.AppendLine("            => new()");
-        builder.AppendLine("            {");
-        builder.AppendLine("                BufferPool = options.BufferPool,");
-        builder.AppendLine("                Execution = options.Execution,");
-        builder.AppendLine("                MaxReadAheadRowGroups = options.MaxReadAheadRowGroups,");
-        builder.AppendLine("                Strict = false");
-        builder.AppendLine("            };");
-        builder.AppendLine();
-        builder.AppendLine("        void ResolveFileSchema()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            var fileColumns = _reader.Metadata.Schema.Columns;");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("            _").Append(columns[i].PropertyName).Append("Ordinal = ResolveColumnOrdinal(fileColumns, Schema.Columns[")
-                .Append(i).Append("], \"").Append(Escape(columns[i].Name)).Append("\", \"")
-                .Append(Escape(columns[i].PropertyName)).Append("\", _")
-                .Append(columns[i].PropertyName).AppendLine("Projected);");
-            builder.Append("            if (_").Append(columns[i].PropertyName).AppendLine("Ordinal < 0)");
-            builder.AppendLine("            {");
-            builder.Append("                if (_").Append(columns[i].PropertyName).AppendLine("Projected)");
-            builder.AppendLine("                {");
-            builder.Append("                    _").Append(columns[i].PropertyName).Append("PageArray = s_missing")
-                .Append(columns[i].PropertyName).AppendLine(";");
-            builder.Append("                    _").Append(columns[i].PropertyName).AppendLine("PageIndex = 0;");
-            builder.Append("                    _").Append(columns[i].PropertyName).AppendLine("Materialized = true;");
-            builder.AppendLine("                }");
-            builder.Append("                _").Append(columns[i].PropertyName).AppendLine("Projected = false;");
-            builder.AppendLine("            }");
-            builder.AppendLine("            else");
-            builder.Append("                _").Append(columns[i].PropertyName).AppendLine("Materialized = false;");
-        }
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        static int ResolveColumnOrdinal(global::System.Collections.Immutable.ImmutableArray<global::Plank.Schema.Column> fileColumns, global::Plank.Schema.Column expected, string columnName)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            for (var i = 0; i < fileColumns.Length; i++)");
-        builder.AppendLine("            {");
-        builder.AppendLine("                var actual = fileColumns[i];");
-        builder.AppendLine("                if (actual.Name != expected.Name)");
-        builder.AppendLine("                    continue;");
-        builder.AppendLine("                if (actual.PhysicalType != expected.PhysicalType)");
-        builder.AppendLine("                    throw new global::System.InvalidOperationException($\"Column '{columnName}' has physical type {actual.PhysicalType}, expected {expected.PhysicalType}.\");");
-        builder.AppendLine("                if (!global::System.Collections.Generic.EqualityComparer<global::Plank.Schema.LogicalType?>.Default.Equals(actual.LogicalType, expected.LogicalType))");
-        builder.AppendLine("                    throw new global::System.InvalidOperationException($\"Column '{columnName}' has a different logical type than the generated schema.\");");
-        builder.AppendLine("                var actualRepetition = NormalizeRepetition(actual.Options.Repetition);");
-        builder.AppendLine("                var expectedRepetition = NormalizeRepetition(expected.Options.Repetition);");
-        builder.AppendLine("                if (actualRepetition != expectedRepetition)");
-        builder.AppendLine("                    throw new global::System.InvalidOperationException($\"Column '{columnName}' has repetition {actualRepetition}, expected {expectedRepetition}.\");");
-        builder.AppendLine("                return i;");
-        builder.AppendLine("            }");
-        builder.AppendLine();
-        builder.AppendLine("            throw new global::System.InvalidOperationException($\"Column '{columnName}' was not found in the file schema.\");");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        int ResolveColumnOrdinal(global::System.Collections.Immutable.ImmutableArray<global::Plank.Schema.Column> fileColumns, global::Plank.Schema.Column expected, string columnName, string propertyName, bool projected)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            for (var i = 0; i < fileColumns.Length; i++)");
-        builder.AppendLine("            {");
-        builder.AppendLine("                var actual = fileColumns[i];");
-        builder.AppendLine("                if (actual.Name != expected.Name)");
-        builder.AppendLine("                    continue;");
-        builder.AppendLine();
-        builder.AppendLine("                ValidatePhysicalType(actual, expected, columnName);");
-        builder.AppendLine("                ValidateLogicalType(actual, expected, columnName);");
-        builder.AppendLine("                ValidateRepetition(actual, expected, columnName);");
-        builder.AppendLine("                ValidateMaterializedType(actual, expected, columnName, propertyName);");
-        builder.AppendLine("                return i;");
-        builder.AppendLine("            }");
-        builder.AppendLine();
-        builder.AppendLine("            if (!projected)");
-        builder.AppendLine("                return -1;");
-        builder.AppendLine("            if (_schemaEvolution?.MissingColumns == global::Plank.Reading.MissingColumnEvolutionBehavior.MaterializeDefault)");
-        builder.AppendLine("                return -1;");
-        builder.AppendLine();
-        builder.AppendLine("            throw new global::System.InvalidOperationException($\"Column '{columnName}' was not found in the file schema.\");");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        void ValidatePhysicalType(global::Plank.Schema.Column actual, global::Plank.Schema.Column expected, string columnName)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (actual.PhysicalType == expected.PhysicalType)");
-        builder.AppendLine("                return;");
-        builder.AppendLine();
-        builder.AppendLine("            if (_schemaEvolution?.PhysicalTypes == global::Plank.Reading.SchemaTypeEvolutionBehavior.AllowCompatible)");
-        builder.AppendLine("                throw new global::System.InvalidOperationException($\"Column '{columnName}' changed physical type from {expected.PhysicalType} to {actual.PhysicalType}, and no compatible materialization is available.\");");
-        builder.AppendLine("            throw new global::System.InvalidOperationException($\"Column '{columnName}' has physical type {actual.PhysicalType}, expected {expected.PhysicalType}.\");");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        void ValidateLogicalType(global::Plank.Schema.Column actual, global::Plank.Schema.Column expected, string columnName)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (global::System.Collections.Generic.EqualityComparer<global::Plank.Schema.LogicalType?>.Default.Equals(actual.LogicalType, expected.LogicalType))");
-        builder.AppendLine("                return;");
-        builder.AppendLine("            if (_schemaEvolution?.LogicalTypes == global::Plank.Reading.SchemaTypeEvolutionBehavior.AllowCompatible && expected.LogicalType is null && actual.LogicalType is global::Plank.Schema.LogicalType.Int integer && integer.IsSigned)");
-        builder.AppendLine("                if ((expected.PhysicalType == global::Plank.Schema.ParquetPhysicalType.Int32 && integer.BitWidth == 32) || (expected.PhysicalType == global::Plank.Schema.ParquetPhysicalType.Int64 && integer.BitWidth == 64))");
-        builder.AppendLine("                    return;");
-        builder.AppendLine();
-        builder.AppendLine("            throw new global::System.InvalidOperationException($\"Column '{columnName}' has a different logical type than the generated schema.\");");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        void ValidateRepetition(global::Plank.Schema.Column actual, global::Plank.Schema.Column expected, string columnName)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            var actualRepetition = NormalizeRepetition(actual.Options.Repetition);");
-        builder.AppendLine("            var expectedRepetition = NormalizeRepetition(expected.Options.Repetition);");
-        builder.AppendLine("            if (actualRepetition == expectedRepetition)");
-        builder.AppendLine("                return;");
-        builder.AppendLine("            if (actualRepetition == global::Plank.Schema.ParquetRepetition.Required && expectedRepetition == global::Plank.Schema.ParquetRepetition.Optional && _schemaEvolution?.Repetition >= global::Plank.Reading.RepetitionEvolutionBehavior.AllowRequiredToOptional)");
-        builder.AppendLine("                return;");
-        builder.AppendLine("            if (actualRepetition == global::Plank.Schema.ParquetRepetition.Optional && expectedRepetition == global::Plank.Schema.ParquetRepetition.Required && _schemaEvolution?.Repetition == global::Plank.Reading.RepetitionEvolutionBehavior.AllowRequiredToOptionalAndOptionalToRequired)");
-        builder.AppendLine("                throw new global::System.InvalidOperationException($\"Column '{columnName}' became optional, but generated non-null materialization is not safe.\");");
-        builder.AppendLine("            throw new global::System.InvalidOperationException($\"Column '{columnName}' has repetition {actualRepetition}, expected {expectedRepetition}.\");");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        void ValidateMaterializedType(global::Plank.Schema.Column actual, global::Plank.Schema.Column expected, string columnName, string propertyName)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (actual.PhysicalType == expected.PhysicalType)");
-        builder.AppendLine("                return;");
-        builder.AppendLine("            if (_schemaEvolution?.MaterializedTypes == global::Plank.Reading.SchemaTypeEvolutionBehavior.AllowCompatible)");
-        builder.AppendLine("                throw new global::System.InvalidOperationException($\"Column '{columnName}' cannot be materialized into generated property '{propertyName}'.\");");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        static global::Plank.Schema.ParquetRepetition NormalizeRepetition(global::Plank.Schema.ParquetRepetition repetition)");
-        builder.AppendLine("            => repetition == global::Plank.Schema.ParquetRepetition.Unspecified ? global::Plank.Schema.ParquetRepetition.Required : repetition;");
-        builder.AppendLine();
-        builder.AppendLine("        void EnsureStarted()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (_started)");
-        builder.AppendLine("                return;");
-        builder.AppendLine();
-        builder.AppendLine("            _rowGroups = _reader.EnumerateRowGroups().GetEnumerator();");
-        builder.AppendLine("            _started = true;");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        void DisposeColumnReaders()");
-        builder.AppendLine("        {");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("            if (_").Append(columns[i].PropertyName).AppendLine("PagesOpen)");
-            builder.AppendLine("            {");
-            builder.Append("                _").Append(columns[i].PropertyName).AppendLine("Pages.Dispose();");
-            builder.Append("                _").Append(columns[i].PropertyName).AppendLine("PagesOpen = false;");
-            builder.AppendLine("            }");
-        }
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        void ThrowIfDisposed()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (_disposed)");
-        builder.AppendLine("                throw new global::System.ObjectDisposedException(nameof(RowReader));");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        static T[] GetArray<T>(global::System.ReadOnlyMemory<T> memory, string columnName)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (global::System.Runtime.InteropServices.MemoryMarshal.TryGetArray(memory, out var segment) && segment.Array is not null)");
-        builder.AppendLine("                return segment.Array;");
-        builder.AppendLine();
-        builder.AppendLine("            throw new global::System.InvalidOperationException($\"Column '{columnName}' page is not array-backed.\");");
-        builder.AppendLine("        }");
-        builder.AppendLine("    }");
-        builder.AppendLine();
-        builder.AppendLine("    public sealed class BufferSlot");
-        builder.AppendLine("    {");
-        builder.AppendLine("        int _index;");
-        builder.AppendLine("        readonly int _rowCount;");
-        builder.AppendLine("        global::System.Collections.Generic.List<global::System.IDisposable>? _ownedBuffers;");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("        internal readonly ").Append(GetBufferType(columns[i].ClrTypeName)).Append(" _").Append(columns[i].PropertyName).AppendLine(";");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("        readonly global::Plank.Writing.SerializedColumn<").Append(columns[i].ClrTypeName).Append("> _serialized").Append(columns[i].PropertyName).AppendLine(";");
-        builder.AppendLine();
         builder.AppendLine("        internal BufferSlot(global::Plank.Writing.RowGroupWriter rowGroupWriter, int rowCount)");
+        builder.AppendLine("            : base(rowGroupWriter, s_rowApiColumns, rowCount)");
         builder.AppendLine("        {");
-        builder.AppendLine("            _ = rowGroupWriter ?? throw new global::System.ArgumentNullException(nameof(rowGroupWriter));");
-        builder.AppendLine("            if (rowCount < 0)");
-        builder.AppendLine("                throw new global::System.ArgumentOutOfRangeException(nameof(rowCount), rowCount, \"Row count must be non-negative.\");");
-        builder.AppendLine();
-        builder.AppendLine("            _index = 0;");
-        builder.AppendLine("            _rowCount = rowCount;");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("            _").Append(columns[i].PropertyName).Append(" = rowCount == 0 ? global::System.Array.Empty<").Append(columns[i].ClrTypeName).Append(">() : ").Append(GetBufferAllocation(columns[i].ClrTypeName)).AppendLine(";");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("            _serialized").Append(columns[i].PropertyName).Append(" = rowGroupWriter.CreateSerializedColumn<").Append(columns[i].ClrTypeName).Append(">(Schema.Columns[").Append(i).Append("]);").AppendLine();
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        internal BufferSlot(global::Plank.Writing.ParquetWriter writer, int rowCount)");
+        builder.AppendLine("            : base(writer, s_rowApiColumns, rowCount)");
         builder.AppendLine("        {");
-        builder.AppendLine("            _ = writer ?? throw new global::System.ArgumentNullException(nameof(writer));");
-        builder.AppendLine("            if (rowCount < 0)");
-        builder.AppendLine("                throw new global::System.ArgumentOutOfRangeException(nameof(rowCount), rowCount, \"Row count must be non-negative.\");");
-        builder.AppendLine();
-        builder.AppendLine("            _index = 0;");
-        builder.AppendLine("            _rowCount = rowCount;");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("            _").Append(columns[i].PropertyName).Append(" = rowCount == 0 ? global::System.Array.Empty<").Append(columns[i].ClrTypeName).Append(">() : ").Append(GetBufferAllocation(columns[i].ClrTypeName)).AppendLine(";");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("            _serialized").Append(columns[i].PropertyName).Append(" = writer.CreateSerializedColumn<").Append(columns[i].ClrTypeName).Append(">(Schema.Columns[").Append(i).Append("]);").AppendLine();
         builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal bool IsFull => _index == _rowCount;");
-        builder.AppendLine();
-        builder.AppendLine("        internal bool IsEmpty => _index == 0;");
-        builder.AppendLine();
-        builder.AppendLine("        internal int Count => _index;");
         builder.AppendLine();
         builder.AppendLine("        internal Row GetRow()");
         builder.AppendLine("        {");
-        builder.AppendLine("            if (_index >= _rowCount)");
-        builder.AppendLine("                throw new global::System.InvalidOperationException(\"No more row slots are available.\");");
+        builder.AppendLine("            EnsureRowAvailable();");
         builder.AppendLine();
-        builder.Append("            return new Row(_index, this");
+        builder.Append("            return new Row(Index, this");
         for (var i = 0; i < columns.Length; i++)
-            builder.Append(", _").Append(columns[i].PropertyName);
+            builder.Append(", GetValues<").Append(columns[i].ClrTypeName).Append(">(").Append(i).Append(')');
         builder.AppendLine(");");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal void Next()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (_index >= _rowCount)");
-        builder.AppendLine("                throw new global::System.InvalidOperationException(\"No more row slots are available.\");");
-        builder.AppendLine("            _index++;");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal void SerializeColumns()");
-        builder.AppendLine("        {");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("            _serialized").Append(columns[i].PropertyName).Append(".Serialize(new global::System.ReadOnlySpan<").Append(columns[i].ClrTypeName).Append(">(_").Append(columns[i].PropertyName).Append(", 0, _index));").AppendLine();
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal void WriteSerialized(global::Plank.Writing.RowGroupWriter rowGroupWriter)");
-        builder.AppendLine("        {");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("            rowGroupWriter.Write(_serialized").Append(columns[i].PropertyName).Append(");").AppendLine();
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal void RegisterOwner(global::System.IDisposable owner)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            global::System.ArgumentNullException.ThrowIfNull(owner);");
-        builder.AppendLine("            (_ownedBuffers ??= new global::System.Collections.Generic.List<global::System.IDisposable>()).Add(owner);");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal void ResetForReuse()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            if (_ownedBuffers is not null)");
-        builder.AppendLine("            {");
-        builder.AppendLine("                for (var i = 0; i < _ownedBuffers.Count; i++)");
-        builder.AppendLine("                    _ownedBuffers[i].Dispose();");
-        builder.AppendLine("                _ownedBuffers.Clear();");
-        builder.AppendLine("            }");
-        for (var i = 0; i < columns.Length; i++)
-            if (RequiresClearOnReset(columns[i].ClrTypeName))
-                builder.Append("            global::System.Array.Clear(_").Append(columns[i].PropertyName).Append(", 0, _index);").AppendLine();
-        builder.AppendLine("            _index = 0;");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -1202,25 +518,82 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return true;
     }
 
-    static void AppendAdvanceColumnBody(StringBuilder builder, MappedColumn column, string indent)
+    static void AppendRowApiColumnDescriptors(StringBuilder builder, ImmutableArray<MappedColumn> columns)
     {
-        var name = column.PropertyName;
-        builder.Append(indent).Append('_').Append(name).AppendLine("PageIndex++;");
-        builder.Append(indent).Append("while ((uint)_").Append(name).Append("PageIndex >= (uint)_")
-            .Append(name).AppendLine("Page.Length)");
-        builder.Append(indent).AppendLine("{");
-        builder.Append(indent).Append("    if (!_").Append(name).AppendLine("Pages.MoveNext())");
-        builder.Append(indent)
-            .Append("        throw new global::System.IO.InvalidDataException(\"Column '")
-            .Append(Escape(name)).AppendLine("' ended before the row group was complete.\");");
+        builder.AppendLine("    static readonly global::Plank.RowApi.RowApiColumnDescriptor[] s_rowApiColumns = [");
+        for (var i = 0; i < columns.Length; i++)
+            builder.Append("        new global::Plank.RowApi.RowApiColumnDescriptor<")
+                .Append(columns[i].ClrTypeName).Append(">(\"").Append(Escape(columns[i].PropertyName))
+                .Append("\", Schema.Columns[").Append(i).Append("], (ulong)Projection.")
+                .Append(columns[i].PropertyName).AppendLine("),");
+        builder.AppendLine("    ];");
+    }
+
+    static void AppendRowReader(StringBuilder builder, ImmutableArray<MappedColumn> columns)
+    {
+        builder.AppendLine("    public sealed class RowReader : global::System.IDisposable");
+        builder.AppendLine("    {");
+        builder.AppendLine("        readonly global::Plank.RowApi.RowReaderCore _core;");
         builder.AppendLine();
-        builder.Append(indent).Append("    _").Append(name).Append("Page = _").Append(name).AppendLine("Pages.Current.Values;");
-        builder.Append(indent).Append("    _").Append(name).Append("PageArray = GetArray(_").Append(name).Append("Page, \"")
-            .Append(Escape(name)).AppendLine("\");");
-        builder.Append(indent).Append("    _").Append(name).AppendLine("PageIndex = 0;");
-        builder.Append(indent).Append("    if (_").Append(name).AppendLine("Page.Length == 0)");
-        builder.Append(indent).Append("        _").Append(name).AppendLine("PageIndex = -1;");
-        builder.Append(indent).AppendLine("}");
+        builder.AppendLine("        internal RowReader(global::System.IO.Stream stream, Projection projection, global::Plank.Reading.Logical.ParquetReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            _core = new global::Plank.RowApi.RowReaderCore(stream, Schema, s_rowApiColumns, (ulong)projection, options, schemaEvolution);");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        internal RowReader(global::Plank.Reading.IParquetReadSource source, Projection projection, global::Plank.Reading.Logical.ParquetReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            _core = new global::Plank.RowApi.RowReaderCore(source, Schema, s_rowApiColumns, (ulong)projection, options, schemaEvolution);");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        public Enumerator GetEnumerator()");
+        builder.AppendLine("            => new(this);");
+        builder.AppendLine();
+        builder.AppendLine("        public void Reset(global::System.IO.Stream stream, Projection projection = Projection.All, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
+        builder.AppendLine("            => _core.Reset(stream, (ulong)projection, schemaEvolution);");
+        builder.AppendLine();
+        builder.AppendLine("        public void Reset(global::Plank.Reading.IParquetReadSource source, Projection projection = Projection.All, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
+        builder.AppendLine("            => _core.Reset(source, (ulong)projection, schemaEvolution);");
+        builder.AppendLine();
+        builder.AppendLine("        public readonly struct Enumerator : global::System.IDisposable");
+        builder.AppendLine("        {");
+        builder.AppendLine("            readonly RowReader _reader;");
+        builder.AppendLine();
+        builder.AppendLine("            internal Enumerator(RowReader reader)");
+        builder.AppendLine("                => _reader = reader ?? throw new global::System.ArgumentNullException(nameof(reader));");
+        builder.AppendLine();
+        builder.AppendLine("            public Row Current => _reader.Current;");
+        builder.AppendLine();
+        builder.AppendLine("            public bool MoveNext()");
+        builder.AppendLine("                => _reader.MoveNext();");
+        builder.AppendLine();
+        builder.AppendLine("            public void Dispose()");
+        builder.AppendLine("            {");
+        builder.AppendLine("            }");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        public Row Current");
+        builder.AppendLine("        {");
+        builder.AppendLine("            get");
+        builder.AppendLine("            {");
+        builder.AppendLine("                _core.ThrowIfNotPositioned();");
+        builder.Append("                return new Row(");
+        for (var i = 0; i < columns.Length; i++)
+        {
+            if (i > 0)
+                builder.Append(", ");
+            builder.Append("_core.GetCurrentArray<").Append(columns[i].ClrTypeName).Append(">(").Append(i)
+                .Append("), _core.GetCurrentIndex(").Append(i).Append(')');
+        }
+        builder.AppendLine(");");
+        builder.AppendLine("            }");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        public bool MoveNext()");
+        builder.AppendLine("            => _core.MoveNext();");
+        builder.AppendLine();
+        builder.AppendLine("        public void Dispose()");
+        builder.AppendLine("            => _core.Dispose();");
+        builder.AppendLine("    }");
     }
 
     static bool IsSupportedMapping(SchemaColumn column, string clrType)
@@ -1318,25 +691,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static string GetBufferType(string clrTypeName)
         => $"{clrTypeName}[]";
 
-    static string GetBufferAllocation(string clrTypeName)
-    {
-        if (clrTypeName.EndsWith("[]", StringComparison.Ordinal))
-        {
-            var elementType = clrTypeName.Substring(0, clrTypeName.Length - 2);
-            return $"new {elementType}[rowCount][]";
-        }
-
-        return $"new {clrTypeName}[rowCount]";
-    }
-
     static bool SupportsOwnerSetter(string clrTypeName)
         => clrTypeName is "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?";
-
-    static bool RequiresClearOnReset(string clrTypeName)
-        => clrTypeName is
-            "string" or "string?" or
-            "byte[]" or "byte[]?" or
-            "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?";
 
     static bool TryExtractColumns(INamedTypeSymbol schemaType, out ImmutableArray<SchemaColumn> columns, out string error)
     {
