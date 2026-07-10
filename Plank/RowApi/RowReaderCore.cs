@@ -38,7 +38,8 @@ public sealed class RowReaderCore : IDisposable
         _schemaEvolution = schemaEvolution;
         _streamSource = source as StreamReadSource;
         _states = CreateStates(columns);
-        _reader = ParquetReader.Open(source, CreateLooseReaderOptions(options));
+        _reader = new ParquetReader(CreateLooseReaderOptions(options));
+        _reader.Reset(source);
         _rowGroup = _reader.CreateReusableRowGroupReader();
         _rowGroups = default;
         _rowGroupRowsRemaining = 0;

@@ -18,7 +18,6 @@ public readonly struct RowGroupTokenEnumerable
     {
         readonly ParquetReader _reader;
         int _ordinal;
-        int _offset;
 
         internal Enumerator(ParquetReader reader)
         {
@@ -26,7 +25,6 @@ public readonly struct RowGroupTokenEnumerable
 
             _reader = reader;
             _ordinal = 0;
-            _offset = reader.RowGroupsOffset;
             Current = default;
         }
 
@@ -34,7 +32,7 @@ public readonly struct RowGroupTokenEnumerable
 
         public bool MoveNext()
         {
-            if (!_reader.TryReadNextRowGroupToken(_ordinal, ref _offset, out var token))
+            if (!_reader.TryReadNextRowGroupToken(_ordinal, out var token))
                 return false;
 
             Current = token;

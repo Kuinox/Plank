@@ -11,21 +11,92 @@ static class ColumnChunkReader
 {
     static readonly Encoding Utf8 = new UTF8Encoding(false, true);
 
-    internal static int ReadChunkBuffer(IParquetReadSource source, InternalColumnChunkMetadata columnChunk, ref byte[]? buffer,
-        IParquetBufferPool bufferPool)
+    internal static bool TryDecodePage<T>(PageHeader header, ReadOnlySpan<byte> payload, Column column,
+        InternalColumnChunkMetadata columnChunk, ulong rowCount, ref Array? dictionary, ref T[]? dictionaryBuffer,
+        ref T[]? valuesBuffer, IParquetBufferPool bufferPool, ref int[]? deltaPrefixLengthsBuffer,
+        ref int[]? deltaSuffixLengthsBuffer, out ReadOnlyMemory<T> values, out EncodingKind encoding)
     {
-        ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(bufferPool);
-        if (columnChunk.TotalCompressedSize > source.Length)
-            throw new CorruptParquetException(
-                $"Column chunk size ({columnChunk.TotalCompressedSize}) exceeds source length ({source.Length}).");
-        if (columnChunk.TotalCompressedSize > int.MaxValue)
-            throw new NotSupportedException("Column chunks larger than Int32.MaxValue are not supported.");
+        ArgumentNullException.ThrowIfNull(column);
 
-        var length = checked((int)columnChunk.TotalCompressedSize);
-        buffer = EnsureByteBuffer(ref buffer, length, bufferPool);
-        source.ReadExactly(columnChunk.ChunkOffset, buffer.AsSpan(0, length));
-        return length;
+        if (column.Options.Repetition == ParquetRepetition.Repeated)
+            throw new NotSupportedException($"Repeated readback is not implemented yet for column '{column.Name}'.");
+
+        switch (header.Type)
+        {
+            case PageHeaderType.DictionaryPage:
+                dictionary = DecodeDictionaryPage(payload, column, header, CompressionKind.None,
+                    ref dictionaryBuffer, GetPhysicalDecodeType<T>(), bufferPool);
+                values = ReadOnlyMemory<T>.Empty;
+                encoding = default;
+                return false;
+            case PageHeaderType.DataPage:
+            {
+                byte[]? decompressionBuffer = null;
+                values = DecodeDataPageV1(payload, column, header, CompressionKind.None, rowCount, dictionary,
+                    ref valuesBuffer, bufferPool, ref deltaPrefixLengthsBuffer, ref deltaSuffixLengthsBuffer,
+                    ref decompressionBuffer);
+                encoding = header.Encoding;
+                return true;
+            }
+            case PageHeaderType.DataPageV2:
+                values = DecodeDataPageV2Payload(payload, column, header, columnChunk, rowCount, dictionary,
+                    ref valuesBuffer, bufferPool, ref deltaPrefixLengthsBuffer, ref deltaSuffixLengthsBuffer);
+                encoding = header.Encoding;
+                return true;
+            default:
+                throw new NotSupportedException($"Page type '{header.Type}' is not supported.");
+        }
+    }
+
+    static ReadOnlyMemory<T> DecodeDataPageV2Payload<T>(ReadOnlySpan<byte> payload, Column column,
+        PageHeader header, InternalColumnChunkMetadata columnChunk, ulong rowCount, Array? dictionary,
+        ref T[]? valuesBuffer, IParquetBufferPool bufferPool, ref int[]? deltaPrefixLengthsBuffer,
+        ref int[]? deltaSuffixLengthsBuffer)
+    {
+        var repLen = header.RepetitionLevelsByteLength;
+        var defLen = header.DefinitionLevelsByteLength;
+        var levelBytes = repLen + defLen;
+        if (header.NullCount > header.ValueCount)
+            throw new CorruptParquetException(
+                $"Page null count ({header.NullCount}) exceeds value count ({header.ValueCount}).");
+        if (header.ValueCount > rowCount)
+            throw new CorruptParquetException(
+                $"Page value count ({header.ValueCount}) exceeds row group row count ({rowCount}).");
+        if (levelBytes > (uint)payload.Length)
+            throw new CorruptParquetException(
+                $"Level bytes ({levelBytes}) exceed page payload size ({payload.Length}).");
+        if (payload.Length > 0 && columnChunk.Compression != CompressionKind.None &&
+            header.IsCompressed && payload.Length != header.UncompressedPageSize)
+            throw new CorruptParquetException("Physical page cursor returned a compressed DataPageV2 payload.");
+
+        var totalValueCount = header.ValueCount;
+        var physicalValueCount = header.ValueCount - header.NullCount;
+        var definitionPayload = defLen > 0 ? payload.Slice((int)repLen, (int)defLen) : default;
+        var dataPayload = payload[(int)levelBytes..];
+        var physicalDecodeType = GetPhysicalDecodeType<T>();
+        var isNullableValueType = physicalDecodeType != typeof(T);
+        var needsNullExpansion = isNullableValueType
+            || (!typeof(T).IsValueType && header.NullCount > 0 && defLen > 0);
+
+        if (dictionary is null)
+        {
+            if (needsNullExpansion)
+                return DecodeValuesWithNullExpansion<T>(dataPayload, definitionPayload, column, totalValueCount,
+                    physicalValueCount, header.Encoding, header.NullCount > 0);
+            if (header.NullCount > 0 && defLen > 0)
+                return (T[])DecodeValues(dataPayload, column, physicalValueCount, header.Encoding, typeof(T));
+            if (TryDecodeValuesIntoBuffer(dataPayload, column, physicalValueCount, header.Encoding, ref valuesBuffer,
+                    bufferPool, ref deltaPrefixLengthsBuffer, ref deltaSuffixLengthsBuffer, out var values))
+                return values;
+            return (T[])DecodeValues(dataPayload, column, physicalValueCount, header.Encoding, typeof(T));
+        }
+
+        if (header.NullCount > 0 && defLen > 0)
+            return DecodeDictionaryIndexesWithNulls<T>(dataPayload, totalValueCount, physicalValueCount, dictionary,
+                definitionPayload);
+
+        DecodeDictionaryIndexes(dataPayload, physicalValueCount, dictionary, ref valuesBuffer, bufferPool, out var decoded);
+        return decoded;
     }
 
     internal static bool TryReadNextDataPage<T>(byte[] buffer, int bufferLength, ref int offset, Column column,

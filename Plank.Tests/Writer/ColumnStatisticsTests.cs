@@ -463,7 +463,8 @@ internal sealed class ColumnStatisticsTests
     static InternalColumnChunkMetadata[] ReadFirstRowGroupColumns(string path)
     {
         using var stream = File.OpenRead(path);
-        using var reader = ParquetReader.Open(stream);
+        using var reader = new ParquetReader();
+        reader.Reset(stream);
         foreach (var token in reader.EnumerateRowGroups())
         {
             using var rowGroup = reader.OpenRowGroup(token);

@@ -1,6 +1,7 @@
 #nullable enable
 # Logical reader API review block - remove before shipping
 Plank.Reading.Logical.ParquetReader
+Plank.Reading.Logical.ParquetReader.ParquetReader(Plank.Reading.Logical.ParquetReaderOptions? options = null) -> void
 Plank.Reading.Logical.ParquetReader.CreateReusableRowGroupReader() -> Plank.Reading.Logical.RowGroupReader!
 Plank.Reading.Logical.ParquetReader.Dispose() -> void
 Plank.Reading.Logical.ParquetReader.EnumerateRowGroups() -> Plank.Reading.Logical.RowGroupTokenEnumerable
@@ -11,8 +12,6 @@ Plank.Reading.Logical.ParquetReader.OpenRowGroup(Plank.Reading.Logical.RowGroupT
 Plank.Reading.Logical.ParquetReader.Reset(Plank.Reading.IParquetReadSource! source) -> void
 Plank.Reading.Logical.ParquetReader.Reset(System.IO.Stream! stream) -> void
 Plank.Reading.Logical.ParquetReader.Schema.get -> Plank.Schema.ParquetSchema!
-static Plank.Reading.Logical.ParquetReader.Open(Plank.Reading.IParquetReadSource! source, Plank.Reading.Logical.ParquetReaderOptions? options = null) -> Plank.Reading.Logical.ParquetReader!
-static Plank.Reading.Logical.ParquetReader.Open(System.IO.Stream! stream, Plank.Reading.Logical.ParquetReaderOptions? options = null) -> Plank.Reading.Logical.ParquetReader!
 Plank.Reading.Logical.ParquetReaderOptions
 Plank.Reading.Logical.ParquetReaderOptions.BufferPool.get -> Plank.Writing.IParquetBufferPool!
 Plank.Reading.Logical.ParquetReaderOptions.BufferPool.init -> void

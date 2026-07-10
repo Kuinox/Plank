@@ -5,36 +5,15 @@ using Plank.Writing;
 
 sealed class ColumnPageReadState<T> : IColumnPageReadState
 {
-    internal byte[]? Buffer;
-    internal int BufferLength;
-    internal byte[]? DecompressionBuffer;
     internal Array? Dictionary;
     internal T[]? DictionaryBuffer;
     internal T[]? ValuesBuffer;
     internal int[]? DeltaPrefixLengthsBuffer;
     internal int[]? DeltaSuffixLengthsBuffer;
 
-    internal void ReleasePageBuffer(IParquetBufferPool bufferPool)
-    {
-        ArgumentNullException.ThrowIfNull(bufferPool);
-
-        if (Buffer is not null)
-        {
-            bufferPool.Return(Buffer);
-            Buffer = null;
-            BufferLength = 0;
-        }
-    }
-
     public void ReleaseAll(IParquetBufferPool bufferPool)
     {
-        ReleasePageBuffer(bufferPool);
-
-        if (DecompressionBuffer is not null)
-        {
-            bufferPool.Return(DecompressionBuffer);
-            DecompressionBuffer = null;
-        }
+        ArgumentNullException.ThrowIfNull(bufferPool);
 
         if (ValuesBuffer is not null)
         {

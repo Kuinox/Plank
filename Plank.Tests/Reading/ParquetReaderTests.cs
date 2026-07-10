@@ -52,7 +52,8 @@ internal sealed class ParquetReaderTests
     {
         using var stream = CreateTwoColumnFile();
 
-        using var reader = ParquetReader.Open(stream);
+        using var reader = new ParquetReader();
+        reader.Reset(stream);
 
         await Assert.That(reader.Schema.Columns.Length).IsEqualTo(2);
         await Assert.That(reader.Schema.Columns[0].Name).IsEqualTo("Value");
@@ -66,7 +67,8 @@ internal sealed class ParquetReaderTests
     {
         using var stream = CreateTwoColumnFile();
 
-        using var reader = ParquetReader.Open(stream);
+        using var reader = new ParquetReader();
+        reader.Reset(stream);
         var token = EnumerateTokens(reader)[0];
         using var rowGroup = reader.OpenRowGroup(token);
 
@@ -79,7 +81,8 @@ internal sealed class ParquetReaderTests
     {
         using var first = CreateInt32File("Value");
         using var second = CreateInt32File("Other");
-        using var reader = ParquetReader.Open(first);
+        using var reader = new ParquetReader();
+        reader.Reset(first);
 
         await Assert.That(reader.Schema.Columns[0].Name).IsEqualTo("Value");
 
@@ -92,7 +95,8 @@ internal sealed class ParquetReaderTests
     {
         using var first = CreateInt32File("Value");
         using var second = CreateInt32File("Other");
-        using var reader = ParquetReader.Open(first);
+        using var reader = new ParquetReader();
+        reader.Reset(first);
         var oldToken = EnumerateTokens(reader)[0];
 
         reader.Reset(second);

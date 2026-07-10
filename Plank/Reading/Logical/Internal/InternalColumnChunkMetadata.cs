@@ -10,10 +10,11 @@ readonly struct InternalColumnChunkMetadata
         ulong totalUncompressedSize, CompressionKind compression, EncodingKind[] encodings, string path,
         ParquetPhysicalType physicalType,
         ulong columnIndexOffset = 0, uint columnIndexLength = 0, ulong offsetIndexOffset = 0,
-        uint offsetIndexLength = 0)
+        uint offsetIndexLength = 0, int physicalColumnOrdinal = -1)
     {
         Path = path;
         PhysicalType = physicalType;
+        PhysicalColumnOrdinal = physicalColumnOrdinal;
         DataPageOffset = dataPageOffset;
         DictionaryPageOffset = dictionaryPageOffset;
         TotalCompressedSize = totalCompressedSize;
@@ -29,13 +30,16 @@ readonly struct InternalColumnChunkMetadata
     internal InternalColumnChunkMetadata(ParquetColumnChunkInfo chunk, EncodingKind[] encodings, string path)
         : this(chunk.DataPageOffset, chunk.DictionaryPageOffset, chunk.TotalCompressedSize,
             chunk.TotalUncompressedSize, chunk.Compression, encodings, path, chunk.PhysicalType,
-            chunk.ColumnIndexOffset, chunk.ColumnIndexLength, chunk.OffsetIndexOffset, chunk.OffsetIndexLength)
+            chunk.ColumnIndexOffset, chunk.ColumnIndexLength, chunk.OffsetIndexOffset, chunk.OffsetIndexLength,
+            chunk.ColumnOrdinal)
     {
     }
 
     internal string Path { get; }
 
     internal ParquetPhysicalType PhysicalType { get; }
+
+    internal int PhysicalColumnOrdinal { get; }
 
     internal ulong DataPageOffset { get; }
 

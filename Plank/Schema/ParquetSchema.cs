@@ -45,11 +45,18 @@ public sealed record ParquetSchema
     public ParquetReader CreateReader(Stream stream, ParquetReaderOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        return ParquetReader.Open(new StreamReadSource(stream), this, options ?? ParquetReaderOptions.Default);
+        var reader = new ParquetReader(this, options);
+        reader.Reset(stream);
+        return reader;
     }
 
     public ParquetReader CreateReader(IParquetReadSource source, ParquetReaderOptions? options = null)
-        => ParquetReader.Open(source, this, options ?? ParquetReaderOptions.Default);
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var reader = new ParquetReader(this, options);
+        reader.Reset(source);
+        return reader;
+    }
 
     public ParquetWriter CreateWriter(Stream stream, ParquetWriterOptions? options = null)
         => new(stream, this, options ?? ParquetWriterOptions.Default);

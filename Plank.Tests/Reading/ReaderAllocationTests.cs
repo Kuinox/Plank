@@ -32,7 +32,8 @@ internal sealed class ReaderAllocationTests
         try
         {
             using var stream = File.OpenRead(path);
-            using var reader = ParquetReader.Open(stream);
+            using var reader = new ParquetReader();
+            reader.Reset(stream);
             for (var i = 0; i < 8; i++)
                 _ = CountRowGroups(reader);
 

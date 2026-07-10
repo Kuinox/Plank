@@ -1,6 +1,8 @@
 using Plank.Reading.Logical;
 using Plank.Reading.Logical.Internal;
 using Plank.Schema;
+using System.Buffers;
+using System.Runtime.CompilerServices;
 
 namespace Plank.Reading.Logical.Internal;
 
@@ -14,6 +16,12 @@ sealed class RowGroupReadContext
 
     internal RowGroupReadContext(int columnCount)
     {
+        var arr = ArrayPool<byte>.Shared.Rent(1024);
+
+        Unsafe.As<int[]>(arr);
+
+
+
         if (columnCount < 0)
             throw new ArgumentOutOfRangeException(nameof(columnCount), columnCount,
                 "Column count must be non-negative.");
@@ -24,9 +32,6 @@ sealed class RowGroupReadContext
         _token = default;
         _disposed = true;
     }
-
-    internal IParquetReadSource Source
-        => _reader.Source;
 
     internal InternalColumnChunkMetadata[] PreviousColumns
         => _rowGroup.Columns ?? [];
@@ -83,8 +88,12 @@ sealed class RowGroupReadContext
         if ((uint)columnOrdinal >= (uint)_rowGroup.Columns.Length)
             throw new CorruptParquetException(
                 $"Column '{column.Name}' (ordinal {columnOrdinal}) is not present in this row group ({_rowGroup.Columns.Length} columns).");
-        return new(Source, column, _rowGroup.Columns[columnOrdinal],
-            GetPageReadState<T>(columnOrdinal), _reader.Options.BufferPool, _rowGroup.RowCount);
+        var columnChunk = _rowGroup.Columns[columnOrdinal];
+        var physicalColumnOrdinal = columnChunk.PhysicalColumnOrdinal >= 0
+            ? columnChunk.PhysicalColumnOrdinal
+            : columnOrdinal;
+        return new(_reader.PhysicalReader, _rowGroup.RowGroupOrdinal, physicalColumnOrdinal, column,
+            columnChunk, GetPageReadState<T>(columnOrdinal), _reader.Options.BufferPool, _rowGroup.RowCount);
     }
 
     ColumnPageReadState<T> GetPageReadState<T>(int columnOrdinal)
