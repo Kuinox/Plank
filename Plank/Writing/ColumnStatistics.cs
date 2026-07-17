@@ -898,14 +898,14 @@ internal readonly struct ColumnStatistics
         var rightBytes = bufferPool.Rent<byte>(checked((uint)Math.Max(1, rightByteCount)));
         try
         {
-            Utf8.GetBytes(left, leftBytes.AsSpan(0, leftByteCount));
-            Utf8.GetBytes(right, rightBytes.AsSpan(0, rightByteCount));
-            return CompareBytes(leftBytes.AsSpan(0, leftByteCount), rightBytes.AsSpan(0, rightByteCount));
+            Utf8.GetBytes(left, leftBytes.Span[..leftByteCount]);
+            Utf8.GetBytes(right, rightBytes.Span[..rightByteCount]);
+            return CompareBytes(leftBytes.Span[..leftByteCount], rightBytes.Span[..rightByteCount]);
         }
         finally
         {
-            bufferPool.Return(leftBytes);
-            bufferPool.Return(rightBytes);
+            leftBytes.Dispose();
+            rightBytes.Dispose();
         }
     }
 

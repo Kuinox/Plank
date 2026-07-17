@@ -7,7 +7,6 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
     where TSlot : RowBufferSlot
 {
     readonly Action<int>? _onFlush;
-    readonly string _workerThreadNamePrefix;
     TSlot _active;
     bool _completed;
 
@@ -21,7 +20,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
 
         RowBatchSize = rowBatchSize;
         _onFlush = onFlush;
-        _workerThreadNamePrefix = workerThreadNamePrefix;
+        WorkerThreadNamePrefix = workerThreadNamePrefix;
         InitializeSlots();
         _active = TakeInitialSlot();
         _completed = false;
@@ -41,8 +40,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
     protected override void ResetSlotForReuse(TSlot slot)
         => slot.ResetForReuse();
 
-    protected override string WorkerThreadNamePrefix
-        => _workerThreadNamePrefix;
+    protected override string WorkerThreadNamePrefix { get; }
 
     protected TSlot GetSlotForRow()
     {

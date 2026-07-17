@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Plank.Schema;
 using Plank.Writing;
 
@@ -41,49 +42,45 @@ static class PhysicalMetadataThriftReader
         var nodeCount = checked((int)count);
         metadata.SchemaNodeBuffer = Rent<ParquetSchemaNodeInfo>(bufferPool, nodeCount);
         metadata.ColumnBuffer = Rent<ParquetColumnSchemaInfo>(bufferPool, nodeCount);
-        var parentStack = Rent<int>(bufferPool, nodeCount);
-        var remainingChildren = Rent<int>(bufferPool, nodeCount);
-        try
+        using var parentStackBuffer = Rent<int>(bufferPool, nodeCount);
+        using var remainingChildrenBuffer = Rent<int>(bufferPool, nodeCount);
+        var parentStack = ParquetBuffer.AsSpan<int>(parentStackBuffer, nodeCount);
+        var remainingChildren = ParquetBuffer.AsSpan<int>(remainingChildrenBuffer, nodeCount);
+        var schemaNodes = metadata.SchemaNodeStorage;
+        var columns = metadata.ColumnStorage;
+        var depth = 0;
+        for (var ordinal = 0; ordinal < nodeCount; ordinal++)
         {
-            var depth = 0;
-            for (var ordinal = 0; ordinal < nodeCount; ordinal++)
-            {
-                while (depth > 0 && remainingChildren[depth - 1] == 0)
-                    depth--;
-
-                var parentOrdinal = depth == 0 ? -1 : parentStack[depth - 1];
-                if (depth > 0)
-                    remainingChildren[depth - 1]--;
-
-                var node = ReadSchemaNode(ref reader, ordinal, parentOrdinal);
-                metadata.SchemaNodeBuffer[ordinal] = node;
-                if (node.PhysicalType.HasValue)
-                {
-                    var columnOrdinal = metadata.ColumnCount++;
-                    metadata.ColumnBuffer[columnOrdinal] = new ParquetColumnSchemaInfo(columnOrdinal, ordinal, depth,
-                        node.PhysicalType.Value, node.TypeLength, node.LogicalType);
-                }
-
-                if (node.ChildCount <= 0)
-                    continue;
-
-                parentStack[depth] = ordinal;
-                remainingChildren[depth] = node.ChildCount;
-                depth++;
-            }
-
             while (depth > 0 && remainingChildren[depth - 1] == 0)
                 depth--;
-            if (depth != 0)
-                throw new CorruptParquetException("Schema node list ended before all declared child nodes were read.");
 
-            metadata.SchemaNodeCount = nodeCount;
+            var parentOrdinal = depth == 0 ? -1 : parentStack[depth - 1];
+            if (depth > 0)
+                remainingChildren[depth - 1]--;
+
+            var node = ReadSchemaNode(ref reader, ordinal, parentOrdinal);
+            schemaNodes[ordinal] = node;
+            if (node.PhysicalType.HasValue)
+            {
+                var columnOrdinal = metadata.ColumnCount++;
+                columns[columnOrdinal] = new ParquetColumnSchemaInfo(columnOrdinal, ordinal, depth,
+                    node.PhysicalType.Value, node.TypeLength, node.LogicalType);
+            }
+
+            if (node.ChildCount <= 0)
+                continue;
+
+            parentStack[depth] = ordinal;
+            remainingChildren[depth] = node.ChildCount;
+            depth++;
         }
-        finally
-        {
-            Return(bufferPool, ref parentStack);
-            Return(bufferPool, ref remainingChildren);
-        }
+
+        while (depth > 0 && remainingChildren[depth - 1] == 0)
+            depth--;
+        if (depth != 0)
+            throw new CorruptParquetException("Schema node list ended before all declared child nodes were read.");
+
+        metadata.SchemaNodeCount = nodeCount;
     }
 
     static ParquetSchemaNodeInfo ReadSchemaNode(ref CompactProtocolReader reader, int ordinal, int parentOrdinal)
@@ -313,9 +310,9 @@ static class PhysicalMetadataThriftReader
             throw new CorruptParquetException($"Row group count {count} exceeds remaining input bytes.");
 
         var rowGroupCount = checked((int)count);
-        var rowGroups = Rent<ParquetRowGroupInfo>(bufferPool, rowGroupCount);
-        metadata.RowGroupBuffer = rowGroups;
+        metadata.RowGroupBuffer = Rent<ParquetRowGroupInfo>(bufferPool, rowGroupCount);
         metadata.ColumnChunkBuffer = Rent<ParquetColumnChunkInfo>(bufferPool, checked(rowGroupCount * metadata.ColumnCount));
+        var rowGroups = metadata.RowGroupStorage;
         for (var ordinal = 0; ordinal < rowGroupCount; ordinal++)
             rowGroups[ordinal] = ReadRowGroup(ref reader, metadata, ordinal,
                 metadata.FooterOffset + (ulong)reader.Offset);
@@ -350,7 +347,7 @@ static class PhysicalMetadataThriftReader
         }
 
         if (columnChunkOffset == 0 && columnCount != 0)
-            columnChunkOffset = metadata.ColumnChunkBuffer![columnStart].ChunkOffset;
+            columnChunkOffset = metadata.ColumnChunkStorage[columnStart].ChunkOffset;
 
         return new ParquetRowGroupInfo(ordinal, metadataOffset, columnChunkOffset, rowCount, columnStart, columnCount);
     }
@@ -367,7 +364,7 @@ static class PhysicalMetadataThriftReader
                 $"Column count {count} exceeds file schema column count {metadata.ColumnCount}.");
 
         var columnCount = checked((int)count);
-        var columnChunks = metadata.ColumnChunkBuffer!;
+        var columnChunks = metadata.ColumnChunkStorage;
         if (columnCount > columnChunks.Length - metadata.ColumnChunkCount)
             throw new CorruptParquetException("Column chunk metadata exceeds allocated row group capacity.");
 
@@ -504,7 +501,7 @@ static class PhysicalMetadataThriftReader
             throw new CorruptParquetException(
                 $"Column chunk ordinal {expectedColumnOrdinal} is outside the file schema column count ({metadata.ColumnCount}).");
 
-        var column = metadata.ColumnBuffer![expectedColumnOrdinal];
+        var column = metadata.ColumnStorage[expectedColumnOrdinal];
         if (count != (uint)column.PathSegmentCount)
             throw new CorruptParquetException(
                 $"Column chunk path has {count} segments, but schema column {expectedColumnOrdinal} has {column.PathSegmentCount}.");
@@ -514,8 +511,8 @@ static class PhysicalMetadataThriftReader
             var actual = reader.ReadBinary();
             var nodeOrdinal = column.NodeOrdinal;
             for (var i = column.PathSegmentCount - 1; i > segmentOrdinal; i--)
-                nodeOrdinal = metadata.SchemaNodeBuffer![nodeOrdinal].ParentOrdinal;
-            var node = metadata.SchemaNodeBuffer![nodeOrdinal];
+                nodeOrdinal = metadata.SchemaNodeStorage[nodeOrdinal].ParentOrdinal;
+            var node = metadata.SchemaNodeStorage[nodeOrdinal];
             var expected = metadata.FooterBytes.Slice(node.NameOffset, node.NameLength);
             if (!actual.SequenceEqual(expected))
                 throw new CorruptParquetException(
@@ -546,13 +543,6 @@ static class PhysicalMetadataThriftReader
             _ => throw new NotSupportedException($"Repetition type '{repetition}' is not supported.")
         };
 
-    static T[] Rent<T>(IParquetBufferPool bufferPool, int count)
-        => count == 0 ? [] : bufferPool.Rent<T>(checked((uint)count));
-
-    static void Return<T>(IParquetBufferPool bufferPool, ref T[] buffer)
-    {
-        if (buffer.Length != 0)
-            bufferPool.Return(buffer);
-        buffer = [];
-    }
+    static ParquetBuffer Rent<T>(IParquetBufferPool bufferPool, int count) where T : unmanaged
+        => count == 0 ? default : bufferPool.Rent(checked((uint)(count * Unsafe.SizeOf<T>())));
 }

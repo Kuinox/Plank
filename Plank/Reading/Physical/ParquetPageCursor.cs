@@ -1,5 +1,7 @@
 namespace Plank.Reading.Physical;
 
+using Plank.Writing;
+
 public struct ParquetPageCursor : IDisposable
 {
     const int MaxPageHeaderLength = 64 * 1024;
@@ -7,7 +9,7 @@ public struct ParquetPageCursor : IDisposable
     ParquetFileReader? _owner;
     readonly int _generation;
     readonly ParquetColumnChunkInfo _chunk;
-    byte[]? _payloadBuffer;
+    ParquetBuffer _payloadBuffer;
     int _chunkLength;
     int _offset;
     int _payloadLength;
@@ -17,7 +19,7 @@ public struct ParquetPageCursor : IDisposable
         _owner = owner;
         _generation = generation;
         _chunk = owner.Metadata.ColumnChunk(rowGroupOrdinal, columnOrdinal);
-        _payloadBuffer = null;
+        _payloadBuffer = default;
         _chunkLength = 0;
         _offset = 0;
         _payloadLength = 0;
@@ -43,7 +45,7 @@ public struct ParquetPageCursor : IDisposable
         get
         {
             ValidateCurrent();
-            return _payloadBuffer!.AsSpan(0, _payloadLength);
+            return _payloadBuffer.Span[.._payloadLength];
         }
     }
 
@@ -57,13 +59,13 @@ public struct ParquetPageCursor : IDisposable
         {
             CurrentHeader = default;
             _payloadLength = 0;
-            ReturnPayloadBuffer(owner);
+            ReturnPayloadBuffer();
             return false;
         }
 
         var headerProbeLength = Math.Min(_chunkLength - _offset, MaxPageHeaderLength);
         EnsurePayloadBuffer(owner, headerProbeLength);
-        var headerBytes = _payloadBuffer!.AsSpan(0, headerProbeLength);
+        var headerBytes = _payloadBuffer.Span[..headerProbeLength];
         owner.Source.ReadExactly(_chunk.ChunkOffset + (ulong)_offset, headerBytes);
         var maxUncompressedPageSize = (uint)Math.Min(_chunk.TotalUncompressedSize, uint.MaxValue);
         var header = PageHeaderReader.Read(headerBytes, maxUncompressedPageSize);
@@ -79,7 +81,7 @@ public struct ParquetPageCursor : IDisposable
         {
             EnsurePayloadBuffer(owner, compressedLength);
             if (compressedLength > 0)
-                owner.Source.ReadExactly(sourceOffset, _payloadBuffer!.AsSpan(0, compressedLength));
+                owner.Source.ReadExactly(sourceOffset, _payloadBuffer.Span[..compressedLength]);
             _payloadLength = compressedLength;
             CurrentHeader = header;
             return true;
@@ -90,7 +92,7 @@ public struct ParquetPageCursor : IDisposable
 
         var uncompressedLength = checked((int)header.UncompressedPageSize);
         EnsurePayloadBuffer(owner, uncompressedLength);
-        var destination = _payloadBuffer!.AsSpan(0, uncompressedLength);
+        var destination = _payloadBuffer.Span[..uncompressedLength];
 
         if (header.Type == PageHeaderType.DataPageV2)
         {
@@ -109,17 +111,10 @@ public struct ParquetPageCursor : IDisposable
 
         if (compressedLength > 0)
         {
-            var compressed = owner.BufferPool.Rent<byte>(checked((uint)compressedLength));
-            try
-            {
-                owner.Source.ReadExactly(sourceOffset, compressed.AsSpan(0, compressedLength));
-                ParquetDecompressor.DecompressInto(compressed.AsSpan(0, compressedLength), _chunk.Compression,
-                    destination);
-            }
-            finally
-            {
-                owner.BufferPool.Return(compressed);
-            }
+            using var compressed = owner.BufferPool.Rent(checked((uint)compressedLength));
+            owner.Source.ReadExactly(sourceOffset, compressed.Span[..compressedLength]);
+            ParquetDecompressor.DecompressInto(compressed.Span[..compressedLength], _chunk.Compression,
+                destination);
         }
 
         _payloadLength = uncompressedLength;
@@ -133,7 +128,7 @@ public struct ParquetPageCursor : IDisposable
         if (owner is null)
             return;
 
-        ReturnPayloadBuffer(owner);
+        ReturnPayloadBuffer();
 
         _owner = null;
         CurrentHeader = default;
@@ -148,20 +143,16 @@ public struct ParquetPageCursor : IDisposable
 
     void EnsurePayloadBuffer(ParquetFileReader owner, int length)
     {
-        if (_payloadBuffer is not null && _payloadBuffer.Length >= length)
+        if (_payloadBuffer.Length >= length)
             return;
 
-        ReturnPayloadBuffer(owner);
-        _payloadBuffer = owner.BufferPool.Rent<byte>(checked((uint)length));
+        ReturnPayloadBuffer();
+        _payloadBuffer = owner.BufferPool.Rent(checked((uint)length));
     }
 
-    void ReturnPayloadBuffer(ParquetFileReader owner)
+    void ReturnPayloadBuffer()
     {
-        if (_payloadBuffer is null)
-            return;
-
-        owner.BufferPool.Return(_payloadBuffer);
-        _payloadBuffer = null;
+        _payloadBuffer.Dispose();
     }
 
     ParquetFileReader GetOwner()

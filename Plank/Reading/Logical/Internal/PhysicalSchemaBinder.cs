@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Plank.Reading.Physical;
 using Plank.Schema;
@@ -30,11 +31,12 @@ static class PhysicalSchemaBinder
         InternalParquetFooter previous, bool strict, IParquetBufferPool bufferPool, int footerVersion)
     {
         var requestedColumns = requestedSchema.Columns;
-        int[]? rentedOrdinals = null;
+        ParquetBuffer rentedOrdinals = default;
         Span<int> projectedOrdinals = requestedColumns.Length <= 256
             ? stackalloc int[requestedColumns.Length]
-            : (rentedOrdinals = bufferPool.Rent<int>(checked((uint)requestedColumns.Length)))
-                .AsSpan(0, requestedColumns.Length);
+            : ParquetBuffer.AsSpan<int>(
+                rentedOrdinals = bufferPool.Rent(checked((uint)(requestedColumns.Length * sizeof(int)))),
+                requestedColumns.Length);
         try
         {
             var metadata = physicalReader.Metadata;
@@ -82,8 +84,7 @@ static class PhysicalSchemaBinder
         }
         finally
         {
-            if (rentedOrdinals is not null)
-                bufferPool.Return(rentedOrdinals);
+            rentedOrdinals.Dispose();
         }
     }
 
@@ -240,10 +241,10 @@ static class PhysicalSchemaBinder
         IParquetBufferPool bufferPool)
     {
         var byteCount = Encoding.UTF8.GetByteCount(requestedPath);
-        byte[]? rented = null;
+        ParquetBuffer rented = default;
         Span<byte> requestedBytes = byteCount <= 1024
             ? stackalloc byte[byteCount]
-            : (rented = bufferPool.Rent<byte>(checked((uint)byteCount))).AsSpan(0, byteCount);
+            : (rented = bufferPool.Rent(checked((uint)byteCount))).Span[..byteCount];
         try
         {
             Encoding.UTF8.GetBytes(requestedPath, requestedBytes);
@@ -265,8 +266,7 @@ static class PhysicalSchemaBinder
         }
         finally
         {
-            if (rented is not null)
-                bufferPool.Return(rented);
+            rented.Dispose();
         }
     }
 

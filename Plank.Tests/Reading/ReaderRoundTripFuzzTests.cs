@@ -35,11 +35,9 @@ internal sealed class ReaderRoundTripFuzzTests
 
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
-            using var rowGroup = reader.CreateReusableRowGroupReader();
             var rowGroupIndex = 0;
-            foreach (var token in reader.EnumerateRowGroups())
+            foreach (var rowGroup in reader.RowGroups)
             {
-                reader.OpenRowGroup(token, rowGroup);
                 for (var columnIndex = 0; columnIndex < specs.Length; columnIndex++)
                 {
                     var actual = ReadColumn(rowGroup, specs[columnIndex]);
@@ -300,12 +298,12 @@ internal sealed class ReaderRoundTripFuzzTests
         }
     }
 
-    static Array ReadColumn(RowGroupReader rowGroup, ColumnSpec spec)
-        => spec.ClrType == typeof(int) ? ReadAllPages(rowGroup.Column<int>(spec.Column).Pages)
-        : spec.ClrType == typeof(long) ? ReadAllPages(rowGroup.Column<long>(spec.Column).Pages)
-        : spec.ClrType == typeof(double) ? ReadAllPages(rowGroup.Column<double>(spec.Column).Pages)
-        : spec.ClrType == typeof(byte[]) ? ReadAllPages(rowGroup.Column<byte[]>(spec.Column).Pages)
-        : ReadAllPages(rowGroup.Column<bool>(spec.Column).Pages);
+    static Array ReadColumn(RowGroup rowGroup, ColumnSpec spec)
+        => spec.ClrType == typeof(int) ? ReadAllBuffers(rowGroup.Column<int>(spec.Column))
+        : spec.ClrType == typeof(long) ? ReadAllBuffers(rowGroup.Column<long>(spec.Column))
+        : spec.ClrType == typeof(double) ? ReadAllBuffers(rowGroup.Column<double>(spec.Column))
+        : spec.ClrType == typeof(byte[]) ? ReadAllBuffers(rowGroup.Column<byte[]>(spec.Column))
+        : ReadAllBuffers(rowGroup.Column<bool>(spec.Column));
 
     static void AssertArraysEqual(int seed, int rowGroupIndex, ColumnSpec spec, Array expected, Array actual)
     {
@@ -333,11 +331,11 @@ internal sealed class ReaderRoundTripFuzzTests
     static string Describe(ColumnSpec spec)
         => $"{spec.Column.PhysicalType}/{spec.Column.Options.Encodings[0]}";
 
-    static T[] ReadAllPages<T>(ColumnPageEnumerable<T> pages)
+    static T[] ReadAllBuffers<T>(RowGroupColumn<T> buffers)
     {
         var values = new List<T>();
-        foreach (var page in pages)
-            foreach (var value in page.Values.Span)
+        foreach (var buffer in buffers)
+            foreach (var value in buffer.Values)
                 values.Add(value);
         return values.ToArray();
     }

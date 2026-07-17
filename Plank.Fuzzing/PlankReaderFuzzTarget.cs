@@ -20,11 +20,10 @@ public static class PlankReaderFuzzTarget
         try
         {
             using var reader = schema.CreateReader(source);
-            foreach (var token in reader.EnumerateRowGroups())
+            foreach (var group in reader.RowGroups)
             {
-                using var rowGroup = reader.OpenRowGroup(token);
                 foreach (var column in reader.Schema.Columns)
-                    DrainColumn(rowGroup, column);
+                    DrainColumn(group, column);
             }
         }
         catch (Exception ex) when (ex is CorruptParquetException or NotSupportedException or InvalidOperationException) { }
@@ -39,11 +38,10 @@ public static class PlankReaderFuzzTarget
         try
         {
             using var reader = schema.CreateReader(source);
-            foreach (var token in reader.EnumerateRowGroups())
+            foreach (var group in reader.RowGroups)
             {
-                using var rowGroup = reader.OpenRowGroup(token);
                 foreach (var column in reader.Schema.Columns)
-                    DrainColumn(rowGroup, column);
+                    DrainColumn(group, column);
             }
             return null;
         }
@@ -53,33 +51,33 @@ public static class PlankReaderFuzzTarget
         }
     }
 
-    static void DrainColumn(RowGroupReader rowGroup, Column column)
+    static void DrainColumn(RowGroup rowGroup, Column column)
     {
         switch (column.PhysicalType)
         {
             case ParquetPhysicalType.Boolean:
-                DrainPages(rowGroup.Column<bool>(column).Pages);
+                DrainBuffers(rowGroup.Column<bool>(column));
                 break;
             case ParquetPhysicalType.Int32:
-                DrainPages(rowGroup.Column<int>(column).Pages);
+                DrainBuffers(rowGroup.Column<int>(column));
                 break;
             case ParquetPhysicalType.Int64:
-                DrainPages(rowGroup.Column<long>(column).Pages);
+                DrainBuffers(rowGroup.Column<long>(column));
                 break;
             case ParquetPhysicalType.Double:
-                DrainPages(rowGroup.Column<double>(column).Pages);
+                DrainBuffers(rowGroup.Column<double>(column));
                 break;
             case ParquetPhysicalType.ByteArray:
-                DrainPages(rowGroup.Column<byte[]>(column).Pages);
+                DrainBuffers(rowGroup.Column<byte[]>(column));
                 break;
         }
     }
 
-    static void DrainPages<T>(ColumnPageEnumerable<T> pages)
+    static void DrainBuffers<T>(RowGroupColumn<T> buffers)
     {
-        foreach (var page in pages)
+        foreach (var buffer in buffers)
         {
-            var span = page.Values.Span;
+            var span = buffer.Values;
             for (var i = 0; i < span.Length; i++)
                 _ = span[i];
         }

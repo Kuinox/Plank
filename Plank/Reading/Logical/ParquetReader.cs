@@ -6,12 +6,9 @@ namespace Plank.Reading.Logical;
 
 public sealed class ParquetReader : IDisposable
 {
-    readonly ParquetReaderOptions _options;
     readonly ParquetSchema? _requestedSchema;
     internal readonly ParquetFileReader PhysicalReader;
-    ParquetSchema _schema;
     InternalParquetFooter _footer;
-    ParquetFileMetadata _metadata;
     int _footerVersion;
     bool _disposed;
 
@@ -30,30 +27,33 @@ public sealed class ParquetReader : IDisposable
         var readerOptions = options ?? ParquetReaderOptions.Default;
         readerOptions.Validate();
 
-        _options = readerOptions;
+        Options = readerOptions;
         _requestedSchema = requestedSchema;
         PhysicalReader = new ParquetFileReader(new ParquetFileReaderOptions
         {
             BufferPool = readerOptions.BufferPool
         });
-        _schema = new ParquetSchema(System.Collections.Immutable.ImmutableArray<Column>.Empty);
+        Schema = new ParquetSchema(System.Collections.Immutable.ImmutableArray<Column>.Empty);
         _footer = InternalParquetFooter.Empty;
-        _metadata = default;
+        Metadata = default;
         _footerVersion = 0;
         _disposed = false;
     }
 
-    public ParquetSchema Schema
-        => _schema;
+    public ParquetSchema Schema { get; private set; }
 
-    public ParquetFileMetadata Metadata
-        => _metadata;
+    public ParquetFileMetadata Metadata { get; private set; }
 
-    public ParquetFooter Footer
-        => new(this);
+    public RowGroupCollection RowGroups
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return new RowGroupCollection(this, _footerVersion);
+        }
+    }
 
-    internal ParquetReaderOptions Options
-        => _options;
+    internal ParquetReaderOptions Options { get; }
 
     public void Reset(Stream stream)
     {
@@ -75,57 +75,33 @@ public sealed class ParquetReader : IDisposable
     {
         var physicalMetadata = PhysicalReader.Metadata;
         var fileSchema = PhysicalSchemaBinder.BuildSchema(physicalMetadata);
-        if (_options.Strict && _requestedSchema is not null)
+        if (Options.Strict && _requestedSchema is not null)
             ValidateRequestedSchema(_requestedSchema, fileSchema);
 
         var schema = _requestedSchema ?? fileSchema;
         var footerVersion = _footerVersion + 1;
-        var footer = PhysicalSchemaBinder.Bind(PhysicalReader, schema, _footer, _options.Strict,
-            _options.BufferPool, footerVersion);
+        var footer = PhysicalSchemaBinder.Bind(PhysicalReader, schema, _footer, Options.Strict,
+            Options.BufferPool, footerVersion);
 
-        _schema = schema;
+        Schema = schema;
         _footer = footer;
-        _metadata = new ParquetFileMetadata(fileSchema, physicalMetadata.FooterOffset,
+        Metadata = new ParquetFileMetadata(fileSchema, physicalMetadata.FooterOffset,
             physicalMetadata.FooterLength, physicalMetadata.FileVersion);
         _footerVersion = footerVersion;
     }
 
-    public RowGroupTokenEnumerable EnumerateRowGroups()
+    internal void ValidateRowGroup(RowGroup rowGroup)
     {
-        ThrowIfDisposed();
-        return new RowGroupTokenEnumerable(this);
-    }
-
-    public RowGroupReader OpenRowGroup(RowGroupToken token)
-    {
-        ThrowIfDisposed();
-        var rowGroup = CreateReusableRowGroupReader();
-        return OpenRowGroup(token, rowGroup);
-    }
-
-    public RowGroupReader CreateReusableRowGroupReader()
-        => new(new RowGroupReadContext(_schema.Columns.Length));
-
-    public RowGroupReader OpenRowGroup(RowGroupToken token, RowGroupReader reusable)
-    {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(reusable);
-
-        ValidateRowGroupToken(token);
-        reusable.Reset(this, token.Metadata);
-        return reusable;
-    }
-
-    void ValidateRowGroupToken(RowGroupToken token)
-    {
-        if (!ReferenceEquals(token.Reader, this))
-            throw new ArgumentException("Row group token does not belong to this reader.", nameof(token));
-        if (token.RowGroupOrdinal < 0)
-            throw new ArgumentOutOfRangeException(nameof(token), token.RowGroupOrdinal, "Row group ordinal must be non-negative.");
-        if ((uint)token.RowGroupOrdinal >= _footer.RowGroupCount)
-            throw new ArgumentOutOfRangeException(nameof(token), token.RowGroupOrdinal, "Row group ordinal is outside the parsed footer.");
-        if (token.FooterVersion != _footerVersion)
-            throw new ArgumentException("Row group token does not belong to the current reader state.", nameof(token));
+        if (!ReferenceEquals(rowGroup.Reader, this))
+            throw new ArgumentException("Row group does not belong to this reader.", nameof(rowGroup));
+        if (rowGroup.Index < 0)
+            throw new ArgumentOutOfRangeException(nameof(rowGroup), rowGroup.Index,
+                "Row group index must be non-negative.");
+        if ((uint)rowGroup.Index >= _footer.RowGroupCount)
+            throw new ArgumentOutOfRangeException(nameof(rowGroup), rowGroup.Index,
+                "Row group index is outside the parsed footer.");
+        if (rowGroup.Metadata.FooterVersion != _footerVersion)
+            throw new ArgumentException("Row group does not belong to the current reader state.", nameof(rowGroup));
     }
 
     public void Dispose()
@@ -143,28 +119,37 @@ public sealed class ParquetReader : IDisposable
             throw new ObjectDisposedException(nameof(ParquetReader));
     }
 
-    internal bool TryReadNextRowGroupToken(int ordinal, out RowGroupToken token)
+    internal int GetRowGroupCount(int footerVersion)
     {
         ThrowIfDisposed();
-        if ((uint)ordinal >= _footer.RowGroupCount)
-        {
-            token = default;
-            return false;
-        }
+        ValidateFooterVersion(footerVersion);
+        return checked((int)_footer.RowGroupCount);
+    }
 
-        var rowGroup = _footer.RowGroups[ordinal];
-        token = new RowGroupToken(this, rowGroup);
-        return true;
+    internal RowGroup GetRowGroup(int index, int footerVersion)
+    {
+        ThrowIfDisposed();
+        ValidateFooterVersion(footerVersion);
+        if ((uint)index >= _footer.RowGroupCount)
+            throw new ArgumentOutOfRangeException(nameof(index), index,
+                "Row group index is outside the parsed footer.");
+        return new RowGroup(this, _footer.RowGroups[index]);
+    }
+
+    void ValidateFooterVersion(int footerVersion)
+    {
+        if (footerVersion != _footerVersion)
+            throw new InvalidOperationException("The row group collection is stale because the reader was reset.");
     }
 
     internal int GetColumnOrdinal(Column column)
     {
-        var ordinal = _schema.Columns.IndexOf(column);
+        var ordinal = Schema.Columns.IndexOf(column);
         if (ordinal >= 0)
             return ordinal;
 
-        for (var i = 0; i < _schema.Columns.Length; i++)
-            if (_schema.Columns[i].Name == column.Name && _schema.Columns[i].PhysicalType == column.PhysicalType)
+        for (var i = 0; i < Schema.Columns.Length; i++)
+            if (Schema.Columns[i].Name == column.Name && Schema.Columns[i].PhysicalType == column.PhysicalType)
                 return i;
 
         throw new ArgumentException("Column does not belong to this schema.", nameof(column));

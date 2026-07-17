@@ -3,7 +3,6 @@ namespace Plank.Writing;
 internal sealed class PageList
 {
     Page[] _pages;
-    int _count;
 
     public PageList(uint initialCapacity)
     {
@@ -12,36 +11,35 @@ internal sealed class PageList
                 $"Initial capacity must be <= {int.MaxValue}.");
 
         _pages = new Page[checked((int)initialCapacity)];
-        _count = 0;
+        Count = 0;
     }
 
-    public int Count
-        => _count;
+    public int Count { get; private set; }
 
     public ref Page Add()
     {
-        EnsureCapacity(_count + 1);
-        return ref _pages[_count++];
+        EnsureCapacity(Count + 1);
+        return ref _pages[Count++];
     }
 
     public ref Page this[int index]
     {
         get
         {
-            if ((uint)index >= (uint)_count)
+            if ((uint)index >= (uint)Count)
                 throw new ArgumentOutOfRangeException(nameof(index), index, "Page index is out of range.");
             return ref _pages[index];
         }
     }
 
     public void Clear()
-        => _count = 0;
+        => Count = 0;
 
     public void RemoveLast()
     {
-        if (_count == 0)
+        if (Count == 0)
             throw new InvalidOperationException("Cannot remove a page from an empty page list.");
-        _count--;
+        Count--;
     }
 
     void EnsureCapacity(int required)

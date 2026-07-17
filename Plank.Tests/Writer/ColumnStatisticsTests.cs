@@ -465,11 +465,8 @@ internal sealed class ColumnStatisticsTests
         using var stream = File.OpenRead(path);
         using var reader = new ParquetReader();
         reader.Reset(stream);
-        foreach (var token in reader.EnumerateRowGroups())
-        {
-            using var rowGroup = reader.OpenRowGroup(token);
+        foreach (var rowGroup in reader.RowGroups)
             return rowGroup.PreviousColumns;
-        }
 
         throw new InvalidOperationException("Expected at least one row group.");
     }

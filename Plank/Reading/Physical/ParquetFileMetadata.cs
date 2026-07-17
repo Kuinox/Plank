@@ -4,11 +4,11 @@ namespace Plank.Reading.Physical;
 
 public sealed class ParquetFileMetadata
 {
-    internal byte[]? FooterBuffer;
-    internal ParquetSchemaNodeInfo[]? SchemaNodeBuffer;
-    internal ParquetColumnSchemaInfo[]? ColumnBuffer;
-    internal ParquetRowGroupInfo[]? RowGroupBuffer;
-    internal ParquetColumnChunkInfo[]? ColumnChunkBuffer;
+    internal ParquetBuffer FooterBuffer;
+    internal ParquetBuffer SchemaNodeBuffer;
+    internal ParquetBuffer ColumnBuffer;
+    internal ParquetBuffer RowGroupBuffer;
+    internal ParquetBuffer ColumnChunkBuffer;
     internal int FooterByteCount;
     internal int ColumnChunkCount;
 
@@ -20,27 +20,43 @@ public sealed class ParquetFileMetadata
     public int RowGroupCount { get; internal set; }
 
     public ReadOnlySpan<ParquetSchemaNodeInfo> SchemaNodes
-        => SchemaNodeBuffer.AsSpan(0, SchemaNodeCount);
+        => ParquetBuffer.AsReadOnlySpan<ParquetSchemaNodeInfo>(SchemaNodeBuffer, SchemaNodeCount);
 
     public ReadOnlySpan<ParquetColumnSchemaInfo> Columns
-        => ColumnBuffer.AsSpan(0, ColumnCount);
+        => ParquetBuffer.AsReadOnlySpan<ParquetColumnSchemaInfo>(ColumnBuffer, ColumnCount);
 
     public ReadOnlySpan<ParquetRowGroupInfo> RowGroups
-        => RowGroupBuffer.AsSpan(0, RowGroupCount);
+        => ParquetBuffer.AsReadOnlySpan<ParquetRowGroupInfo>(RowGroupBuffer, RowGroupCount);
 
     public ReadOnlySpan<ParquetColumnChunkInfo> ColumnChunks
-        => ColumnChunkBuffer.AsSpan(0, ColumnChunkCount);
+        => ParquetBuffer.AsReadOnlySpan<ParquetColumnChunkInfo>(ColumnChunkBuffer, ColumnChunkCount);
+
+    internal Span<ParquetSchemaNodeInfo> SchemaNodeStorage
+        => ParquetBuffer.AsSpan<ParquetSchemaNodeInfo>(SchemaNodeBuffer,
+            SchemaNodeBuffer.Length / System.Runtime.CompilerServices.Unsafe.SizeOf<ParquetSchemaNodeInfo>());
+
+    internal Span<ParquetColumnSchemaInfo> ColumnStorage
+        => ParquetBuffer.AsSpan<ParquetColumnSchemaInfo>(ColumnBuffer,
+            ColumnBuffer.Length / System.Runtime.CompilerServices.Unsafe.SizeOf<ParquetColumnSchemaInfo>());
+
+    internal Span<ParquetRowGroupInfo> RowGroupStorage
+        => ParquetBuffer.AsSpan<ParquetRowGroupInfo>(RowGroupBuffer,
+            RowGroupBuffer.Length / System.Runtime.CompilerServices.Unsafe.SizeOf<ParquetRowGroupInfo>());
+
+    internal Span<ParquetColumnChunkInfo> ColumnChunkStorage
+        => ParquetBuffer.AsSpan<ParquetColumnChunkInfo>(ColumnChunkBuffer,
+            ColumnChunkBuffer.Length / System.Runtime.CompilerServices.Unsafe.SizeOf<ParquetColumnChunkInfo>());
 
     public ReadOnlySpan<byte> SchemaNodeNameUtf8(int nodeOrdinal)
     {
         ValidateOrdinal(nodeOrdinal, SchemaNodeCount, nameof(nodeOrdinal));
-        return GetName(SchemaNodeBuffer![nodeOrdinal]);
+        return GetName(SchemaNodes[nodeOrdinal]);
     }
 
     public ParquetColumnSchemaInfo ColumnSchema(int columnOrdinal)
     {
         ValidateOrdinal(columnOrdinal, ColumnCount, nameof(columnOrdinal));
-        return ColumnBuffer![columnOrdinal];
+        return Columns[columnOrdinal];
     }
 
     public ReadOnlySpan<byte> ColumnPathSegmentUtf8(int columnOrdinal, int segmentOrdinal)
@@ -53,31 +69,31 @@ public sealed class ParquetFileMetadata
     public ParquetRowGroupInfo RowGroup(int rowGroupOrdinal)
     {
         ValidateOrdinal(rowGroupOrdinal, RowGroupCount, nameof(rowGroupOrdinal));
-        return RowGroupBuffer![rowGroupOrdinal];
+        return RowGroups[rowGroupOrdinal];
     }
 
     public ParquetColumnChunkInfo ColumnChunk(int rowGroupOrdinal, int columnOrdinal)
     {
         var rowGroup = RowGroup(rowGroupOrdinal);
         ValidateOrdinal(columnOrdinal, rowGroup.ColumnCount, nameof(columnOrdinal));
-        return ColumnChunkBuffer![rowGroup.ColumnStart + columnOrdinal];
+        return ColumnChunks[rowGroup.ColumnStart + columnOrdinal];
     }
 
     internal ReadOnlySpan<byte> FooterBytes
-        => FooterBuffer.AsSpan(0, FooterByteCount);
+        => FooterBuffer.Span[..FooterByteCount];
 
-    internal void ReturnBuffers(IParquetBufferPool bufferPool)
+    internal void ReturnBuffers()
     {
-        Return(bufferPool, ref FooterBuffer);
-        Return(bufferPool, ref SchemaNodeBuffer);
-        Return(bufferPool, ref ColumnBuffer);
-        Return(bufferPool, ref RowGroupBuffer);
-        Return(bufferPool, ref ColumnChunkBuffer);
+        FooterBuffer.Dispose();
+        SchemaNodeBuffer.Dispose();
+        ColumnBuffer.Dispose();
+        RowGroupBuffer.Dispose();
+        ColumnChunkBuffer.Dispose();
         Clear();
     }
 
     ReadOnlySpan<byte> GetName(int nodeOrdinal)
-        => GetName(SchemaNodeBuffer![nodeOrdinal]);
+        => GetName(SchemaNodes[nodeOrdinal]);
 
     ReadOnlySpan<byte> GetName(ParquetSchemaNodeInfo node)
         => FooterBytes.Slice(node.NameOffset, node.NameLength);
@@ -86,7 +102,7 @@ public sealed class ParquetFileMetadata
     {
         var nodeOrdinal = column.NodeOrdinal;
         for (var i = column.PathSegmentCount - 1; i > segmentOrdinal; i--)
-            nodeOrdinal = SchemaNodeBuffer![nodeOrdinal].ParentOrdinal;
+            nodeOrdinal = SchemaNodes[nodeOrdinal].ParentOrdinal;
         return nodeOrdinal;
     }
 
@@ -100,13 +116,6 @@ public sealed class ParquetFileMetadata
         RowGroupCount = 0;
         FooterByteCount = 0;
         ColumnChunkCount = 0;
-    }
-
-    static void Return<T>(IParquetBufferPool bufferPool, ref T[]? buffer)
-    {
-        if (buffer is { Length: > 0 })
-            bufferPool.Return(buffer);
-        buffer = null;
     }
 
     static void ValidateOrdinal(int ordinal, int count, string parameterName)

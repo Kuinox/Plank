@@ -40,7 +40,7 @@ abstract class RowApiColumnReadState : IDisposable
         Projected = (projection & ProjectionBit) != 0;
         Materialized = false;
         Ordinal = -1;
-        ResetPageState();
+        ResetBufferState();
     }
 
     internal void ResetForMissingMaterialized()
@@ -56,19 +56,19 @@ abstract class RowApiColumnReadState : IDisposable
         Projected = false;
         Materialized = false;
         Ordinal = -1;
-        ResetPageState();
+        ResetBufferState();
     }
 
-    internal abstract void ResetPageState();
+    internal abstract void ResetBufferState();
 
     internal abstract void SetMissingValue();
 
-    internal abstract void Open(RowGroupReader rowGroup);
+    internal abstract void Open(RowGroup rowGroup);
 
     internal abstract void Advance();
 
-    internal abstract void DisposePages();
+    internal abstract void DisposeBuffers();
 
     public void Dispose()
-        => DisposePages();
+        => DisposeBuffers();
 }

@@ -10,7 +10,6 @@ public struct BufferWriter : IBufferWriter<byte>
     int _segmentCount;
     int _currentSegmentIndex;
     int _currentSegmentWritten;
-    int _writtenLength;
 
     internal BufferWriter(IParquetBufferPool pool, uint chunkSizeBytes, uint initialBufferBytes)
     {
@@ -34,7 +33,7 @@ public struct BufferWriter : IBufferWriter<byte>
         _segmentCount = 0;
         _currentSegmentIndex = 0;
         _currentSegmentWritten = 0;
-        _writtenLength = 0;
+        WrittenLength = 0;
     }
 
     public void Advance(int count)
@@ -50,7 +49,7 @@ public struct BufferWriter : IBufferWriter<byte>
 
         _currentSegmentWritten += count;
         segment.Written = _currentSegmentWritten;
-        _writtenLength += count;
+        WrittenLength += count;
     }
 
     public Memory<byte> GetMemory(int sizeHint = 0)
@@ -68,12 +67,11 @@ public struct BufferWriter : IBufferWriter<byte>
     internal bool IsInitialized
         => _segments is not null;
 
-    internal int WrittenLength
-        => _writtenLength;
+    internal int WrittenLength { get; private set; }
 
     internal bool TryGetSingleWrittenSpan(out ReadOnlySpan<byte> span)
     {
-        if (_segments is null || _writtenLength == 0)
+        if (_segments is null || WrittenLength == 0)
         {
             span = [];
             return true;
@@ -113,13 +111,13 @@ public struct BufferWriter : IBufferWriter<byte>
 
         _currentSegmentIndex = 0;
         _currentSegmentWritten = 0;
-        _writtenLength = 0;
+        WrittenLength = 0;
     }
 
     internal void WriteTo(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        if (_segments is null || _writtenLength == 0)
+        if (_segments is null || WrittenLength == 0)
             return;
 
         for (var i = 0; i < _segmentCount; i++)
@@ -133,9 +131,9 @@ public struct BufferWriter : IBufferWriter<byte>
 
     internal void CopyTo(Span<byte> destination)
     {
-        if (destination.Length < _writtenLength)
+        if (destination.Length < WrittenLength)
             throw new ArgumentException("Destination span is smaller than written content.", nameof(destination));
-        if (_segments is null || _writtenLength == 0)
+        if (_segments is null || WrittenLength == 0)
             return;
 
         var offset = 0;
@@ -165,7 +163,7 @@ public struct BufferWriter : IBufferWriter<byte>
 
     internal void CopyFrom(ref BufferWriter source)
     {
-        if (source._segments is null || source._writtenLength == 0)
+        if (source._segments is null || source.WrittenLength == 0)
             return;
 
         for (var i = 0; i < source._segmentCount; i++)
@@ -229,7 +227,7 @@ public struct BufferWriter : IBufferWriter<byte>
             return;
 
         var minimumSize = Math.Max(_chunkSizeBytes, sizeHint);
-        var buffer = _pool.Rent<byte>(checked((uint)minimumSize));
+        var buffer = ArrayRenter<byte>.Shared.Rent(checked((uint)minimumSize));
         _segments[_currentSegmentIndex] = new Segment(buffer);
         _segmentCount = _currentSegmentIndex + 1;
     }

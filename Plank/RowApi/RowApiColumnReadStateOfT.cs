@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Plank.Reading.Logical;
 
 namespace Plank.RowApi;
@@ -6,48 +5,43 @@ namespace Plank.RowApi;
 sealed class RowApiColumnReadState<T> : RowApiColumnReadState
 {
     readonly T[] _missing;
-    ColumnPageEnumerable<T>.Enumerator _pages;
-    ReadOnlyMemory<T> _page;
-    bool _pagesOpen;
+    RowGroupColumn<T>.Enumerator _buffers;
+    ColumnBuffer<T> _buffer;
+    bool _buffersOpen;
 
     internal RowApiColumnReadState(RowApiColumnDescriptor<T> descriptor)
         : base(descriptor)
     {
         _missing = [default!];
-        _pages = default;
-        _page = default;
-        CurrentArray = [];
+        _buffers = default;
+        _buffer = default;
         CurrentIndex = -1;
-        _pagesOpen = false;
+        _buffersOpen = false;
     }
 
-    internal T[] CurrentArray;
+    internal Span<T> CurrentSpan
+        => _buffer.WritableValues;
 
-    internal override void ResetPageState()
+    internal override void ResetBufferState()
     {
-        DisposePages();
-        _page = default;
-        CurrentArray = [];
+        DisposeBuffers();
+        _buffer = default;
         CurrentIndex = -1;
     }
 
     internal override void SetMissingValue()
     {
-        DisposePages();
-        _page = default;
-        CurrentArray = _missing;
+        DisposeBuffers();
+        _buffer = new ColumnBuffer<T>(_missing);
         CurrentIndex = 0;
     }
 
-    internal override void Open(RowGroupReader rowGroup)
+    internal override void Open(RowGroup rowGroup)
     {
-        ArgumentNullException.ThrowIfNull(rowGroup);
-
-        DisposePages();
-        _pages = rowGroup.Column<T>(Ordinal).Pages.GetEnumerator();
-        _pagesOpen = true;
-        _page = default;
-        CurrentArray = [];
+        DisposeBuffers();
+        _buffers = rowGroup.Column<T>(Ordinal).GetEnumerator();
+        _buffersOpen = true;
+        _buffer = default;
         CurrentIndex = -1;
     }
 
@@ -57,33 +51,24 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
             return;
 
         CurrentIndex++;
-        while ((uint)CurrentIndex >= (uint)_page.Length)
+        while ((uint)CurrentIndex >= (uint)_buffer.ValueCount)
         {
-            if (!_pages.MoveNext())
+            if (!_buffers.MoveNext())
                 throw new InvalidDataException($"Column '{PropertyName}' ended before the row group was complete.");
 
-            _page = _pages.Current.Values;
-            CurrentArray = GetArray(_page, PropertyName);
+            _buffer = _buffers.Current;
             CurrentIndex = 0;
-            if (_page.Length == 0)
+            if (_buffer.ValueCount == 0)
                 CurrentIndex = -1;
         }
     }
 
-    internal override void DisposePages()
+    internal override void DisposeBuffers()
     {
-        if (!_pagesOpen)
+        if (!_buffersOpen)
             return;
 
-        _pages.Dispose();
-        _pagesOpen = false;
-    }
-
-    static T[] GetArray(ReadOnlyMemory<T> memory, string propertyName)
-    {
-        if (MemoryMarshal.TryGetArray(memory, out var segment) && segment.Array is not null)
-            return segment.Array;
-
-        throw new InvalidOperationException($"Column '{propertyName}' page is not array-backed.");
+        _buffers.Dispose();
+        _buffersOpen = false;
     }
 }

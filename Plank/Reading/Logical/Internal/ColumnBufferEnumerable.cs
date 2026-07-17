@@ -1,29 +1,24 @@
-using Plank.Reading.Logical.Internal;
 using Plank.Reading.Physical;
 using Plank.Schema;
 using Plank.Writing;
 
-namespace Plank.Reading.Logical;
+namespace Plank.Reading.Logical.Internal;
 
-public readonly struct ColumnPageEnumerable<T>
+readonly struct ColumnBufferEnumerable<T>
 {
     readonly ParquetFileReader _physicalReader;
     readonly int _rowGroupOrdinal;
     readonly int _columnOrdinal;
     readonly Column _column;
     readonly InternalColumnChunkMetadata _columnChunk;
-    readonly ColumnPageReadState<T> _state;
     readonly IParquetBufferPool _bufferPool;
-
     readonly ulong _rowCount;
 
-    internal ColumnPageEnumerable(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
-        Column column, InternalColumnChunkMetadata columnChunk, ColumnPageReadState<T> state,
-        IParquetBufferPool bufferPool, ulong rowCount)
+    internal ColumnBufferEnumerable(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
+        Column column, InternalColumnChunkMetadata columnChunk, IParquetBufferPool bufferPool, ulong rowCount)
     {
         ArgumentNullException.ThrowIfNull(physicalReader);
         ArgumentNullException.ThrowIfNull(column);
-        ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(bufferPool);
 
         _physicalReader = physicalReader;
@@ -31,36 +26,31 @@ public readonly struct ColumnPageEnumerable<T>
         _columnOrdinal = columnOrdinal;
         _column = column;
         _columnChunk = columnChunk;
-        _state = state;
         _bufferPool = bufferPool;
         _rowCount = rowCount;
     }
 
-    public Enumerator GetEnumerator()
-        => new(_physicalReader, _rowGroupOrdinal, _columnOrdinal, _column, _columnChunk, _state, _bufferPool,
-            _rowCount);
+    internal Enumerator GetEnumerator()
+        => new(_physicalReader, _rowGroupOrdinal, _columnOrdinal, _column, _columnChunk, _bufferPool, _rowCount);
 
-    public struct Enumerator : IDisposable
+    internal struct Enumerator : IDisposable
     {
         readonly ParquetFileReader _physicalReader;
         readonly int _rowGroupOrdinal;
         readonly int _columnOrdinal;
         readonly Column _column;
         readonly InternalColumnChunkMetadata _columnChunk;
-        readonly ColumnPageReadState<T> _state;
         readonly IParquetBufferPool _bufferPool;
+        readonly ulong _rowCount;
         ParquetPageCursor _cursor;
+        ColumnReadBuffers<T> _buffers;
         bool _openedCursor;
 
-        readonly ulong _rowCount;
-
         internal Enumerator(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal, Column column,
-            InternalColumnChunkMetadata columnChunk, ColumnPageReadState<T> state, IParquetBufferPool bufferPool,
-            ulong rowCount)
+            InternalColumnChunkMetadata columnChunk, IParquetBufferPool bufferPool, ulong rowCount)
         {
             ArgumentNullException.ThrowIfNull(physicalReader);
             ArgumentNullException.ThrowIfNull(column);
-            ArgumentNullException.ThrowIfNull(state);
             ArgumentNullException.ThrowIfNull(bufferPool);
 
             _physicalReader = physicalReader;
@@ -68,18 +58,17 @@ public readonly struct ColumnPageEnumerable<T>
             _columnOrdinal = columnOrdinal;
             _column = column;
             _columnChunk = columnChunk;
-            _state = state;
             _bufferPool = bufferPool;
             _rowCount = rowCount;
             _cursor = default;
+            _buffers = default;
             _openedCursor = false;
-            _state.Dictionary = null;
             Current = default;
         }
 
-        public ColumnPage<T> Current { get; private set; }
+        internal ColumnBuffer<T> Current { get; private set; }
 
-        public bool MoveNext()
+        internal bool MoveNext()
         {
             if (!_openedCursor)
             {
@@ -89,13 +78,33 @@ public readonly struct ColumnPageEnumerable<T>
 
             while (_cursor.MoveNext())
             {
-                if (!ColumnChunkReader.TryDecodePage(_cursor.CurrentHeader, _cursor.CurrentPayload, _column,
-                        _columnChunk, _rowCount, ref _state.Dictionary, ref _state.DictionaryBuffer,
-                        ref _state.ValuesBuffer, _bufferPool, ref _state.DeltaPrefixLengthsBuffer,
-                        ref _state.DeltaSuffixLengthsBuffer, out var values, out var encoding))
+                if (ColumnChunkReader.TryDecodeDictionaryPageIntoNative<T>(_cursor.CurrentHeader,
+                        _cursor.CurrentPayload, _column, ref _buffers, _bufferPool))
                     continue;
 
-                Current = new ColumnPage<T>(values, encoding);
+                if (ColumnChunkReader.TryDecodeNullablePageIntoNative<T>(_cursor.CurrentHeader,
+                        _cursor.CurrentPayload, _column, _rowCount, ref _buffers, _bufferPool,
+                        out var nullableBuffer))
+                {
+                    Current = nullableBuffer;
+                    return true;
+                }
+
+                if (ColumnChunkReader.TryDecodeRequiredPageIntoNative<T>(_cursor.CurrentHeader,
+                        _cursor.CurrentPayload, _column, _rowCount, ref _buffers, _bufferPool,
+                        out var nativeBuffer))
+                {
+                    Current = nativeBuffer;
+                    return true;
+                }
+
+                if (!ColumnChunkReader.TryDecodePage(_cursor.CurrentHeader, _cursor.CurrentPayload, _column,
+                        _columnChunk, _rowCount, ref _buffers.ManagedDictionary,
+                        ref _buffers.ManagedDictionaryBuffer, ref _buffers.ManagedValuesBuffer,
+                        _bufferPool, ref _buffers.Scratch, out var values, out _))
+                    continue;
+
+                Current = _buffers.CreateBuffer(values, _bufferPool);
                 return true;
             }
 
@@ -106,6 +115,7 @@ public readonly struct ColumnPageEnumerable<T>
         {
             if (_openedCursor)
                 _cursor.Dispose();
+            _buffers.Dispose(_bufferPool);
             _openedCursor = false;
             Current = default;
         }

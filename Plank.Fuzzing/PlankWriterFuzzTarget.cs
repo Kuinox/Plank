@@ -6,7 +6,7 @@ using Plank.Schema;
 using Plank.Writing;
 using PlankColumn = Plank.Schema.Column;
 using PlankReader = Plank.Reading.Logical.ParquetReader;
-using PlankRowGroupReader = Plank.Reading.Logical.RowGroupReader;
+using PlankRowGroup = Plank.Reading.Logical.RowGroup;
 using PlankRowGroupWriter = Plank.Writing.RowGroupWriter;
 using PlankSchema = Plank.Schema.ParquetSchema;
 using PlankWriter = Plank.Writing.ParquetWriter;
@@ -145,11 +145,9 @@ public static class PlankWriterFuzzTarget
     {
         using var stream = File.OpenRead(path);
         using var reader = fuzzCase.Schema.CreateReader(stream);
-        using var rowGroup = reader.CreateReusableRowGroupReader();
         var rowGroupIndex = 0;
-        foreach (var token in reader.EnumerateRowGroups())
+        foreach (var rowGroup in reader.RowGroups)
         {
-            reader.OpenRowGroup(token, rowGroup);
             for (var columnIndex = 0; columnIndex < fuzzCase.Columns.Count; columnIndex++)
             {
                 var actual = ReadPlankColumn(rowGroup, fuzzCase.Columns[columnIndex]);
@@ -164,12 +162,12 @@ public static class PlankWriterFuzzTarget
                 $"Plank row-group count mismatch. Expected {fuzzCase.RowGroups.Count}, got {rowGroupIndex}.");
     }
 
-    static Array ReadPlankColumn(PlankRowGroupReader rowGroup, ColumnSpec spec)
-        => spec.ClrType == typeof(bool) ? ReadAllPages(rowGroup.Column<bool>(spec.Column).Pages)
-        : spec.ClrType == typeof(int) ? ReadAllPages(rowGroup.Column<int>(spec.Column).Pages)
-        : spec.ClrType == typeof(long) ? ReadAllPages(rowGroup.Column<long>(spec.Column).Pages)
-        : spec.ClrType == typeof(double) ? ReadAllPages(rowGroup.Column<double>(spec.Column).Pages)
-        : ReadAllPages(rowGroup.Column<byte[]>(spec.Column).Pages);
+    static Array ReadPlankColumn(PlankRowGroup rowGroup, ColumnSpec spec)
+        => spec.ClrType == typeof(bool) ? ReadAllBuffers(rowGroup.Column<bool>(spec.Column))
+        : spec.ClrType == typeof(int) ? ReadAllBuffers(rowGroup.Column<int>(spec.Column))
+        : spec.ClrType == typeof(long) ? ReadAllBuffers(rowGroup.Column<long>(spec.Column))
+        : spec.ClrType == typeof(double) ? ReadAllBuffers(rowGroup.Column<double>(spec.Column))
+        : ReadAllBuffers(rowGroup.Column<byte[]>(spec.Column));
 
     static void AssertParquetSharpCanRead(string path, FuzzCase fuzzCase)
     {
@@ -228,11 +226,11 @@ public static class PlankWriterFuzzTarget
         return bytesReader.ReadAll(rowCount);
     }
 
-    static T[] ReadAllPages<T>(ColumnPageEnumerable<T> pages)
+    static T[] ReadAllBuffers<T>(RowGroupColumn<T> buffers)
     {
         var values = new List<T>();
-        foreach (var page in pages)
-            foreach (var value in page.Values.Span)
+        foreach (var buffer in buffers)
+            foreach (var value in buffer.Values)
                 values.Add(value);
         return values.ToArray();
     }

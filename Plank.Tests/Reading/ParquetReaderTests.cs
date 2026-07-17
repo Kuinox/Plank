@@ -28,18 +28,18 @@ internal sealed class ParquetReaderTests
 
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
-        var tokens = EnumerateTokens(reader);
+        var rowGroups = reader.RowGroups;
 
         await Assert.That(reader.Metadata.Version).IsEqualTo(1);
         await Assert.That(reader.Metadata.FooterOffset).IsGreaterThan(0UL);
         await Assert.That(reader.Metadata.FooterLength).IsGreaterThan(0U);
-        await Assert.That(tokens.Length).IsEqualTo(2);
-        await Assert.That(tokens[0].RowGroupOrdinal).IsEqualTo(0);
-        await Assert.That(tokens[1].RowGroupOrdinal).IsEqualTo(1);
-        await Assert.That(tokens[0].MetadataOffset).IsGreaterThan(0UL);
-        await Assert.That(tokens[1].MetadataOffset).IsGreaterThan(tokens[0].MetadataOffset);
-            await Assert.That(tokens[0].ColumnChunkOffset).IsGreaterThan(0UL);
-            await Assert.That(tokens[1].ColumnChunkOffset).IsGreaterThan(tokens[0].ColumnChunkOffset);
+        await Assert.That(rowGroups.Count).IsEqualTo(2);
+        await Assert.That(rowGroups[0].Index).IsEqualTo(0);
+        await Assert.That(rowGroups[1].Index).IsEqualTo(1);
+        await Assert.That(rowGroups[0].MetadataOffset).IsGreaterThan(0UL);
+        await Assert.That(rowGroups[1].MetadataOffset).IsGreaterThan(rowGroups[0].MetadataOffset);
+            await Assert.That(rowGroups[0].ColumnChunkOffset).IsGreaterThan(0UL);
+            await Assert.That(rowGroups[1].ColumnChunkOffset).IsGreaterThan(rowGroups[0].ColumnChunkOffset);
         }
         finally
         {
@@ -69,11 +69,10 @@ internal sealed class ParquetReaderTests
 
         using var reader = new ParquetReader();
         reader.Reset(stream);
-        var token = EnumerateTokens(reader)[0];
-        using var rowGroup = reader.OpenRowGroup(token);
+        var rowGroup = reader.RowGroups[0];
 
-        await Assert.That(ReadAllPages(rowGroup.Column<int>(reader.Schema.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3]);
-        await Assert.That(ReadAllPages(rowGroup.Column<long>(reader.Schema.Columns[1]).Pages)).IsEquivalentTo([10L, 20L, 30L]);
+        await Assert.That(ReadAllBuffers(rowGroup.Column<int>(reader.Schema.Columns[0]))).IsEquivalentTo([1, 2, 3]);
+        await Assert.That(ReadAllBuffers(rowGroup.Column<long>(reader.Schema.Columns[1]))).IsEquivalentTo([10L, 20L, 30L]);
     }
 
     [Test]
@@ -91,18 +90,18 @@ internal sealed class ParquetReaderTests
     }
 
     [Test]
-    public async Task OldTokenIsInvalidAfterReset()
+    public async Task OldRowGroupIsInvalidAfterReset()
     {
         using var first = CreateInt32File("Value");
         using var second = CreateInt32File("Other");
         using var reader = new ParquetReader();
         reader.Reset(first);
-        var oldToken = EnumerateTokens(reader)[0];
+        var oldRowGroup = reader.RowGroups[0];
 
         reader.Reset(second);
 
         await Assert.ThrowsAsync<ArgumentException>(async () =>
-            await Task.Run(() => reader.OpenRowGroup(oldToken)).ConfigureAwait(false));
+            await Task.Run(() => oldRowGroup.Column<int>(0)).ConfigureAwait(false));
     }
 
     [Test]
@@ -138,10 +137,9 @@ internal sealed class ParquetReaderTests
         ]);
 
         using var reader = requested.CreateReader(stream);
-        var token = EnumerateTokens(reader)[0];
-        using var rowGroup = reader.OpenRowGroup(token);
+        var rowGroup = reader.RowGroups[0];
 
-        await Assert.That(ReadAllPages(rowGroup.Column<int>(requested.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3]);
+        await Assert.That(ReadAllBuffers(rowGroup.Column<int>(requested.Columns[0]))).IsEquivalentTo([1, 2, 3]);
         await Assert.That(reader.Schema.Columns.Length).IsEqualTo(1);
         await Assert.That(reader.Metadata.Schema.Columns.Length).IsEqualTo(2);
     }
@@ -169,11 +167,10 @@ internal sealed class ParquetReaderTests
         ]);
 
         using var reader = requested.CreateReader(stream);
-        var token = EnumerateTokens(reader)[0];
-        using var rowGroupReader = reader.OpenRowGroup(token);
+        var rowGroupReader = reader.RowGroups[0];
 
-        await Assert.That(ReadAllPages(rowGroupReader.Column<int>(requested.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3]);
-        await Assert.That(ReadAllPages(rowGroupReader.Column<long>(requested.Columns[1]).Pages))
+        await Assert.That(ReadAllBuffers(rowGroupReader.Column<int>(requested.Columns[0]))).IsEquivalentTo([1, 2, 3]);
+        await Assert.That(ReadAllBuffers(rowGroupReader.Column<long>(requested.Columns[1])))
             .IsEquivalentTo([10L, 20L, 30L]);
     }
 
@@ -199,10 +196,9 @@ internal sealed class ParquetReaderTests
         ]);
 
         using var reader = requested.CreateReader(stream);
-        var token = EnumerateTokens(reader)[0];
-        using var rowGroup = reader.OpenRowGroup(token);
+        var rowGroup = reader.RowGroups[0];
 
-        await Assert.That(ReadAllPages(rowGroup.Column<int?>(requested.Columns[0]).Pages))
+        await Assert.That(ReadAllBuffers(rowGroup.Column<int?>(requested.Columns[0])))
             .IsEquivalentTo(new int?[] { 1, 2, 3 });
     }
 
@@ -269,22 +265,20 @@ internal sealed class ParquetReaderTests
 
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
-            using var reusable = reader.CreateReusableRowGroupReader();
             var rowGroupIndex = 0;
-            foreach (var token in reader.EnumerateRowGroups())
+            foreach (var rowGroup in reader.RowGroups)
             {
-                reader.OpenRowGroup(token, reusable);
                 if (rowGroupIndex == 0)
                 {
-                    await Assert.That(ReadAllPages(reusable.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([1, 2]);
-                    await Assert.That(ReadAllPages(reusable.Column<double>(schema.Columns[1]).Pages)).IsEquivalentTo([1.5, 2.5]);
-                    await AssertByteArraysEqual(ReadAllPages(reusable.Column<byte[]>(schema.Columns[2]).Pages), [Bytes(1), Bytes(2)]);
+                    await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.Columns[0]))).IsEquivalentTo([1, 2]);
+                    await Assert.That(ReadAllBuffers(rowGroup.Column<double>(schema.Columns[1]))).IsEquivalentTo([1.5, 2.5]);
+                    await AssertByteArraysEqual(ReadAllBuffers(rowGroup.Column<byte[]>(schema.Columns[2])), [Bytes(1), Bytes(2)]);
                 }
                 else
                 {
-                    await Assert.That(ReadAllPages(reusable.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([3]);
-                    await Assert.That(ReadAllPages(reusable.Column<double>(schema.Columns[1]).Pages)).IsEquivalentTo([3.5]);
-                    await AssertByteArraysEqual(ReadAllPages(reusable.Column<byte[]>(schema.Columns[2]).Pages), [Bytes(3)]);
+                    await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.Columns[0]))).IsEquivalentTo([3]);
+                    await Assert.That(ReadAllBuffers(rowGroup.Column<double>(schema.Columns[1]))).IsEquivalentTo([3.5]);
+                    await AssertByteArraysEqual(ReadAllBuffers(rowGroup.Column<byte[]>(schema.Columns[2])), [Bytes(3)]);
                 }
                 rowGroupIndex++;
             }
@@ -322,10 +316,9 @@ internal sealed class ParquetReaderTests
 
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(token);
+            var rowGroup = reader.RowGroups[0];
 
-            await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo(values);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.Columns[0]))).IsEquivalentTo(values);
         }
         finally
         {
@@ -348,11 +341,10 @@ internal sealed class ParquetReaderTests
 
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(token);
+            var rowGroup = reader.RowGroups[0];
 
-            await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([1, 2, 3, 4, 5]);
-            await Assert.That(ReadAllPages(rowGroup.Column<int?>(schema.Columns[1]).Pages)).IsEquivalentTo(optionalValues);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.Columns[0]))).IsEquivalentTo([1, 2, 3, 4, 5]);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<int?>(schema.Columns[1]))).IsEquivalentTo(optionalValues);
         }
         finally
         {
@@ -402,14 +394,13 @@ internal sealed class ParquetReaderTests
 
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(token);
+            var rowGroup = reader.RowGroups[0];
 
-            await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[0]).Pages)).IsEquivalentTo([10, 20, 30]);
-            await Assert.That(ReadAllPages(rowGroup.Column<double>(schema.Columns[1]).Pages)).IsEquivalentTo([1.25, 2.25, 3.25]);
-            await AssertByteArraysEqual(ReadAllPages(rowGroup.Column<byte[]>(schema.Columns[2]).Pages),
+            await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.Columns[0]))).IsEquivalentTo([10, 20, 30]);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<double>(schema.Columns[1]))).IsEquivalentTo([1.25, 2.25, 3.25]);
+            await AssertByteArraysEqual(ReadAllBuffers(rowGroup.Column<byte[]>(schema.Columns[2])),
                 [Bytes(1, 1), Bytes(1, 2), Bytes(1, 3)]);
-            await Assert.That(ReadAllPages(rowGroup.Column<int>(schema.Columns[3]).Pages)).IsEquivalentTo([7, 7, 9]);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.Columns[3]))).IsEquivalentTo([7, 7, 9]);
         }
         finally
         {
@@ -483,14 +474,13 @@ internal sealed class ParquetReaderTests
 
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(token);
+            var rowGroup = reader.RowGroups[0];
 
-            await Assert.That(ReadAllPages(rowGroup.Column<byte>(schema.Columns[0]).Pages)).IsEquivalentTo(byteValues);
-            await Assert.That(ReadAllPages(rowGroup.Column<ushort>(schema.Columns[1]).Pages)).IsEquivalentTo(ushortValues);
-            await Assert.That(ReadAllPages(rowGroup.Column<uint>(schema.Columns[2]).Pages)).IsEquivalentTo(uintValues);
-            await Assert.That(ReadAllPages(rowGroup.Column<ulong>(schema.Columns[3]).Pages)).IsEquivalentTo(ulongValues);
-            await Assert.That(ReadAllPages(rowGroup.Column<uint>(schema.Columns[4]).Pages)).IsEquivalentTo(dictionaryValues);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<byte>(schema.Columns[0]))).IsEquivalentTo(byteValues);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<ushort>(schema.Columns[1]))).IsEquivalentTo(ushortValues);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<uint>(schema.Columns[2]))).IsEquivalentTo(uintValues);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<ulong>(schema.Columns[3]))).IsEquivalentTo(ulongValues);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<uint>(schema.Columns[4]))).IsEquivalentTo(dictionaryValues);
         }
         finally
         {
@@ -544,13 +534,12 @@ internal sealed class ParquetReaderTests
 
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup2 = reader.OpenRowGroup(token);
+            var rowGroup2 = reader.RowGroups[0];
 
-            await Assert.That(ReadAllPages(rowGroup2.Column<int?>(schema.Columns[0]).Pages)).IsEquivalentTo(intValues);
-            await Assert.That(ReadAllPages(rowGroup2.Column<long?>(schema.Columns[1]).Pages)).IsEquivalentTo(longValues);
-            await Assert.That(ReadAllPages(rowGroup2.Column<double?>(schema.Columns[2]).Pages)).IsEquivalentTo(doubleValues);
-            await Assert.That(ReadAllPages(rowGroup2.Column<bool?>(schema.Columns[3]).Pages)).IsEquivalentTo(boolValues);
+            await Assert.That(ReadAllBuffers(rowGroup2.Column<int?>(schema.Columns[0]))).IsEquivalentTo(intValues);
+            await Assert.That(ReadAllBuffers(rowGroup2.Column<long?>(schema.Columns[1]))).IsEquivalentTo(longValues);
+            await Assert.That(ReadAllBuffers(rowGroup2.Column<double?>(schema.Columns[2]))).IsEquivalentTo(doubleValues);
+            await Assert.That(ReadAllBuffers(rowGroup2.Column<bool?>(schema.Columns[3]))).IsEquivalentTo(boolValues);
         }
         finally
         {
@@ -590,13 +579,12 @@ internal sealed class ParquetReaderTests
 
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup2 = reader.OpenRowGroup(token);
+            var rowGroup2 = reader.RowGroups[0];
 
-            var actualStr = ReadAllPages(rowGroup2.Column<string>(schema.Columns[0]).Pages);
+            var actualStr = ReadAllBuffers(rowGroup2.Column<string>(schema.Columns[0]));
             await Assert.That(actualStr).IsEquivalentTo(strValues);
 
-            var actualBin = ReadAllPages(rowGroup2.Column<byte[]>(schema.Columns[1]).Pages);
+            var actualBin = ReadAllBuffers(rowGroup2.Column<byte[]>(schema.Columns[1]));
             await Assert.That(actualBin.Length).IsEqualTo(binValues.Length);
             for (var i = 0; i < binValues.Length; i++)
             {
@@ -635,10 +623,9 @@ internal sealed class ParquetReaderTests
 
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup2 = reader.OpenRowGroup(token);
+            var rowGroup2 = reader.RowGroups[0];
 
-            await Assert.That(ReadAllPages(rowGroup2.Column<int?>(schema.Columns[0]).Pages)).IsEquivalentTo(values);
+            await Assert.That(ReadAllBuffers(rowGroup2.Column<int?>(schema.Columns[0]))).IsEquivalentTo(values);
         }
         finally
         {
@@ -670,10 +657,9 @@ internal sealed class ParquetReaderTests
 
             using var readStream = File.OpenRead(path);
             using var reader = schema.CreateReader(readStream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup2 = reader.OpenRowGroup(token);
+            var rowGroup2 = reader.RowGroups[0];
 
-            await Assert.That(ReadAllPages(rowGroup2.Column<int?>(schema.Columns[0]).Pages)).IsEquivalentTo(values);
+            await Assert.That(ReadAllBuffers(rowGroup2.Column<int?>(schema.Columns[0]))).IsEquivalentTo(values);
         }
         finally
         {
@@ -714,14 +700,6 @@ internal sealed class ParquetReaderTests
         await Assert.That(actual.Length).IsEqualTo(expected.Length);
         for (var i = 0; i < expected.Length; i++)
             await Assert.That(actual[i]).IsEquivalentTo(expected[i]);
-    }
-
-    static RowGroupToken[] EnumerateTokens(ParquetReader reader)
-    {
-        var tokens = new List<RowGroupToken>();
-        foreach (var token in reader.EnumerateRowGroups())
-            tokens.Add(token);
-        return tokens.ToArray();
     }
 
     static byte[] Bytes(params byte[] values)
@@ -780,11 +758,11 @@ internal sealed class ParquetReaderTests
         return new MemoryStream(stream.ToArray());
     }
 
-    static T[] ReadAllPages<T>(ColumnPageEnumerable<T> pages)
+    static T[] ReadAllBuffers<T>(RowGroupColumn<T> buffers)
     {
         var values = new List<T>();
-        foreach (var page in pages)
-            foreach (var value in page.Values.Span)
+        foreach (var buffer in buffers)
+            foreach (var value in buffer.Values)
                 values.Add(value);
         return values.ToArray();
     }

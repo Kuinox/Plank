@@ -42,11 +42,11 @@ internal readonly struct BufferWriterFactory
         => new(BufferPool, _bufferChunkSizeBytes, _initialMetadataBufferBytes);
 
     internal T[] RentScratch<T>(uint minimumLength)
-        => BufferPool.Rent<T>(minimumLength);
+        => ArrayRenter<T>.Shared.Rent(minimumLength);
 
     internal byte[] RentScratch(uint minimumLength)
         => RentScratch<byte>(minimumLength);
 
     internal void ReturnScratch<T>(T[] buffer, bool clearArray = false)
-        => BufferPool.Return(buffer, clearArray);
+        => ArrayRenter<T>.Shared.Return(buffer, clearArray);
 }

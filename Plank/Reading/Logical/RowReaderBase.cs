@@ -22,8 +22,8 @@ abstract class RowReaderBase<TSlot> : IDisposable
     public ParquetFileMetadata Metadata
         => Reader.Metadata;
 
-    public RowGroupTokenEnumerable EnumerateRowGroups()
-        => Reader.EnumerateRowGroups();
+    public RowGroupCollection RowGroups
+        => Reader.RowGroups;
 
     public void Dispose()
     {

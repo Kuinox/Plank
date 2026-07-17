@@ -9,28 +9,29 @@ public sealed class RowReaderCore : IDisposable
 {
     readonly RowApiColumnReadState[] _states;
     readonly ParquetReader _reader;
-    readonly RowGroupReader _rowGroup;
+    RowGroup _rowGroup;
     ParquetSchemaEvolutionOptions? _schemaEvolution;
     StreamReadSource? _streamSource;
-    RowGroupTokenEnumerable.Enumerator _rowGroups;
+    RowGroupCollection.Enumerator _rowGroups;
     ulong _rowGroupRowsRemaining;
     bool _started;
     bool _hasCurrent;
     bool _disposed;
 
     public RowReaderCore(Stream stream, ParquetSchema schema, RowApiColumnDescriptor[] columns,
-        ulong projection, ParquetReaderOptions options, ParquetSchemaEvolutionOptions? schemaEvolution)
+        ulong projection, RowReaderOptions options, ParquetSchemaEvolutionOptions? schemaEvolution)
         : this(new StreamReadSource(stream), schema, columns, projection, options, schemaEvolution)
     {
     }
 
     public RowReaderCore(IParquetReadSource source, ParquetSchema schema, RowApiColumnDescriptor[] columns,
-        ulong projection, ParquetReaderOptions options, ParquetSchemaEvolutionOptions? schemaEvolution)
+        ulong projection, RowReaderOptions options, ParquetSchemaEvolutionOptions? schemaEvolution)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
         if (columns.Length != schema.Columns.Length)
             throw new ArgumentException("Row API column descriptors must match the row API schema column count.",
                 nameof(columns));
@@ -40,7 +41,7 @@ public sealed class RowReaderCore : IDisposable
         _states = CreateStates(columns);
         _reader = new ParquetReader(CreateLooseReaderOptions(options));
         _reader.Reset(source);
-        _rowGroup = _reader.CreateReusableRowGroupReader();
+        _rowGroup = default;
         _rowGroups = default;
         _rowGroupRowsRemaining = 0;
         _started = false;
@@ -76,8 +77,8 @@ public sealed class RowReaderCore : IDisposable
 
         ApplyProjection(projection);
         DisposeColumnReaders();
-        _rowGroup.Dispose();
         _reader.Reset(source);
+        _rowGroup = default;
         _rowGroups = default;
         _rowGroupRowsRemaining = 0;
         _started = false;
@@ -85,8 +86,8 @@ public sealed class RowReaderCore : IDisposable
         ResolveFileSchema();
     }
 
-    public T[] GetCurrentArray<T>(int columnIndex)
-        => GetState<T>(columnIndex).CurrentArray;
+    public Span<T> GetCurrentSpan<T>(int columnIndex)
+        => GetState<T>(columnIndex).CurrentSpan;
 
     public int GetCurrentIndex(int columnIndex)
     {
@@ -109,7 +110,6 @@ public sealed class RowReaderCore : IDisposable
             return;
 
         DisposeColumnReaders();
-        _rowGroup.Dispose();
         _reader.Dispose();
         _disposed = true;
     }
@@ -127,12 +127,10 @@ public sealed class RowReaderCore : IDisposable
         return states;
     }
 
-    static ParquetReaderOptions CreateLooseReaderOptions(ParquetReaderOptions options)
+    static ParquetReaderOptions CreateLooseReaderOptions(RowReaderOptions options)
         => new()
         {
             BufferPool = options.BufferPool,
-            Execution = options.Execution,
-            MaxReadAheadRowGroups = options.MaxReadAheadRowGroups,
             Strict = false
         };
 
@@ -163,11 +161,10 @@ public sealed class RowReaderCore : IDisposable
         while (true)
         {
             DisposeColumnReaders();
-            _rowGroup.Dispose();
             if (!_rowGroups.MoveNext())
                 return false;
 
-            _reader.OpenRowGroup(_rowGroups.Current, _rowGroup);
+            _rowGroup = _rowGroups.Current;
             _rowGroupRowsRemaining = _rowGroup.RowCount;
             if (_rowGroupRowsRemaining == 0)
                 continue;
@@ -175,7 +172,7 @@ public sealed class RowReaderCore : IDisposable
             for (var i = 0; i < _states.Length; i++)
             {
                 var state = _states[i];
-                state.ResetPageState();
+                state.ResetBufferState();
                 if (state.Projected)
                     state.Open(_rowGroup);
                 if (state.Materialized)
@@ -290,14 +287,14 @@ public sealed class RowReaderCore : IDisposable
         if (_started)
             return;
 
-        _rowGroups = _reader.EnumerateRowGroups().GetEnumerator();
+        _rowGroups = _reader.RowGroups.GetEnumerator();
         _started = true;
     }
 
     void DisposeColumnReaders()
     {
         for (var i = 0; i < _states.Length; i++)
-            _states[i].DisposePages();
+            _states[i].DisposeBuffers();
     }
 
     void ThrowIfDisposed()

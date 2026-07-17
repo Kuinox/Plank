@@ -22,6 +22,38 @@ internal sealed class ReaderAllocationTests
     ];
 
     [Test]
+    public void RowGroupIndexAccessDoesNotAllocateAfterWarmup()
+    {
+        var schema = new ParquetSchema([
+            new Column("Value", ParquetPhysicalType.Int32)
+        ]);
+        var path = CreateFile(schema, CreateValues(16));
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = schema.CreateReader(stream);
+            for (var i = 0; i < 8; i++)
+                _ = reader.RowGroups[0].RowCount;
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            _ = reader.RowGroups[0].RowCount;
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            if (allocated != 0)
+                throw new InvalidOperationException(
+                    $"Expected zero allocations for row group index access but saw {allocated} bytes.");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
     public void RowGroupEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
@@ -96,7 +128,7 @@ internal sealed class ReaderAllocationTests
     }
 
     [Test]
-    public void ColumnPageEnumerationDoesNotAllocateAfterWarmup()
+    public void ColumnBufferEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
             new Column("Value", ParquetPhysicalType.Int32,
@@ -107,8 +139,7 @@ internal sealed class ReaderAllocationTests
         {
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(token);
+            var rowGroup = reader.RowGroups[0];
             for (var i = 0; i < 8; i++)
                 _ = SumValues(rowGroup, schema.Columns[0]);
 
@@ -123,7 +154,7 @@ internal sealed class ReaderAllocationTests
 
             if (allocated != 0)
                 throw new InvalidOperationException(
-                    $"Expected zero allocations for steady-state column page enumeration but saw {allocated} bytes.");
+                    $"Expected zero allocations for steady-state column buffer enumeration but saw {allocated} bytes.");
         }
         finally
         {
@@ -132,7 +163,7 @@ internal sealed class ReaderAllocationTests
     }
 
     [Test]
-    public void DictionaryColumnPageEnumerationDoesNotAllocateAfterWarmup()
+    public void DictionaryColumnBufferEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
             new Column("Value", ParquetPhysicalType.Int32,
@@ -148,8 +179,7 @@ internal sealed class ReaderAllocationTests
         {
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(token);
+            var rowGroup = reader.RowGroups[0];
             for (var i = 0; i < 8; i++)
                 _ = SumValues(rowGroup, schema.Columns[0]);
 
@@ -164,7 +194,7 @@ internal sealed class ReaderAllocationTests
 
             if (allocated != 0)
                 throw new InvalidOperationException(
-                    $"Expected zero allocations for steady-state dictionary column page enumeration but saw {allocated} bytes.");
+                    $"Expected zero allocations for steady-state dictionary column buffer enumeration but saw {allocated} bytes.");
         }
         finally
         {
@@ -173,7 +203,7 @@ internal sealed class ReaderAllocationTests
     }
 
     [Test]
-    public void DeltaBinaryPackedColumnPageEnumerationDoesNotAllocateAfterWarmup()
+    public void DeltaBinaryPackedColumnBufferEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
             new Column("Value", ParquetPhysicalType.Int32,
@@ -184,12 +214,11 @@ internal sealed class ReaderAllocationTests
         {
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(token);
-            var firstPage = rowGroup.Column<int>(schema.Columns[0]).Pages.GetEnumerator();
-            if (!firstPage.MoveNext() || firstPage.Current.Encoding != EncodingKind.DeltaBinaryPacked)
-                throw new InvalidOperationException("Expected delta binary packed test data.");
-            firstPage.Dispose();
+            var rowGroup = reader.RowGroups[0];
+            var firstBuffer = rowGroup.Column<int>(schema.Columns[0]).GetEnumerator();
+            if (!firstBuffer.MoveNext())
+                throw new InvalidOperationException("Expected test data.");
+            firstBuffer.Dispose();
 
             for (var i = 0; i < 8; i++)
                 _ = SumValues(rowGroup, schema.Columns[0]);
@@ -205,7 +234,7 @@ internal sealed class ReaderAllocationTests
 
             if (allocated != 0)
                 throw new InvalidOperationException(
-                    $"Expected zero allocations for steady-state delta binary packed column page enumeration but saw {allocated} bytes.");
+                    $"Expected zero allocations for steady-state delta binary packed column buffer enumeration but saw {allocated} bytes.");
         }
         finally
         {
@@ -214,7 +243,7 @@ internal sealed class ReaderAllocationTests
     }
 
     [Test]
-    public void BooleanRleColumnPageEnumerationDoesNotAllocateAfterWarmup()
+    public void BooleanRleColumnBufferEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
             new Column("Value", ParquetPhysicalType.Boolean,
@@ -225,8 +254,7 @@ internal sealed class ReaderAllocationTests
         {
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(token);
+            var rowGroup = reader.RowGroups[0];
 
             for (var i = 0; i < 8; i++)
                 _ = CountTrueValues(rowGroup, schema.Columns[0]);
@@ -242,7 +270,7 @@ internal sealed class ReaderAllocationTests
 
             if (allocated != 0)
                 throw new InvalidOperationException(
-                    $"Expected zero allocations for steady-state boolean RLE column page enumeration but saw {allocated} bytes.");
+                    $"Expected zero allocations for steady-state boolean RLE column buffer enumeration but saw {allocated} bytes.");
         }
         finally
         {
@@ -251,7 +279,7 @@ internal sealed class ReaderAllocationTests
     }
 
     [Test]
-    public void ByteStreamSplitColumnPageEnumerationDoesNotAllocateAfterWarmup()
+    public void ByteStreamSplitColumnBufferEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
             new Column("Value", ParquetPhysicalType.Int32,
@@ -262,8 +290,7 @@ internal sealed class ReaderAllocationTests
         {
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(token);
+            var rowGroup = reader.RowGroups[0];
 
             for (var i = 0; i < 8; i++)
                 _ = SumValues(rowGroup, schema.Columns[0]);
@@ -279,7 +306,7 @@ internal sealed class ReaderAllocationTests
 
             if (allocated != 0)
                 throw new InvalidOperationException(
-                    $"Expected zero allocations for steady-state byte-stream-split column page enumeration but saw {allocated} bytes.");
+                    $"Expected zero allocations for steady-state byte-stream-split column buffer enumeration but saw {allocated} bytes.");
         }
         finally
         {
@@ -288,7 +315,7 @@ internal sealed class ReaderAllocationTests
     }
 
     [Test]
-    public void CompressedColumnPageEnumerationDoesNotAllocateAfterWarmup()
+    public void CompressedColumnBufferEnumerationDoesNotAllocateAfterWarmup()
     {
         var failures = new List<string>();
         for (var i = 0; i < _compressionKinds.Length; i++)
@@ -300,7 +327,7 @@ internal sealed class ReaderAllocationTests
                 // Zstd allocates until .NET 11 ships ZstandardDecoder.TryDecompress (dotnet/runtime#59591).
                 if (compression is CompressionKind.Gzip or CompressionKind.Zstd)
                     continue;
-                var allocated = MeasureCompressedColumnPageEnumerationAllocations(compression);
+                var allocated = MeasureCompressedColumnBufferEnumerationAllocations(compression);
                 if (allocated != 0)
                     failures.Add($"codec '{compression}' allocated {allocated} bytes.");
             }
@@ -312,16 +339,16 @@ internal sealed class ReaderAllocationTests
 
         if (failures.Count > 0)
             throw new InvalidOperationException(
-                $"Expected zero allocations for steady-state compressed column page enumeration. Failures: {string.Join(' ', failures)}");
+                $"Expected zero allocations for steady-state compressed column buffer enumeration. Failures: {string.Join(' ', failures)}");
     }
 
     [Test]
-    public void DeltaLengthByteArrayColumnPageEnumerationDoesNotAllocateAfterWarmup()
-        => AssertByteArrayColumnPageEnumerationDoesNotAllocateAfterWarmup(EncodingKind.DeltaLengthByteArray);
+    public void DeltaLengthByteArrayColumnBufferEnumerationDoesNotAllocateAfterWarmup()
+        => AssertByteArrayColumnBufferEnumerationDoesNotAllocateAfterWarmup(EncodingKind.DeltaLengthByteArray);
 
     [Test]
-    public void DeltaByteArrayColumnPageEnumerationDoesNotAllocateAfterWarmup()
-        => AssertByteArrayColumnPageEnumerationDoesNotAllocateAfterWarmup(EncodingKind.DeltaByteArray);
+    public void DeltaByteArrayColumnBufferEnumerationDoesNotAllocateAfterWarmup()
+        => AssertByteArrayColumnBufferEnumerationDoesNotAllocateAfterWarmup(EncodingKind.DeltaByteArray);
 
     [Test]
     public void GeneratedRowReaderDoesNotAllocateBatchBuffersAfterWarmup()
@@ -406,35 +433,35 @@ internal sealed class ReaderAllocationTests
         return path;
     }
 
-    static int SumValues(RowGroupReader rowGroup, Column column)
+    static int SumValues(RowGroup rowGroup, Column column)
     {
         var sum = 0;
-        foreach (var page in rowGroup.Column<int>(column).Pages)
-            foreach (var value in page.Values.Span)
+        foreach (var buffer in rowGroup.Column<int>(column))
+            foreach (var value in buffer.Values)
                 sum += value;
         return sum;
     }
 
-    static int CountTrueValues(RowGroupReader rowGroup, Column column)
+    static int CountTrueValues(RowGroup rowGroup, Column column)
     {
         var count = 0;
-        foreach (var page in rowGroup.Column<bool>(column).Pages)
-            foreach (var value in page.Values.Span)
+        foreach (var buffer in rowGroup.Column<bool>(column))
+            foreach (var value in buffer.Values)
                 if (value)
                     count++;
         return count;
     }
 
-    static int SumByteLengths(RowGroupReader rowGroup, Column column)
+    static int SumByteLengths(RowGroup rowGroup, Column column)
     {
         var sum = 0;
-        foreach (var page in rowGroup.Column<byte[]>(column).Pages)
-            foreach (var value in page.Values.Span)
+        foreach (var buffer in rowGroup.Column<byte[]>(column))
+            foreach (var value in buffer.Values)
                 sum += value.Length;
         return sum;
     }
 
-    static void AssertByteArrayColumnPageEnumerationDoesNotAllocateAfterWarmup(EncodingKind encoding)
+    static void AssertByteArrayColumnBufferEnumerationDoesNotAllocateAfterWarmup(EncodingKind encoding)
     {
         var schema = new ParquetSchema([
             new Column("Value", ParquetPhysicalType.ByteArray,
@@ -445,8 +472,7 @@ internal sealed class ReaderAllocationTests
         {
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(token);
+            var rowGroup = reader.RowGroups[0];
 
             for (var i = 0; i < 8; i++)
                 _ = SumByteLengths(rowGroup, schema.Columns[0]);
@@ -462,7 +488,7 @@ internal sealed class ReaderAllocationTests
 
             if (allocated != 0)
                 throw new InvalidOperationException(
-                    $"Expected zero allocations for steady-state {encoding} column page enumeration but saw {allocated} bytes.");
+                    $"Expected zero allocations for steady-state {encoding} column buffer enumeration but saw {allocated} bytes.");
         }
         finally
         {
@@ -490,7 +516,7 @@ internal sealed class ReaderAllocationTests
         return total;
     }
 
-    static long MeasureCompressedColumnPageEnumerationAllocations(CompressionKind compression)
+    static long MeasureCompressedColumnBufferEnumerationAllocations(CompressionKind compression)
     {
         var schema = new ParquetSchema([
             new Column("Value", ParquetPhysicalType.Int32,
@@ -501,8 +527,7 @@ internal sealed class ReaderAllocationTests
         {
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
-            var token = EnumerateTokens(reader)[0];
-            using var rowGroup = reader.OpenRowGroup(token);
+            var rowGroup = reader.RowGroups[0];
             for (var i = 0; i < 8; i++)
                 _ = SumValues(rowGroup, schema.Columns[0]);
 
@@ -521,18 +546,10 @@ internal sealed class ReaderAllocationTests
         }
     }
 
-    static RowGroupToken[] EnumerateTokens(ParquetReader reader)
-    {
-        var tokens = new List<RowGroupToken>();
-        foreach (var token in reader.EnumerateRowGroups())
-            tokens.Add(token);
-        return tokens.ToArray();
-    }
-
     static int CountRowGroups(ParquetReader reader)
     {
         var count = 0;
-        foreach (var _ in reader.EnumerateRowGroups())
+        foreach (var _ in reader.RowGroups)
             count++;
         return count;
     }

@@ -113,9 +113,9 @@ public sealed class ParquetFileReader : IDisposable
 
             _metadata.FooterOffset = footerOffset;
             _metadata.FooterLength = footerLength;
-            _metadata.FooterBuffer = Rent<byte>(footerLength);
+            _metadata.FooterBuffer = Rent(footerLength);
             _metadata.FooterByteCount = checked((int)footerLength);
-            var footerBytes = _metadata.FooterBuffer.AsSpan(0, _metadata.FooterByteCount);
+            var footerBytes = _metadata.FooterBuffer.Span[.._metadata.FooterByteCount];
             source.ReadExactly(footerOffset, footerBytes);
             PhysicalMetadataThriftReader.Read(_metadata, _options.BufferPool);
         }
@@ -138,11 +138,11 @@ public sealed class ParquetFileReader : IDisposable
         }
     }
 
-    T[] Rent<T>(uint count)
-        => count == 0 ? [] : _options.BufferPool.Rent<T>(count);
+    ParquetBuffer Rent(uint count)
+        => _options.BufferPool.Rent(count);
 
     void ReturnMetadataBuffers()
-        => _metadata.ReturnBuffers(_options.BufferPool);
+        => _metadata.ReturnBuffers();
 
     internal void ValidateGeneration(int generation)
     {

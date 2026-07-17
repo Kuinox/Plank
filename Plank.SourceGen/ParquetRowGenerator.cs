@@ -234,11 +234,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("    public static PipelineWriter CreateRowWriter(global::System.IO.Stream stream, uint maxParallelism, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(stream, maxParallelism, onFlush, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
         builder.AppendLine();
-        builder.AppendLine("    public static RowReader CreateRowReader(global::System.IO.Stream stream, Projection projection = Projection.All, global::Plank.Reading.Logical.ParquetReaderOptions? options = null, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
-        builder.AppendLine("        => new(stream, projection, options ?? global::Plank.Reading.Logical.ParquetReaderOptions.Default, schemaEvolution);");
+        builder.AppendLine("    public static RowReader CreateRowReader(global::System.IO.Stream stream, Projection projection = Projection.All, global::Plank.RowApi.RowReaderOptions? options = null, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
+        builder.AppendLine("        => new(stream, projection, options ?? global::Plank.RowApi.RowReaderOptions.Default, schemaEvolution);");
         builder.AppendLine();
-        builder.AppendLine("    public static RowReader CreateRowReader(global::Plank.Reading.IParquetReadSource source, Projection projection = Projection.All, global::Plank.Reading.Logical.ParquetReaderOptions? options = null, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
-        builder.AppendLine("        => new(source, projection, options ?? global::Plank.Reading.Logical.ParquetReaderOptions.Default, schemaEvolution);");
+        builder.AppendLine("    public static RowReader CreateRowReader(global::Plank.Reading.IParquetReadSource source, Projection projection = Projection.All, global::Plank.RowApi.RowReaderOptions? options = null, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
+        builder.AppendLine("        => new(source, projection, options ?? global::Plank.RowApi.RowReaderOptions.Default, schemaEvolution);");
         builder.AppendLine();
         builder.AppendLine("    [global::System.Flags]");
         builder.AppendLine("    public enum Projection : ulong");
@@ -535,12 +535,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("    {");
         builder.AppendLine("        readonly global::Plank.RowApi.RowReaderCore _core;");
         builder.AppendLine();
-        builder.AppendLine("        internal RowReader(global::System.IO.Stream stream, Projection projection, global::Plank.Reading.Logical.ParquetReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
+        builder.AppendLine("        internal RowReader(global::System.IO.Stream stream, Projection projection, global::Plank.RowApi.RowReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
         builder.AppendLine("        {");
         builder.AppendLine("            _core = new global::Plank.RowApi.RowReaderCore(stream, Schema, s_rowApiColumns, (ulong)projection, options, schemaEvolution);");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        internal RowReader(global::Plank.Reading.IParquetReadSource source, Projection projection, global::Plank.Reading.Logical.ParquetReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
+        builder.AppendLine("        internal RowReader(global::Plank.Reading.IParquetReadSource source, Projection projection, global::Plank.RowApi.RowReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
         builder.AppendLine("        {");
         builder.AppendLine("            _core = new global::Plank.RowApi.RowReaderCore(source, Schema, s_rowApiColumns, (ulong)projection, options, schemaEvolution);");
         builder.AppendLine("        }");
@@ -581,7 +581,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         {
             if (i > 0)
                 builder.Append(", ");
-            builder.Append("_core.GetCurrentArray<").Append(columns[i].ClrTypeName).Append(">(").Append(i)
+            builder.Append("_core.GetCurrentSpan<").Append(columns[i].ClrTypeName).Append(">(").Append(i)
                 .Append("), _core.GetCurrentIndex(").Append(i).Append(')');
         }
         builder.AppendLine(");");
@@ -689,7 +689,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         };
 
     static string GetBufferType(string clrTypeName)
-        => $"{clrTypeName}[]";
+        => $"global::System.Span<{clrTypeName}>";
 
     static bool SupportsOwnerSetter(string clrTypeName)
         => clrTypeName is "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?";
