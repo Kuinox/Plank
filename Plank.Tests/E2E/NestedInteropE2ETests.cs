@@ -24,10 +24,10 @@ internal sealed class NestedInteropE2ETests
         };
 
         var schema = new PlankSchema([
-            ColumnDef.List("items",
-                ColumnDef.RequiredGroup("entry",
-                    ColumnDef.RequiredLeaf("a", ParquetPhysicalType.Int32),
-                    ColumnDef.RequiredLeaf("b", ParquetPhysicalType.Int64)),
+            ColumnDefinition.List("items",
+                ColumnDefinition.RequiredGroup("entry",
+                    ColumnDefinition.RequiredLeaf("a", ParquetPhysicalType.Int32),
+                    ColumnDefinition.RequiredLeaf("b", ParquetPhysicalType.Int64)),
                 repetition: ParquetRepetition.Required)
         ]);
 
@@ -41,11 +41,11 @@ internal sealed class NestedInteropE2ETests
                 });
                 var rowGroup = writer.StartRowGroup();
 
-                var serializedA = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                var serializedA = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
                 serializedA.Serialize(aRows);
                 rowGroup.Write(serializedA);
 
-                var serializedB = rowGroup.CreateSerializedColumn<long[]>(schema.Columns[1]);
+                var serializedB = rowGroup.CreateSerializedColumn<long[]>(schema.LeafColumns[1]);
                 serializedB.Serialize(bRows);
                 rowGroup.Write(serializedB);
 
@@ -78,9 +78,9 @@ internal sealed class NestedInteropE2ETests
         };
 
         var schema = new PlankSchema([
-            ColumnDef.Map("scores",
-                ColumnDef.RequiredLeaf("k", ParquetPhysicalType.Int32),
-                ColumnDef.RequiredLeaf("v", ParquetPhysicalType.Int32),
+            ColumnDefinition.Map("scores",
+                ColumnDefinition.RequiredLeaf("k", ParquetPhysicalType.Int32),
+                ColumnDefinition.RequiredLeaf("v", ParquetPhysicalType.Int32),
                 repetition: ParquetRepetition.Required)
         ]);
 
@@ -94,11 +94,11 @@ internal sealed class NestedInteropE2ETests
                 });
                 var rowGroup = writer.StartRowGroup();
 
-                var serializedKeys = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                var serializedKeys = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
                 serializedKeys.Serialize(keyRows);
                 rowGroup.Write(serializedKeys);
 
-                var serializedValues = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[1]);
+                var serializedValues = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[1]);
                 serializedValues.Serialize(valueRows);
                 rowGroup.Write(serializedValues);
 
@@ -131,9 +131,9 @@ internal sealed class NestedInteropE2ETests
         };
 
         var schema = new PlankSchema([
-            ColumnDef.Map("scores",
-                ColumnDef.RequiredLeaf("k", ParquetPhysicalType.Int32),
-                ColumnDef.RequiredLeaf("v", ParquetPhysicalType.Int32),
+            ColumnDefinition.Map("scores",
+                ColumnDefinition.RequiredLeaf("k", ParquetPhysicalType.Int32),
+                ColumnDefinition.RequiredLeaf("v", ParquetPhysicalType.Int32),
                 repetition: ParquetRepetition.Required)
         ]);
 
@@ -147,11 +147,11 @@ internal sealed class NestedInteropE2ETests
                 });
                 var rowGroup = writer.StartRowGroup();
 
-                var serializedKeys = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                var serializedKeys = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
                 serializedKeys.Serialize(keyRows);
                 rowGroup.Write(serializedKeys);
 
-                var serializedValues = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[1]);
+                var serializedValues = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[1]);
                 serializedValues.Serialize(valueRows);
                 rowGroup.Write(serializedValues);
 
@@ -188,9 +188,9 @@ internal sealed class NestedInteropE2ETests
         ];
 
         var schema = new PlankSchema([
-            ColumnDef.Map("scores",
-                ColumnDef.RequiredLeaf("k", ParquetPhysicalType.Int32),
-                ColumnDef.OptionalLeaf("v", ParquetPhysicalType.Int32),
+            ColumnDefinition.Map("scores",
+                ColumnDefinition.RequiredLeaf("k", ParquetPhysicalType.Int32),
+                ColumnDefinition.OptionalLeaf("v", ParquetPhysicalType.Int32),
                 repetition: ParquetRepetition.Optional)
         ]);
 
@@ -204,11 +204,11 @@ internal sealed class NestedInteropE2ETests
                 });
                 var rowGroup = writer.StartRowGroup();
 
-                var serializedKeys = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                var serializedKeys = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
                 serializedKeys.Serialize(keyRows);
                 rowGroup.Write(serializedKeys);
 
-                var serializedValues = rowGroup.CreateSerializedColumn<int?[]>(schema.Columns[1]);
+                var serializedValues = rowGroup.CreateSerializedColumn<int?[]>(schema.LeafColumns[1]);
                 serializedValues.Serialize(valueRows);
                 rowGroup.Write(serializedValues);
 
@@ -237,8 +237,8 @@ internal sealed class NestedInteropE2ETests
         ];
 
         var schema = new PlankSchema([
-            ColumnDef.List("outer",
-                ColumnDef.List("inner", ColumnDef.RequiredLeaf("value", ParquetPhysicalType.Int32),
+            ColumnDefinition.List("outer",
+                ColumnDefinition.List("inner", ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int32),
                     repetition: ParquetRepetition.Required),
                 repetition: ParquetRepetition.Required)
         ]);
@@ -253,7 +253,7 @@ internal sealed class NestedInteropE2ETests
                 });
                 var rowGroup = writer.StartRowGroup();
 
-                var serialized = rowGroup.CreateSerializedColumn<int[][]>(schema.Columns[0]);
+                var serialized = rowGroup.CreateSerializedColumn<int[][]>(schema.LeafColumns[0]);
                 serialized.Serialize(rows);
                 rowGroup.Write(serialized);
 

@@ -49,7 +49,7 @@ for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroup
 foreach (ParquetPage page in reader.OpenPages(rowGroupOrdinal, columnOrdinal))
 {
     PageHeader header = page.Header;
-    var payload = page.Payload;
+    ReadOnlySpan<byte> payload = page.Payload;
 }
 ```
 

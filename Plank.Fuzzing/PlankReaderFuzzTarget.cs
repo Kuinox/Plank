@@ -22,7 +22,7 @@ public static class PlankReaderFuzzTarget
             using var reader = schema.CreateReader(source);
             foreach (var group in reader.RowGroups)
             {
-                foreach (var column in reader.Schema.Columns)
+                foreach (var column in reader.Schema.LeafColumns)
                     DrainColumn(group, column);
             }
         }
@@ -40,7 +40,7 @@ public static class PlankReaderFuzzTarget
             using var reader = schema.CreateReader(source);
             foreach (var group in reader.RowGroups)
             {
-                foreach (var column in reader.Schema.Columns)
+                foreach (var column in reader.Schema.LeafColumns)
                     DrainColumn(group, column);
             }
             return null;
@@ -51,7 +51,7 @@ public static class PlankReaderFuzzTarget
         }
     }
 
-    static void DrainColumn(RowGroup rowGroup, Column column)
+    static void DrainColumn(RowGroup rowGroup, LeafColumn column)
     {
         switch (column.PhysicalType)
         {
@@ -110,9 +110,9 @@ public static class PlankReaderFuzzTarget
             Schema(Col("c0", ParquetPhysicalType.ByteArray, EncodingKind.DeltaByteArray)),
         ];
 
-    static ParquetSchema Schema(params Column[] columns)
+    static ParquetSchema Schema(params ColumnDefinition[] columns)
         => new(columns.ToImmutableArray());
 
-    static Column Col(string name, ParquetPhysicalType type, EncodingKind encoding)
-        => new(name, type, new ColumnOptions(encodings: ImmutableArray.Create(encoding)));
+    static ColumnDefinition Col(string name, ParquetPhysicalType type, EncodingKind encoding)
+        => ColumnDefinition.Leaf(name, type, new ColumnOptions(encodings: ImmutableArray.Create(encoding)));
 }

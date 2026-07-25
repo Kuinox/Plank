@@ -6,7 +6,7 @@ using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
 using ParquetSchema = Parquet.Schema.ParquetSchema;
-using PlankColumn = Plank.Schema.Column;
+using PlankColumn = Plank.Schema.LeafColumn;
 using PlankSchema = Plank.Schema.ParquetSchema;
 
 namespace Plank.Benchmarks;
@@ -83,11 +83,12 @@ public class EncodingBenchmark
         }
 
         _sharedStream = new MemoryStream(capacity: Rows * 64);
-        _plankColumn = new PlankColumn(
+        var plankColumnDefinition = Plank.Schema.ColumnDefinition.Leaf(
             "value",
             MapPlankPhysicalType(DataType),
             new ColumnOptions(ParquetRepetition.Required, [MapPlankEncoding(EncodingName)]));
-        var plankSchema = CreatePlankSchema(_plankColumn, EncodingName);
+        var plankSchema = CreatePlankSchema(plankColumnDefinition, EncodingName);
+        _plankColumn = plankSchema.LeafColumns[0];
         _plankWriter = plankSchema.CreateWriter(_sharedStream, new ParquetWriterOptions
         {
             Compression = CompressionKind.None
@@ -246,15 +247,10 @@ public class EncodingBenchmark
             _ => throw new InvalidOperationException($"Unknown type '{dataType}'.")
         };
 
-    static PlankSchema CreatePlankSchema(PlankColumn column, string encoding)
-        => string.Equals(encoding, "dictionary", StringComparison.Ordinal)
-            ? new PlankSchema([column])
-            {
-                PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
-                    .WithComparers(StringComparer.Ordinal)
-                    .Add(column.Name, ForceDictionaryPageStrategy.Shared)
-            }
-            : new PlankSchema([column]);
+    static PlankSchema CreatePlankSchema(ColumnDefinition column, string encoding)
+        => new([string.Equals(encoding, "dictionary", StringComparison.Ordinal)
+            ? column with { PageStrategy = ForceDictionaryPageStrategy.Shared }
+            : column]);
 
     static ParquetOptions BuildParquetNetOptions(string encoding)
         => ParquetNetEncodingOptions.ForEncoding(encoding);

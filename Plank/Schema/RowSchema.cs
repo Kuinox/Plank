@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Plank.Writing.PageStrategy;
 
 namespace Plank.Schema;
 
@@ -7,7 +8,7 @@ public sealed record RowSchema
     public RowSchema(ImmutableArray<RowSchemaColumn> columns)
     {
         Columns = columns.IsDefault ? [] : columns;
-        ParquetSchema = new ParquetSchema(Columns.Select(static c => c.ToColumn()).ToImmutableArray());
+        ParquetSchema = new ParquetSchema(Columns.Select(static c => c.ToDefinition()).ToImmutableArray());
     }
 
     public ImmutableArray<RowSchemaColumn> Columns { get; }
@@ -21,7 +22,7 @@ public sealed record RowSchema
         => new(columns);
 
     public static RowSchemaColumn Column<TClr>(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null,
-        LogicalType? logicalType = null)
-        => new(name, physicalType, typeof(TClr), options, logicalType);
+        LogicalType? logicalType = null, IPageStrategy? pageStrategy = null)
+        => new(name, physicalType, typeof(TClr), options, logicalType, pageStrategy);
 
 }

@@ -3,6 +3,11 @@ using Plank.Schema;
 
 namespace Plank.Writing;
 
+/// <summary>Provides the parallel serialization pipeline used by generated row writers.</summary>
+/// <typeparam name="TSlot">The generated row-buffer slot type.</typeparam>
+/// <remarks>
+/// This unstable API supports Plank-generated code and is not intended for direct use by applications.
+/// </remarks>
 public abstract class RowWriterBase<TSlot>
     where TSlot : class
 {
@@ -21,6 +26,11 @@ public abstract class RowWriterBase<TSlot>
     bool _completed;
     ExceptionDispatchInfo? _fault;
 
+    /// <summary>Initializes the pipeline used by a generated row writer.</summary>
+    /// <param name="stream">The destination stream.</param>
+    /// <param name="schema">The generated Parquet schema.</param>
+    /// <param name="maxParallelism">The maximum number of serialization workers.</param>
+    /// <param name="options">The Parquet writer options.</param>
     protected RowWriterBase(Stream stream, ParquetSchema schema, uint maxParallelism, ParquetWriterOptions options)
     {
         ArgumentNullException.ThrowIfNull(stream);
@@ -50,17 +60,31 @@ public abstract class RowWriterBase<TSlot>
         _fault = null;
     }
 
+    /// <summary>Creates a generated row-buffer slot.</summary>
+    /// <param name="writer">The destination Parquet writer.</param>
+    /// <returns>A new buffer slot.</returns>
     protected abstract TSlot CreateSlot(ParquetWriter writer);
+    /// <summary>Serializes a generated row-buffer slot.</summary>
+    /// <param name="slot">The slot to serialize.</param>
     protected abstract void SerializeSlot(TSlot slot);
+    /// <summary>Writes a serialized slot to a row group.</summary>
+    /// <param name="slot">The serialized slot.</param>
+    /// <param name="rowGroupWriter">The destination row-group writer.</param>
     protected abstract void WriteSerializedSlot(TSlot slot, RowGroupWriter rowGroupWriter);
+    /// <summary>Resets a generated slot before it is reused.</summary>
+    /// <param name="slot">The slot to reset.</param>
     protected abstract void ResetSlotForReuse(TSlot slot);
+    /// <summary>Gets the name prefix used for serialization worker threads.</summary>
     protected virtual string WorkerThreadNamePrefix
         => "PlankRowApiWorker";
 
+    /// <summary>Handles successful writing of a generated slot.</summary>
+    /// <param name="slot">The slot that was written.</param>
     protected virtual void OnSlotWritten(TSlot slot)
     {
     }
 
+    /// <summary>Creates the generated slots and starts serialization workers.</summary>
     protected void InitializeSlots()
     {
         lock (_gate)
@@ -86,6 +110,8 @@ public abstract class RowWriterBase<TSlot>
         }
     }
 
+    /// <summary>Takes the first slot used by a generated writer.</summary>
+    /// <returns>The first writable slot.</returns>
     protected TSlot TakeInitialSlot()
     {
         lock (_gate)
@@ -102,6 +128,9 @@ public abstract class RowWriterBase<TSlot>
         }
     }
 
+    /// <summary>Queues a filled slot and obtains the next writable slot.</summary>
+    /// <param name="slot">The filled slot to queue.</param>
+    /// <returns>The next writable slot.</returns>
     protected TSlot EnqueueAndTakeFree(TSlot slot)
     {
         ArgumentNullException.ThrowIfNull(slot);
@@ -118,6 +147,9 @@ public abstract class RowWriterBase<TSlot>
         }
     }
 
+    /// <summary>Completes the serialization pipeline and closes the Parquet file.</summary>
+    /// <param name="activeSlot">The generated writer's active slot.</param>
+    /// <param name="hasRows">Whether the active slot contains rows to write.</param>
     protected void Complete(TSlot activeSlot, bool hasRows)
     {
         ArgumentNullException.ThrowIfNull(activeSlot);
@@ -143,6 +175,7 @@ public abstract class RowWriterBase<TSlot>
         _writer.CloseFile();
     }
 
+    /// <summary>Rethrows a failure reported by a serialization worker.</summary>
     protected void ThrowIfFaulted()
     {
         var fault = _fault;

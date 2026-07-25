@@ -40,7 +40,7 @@ internal sealed class ReaderRoundTripFuzzTests
             {
                 for (var columnIndex = 0; columnIndex < specs.Length; columnIndex++)
                 {
-                    var actual = ReadColumn(rowGroup, specs[columnIndex]);
+                    var actual = ReadColumn(rowGroup, schema.LeafColumns[columnIndex], specs[columnIndex]);
                     AssertArraysEqual(seed, rowGroupIndex, specs[columnIndex], expected[rowGroupIndex][columnIndex], actual);
                 }
                 rowGroupIndex++;
@@ -70,23 +70,23 @@ internal sealed class ReaderRoundTripFuzzTests
         return random.NextInt(0, 5) switch
         {
             0 => new ColumnSpec(
-                new Column($"c{index}_i32", ParquetPhysicalType.Int32,
+                ColumnDefinition.Leaf($"c{index}_i32", ParquetPhysicalType.Int32,
                     new ColumnOptions(encodings: ImmutableArray.Create(PickInt32Encoding(random)))),
                 typeof(int)),
             1 => new ColumnSpec(
-                new Column($"c{index}_i64", ParquetPhysicalType.Int64,
+                ColumnDefinition.Leaf($"c{index}_i64", ParquetPhysicalType.Int64,
                     new ColumnOptions(encodings: ImmutableArray.Create(PickInt64Encoding(random)))),
                 typeof(long)),
             2 => new ColumnSpec(
-                new Column($"c{index}_dbl", ParquetPhysicalType.Double,
+                ColumnDefinition.Leaf($"c{index}_dbl", ParquetPhysicalType.Double,
                     new ColumnOptions(encodings: ImmutableArray.Create(PickDoubleEncoding(random)))),
                 typeof(double)),
             3 => new ColumnSpec(
-                new Column($"c{index}_bin", ParquetPhysicalType.ByteArray,
+                ColumnDefinition.Leaf($"c{index}_bin", ParquetPhysicalType.ByteArray,
                     new ColumnOptions(encodings: ImmutableArray.Create(PickByteArrayEncoding(random)))),
                 typeof(byte[])),
             _ => new ColumnSpec(
-                new Column($"c{index}_bool", ParquetPhysicalType.Boolean,
+                ColumnDefinition.Leaf($"c{index}_bool", ParquetPhysicalType.Boolean,
                     new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain))),
                 typeof(bool))
         };
@@ -132,10 +132,10 @@ internal sealed class ReaderRoundTripFuzzTests
 
     static Array CreateValues(DeterministicRng random, ColumnSpec spec, int rowCount)
     {
-        return spec.ClrType == typeof(int) ? CreateInt32Values(random, spec.Column.Options.Encodings[0], rowCount)
-            : spec.ClrType == typeof(long) ? CreateInt64Values(random, spec.Column.Options.Encodings[0], rowCount)
-            : spec.ClrType == typeof(double) ? CreateDoubleValues(random, spec.Column.Options.Encodings[0], rowCount)
-            : spec.ClrType == typeof(byte[]) ? CreateByteArrayValues(random, spec.Column.Options.Encodings[0], rowCount)
+        return spec.ClrType == typeof(int) ? CreateInt32Values(random, spec.Encoding, rowCount)
+            : spec.ClrType == typeof(long) ? CreateInt64Values(random, spec.Encoding, rowCount)
+            : spec.ClrType == typeof(double) ? CreateDoubleValues(random, spec.Encoding, rowCount)
+            : spec.ClrType == typeof(byte[]) ? CreateByteArrayValues(random, spec.Encoding, rowCount)
             : CreateBooleanValues(random, rowCount);
     }
 
@@ -228,7 +228,9 @@ internal sealed class ReaderRoundTripFuzzTests
         {
             Compression = CompressionKind.None
         });
-        var serializedColumns = specs.Select(CreateSerializedColumn).ToArray();
+        var serializedColumns = new object[specs.Length];
+        for (var i = 0; i < serializedColumns.Length; i++)
+            serializedColumns[i] = CreateSerializedColumn(schema.LeafColumns[i], specs[i]);
 
         for (var rowGroupIndex = 0; rowGroupIndex < expected.Length; rowGroupIndex++)
         {
@@ -242,12 +244,12 @@ internal sealed class ReaderRoundTripFuzzTests
 
         writer.CloseFile();
 
-        object CreateSerializedColumn(ColumnSpec spec)
-            => spec.ClrType == typeof(int) ? writer.CreateSerializedColumn<int>(spec.Column)
-            : spec.ClrType == typeof(long) ? writer.CreateSerializedColumn<long>(spec.Column)
-            : spec.ClrType == typeof(double) ? writer.CreateSerializedColumn<double>(spec.Column)
-            : spec.ClrType == typeof(byte[]) ? writer.CreateSerializedColumn<byte[]>(spec.Column)
-            : writer.CreateSerializedColumn<bool>(spec.Column);
+        object CreateSerializedColumn(LeafColumn column, ColumnSpec spec)
+            => spec.ClrType == typeof(int) ? writer.CreateSerializedColumn<int>(column)
+            : spec.ClrType == typeof(long) ? writer.CreateSerializedColumn<long>(column)
+            : spec.ClrType == typeof(double) ? writer.CreateSerializedColumn<double>(column)
+            : spec.ClrType == typeof(byte[]) ? writer.CreateSerializedColumn<byte[]>(column)
+            : writer.CreateSerializedColumn<bool>(column);
     }
 
     static void SerializeColumn(object serializedColumn, Array values)
@@ -298,12 +300,12 @@ internal sealed class ReaderRoundTripFuzzTests
         }
     }
 
-    static Array ReadColumn(RowGroup rowGroup, ColumnSpec spec)
-        => spec.ClrType == typeof(int) ? ReadAllBuffers(rowGroup.Column<int>(spec.Column))
-        : spec.ClrType == typeof(long) ? ReadAllBuffers(rowGroup.Column<long>(spec.Column))
-        : spec.ClrType == typeof(double) ? ReadAllBuffers(rowGroup.Column<double>(spec.Column))
-        : spec.ClrType == typeof(byte[]) ? ReadAllBuffers(rowGroup.Column<byte[]>(spec.Column))
-        : ReadAllBuffers(rowGroup.Column<bool>(spec.Column));
+    static Array ReadColumn(RowGroup rowGroup, LeafColumn column, ColumnSpec spec)
+        => spec.ClrType == typeof(int) ? ReadAllBuffers(rowGroup.Column<int>(column))
+        : spec.ClrType == typeof(long) ? ReadAllBuffers(rowGroup.Column<long>(column))
+        : spec.ClrType == typeof(double) ? ReadAllBuffers(rowGroup.Column<double>(column))
+        : spec.ClrType == typeof(byte[]) ? ReadAllBuffers(rowGroup.Column<byte[]>(column))
+        : ReadAllBuffers(rowGroup.Column<bool>(column));
 
     static void AssertArraysEqual(int seed, int rowGroupIndex, ColumnSpec spec, Array expected, Array actual)
     {
@@ -329,7 +331,7 @@ internal sealed class ReaderRoundTripFuzzTests
     }
 
     static string Describe(ColumnSpec spec)
-        => $"{spec.Column.PhysicalType}/{spec.Column.Options.Encodings[0]}";
+        => $"{spec.Column.PhysicalType}/{spec.Encoding}";
 
     static T[] ReadAllBuffers<T>(RowGroupColumn<T> buffers)
     {
@@ -340,7 +342,11 @@ internal sealed class ReaderRoundTripFuzzTests
         return values.ToArray();
     }
 
-    readonly record struct ColumnSpec(Column Column, Type ClrType);
+    readonly record struct ColumnSpec(ColumnDefinition Column, Type ClrType)
+    {
+        internal EncodingKind Encoding
+            => Column.Options!.Encodings[0];
+    }
 
     sealed class DeterministicRng
     {

@@ -1,4 +1,65 @@
 #nullable enable
+abstract Plank.Writing.RowWriterBase<TSlot>.CreateSlot(Plank.Writing.ParquetWriter! writer) -> TSlot!
+abstract Plank.Writing.RowWriterBase<TSlot>.ResetSlotForReuse(TSlot! slot) -> void
+abstract Plank.Writing.RowWriterBase<TSlot>.SerializeSlot(TSlot! slot) -> void
+abstract Plank.Writing.RowWriterBase<TSlot>.WriteSerializedSlot(TSlot! slot, Plank.Writing.RowGroupWriter! rowGroupWriter) -> void
+Plank.RowApi.RowApiColumnDescriptor
+Plank.RowApi.RowApiColumnDescriptor.Column.get -> Plank.Schema.LeafColumn!
+Plank.RowApi.RowApiColumnDescriptor.RowApiColumnDescriptor(string! propertyName, Plank.Schema.LeafColumn! column) -> void
+Plank.RowApi.RowApiColumnDescriptor.PropertyName.get -> string!
+Plank.RowApi.RowApiColumnDescriptor<T>
+Plank.RowApi.RowApiColumnDescriptor<T>.RowApiColumnDescriptor(string! propertyName, Plank.Schema.LeafColumn! column) -> void
+Plank.RowApi.RowBufferSlot
+Plank.RowApi.RowBufferSlot.EnsureRowAvailable() -> void
+Plank.RowApi.RowBufferSlot.RowBufferSlot(Plank.Writing.ParquetWriter! writer, Plank.RowApi.RowApiColumnDescriptor![]! columns, int rowCount) -> void
+Plank.RowApi.RowBufferSlot.RowBufferSlot(Plank.Writing.RowGroupWriter! rowGroupWriter, Plank.RowApi.RowApiColumnDescriptor![]! columns, int rowCount) -> void
+Plank.RowApi.RowBufferSlot.GetValues<T>(int columnIndex) -> T[]!
+Plank.RowApi.RowBufferSlot.Index.get -> int
+Plank.RowApi.RowBufferSlot.RegisterOwner(System.IDisposable! owner) -> void
+Plank.RowApi.PipelineRowWriterBase<TSlot>
+Plank.RowApi.PipelineRowWriterBase<TSlot>.CompleteWriter() -> void
+Plank.RowApi.PipelineRowWriterBase<TSlot>.PipelineRowWriterBase(System.IO.Stream! stream, Plank.Schema.ParquetSchema! schema, uint maxParallelism, System.Action<int>? onFlush, Plank.Writing.ParquetWriterOptions! options, int rowBatchSize, string! workerThreadNamePrefix) -> void
+Plank.RowApi.PipelineRowWriterBase<TSlot>.GetSlotForRow() -> TSlot!
+Plank.RowApi.PipelineRowWriterBase<TSlot>.NextRow() -> void
+Plank.RowApi.PipelineRowWriterBase<TSlot>.RowBatchSize.get -> int
+override Plank.RowApi.PipelineRowWriterBase<TSlot>.WorkerThreadNamePrefix.get -> string!
+override Plank.RowApi.PipelineRowWriterBase<TSlot>.OnSlotWritten(TSlot! slot) -> void
+override Plank.RowApi.PipelineRowWriterBase<TSlot>.ResetSlotForReuse(TSlot! slot) -> void
+override Plank.RowApi.PipelineRowWriterBase<TSlot>.SerializeSlot(TSlot! slot) -> void
+override Plank.RowApi.PipelineRowWriterBase<TSlot>.WriteSerializedSlot(TSlot! slot, Plank.Writing.RowGroupWriter! rowGroupWriter) -> void
+Plank.RowApi.RowGroupWriterCore<TSlot>
+Plank.RowApi.RowGroupWriterCore<TSlot>.RowGroupWriterCore(Plank.Writing.RowGroupWriter! rowGroupWriter, TSlot! slot) -> void
+Plank.RowApi.RowGroupWriterCore<TSlot>.GetSlotForRow() -> TSlot!
+Plank.RowApi.RowGroupWriterCore<TSlot>.Next() -> void
+Plank.RowApi.RowGroupWriterCore<TSlot>.Write() -> void
+Plank.RowApi.RowReaderCore
+Plank.RowApi.RowReaderCore.Dispose() -> void
+Plank.RowApi.RowReaderCore.RowReaderCore(Plank.Reading.IParquetReadSource! source, Plank.Schema.ParquetSchema! schema, Plank.RowApi.RowApiColumnDescriptor![]! columns, int[]? projection, Plank.RowApi.RowReaderOptions! options, Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution) -> void
+Plank.RowApi.RowReaderCore.RowReaderCore(System.IO.Stream! stream, Plank.Schema.ParquetSchema! schema, Plank.RowApi.RowApiColumnDescriptor![]! columns, int[]? projection, Plank.RowApi.RowReaderOptions! options, Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution) -> void
+Plank.RowApi.RowReaderCore.GetCurrentIndex(int columnIndex) -> int
+Plank.RowApi.RowReaderCore.GetCurrentSpan<T>(int columnIndex) -> System.Span<T>
+Plank.RowApi.RowReaderCore.MoveNext() -> bool
+Plank.RowApi.RowReaderCore.Reset(Plank.Reading.IParquetReadSource! source, int[]? projection, Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null) -> void
+Plank.RowApi.RowReaderCore.Reset(System.IO.Stream! stream, int[]? projection, Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null) -> void
+Plank.RowApi.RowReaderCore.ThrowIfNotPositioned() -> void
+Plank.RowApi.RowReaderOptions
+Plank.RowApi.RowReaderOptions.BufferPool.get -> Plank.Writing.IParquetBufferPool!
+Plank.RowApi.RowReaderOptions.BufferPool.init -> void
+Plank.RowApi.RowReaderOptions.Execution.get -> Plank.ParquetExecutionOptions!
+Plank.RowApi.RowReaderOptions.Execution.init -> void
+Plank.RowApi.RowReaderOptions.MaxReadAheadRowGroups.get -> int
+Plank.RowApi.RowReaderOptions.MaxReadAheadRowGroups.init -> void
+Plank.RowApi.RowReaderOptions.RowReaderOptions() -> void
+static Plank.RowApi.RowReaderOptions.Default.get -> Plank.RowApi.RowReaderOptions!
+Plank.Writing.RowWriterBase<TSlot>
+Plank.Writing.RowWriterBase<TSlot>.Complete(TSlot! activeSlot, bool hasRows) -> void
+Plank.Writing.RowWriterBase<TSlot>.EnqueueAndTakeFree(TSlot! slot) -> TSlot!
+Plank.Writing.RowWriterBase<TSlot>.InitializeSlots() -> void
+Plank.Writing.RowWriterBase<TSlot>.RowWriterBase(System.IO.Stream! stream, Plank.Schema.ParquetSchema! schema, uint maxParallelism, Plank.Writing.ParquetWriterOptions! options) -> void
+Plank.Writing.RowWriterBase<TSlot>.TakeInitialSlot() -> TSlot!
+Plank.Writing.RowWriterBase<TSlot>.ThrowIfFaulted() -> void
+virtual Plank.Writing.RowWriterBase<TSlot>.OnSlotWritten(TSlot! slot) -> void
+virtual Plank.Writing.RowWriterBase<TSlot>.WorkerThreadNamePrefix.get -> string!
 Plank.CorruptParquetException
 Plank.CorruptParquetException.CorruptParquetException(string! message) -> void
 Plank.CorruptParquetException.CorruptParquetException(string! message, System.Exception! innerException) -> void
@@ -121,10 +182,16 @@ static Plank.Reading.Physical.ParquetFileReaderOptions.Default.get -> Plank.Read
 Plank.Reading.Physical.ParquetFileReaderOptions.BufferPool.get -> Plank.Writing.IParquetBufferPool!
 Plank.Reading.Physical.ParquetFileReaderOptions.BufferPool.init -> void
 Plank.Reading.Physical.ParquetFileReaderOptions.ParquetFileReaderOptions() -> void
+Plank.Reading.Physical.ParquetPage
+Plank.Reading.Physical.ParquetPage.Header.get -> Plank.Reading.PageHeader
+Plank.Reading.Physical.ParquetPage.Payload.get -> System.ReadOnlySpan<byte>
+Plank.Reading.Physical.ParquetPage.ParquetPage() -> void
 Plank.Reading.Physical.ParquetPageCursor
+Plank.Reading.Physical.ParquetPageCursor.Current.get -> Plank.Reading.Physical.ParquetPage
 Plank.Reading.Physical.ParquetPageCursor.CurrentHeader.get -> Plank.Reading.PageHeader
 Plank.Reading.Physical.ParquetPageCursor.CurrentPayload.get -> System.ReadOnlySpan<byte>
 Plank.Reading.Physical.ParquetPageCursor.Dispose() -> void
+Plank.Reading.Physical.ParquetPageCursor.GetEnumerator() -> Plank.Reading.Physical.ParquetPageCursor
 Plank.Reading.Physical.ParquetPageCursor.MoveNext() -> bool
 Plank.Reading.Physical.ParquetPageCursor.ParquetPageCursor() -> void
 Plank.Reading.Physical.ParquetRowGroupInfo
@@ -222,13 +289,13 @@ Plank.Reading.Logical.ColumnBuffer<T>.Values.get -> System.ReadOnlySpan<T>
 Plank.Reading.Logical.RowGroup
 Plank.Reading.Logical.RowGroup.ColumnChunkOffset.get -> ulong
 Plank.Reading.Logical.RowGroup.Column<T>(int columnOrdinal) -> Plank.Reading.Logical.RowGroupColumn<T>
-Plank.Reading.Logical.RowGroup.Column<T>(Plank.Schema.Column! column) -> Plank.Reading.Logical.RowGroupColumn<T>
+Plank.Reading.Logical.RowGroup.Column<T>(Plank.Schema.LeafColumn! column) -> Plank.Reading.Logical.RowGroupColumn<T>
 Plank.Reading.Logical.RowGroup.Index.get -> int
 Plank.Reading.Logical.RowGroup.MetadataOffset.get -> ulong
 Plank.Reading.Logical.RowGroup.RowCount.get -> ulong
 Plank.Reading.Logical.RowGroup.RowGroup() -> void
 Plank.Reading.Logical.RowGroupColumn<T>
-Plank.Reading.Logical.RowGroupColumn<T>.Definition.get -> Plank.Schema.Column!
+Plank.Reading.Logical.RowGroupColumn<T>.Definition.get -> Plank.Schema.LeafColumn!
 Plank.Reading.Logical.RowGroupColumn<T>.Enumerator
 Plank.Reading.Logical.RowGroupColumn<T>.Enumerator.Current.get -> Plank.Reading.Logical.ColumnBuffer<T>
 Plank.Reading.Logical.RowGroupColumn<T>.Enumerator.Dispose() -> void

@@ -8,7 +8,7 @@ using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
 using ParquetEncoding = ParquetSharp.Encoding;
-using PlankColumn = Plank.Schema.Column;
+using PlankColumn = Plank.Schema.LeafColumn;
 using PlankSchema = Plank.Schema.ParquetSchema;
 using PlankWriter = Plank.Writing.ParquetWriter;
 
@@ -84,18 +84,13 @@ static class EncodingActualEncodingAudit
 
     static void WritePlank(string path, string dataType, string requestedEncoding)
     {
-        var column = new PlankColumn(
+        var column = Plank.Schema.ColumnDefinition.Leaf(
             "value",
             MapPlankPhysicalType(dataType),
             new ColumnOptions(ParquetRepetition.Required, [MapPlankEncoding(requestedEncoding)]));
-        var schema = string.Equals(requestedEncoding, "dictionary", StringComparison.Ordinal)
-            ? new PlankSchema([column])
-            {
-                PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
-                    .WithComparers(StringComparer.Ordinal)
-                    .Add(column.Name, ForceDictionaryPageStrategy.Shared)
-            }
-            : new PlankSchema([column]);
+        if (string.Equals(requestedEncoding, "dictionary", StringComparison.Ordinal))
+            column = column with { PageStrategy = ForceDictionaryPageStrategy.Shared };
+        var schema = new PlankSchema([column]);
 
         using var stream = File.Create(path);
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
@@ -103,25 +98,26 @@ static class EncodingActualEncodingAudit
             Compression = CompressionKind.None
         });
         var rowGroup = writer.StartRowGroup();
+        var leaf = schema.LeafColumns[0];
         switch (dataType)
         {
             case "bool":
-                WritePlankColumn(writer, rowGroup, column, CreateBooleanValues());
+                WritePlankColumn(writer, rowGroup, leaf, CreateBooleanValues());
                 break;
             case "int32":
-                WritePlankColumn(writer, rowGroup, column, CreateInt32Values());
+                WritePlankColumn(writer, rowGroup, leaf, CreateInt32Values());
                 break;
             case "int64":
-                WritePlankColumn(writer, rowGroup, column, CreateInt64Values());
+                WritePlankColumn(writer, rowGroup, leaf, CreateInt64Values());
                 break;
             case "float":
-                WritePlankColumn(writer, rowGroup, column, CreateFloatValues());
+                WritePlankColumn(writer, rowGroup, leaf, CreateFloatValues());
                 break;
             case "double":
-                WritePlankColumn(writer, rowGroup, column, CreateDoubleValues());
+                WritePlankColumn(writer, rowGroup, leaf, CreateDoubleValues());
                 break;
             case "string":
-                WritePlankColumn(writer, rowGroup, column, CreateStringBytes());
+                WritePlankColumn(writer, rowGroup, leaf, CreateStringBytes());
                 break;
             default:
                 throw new InvalidOperationException($"Unknown data type '{dataType}'.");

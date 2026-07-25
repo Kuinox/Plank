@@ -79,14 +79,14 @@ internal sealed class ParquetReaderRobustnessTests
             using var reader = schema.CreateReader(source);
             foreach (var rowGroup in reader.RowGroups)
             {
-                foreach (var column in reader.Schema.Columns)
+                foreach (var column in reader.Schema.LeafColumns)
                     DrainColumn(rowGroup, column);
             }
         }
         catch (Exception ex) when (ex is CorruptParquetException or NotSupportedException or InvalidOperationException) { }
     }
 
-    static void DrainColumn(RowGroup rowGroup, Column column)
+    static void DrainColumn(RowGroup rowGroup, LeafColumn column)
     {
         switch (column.PhysicalType)
         {
@@ -116,9 +116,9 @@ internal sealed class ParquetReaderRobustnessTests
     static byte[] FixtureBytes(string fileName)
         => File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Reading", "Fixtures", fileName));
 
-    static ParquetSchema Schema(params Column[] columns)
+    static ParquetSchema Schema(params ColumnDefinition[] columns)
         => new(columns.ToImmutableArray());
 
-    static Column Col(string name, ParquetPhysicalType type, EncodingKind encoding)
-        => new(name, type, new ColumnOptions(encodings: ImmutableArray.Create(encoding)));
+    static ColumnDefinition Col(string name, ParquetPhysicalType type, EncodingKind encoding)
+        => ColumnDefinition.Leaf(name, type, new ColumnOptions(encodings: ImmutableArray.Create(encoding)));
 }

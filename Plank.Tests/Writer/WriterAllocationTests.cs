@@ -19,7 +19,7 @@ internal sealed class WriterAllocationTests
     [Test]
     public void NonDictionaryWriteChainDoesNotAllocateAfterWarmup()
     {
-        var column = new Column("value", ParquetPhysicalType.Int32,
+        var column = ColumnDefinition.Leaf("value", ParquetPhysicalType.Int32,
             new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain]));
         var schema = new ParquetSchema([column]);
         using var stream = new MemoryStream(capacity: 1024 * 1024);
@@ -27,7 +27,7 @@ internal sealed class WriterAllocationTests
         {
             Compression = CompressionKind.None
         });
-        var serialized = writer.CreateSerializedColumn<int>(column);
+        var serialized = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         var values = CreateValues(4096);
 
         for (var i = 0; i < 8; i++)
@@ -50,7 +50,7 @@ internal sealed class WriterAllocationTests
     [Test]
     public void LargeNonDictionaryWriteChainDoesNotAllocateAfterWarmup()
     {
-        var column = new Column("value", ParquetPhysicalType.Int32,
+        var column = ColumnDefinition.Leaf("value", ParquetPhysicalType.Int32,
             new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain]));
         var schema = new ParquetSchema([column]);
         using var stream = new MemoryStream(capacity: 8 * 1024 * 1024);
@@ -58,7 +58,7 @@ internal sealed class WriterAllocationTests
         {
             Compression = CompressionKind.None
         });
-        var serialized = writer.CreateSerializedColumn<int>(column);
+        var serialized = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         var values = CreateValues(1_000_000);
 
         for (var i = 0; i < 8; i++)
@@ -81,7 +81,7 @@ internal sealed class WriterAllocationTests
     [Test]
     public void ByteArrayWriteChainDoesNotAllocateAfterWarmup()
     {
-        var column = new Column("value", ParquetPhysicalType.ByteArray,
+        var column = ColumnDefinition.Leaf("value", ParquetPhysicalType.ByteArray,
             new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain]));
         var schema = new ParquetSchema([column]);
         using var stream = new MemoryStream(capacity: 8 * 1024 * 1024);
@@ -89,7 +89,7 @@ internal sealed class WriterAllocationTests
         {
             Compression = CompressionKind.None
         });
-        var serialized = writer.CreateSerializedColumn<byte[]>(column);
+        var serialized = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
         var values = CreateByteArrayValues(4096);
 
         for (var i = 0; i < 8; i++)
@@ -143,7 +143,7 @@ internal sealed class WriterAllocationTests
 
     static long MeasureCompressedWriteChainAllocations(CompressionKind compression)
     {
-        var column = new Column("value", ParquetPhysicalType.Int32,
+        var column = ColumnDefinition.Leaf("value", ParquetPhysicalType.Int32,
             new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain]));
         var schema = new ParquetSchema([column]);
         using var stream = new MemoryStream(capacity: 1024 * 1024);
@@ -151,7 +151,7 @@ internal sealed class WriterAllocationTests
         {
             Compression = compression
         });
-        var serialized = writer.CreateSerializedColumn<int>(column);
+        var serialized = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         var values = CreateValues(4096);
 
         for (var i = 0; i < 8; i++)

@@ -1,14 +1,17 @@
+using Plank.Writing.PageStrategy;
+
 namespace Plank.Schema;
 
-public sealed record Column
+internal sealed record Column
 {
-    public Column(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null,
-        LogicalType? logicalType = null)
+    internal Column(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null,
+        LogicalType? logicalType = null, IPageStrategy? pageStrategy = null)
     {
         Name = name;
         PhysicalType = physicalType;
         Options = options ?? ColumnOptions.Default;
         LogicalType = logicalType;
+        PageStrategy = pageStrategy;
         EncodingCompatibility.Validate(this);
     }
 
@@ -19,5 +22,7 @@ public sealed record Column
     public ColumnOptions Options { get; }
 
     public LogicalType? LogicalType { get; }
+
+    internal IPageStrategy? PageStrategy { get; }
 
 }

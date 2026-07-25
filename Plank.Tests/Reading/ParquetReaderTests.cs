@@ -3,7 +3,6 @@ using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing;
-using PlankColumn = Plank.Schema.Column;
 
 namespace Plank.Tests.Reading;
 
@@ -14,7 +13,7 @@ internal sealed class ParquetReaderTests
     {
         var path = GetTempPath();
         var schema = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32)
+            Plank.Schema.ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32)
         ]);
         try
         {
@@ -55,11 +54,11 @@ internal sealed class ParquetReaderTests
         using var reader = new ParquetReader();
         reader.Reset(stream);
 
-        await Assert.That(reader.Schema.Columns.Length).IsEqualTo(2);
-        await Assert.That(reader.Schema.Columns[0].Name).IsEqualTo("Value");
-        await Assert.That(reader.Schema.Columns[0].PhysicalType).IsEqualTo(ParquetPhysicalType.Int32);
-        await Assert.That(reader.Schema.Columns[1].Name).IsEqualTo("Other");
-        await Assert.That(reader.Schema.Columns[1].PhysicalType).IsEqualTo(ParquetPhysicalType.Int64);
+        await Assert.That(reader.Schema.LeafColumns.Length).IsEqualTo(2);
+        await Assert.That(reader.Schema.LeafColumns[0].Path).IsEqualTo("Value");
+        await Assert.That(reader.Schema.LeafColumns[0].PhysicalType).IsEqualTo(ParquetPhysicalType.Int32);
+        await Assert.That(reader.Schema.LeafColumns[1].Path).IsEqualTo("Other");
+        await Assert.That(reader.Schema.LeafColumns[1].PhysicalType).IsEqualTo(ParquetPhysicalType.Int64);
     }
 
     [Test]
@@ -71,8 +70,32 @@ internal sealed class ParquetReaderTests
         reader.Reset(stream);
         var rowGroup = reader.RowGroups[0];
 
-        await Assert.That(ReadAllBuffers(rowGroup.Column<int>(reader.Schema.Columns[0]))).IsEquivalentTo([1, 2, 3]);
-        await Assert.That(ReadAllBuffers(rowGroup.Column<long>(reader.Schema.Columns[1]))).IsEquivalentTo([10L, 20L, 30L]);
+        await Assert.That(ReadAllBuffers(rowGroup.Column<int>(reader.Schema.LeafColumns[0]))).IsEquivalentTo([1, 2, 3]);
+        await Assert.That(ReadAllBuffers(rowGroup.Column<long>(reader.Schema.LeafColumns[1]))).IsEquivalentTo([10L, 20L, 30L]);
+    }
+
+    [Test]
+    public async Task ColumnByDefinitionWithWrongClrTypeThrowsImmediately()
+    {
+        using var stream = CreateTwoColumnFile();
+        using var reader = new ParquetReader();
+        reader.Reset(stream);
+        var rowGroup = reader.RowGroups[0];
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Task.Run(() => rowGroup.Column<int>(reader.Schema.LeafColumns[1])).ConfigureAwait(false));
+    }
+
+    [Test]
+    public async Task ColumnByOrdinalWithWrongClrTypeThrowsImmediately()
+    {
+        using var stream = CreateTwoColumnFile();
+        using var reader = new ParquetReader();
+        reader.Reset(stream);
+        var rowGroup = reader.RowGroups[0];
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Task.Run(() => rowGroup.Column<int>(1)).ConfigureAwait(false));
     }
 
     [Test]
@@ -83,10 +106,10 @@ internal sealed class ParquetReaderTests
         using var reader = new ParquetReader();
         reader.Reset(first);
 
-        await Assert.That(reader.Schema.Columns[0].Name).IsEqualTo("Value");
+        await Assert.That(reader.Schema.LeafColumns[0].Path).IsEqualTo("Value");
 
         reader.Reset(second);
-        await Assert.That(reader.Schema.Columns[0].Name).IsEqualTo("Other");
+        await Assert.That(reader.Schema.LeafColumns[0].Path).IsEqualTo("Other");
     }
 
     [Test]
@@ -109,7 +132,7 @@ internal sealed class ParquetReaderTests
     {
         using var stream = CreateInt32File("Actual");
         var requested = new ParquetSchema([
-            new PlankColumn("Requested", ParquetPhysicalType.Int32)
+            Plank.Schema.ColumnDefinition.Leaf("Requested", ParquetPhysicalType.Int32)
         ]);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
@@ -121,7 +144,7 @@ internal sealed class ParquetReaderTests
     {
         using var stream = CreateInt32File("Value");
         var requested = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int64)
+            Plank.Schema.ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int64)
         ]);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
@@ -133,44 +156,44 @@ internal sealed class ParquetReaderTests
     {
         using var stream = CreateTwoColumnFile();
         var requested = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32)
+            Plank.Schema.ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32)
         ]);
 
         using var reader = requested.CreateReader(stream);
         var rowGroup = reader.RowGroups[0];
 
-        await Assert.That(ReadAllBuffers(rowGroup.Column<int>(requested.Columns[0]))).IsEquivalentTo([1, 2, 3]);
-        await Assert.That(reader.Schema.Columns.Length).IsEqualTo(1);
-        await Assert.That(reader.Metadata.Schema.Columns.Length).IsEqualTo(2);
+        await Assert.That(ReadAllBuffers(rowGroup.Column<int>(requested.LeafColumns[0]))).IsEquivalentTo([1, 2, 3]);
+        await Assert.That(reader.Schema.LeafColumns.Length).IsEqualTo(1);
+        await Assert.That(reader.Metadata.Schema.LeafColumns.Length).IsEqualTo(2);
     }
 
     [Test]
     public async Task ReadsRequestedProjectionWhenFileSchemaOrderChanged()
     {
         var fileSchema = new ParquetSchema([
-            new PlankColumn("Other", ParquetPhysicalType.Int64),
-            new PlankColumn("Value", ParquetPhysicalType.Int32)
+            Plank.Schema.ColumnDefinition.Leaf("Other", ParquetPhysicalType.Int64),
+            Plank.Schema.ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32)
         ]);
         using var stream = CreateFile(fileSchema, rowGroup =>
         {
-            var other = rowGroup.CreateSerializedColumn<long>(fileSchema.Columns[0]);
+            var other = rowGroup.CreateSerializedColumn<long>(fileSchema.LeafColumns[0]);
             other.Serialize([10L, 20L, 30L]);
             rowGroup.Write(other);
 
-            var value = rowGroup.CreateSerializedColumn<int>(fileSchema.Columns[1]);
+            var value = rowGroup.CreateSerializedColumn<int>(fileSchema.LeafColumns[1]);
             value.Serialize([1, 2, 3]);
             rowGroup.Write(value);
         });
         var requested = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32),
-            new PlankColumn("Other", ParquetPhysicalType.Int64)
+            Plank.Schema.ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32),
+            Plank.Schema.ColumnDefinition.Leaf("Other", ParquetPhysicalType.Int64)
         ]);
 
         using var reader = requested.CreateReader(stream);
         var rowGroupReader = reader.RowGroups[0];
 
-        await Assert.That(ReadAllBuffers(rowGroupReader.Column<int>(requested.Columns[0]))).IsEquivalentTo([1, 2, 3]);
-        await Assert.That(ReadAllBuffers(rowGroupReader.Column<long>(requested.Columns[1])))
+        await Assert.That(ReadAllBuffers(rowGroupReader.Column<int>(requested.LeafColumns[0]))).IsEquivalentTo([1, 2, 3]);
+        await Assert.That(ReadAllBuffers(rowGroupReader.Column<long>(requested.LeafColumns[1])))
             .IsEquivalentTo([10L, 20L, 30L]);
     }
 
@@ -179,8 +202,8 @@ internal sealed class ParquetReaderTests
     {
         using var stream = CreateInt32File("Value");
         var requested = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32),
-            new PlankColumn("Added", ParquetPhysicalType.Int32)
+            Plank.Schema.ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32),
+            Plank.Schema.ColumnDefinition.Leaf("Added", ParquetPhysicalType.Int32)
         ]);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
@@ -192,13 +215,13 @@ internal sealed class ParquetReaderTests
     {
         using var stream = CreateInt32File("Value");
         var requested = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
+            Plank.Schema.ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
         ]);
 
         using var reader = requested.CreateReader(stream);
         var rowGroup = reader.RowGroups[0];
 
-        await Assert.That(ReadAllBuffers(rowGroup.Column<int?>(requested.Columns[0])))
+        await Assert.That(ReadAllBuffers(rowGroup.Column<int?>(requested.LeafColumns[0])))
             .IsEquivalentTo(new int?[] { 1, 2, 3 });
     }
 
@@ -207,7 +230,7 @@ internal sealed class ParquetReaderTests
     {
         using var stream = CreateOptionalInt32File("Value");
         var requested = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32)
+            Plank.Schema.ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32)
         ]);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
@@ -219,7 +242,7 @@ internal sealed class ParquetReaderTests
     {
         using var stream = CreateInt32File("Actual");
         var requested = new ParquetSchema([
-            new PlankColumn("Requested", ParquetPhysicalType.Int64)
+            Plank.Schema.ColumnDefinition.Leaf("Requested", ParquetPhysicalType.Int64)
         ]);
 
         using var reader = requested.CreateReader(stream, new ParquetReaderOptions
@@ -234,7 +257,7 @@ internal sealed class ParquetReaderTests
     public async Task ResetThrowsWhenNewFileSchemaDoesNotMatchRequestedSchema()
     {
         var requested = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32)
+            Plank.Schema.ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32)
         ]);
         using var matching = CreateInt32File("Value");
         using var mismatched = CreateInt32File("Other");
@@ -249,9 +272,9 @@ internal sealed class ParquetReaderTests
     {
         var path = GetTempPath();
         var schema = new ParquetSchema([
-            new PlankColumn("Id", ParquetPhysicalType.Int32),
-            new PlankColumn("Score", ParquetPhysicalType.Double),
-            new PlankColumn("Payload", ParquetPhysicalType.ByteArray)
+            Plank.Schema.ColumnDefinition.Leaf("Id", ParquetPhysicalType.Int32),
+            Plank.Schema.ColumnDefinition.Leaf("Score", ParquetPhysicalType.Double),
+            Plank.Schema.ColumnDefinition.Leaf("Payload", ParquetPhysicalType.ByteArray)
         ]);
         try
         {
@@ -270,15 +293,15 @@ internal sealed class ParquetReaderTests
             {
                 if (rowGroupIndex == 0)
                 {
-                    await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.Columns[0]))).IsEquivalentTo([1, 2]);
-                    await Assert.That(ReadAllBuffers(rowGroup.Column<double>(schema.Columns[1]))).IsEquivalentTo([1.5, 2.5]);
-                    await AssertByteArraysEqual(ReadAllBuffers(rowGroup.Column<byte[]>(schema.Columns[2])), [Bytes(1), Bytes(2)]);
+                    await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.LeafColumns[0]))).IsEquivalentTo([1, 2]);
+                    await Assert.That(ReadAllBuffers(rowGroup.Column<double>(schema.LeafColumns[1]))).IsEquivalentTo([1.5, 2.5]);
+                    await AssertByteArraysEqual(ReadAllBuffers(rowGroup.Column<byte[]>(schema.LeafColumns[2])), [Bytes(1), Bytes(2)]);
                 }
                 else
                 {
-                    await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.Columns[0]))).IsEquivalentTo([3]);
-                    await Assert.That(ReadAllBuffers(rowGroup.Column<double>(schema.Columns[1]))).IsEquivalentTo([3.5]);
-                    await AssertByteArraysEqual(ReadAllBuffers(rowGroup.Column<byte[]>(schema.Columns[2])), [Bytes(3)]);
+                    await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.LeafColumns[0]))).IsEquivalentTo([3]);
+                    await Assert.That(ReadAllBuffers(rowGroup.Column<double>(schema.LeafColumns[1]))).IsEquivalentTo([3.5]);
+                    await AssertByteArraysEqual(ReadAllBuffers(rowGroup.Column<byte[]>(schema.LeafColumns[2])), [Bytes(3)]);
                 }
                 rowGroupIndex++;
             }
@@ -296,7 +319,7 @@ internal sealed class ParquetReaderTests
     {
         var path = GetTempPath();
         var schema = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32,
+            Plank.Schema.ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
         ]);
         var values = CreateValues(4096);
@@ -308,7 +331,7 @@ internal sealed class ParquetReaderTests
                 {
                     Compression = CompressionKind.Gzip
                 });
-                var serialized = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+                var serialized = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
                 serialized.Serialize(values);
                 writer.StartRowGroup().Write(serialized);
                 writer.CloseFile();
@@ -318,7 +341,7 @@ internal sealed class ParquetReaderTests
             using var reader = schema.CreateReader(readStream);
             var rowGroup = reader.RowGroups[0];
 
-            await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.Columns[0]))).IsEquivalentTo(values);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.LeafColumns[0]))).IsEquivalentTo(values);
         }
         finally
         {
@@ -331,8 +354,8 @@ internal sealed class ParquetReaderTests
     {
         var path = GetTempPath();
         var schema = new ParquetSchema([
-            new PlankColumn("Required", ParquetPhysicalType.Int32),
-            new PlankColumn("Optional", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
+            Plank.Schema.ColumnDefinition.Leaf("Required", ParquetPhysicalType.Int32),
+            Plank.Schema.ColumnDefinition.Leaf("Optional", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
         ]);
         int?[] optionalValues = [10, null, 30, null, 50];
         try
@@ -343,8 +366,8 @@ internal sealed class ParquetReaderTests
             using var reader = schema.CreateReader(readStream);
             var rowGroup = reader.RowGroups[0];
 
-            await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.Columns[0]))).IsEquivalentTo([1, 2, 3, 4, 5]);
-            await Assert.That(ReadAllBuffers(rowGroup.Column<int?>(schema.Columns[1]))).IsEquivalentTo(optionalValues);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.LeafColumns[0]))).IsEquivalentTo([1, 2, 3, 4, 5]);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<int?>(schema.LeafColumns[1]))).IsEquivalentTo(optionalValues);
         }
         finally
         {
@@ -373,13 +396,13 @@ internal sealed class ParquetReaderTests
     {
         var path = GetTempPath();
         var schema = new ParquetSchema([
-            new PlankColumn("DeltaInt", ParquetPhysicalType.Int32,
+            Plank.Schema.ColumnDefinition.Leaf("DeltaInt", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.DeltaBinaryPacked))),
-            new PlankColumn("SplitDouble", ParquetPhysicalType.Double,
+            Plank.Schema.ColumnDefinition.Leaf("SplitDouble", ParquetPhysicalType.Double,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.ByteStreamSplit))),
-            new PlankColumn("DeltaBytes", ParquetPhysicalType.ByteArray,
+            Plank.Schema.ColumnDefinition.Leaf("DeltaBytes", ParquetPhysicalType.ByteArray,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.DeltaLengthByteArray))),
-            new PlankColumn("DictInt", ParquetPhysicalType.Int32,
+            Plank.Schema.ColumnDefinition.Leaf("DictInt", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)))
         ]);
         try
@@ -396,11 +419,11 @@ internal sealed class ParquetReaderTests
             using var reader = schema.CreateReader(readStream);
             var rowGroup = reader.RowGroups[0];
 
-            await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.Columns[0]))).IsEquivalentTo([10, 20, 30]);
-            await Assert.That(ReadAllBuffers(rowGroup.Column<double>(schema.Columns[1]))).IsEquivalentTo([1.25, 2.25, 3.25]);
-            await AssertByteArraysEqual(ReadAllBuffers(rowGroup.Column<byte[]>(schema.Columns[2])),
+            await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.LeafColumns[0]))).IsEquivalentTo([10, 20, 30]);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<double>(schema.LeafColumns[1]))).IsEquivalentTo([1.25, 2.25, 3.25]);
+            await AssertByteArraysEqual(ReadAllBuffers(rowGroup.Column<byte[]>(schema.LeafColumns[2])),
                 [Bytes(1, 1), Bytes(1, 2), Bytes(1, 3)]);
-            await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.Columns[3]))).IsEquivalentTo([7, 7, 9]);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.LeafColumns[3]))).IsEquivalentTo([7, 7, 9]);
         }
         finally
         {
@@ -421,19 +444,19 @@ internal sealed class ParquetReaderTests
     {
         var path = GetTempPath();
         var schema = new ParquetSchema([
-            new PlankColumn("ByteValue", ParquetPhysicalType.Int32,
+            Plank.Schema.ColumnDefinition.Leaf("ByteValue", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)),
                 new LogicalType.Int(8, false)),
-            new PlankColumn("UInt16Value", ParquetPhysicalType.Int32,
+            Plank.Schema.ColumnDefinition.Leaf("UInt16Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.DeltaBinaryPacked)),
                 new LogicalType.Int(16, false)),
-            new PlankColumn("UInt32Value", ParquetPhysicalType.Int32,
+            Plank.Schema.ColumnDefinition.Leaf("UInt32Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.ByteStreamSplit)),
                 new LogicalType.Int(32, false)),
-            new PlankColumn("UInt64Value", ParquetPhysicalType.Int64,
+            Plank.Schema.ColumnDefinition.Leaf("UInt64Value", ParquetPhysicalType.Int64,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.DeltaBinaryPacked)),
                 new LogicalType.Int(64, false)),
-            new PlankColumn("UInt32Dictionary", ParquetPhysicalType.Int32,
+            Plank.Schema.ColumnDefinition.Leaf("UInt32Dictionary", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)),
                 new LogicalType.Int(32, false))
         ]);
@@ -449,23 +472,23 @@ internal sealed class ParquetReaderTests
                 var writer = schema.CreateWriter(writeStream);
                 var writerRowGroup = writer.StartRowGroup();
 
-                var byteColumn = writerRowGroup.CreateSerializedColumn<byte>(schema.Columns[0]);
+                var byteColumn = writerRowGroup.CreateSerializedColumn<byte>(schema.LeafColumns[0]);
                 byteColumn.Serialize(byteValues);
                 writerRowGroup.Write(byteColumn);
 
-                var ushortColumn = writerRowGroup.CreateSerializedColumn<ushort>(schema.Columns[1]);
+                var ushortColumn = writerRowGroup.CreateSerializedColumn<ushort>(schema.LeafColumns[1]);
                 ushortColumn.Serialize(ushortValues);
                 writerRowGroup.Write(ushortColumn);
 
-                var uintColumn = writerRowGroup.CreateSerializedColumn<uint>(schema.Columns[2]);
+                var uintColumn = writerRowGroup.CreateSerializedColumn<uint>(schema.LeafColumns[2]);
                 uintColumn.Serialize(uintValues);
                 writerRowGroup.Write(uintColumn);
 
-                var ulongColumn = writerRowGroup.CreateSerializedColumn<ulong>(schema.Columns[3]);
+                var ulongColumn = writerRowGroup.CreateSerializedColumn<ulong>(schema.LeafColumns[3]);
                 ulongColumn.Serialize(ulongValues);
                 writerRowGroup.Write(ulongColumn);
 
-                var dictionaryColumn = writerRowGroup.CreateSerializedColumn<uint>(schema.Columns[4]);
+                var dictionaryColumn = writerRowGroup.CreateSerializedColumn<uint>(schema.LeafColumns[4]);
                 dictionaryColumn.Serialize(dictionaryValues);
                 writerRowGroup.Write(dictionaryColumn);
 
@@ -476,11 +499,11 @@ internal sealed class ParquetReaderTests
             using var reader = schema.CreateReader(readStream);
             var rowGroup = reader.RowGroups[0];
 
-            await Assert.That(ReadAllBuffers(rowGroup.Column<byte>(schema.Columns[0]))).IsEquivalentTo(byteValues);
-            await Assert.That(ReadAllBuffers(rowGroup.Column<ushort>(schema.Columns[1]))).IsEquivalentTo(ushortValues);
-            await Assert.That(ReadAllBuffers(rowGroup.Column<uint>(schema.Columns[2]))).IsEquivalentTo(uintValues);
-            await Assert.That(ReadAllBuffers(rowGroup.Column<ulong>(schema.Columns[3]))).IsEquivalentTo(ulongValues);
-            await Assert.That(ReadAllBuffers(rowGroup.Column<uint>(schema.Columns[4]))).IsEquivalentTo(dictionaryValues);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<byte>(schema.LeafColumns[0]))).IsEquivalentTo(byteValues);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<ushort>(schema.LeafColumns[1]))).IsEquivalentTo(ushortValues);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<uint>(schema.LeafColumns[2]))).IsEquivalentTo(uintValues);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<ulong>(schema.LeafColumns[3]))).IsEquivalentTo(ulongValues);
+            await Assert.That(ReadAllBuffers(rowGroup.Column<uint>(schema.LeafColumns[4]))).IsEquivalentTo(dictionaryValues);
         }
         finally
         {
@@ -493,13 +516,13 @@ internal sealed class ParquetReaderTests
     {
         var path = GetTempPath();
         var schema = new ParquetSchema([
-            new PlankColumn("IntOpt", ParquetPhysicalType.Int32,
+            Plank.Schema.ColumnDefinition.Leaf("IntOpt", ParquetPhysicalType.Int32,
                 new ColumnOptions(ParquetRepetition.Optional)),
-            new PlankColumn("LongOpt", ParquetPhysicalType.Int64,
+            Plank.Schema.ColumnDefinition.Leaf("LongOpt", ParquetPhysicalType.Int64,
                 new ColumnOptions(ParquetRepetition.Optional)),
-            new PlankColumn("DoubleOpt", ParquetPhysicalType.Double,
+            Plank.Schema.ColumnDefinition.Leaf("DoubleOpt", ParquetPhysicalType.Double,
                 new ColumnOptions(ParquetRepetition.Optional)),
-            new PlankColumn("BoolOpt", ParquetPhysicalType.Boolean,
+            Plank.Schema.ColumnDefinition.Leaf("BoolOpt", ParquetPhysicalType.Boolean,
                 new ColumnOptions(ParquetRepetition.Optional))
         ]);
         int?[] intValues = [1, null, 3, null, 5];
@@ -513,19 +536,19 @@ internal sealed class ParquetReaderTests
                 var writer = schema.CreateWriter(writeStream);
                 var rowGroup = writer.StartRowGroup();
 
-                var intCol = rowGroup.CreateSerializedColumn<int?>(schema.Columns[0]);
+                var intCol = rowGroup.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
                 intCol.Serialize(intValues);
                 rowGroup.Write(intCol);
 
-                var longCol = rowGroup.CreateSerializedColumn<long?>(schema.Columns[1]);
+                var longCol = rowGroup.CreateSerializedColumn<long?>(schema.LeafColumns[1]);
                 longCol.Serialize(longValues);
                 rowGroup.Write(longCol);
 
-                var doubleCol = rowGroup.CreateSerializedColumn<double?>(schema.Columns[2]);
+                var doubleCol = rowGroup.CreateSerializedColumn<double?>(schema.LeafColumns[2]);
                 doubleCol.Serialize(doubleValues);
                 rowGroup.Write(doubleCol);
 
-                var boolCol = rowGroup.CreateSerializedColumn<bool?>(schema.Columns[3]);
+                var boolCol = rowGroup.CreateSerializedColumn<bool?>(schema.LeafColumns[3]);
                 boolCol.Serialize(boolValues);
                 rowGroup.Write(boolCol);
 
@@ -536,10 +559,10 @@ internal sealed class ParquetReaderTests
             using var reader = schema.CreateReader(readStream);
             var rowGroup2 = reader.RowGroups[0];
 
-            await Assert.That(ReadAllBuffers(rowGroup2.Column<int?>(schema.Columns[0]))).IsEquivalentTo(intValues);
-            await Assert.That(ReadAllBuffers(rowGroup2.Column<long?>(schema.Columns[1]))).IsEquivalentTo(longValues);
-            await Assert.That(ReadAllBuffers(rowGroup2.Column<double?>(schema.Columns[2]))).IsEquivalentTo(doubleValues);
-            await Assert.That(ReadAllBuffers(rowGroup2.Column<bool?>(schema.Columns[3]))).IsEquivalentTo(boolValues);
+            await Assert.That(ReadAllBuffers(rowGroup2.Column<int?>(schema.LeafColumns[0]))).IsEquivalentTo(intValues);
+            await Assert.That(ReadAllBuffers(rowGroup2.Column<long?>(schema.LeafColumns[1]))).IsEquivalentTo(longValues);
+            await Assert.That(ReadAllBuffers(rowGroup2.Column<double?>(schema.LeafColumns[2]))).IsEquivalentTo(doubleValues);
+            await Assert.That(ReadAllBuffers(rowGroup2.Column<bool?>(schema.LeafColumns[3]))).IsEquivalentTo(boolValues);
         }
         finally
         {
@@ -552,9 +575,9 @@ internal sealed class ParquetReaderTests
     {
         var path = GetTempPath();
         var schema = new ParquetSchema([
-            new PlankColumn("StrOpt", ParquetPhysicalType.ByteArray,
+            Plank.Schema.ColumnDefinition.Leaf("StrOpt", ParquetPhysicalType.ByteArray,
                 new ColumnOptions(ParquetRepetition.Optional), new LogicalType.String()),
-            new PlankColumn("BinOpt", ParquetPhysicalType.ByteArray,
+            Plank.Schema.ColumnDefinition.Leaf("BinOpt", ParquetPhysicalType.ByteArray,
                 new ColumnOptions(ParquetRepetition.Optional))
         ]);
         string?[] strValues = ["hello", null, "world", null, "!"];
@@ -566,11 +589,11 @@ internal sealed class ParquetReaderTests
                 var writer = schema.CreateWriter(writeStream);
                 var rowGroup = writer.StartRowGroup();
 
-                var strCol = rowGroup.CreateSerializedColumn<string>(schema.Columns[0]);
+                var strCol = rowGroup.CreateSerializedColumn<string>(schema.LeafColumns[0]);
                 strCol.Serialize([.. strValues]);
                 rowGroup.Write(strCol);
 
-                var binCol = rowGroup.CreateSerializedColumn<byte[]>(schema.Columns[1]);
+                var binCol = rowGroup.CreateSerializedColumn<byte[]>(schema.LeafColumns[1]);
                 binCol.Serialize([.. binValues]);
                 rowGroup.Write(binCol);
 
@@ -581,10 +604,10 @@ internal sealed class ParquetReaderTests
             using var reader = schema.CreateReader(readStream);
             var rowGroup2 = reader.RowGroups[0];
 
-            var actualStr = ReadAllBuffers(rowGroup2.Column<string>(schema.Columns[0]));
+            var actualStr = ReadAllBuffers(rowGroup2.Column<string>(schema.LeafColumns[0]));
             await Assert.That(actualStr).IsEquivalentTo(strValues);
 
-            var actualBin = ReadAllBuffers(rowGroup2.Column<byte[]>(schema.Columns[1]));
+            var actualBin = ReadAllBuffers(rowGroup2.Column<byte[]>(schema.LeafColumns[1]));
             await Assert.That(actualBin.Length).IsEqualTo(binValues.Length);
             for (var i = 0; i < binValues.Length; i++)
             {
@@ -605,7 +628,7 @@ internal sealed class ParquetReaderTests
     {
         var path = GetTempPath();
         var schema = new ParquetSchema([
-            new PlankColumn("IntOpt", ParquetPhysicalType.Int32,
+            Plank.Schema.ColumnDefinition.Leaf("IntOpt", ParquetPhysicalType.Int32,
                 new ColumnOptions(ParquetRepetition.Optional))
         ]);
         int?[] values = [null, null, null];
@@ -615,7 +638,7 @@ internal sealed class ParquetReaderTests
             {
                 var writer = schema.CreateWriter(writeStream);
                 var rowGroup = writer.StartRowGroup();
-                var col = rowGroup.CreateSerializedColumn<int?>(schema.Columns[0]);
+                var col = rowGroup.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
                 col.Serialize(values);
                 rowGroup.Write(col);
                 writer.CloseFile();
@@ -625,7 +648,7 @@ internal sealed class ParquetReaderTests
             using var reader = schema.CreateReader(readStream);
             var rowGroup2 = reader.RowGroups[0];
 
-            await Assert.That(ReadAllBuffers(rowGroup2.Column<int?>(schema.Columns[0]))).IsEquivalentTo(values);
+            await Assert.That(ReadAllBuffers(rowGroup2.Column<int?>(schema.LeafColumns[0]))).IsEquivalentTo(values);
         }
         finally
         {
@@ -638,7 +661,7 @@ internal sealed class ParquetReaderTests
     {
         var path = GetTempPath();
         var schema = new ParquetSchema([
-            new PlankColumn("IntOpt", ParquetPhysicalType.Int32,
+            Plank.Schema.ColumnDefinition.Leaf("IntOpt", ParquetPhysicalType.Int32,
                 new ColumnOptions(ParquetRepetition.Optional,
                     encodings: ImmutableArray.Create(EncodingKind.RleDictionary)))
         ]);
@@ -649,7 +672,7 @@ internal sealed class ParquetReaderTests
             {
                 var writer = schema.CreateWriter(writeStream);
                 var rowGroup = writer.StartRowGroup();
-                var col = rowGroup.CreateSerializedColumn<int?>(schema.Columns[0]);
+                var col = rowGroup.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
                 col.Serialize(values);
                 rowGroup.Write(col);
                 writer.CloseFile();
@@ -659,7 +682,7 @@ internal sealed class ParquetReaderTests
             using var reader = schema.CreateReader(readStream);
             var rowGroup2 = reader.RowGroups[0];
 
-            await Assert.That(ReadAllBuffers(rowGroup2.Column<int?>(schema.Columns[0]))).IsEquivalentTo(values);
+            await Assert.That(ReadAllBuffers(rowGroup2.Column<int?>(schema.LeafColumns[0]))).IsEquivalentTo(values);
         }
         finally
         {
@@ -672,25 +695,25 @@ internal sealed class ParquetReaderTests
     {
         var rowGroup = writer.StartRowGroup();
 
-        var intColumn = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
+        var intColumn = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         intColumn.Serialize(ints);
         rowGroup.Write(intColumn);
 
-        if (schema.Columns.Length == 1)
+        if (schema.LeafColumns.Length == 1)
             return;
 
-        var doubleColumn = rowGroup.CreateSerializedColumn<double>(schema.Columns[1]);
+        var doubleColumn = rowGroup.CreateSerializedColumn<double>(schema.LeafColumns[1]);
         doubleColumn.Serialize(doubles);
         rowGroup.Write(doubleColumn);
 
-        var byteColumn = rowGroup.CreateSerializedColumn<byte[]>(schema.Columns[2]);
+        var byteColumn = rowGroup.CreateSerializedColumn<byte[]>(schema.LeafColumns[2]);
         byteColumn.Serialize(bytes);
         rowGroup.Write(byteColumn);
 
         if (dictionaryInts is null)
             return;
 
-        var dictionaryColumn = rowGroup.CreateSerializedColumn<int>(schema.Columns[3]);
+        var dictionaryColumn = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[3]);
         dictionaryColumn.Serialize(dictionaryInts);
         rowGroup.Write(dictionaryColumn);
     }
@@ -708,11 +731,11 @@ internal sealed class ParquetReaderTests
     static MemoryStream CreateInt32File(string columnName)
     {
         var schema = new ParquetSchema([
-            new PlankColumn(columnName, ParquetPhysicalType.Int32)
+            Plank.Schema.ColumnDefinition.Leaf(columnName, ParquetPhysicalType.Int32)
         ]);
         return CreateFile(schema, rowGroup =>
         {
-            var serialized = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
+            var serialized = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[0]);
             serialized.Serialize([1, 2, 3]);
             rowGroup.Write(serialized);
         });
@@ -721,11 +744,11 @@ internal sealed class ParquetReaderTests
     static MemoryStream CreateOptionalInt32File(string columnName)
     {
         var schema = new ParquetSchema([
-            new PlankColumn(columnName, ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
+            Plank.Schema.ColumnDefinition.Leaf(columnName, ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
         ]);
         return CreateFile(schema, rowGroup =>
         {
-            var serialized = rowGroup.CreateSerializedColumn<int?>(schema.Columns[0]);
+            var serialized = rowGroup.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
             serialized.Serialize([1, null, 3]);
             rowGroup.Write(serialized);
         });
@@ -734,16 +757,16 @@ internal sealed class ParquetReaderTests
     static MemoryStream CreateTwoColumnFile()
     {
         var schema = new ParquetSchema([
-            new PlankColumn("Value", ParquetPhysicalType.Int32),
-            new PlankColumn("Other", ParquetPhysicalType.Int64)
+            Plank.Schema.ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32),
+            Plank.Schema.ColumnDefinition.Leaf("Other", ParquetPhysicalType.Int64)
         ]);
         return CreateFile(schema, rowGroup =>
         {
-            var value = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
+            var value = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[0]);
             value.Serialize([1, 2, 3]);
             rowGroup.Write(value);
 
-            var other = rowGroup.CreateSerializedColumn<long>(schema.Columns[1]);
+            var other = rowGroup.CreateSerializedColumn<long>(schema.LeafColumns[1]);
             other.Serialize([10L, 20L, 30L]);
             rowGroup.Write(other);
         });

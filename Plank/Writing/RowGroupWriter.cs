@@ -35,7 +35,7 @@ public sealed class RowGroupWriter
         _rowCount = null;
     }
 
-    public SerializedColumn<T> CreateSerializedColumn<T>(Column column)
+    public SerializedColumn<T> CreateSerializedColumn<T>(LeafColumn column)
         => _writer.CreateSerializedColumn<T>(column);
 
     public void Write<T>(SerializedColumn<T> serialized)

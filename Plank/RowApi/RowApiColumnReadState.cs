@@ -11,8 +11,7 @@ abstract class RowApiColumnReadState : IDisposable
 
         Descriptor = descriptor;
         PropertyName = descriptor.PropertyName;
-        Column = descriptor.Column;
-        ProjectionBit = descriptor.ProjectionBit;
+        Column = descriptor.Column.Column;
         Ordinal = -1;
         Projected = false;
         Materialized = false;
@@ -25,8 +24,6 @@ abstract class RowApiColumnReadState : IDisposable
 
     internal readonly Column Column;
 
-    internal readonly ulong ProjectionBit;
-
     internal int Ordinal;
 
     internal bool Projected;
@@ -35,9 +32,9 @@ abstract class RowApiColumnReadState : IDisposable
 
     internal int CurrentIndex;
 
-    internal void ResetForProjection(ulong projection)
+    internal void ResetForProjection(bool projected)
     {
-        Projected = (projection & ProjectionBit) != 0;
+        Projected = projected;
         Materialized = false;
         Ordinal = -1;
         ResetBufferState();

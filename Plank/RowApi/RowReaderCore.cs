@@ -5,6 +5,10 @@ using Plank.Schema;
 
 namespace Plank.RowApi;
 
+/// <summary>Provides the column-oriented reading core used by generated row readers.</summary>
+/// <remarks>
+/// This unstable API supports Plank-generated code and is not intended for direct use by applications.
+/// </remarks>
 public sealed class RowReaderCore : IDisposable
 {
     readonly RowApiColumnReadState[] _states;
@@ -18,21 +22,35 @@ public sealed class RowReaderCore : IDisposable
     bool _hasCurrent;
     bool _disposed;
 
+    /// <summary>Initializes a generated row reader over a stream.</summary>
+    /// <param name="stream">The source stream.</param>
+    /// <param name="schema">The generated row schema.</param>
+    /// <param name="columns">The generated column descriptors.</param>
+    /// <param name="projection">The selected column indices, or <see langword="null"/> for all columns.</param>
+    /// <param name="options">The row reader options.</param>
+    /// <param name="schemaEvolution">The optional schema-evolution policy.</param>
     public RowReaderCore(Stream stream, ParquetSchema schema, RowApiColumnDescriptor[] columns,
-        ulong projection, RowReaderOptions options, ParquetSchemaEvolutionOptions? schemaEvolution)
+        int[]? projection, RowReaderOptions options, ParquetSchemaEvolutionOptions? schemaEvolution)
         : this(new StreamReadSource(stream), schema, columns, projection, options, schemaEvolution)
     {
     }
 
+    /// <summary>Initializes a generated row reader over a random-access source.</summary>
+    /// <param name="source">The random-access source.</param>
+    /// <param name="schema">The generated row schema.</param>
+    /// <param name="columns">The generated column descriptors.</param>
+    /// <param name="projection">The selected column indices, or <see langword="null"/> for all columns.</param>
+    /// <param name="options">The row reader options.</param>
+    /// <param name="schemaEvolution">The optional schema-evolution policy.</param>
     public RowReaderCore(IParquetReadSource source, ParquetSchema schema, RowApiColumnDescriptor[] columns,
-        ulong projection, RowReaderOptions options, ParquetSchemaEvolutionOptions? schemaEvolution)
+        int[]? projection, RowReaderOptions options, ParquetSchemaEvolutionOptions? schemaEvolution)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
-        if (columns.Length != schema.Columns.Length)
+        if (columns.Length != schema.LeafColumns.Length)
             throw new ArgumentException("Row API column descriptors must match the row API schema column count.",
                 nameof(columns));
 
@@ -51,6 +69,8 @@ public sealed class RowReaderCore : IDisposable
         ResolveFileSchema();
     }
 
+    /// <summary>Advances the generated reader to the next row.</summary>
+    /// <returns><see langword="true"/> when a row is available; otherwise, <see langword="false"/>.</returns>
     public bool MoveNext()
     {
         ThrowIfDisposed();
@@ -59,7 +79,11 @@ public sealed class RowReaderCore : IDisposable
         return _hasCurrent;
     }
 
-    public void Reset(Stream stream, ulong projection, ParquetSchemaEvolutionOptions? schemaEvolution = null)
+    /// <summary>Resets the generated row reader to a stream and projection.</summary>
+    /// <param name="stream">The new source stream.</param>
+    /// <param name="projection">The selected column indices, or <see langword="null"/> for all columns.</param>
+    /// <param name="schemaEvolution">An optional replacement schema-evolution policy.</param>
+    public void Reset(Stream stream, int[]? projection, ParquetSchemaEvolutionOptions? schemaEvolution = null)
     {
         if (_streamSource is null)
             _streamSource = new StreamReadSource(stream);
@@ -68,7 +92,11 @@ public sealed class RowReaderCore : IDisposable
         Reset(_streamSource, projection, schemaEvolution);
     }
 
-    public void Reset(IParquetReadSource source, ulong projection, ParquetSchemaEvolutionOptions? schemaEvolution = null)
+    /// <summary>Resets the generated row reader to a random-access source and projection.</summary>
+    /// <param name="source">The new random-access source.</param>
+    /// <param name="projection">The selected column indices, or <see langword="null"/> for all columns.</param>
+    /// <param name="schemaEvolution">An optional replacement schema-evolution policy.</param>
+    public void Reset(IParquetReadSource source, int[]? projection, ParquetSchemaEvolutionOptions? schemaEvolution = null)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
@@ -86,9 +114,16 @@ public sealed class RowReaderCore : IDisposable
         ResolveFileSchema();
     }
 
+    /// <summary>Gets the typed buffer containing a generated property's current value.</summary>
+    /// <typeparam name="T">The column's generated CLR value type.</typeparam>
+    /// <param name="columnIndex">The column index in the generated row schema.</param>
+    /// <returns>The current typed column buffer.</returns>
     public Span<T> GetCurrentSpan<T>(int columnIndex)
         => GetState<T>(columnIndex).CurrentSpan;
 
+    /// <summary>Gets the current value index within a generated column buffer.</summary>
+    /// <param name="columnIndex">The column index in the generated row schema.</param>
+    /// <returns>The current index.</returns>
     public int GetCurrentIndex(int columnIndex)
     {
         if ((uint)columnIndex >= (uint)_states.Length)
@@ -97,6 +132,7 @@ public sealed class RowReaderCore : IDisposable
         return _states[columnIndex].CurrentIndex;
     }
 
+    /// <summary>Throws if the generated reader is not positioned on a row.</summary>
     public void ThrowIfNotPositioned()
     {
         ThrowIfDisposed();
@@ -104,6 +140,7 @@ public sealed class RowReaderCore : IDisposable
             throw new InvalidOperationException("The row reader is not positioned on a row.");
     }
 
+    /// <summary>Releases resources owned by the generated row reader core.</summary>
     public void Dispose()
     {
         if (_disposed)
@@ -134,10 +171,27 @@ public sealed class RowReaderCore : IDisposable
             Strict = false
         };
 
-    void ApplyProjection(ulong projection)
+    void ApplyProjection(int[]? projection)
     {
+        if (projection is null)
+        {
+            for (var i = 0; i < _states.Length; i++)
+                _states[i].ResetForProjection(true);
+            return;
+        }
+
+        var projected = new bool[_states.Length];
+        for (var i = 0; i < projection.Length; i++)
+        {
+            var columnIndex = projection[i];
+            if ((uint)columnIndex >= (uint)_states.Length)
+                throw new ArgumentOutOfRangeException(nameof(projection), columnIndex,
+                    "Projection column index is outside the row API schema.");
+            projected[columnIndex] = true;
+        }
+
         for (var i = 0; i < _states.Length; i++)
-            _states[i].ResetForProjection(projection);
+            _states[i].ResetForProjection(projected[i]);
     }
 
     bool ReadNextRow()

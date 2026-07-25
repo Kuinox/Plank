@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using Plank.Schema;
 using Plank.Writing;
-using PlankColumn = Plank.Schema.Column;
+using Plank.Writing.PageStrategy;
 using PlankParquetSchema = Plank.Schema.ParquetSchema;
 
 namespace Plank.Tests.Writer;
@@ -12,14 +12,14 @@ internal sealed class PageSizeTests
     public void RequiredFixedWidthColumnSplitsByTargetPageSize()
     {
         var schema = new PlankParquetSchema([
-            new PlankColumn("id", ParquetPhysicalType.Int32)
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32)
         ]);
         using var stream = new MemoryStream();
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
             TargetDataPageSizeBytes = 8
         });
-        var idColumn = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+        var idColumn = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
 
         idColumn.Serialize([1, 2, 3, 4, 5]);
 
@@ -30,14 +30,14 @@ internal sealed class PageSizeTests
     public void RequiredVariableWidthColumnSplitsByTargetPageSize()
     {
         var schema = new PlankParquetSchema([
-            new PlankColumn("name", ParquetPhysicalType.ByteArray)
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray)
         ]);
         using var stream = new MemoryStream();
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
             TargetDataPageSizeBytes = 32
         });
-        var nameColumn = writer.CreateSerializedColumn<string>(schema.Columns[0]);
+        var nameColumn = writer.CreateSerializedColumn<string>(schema.LeafColumns[0]);
 
         nameColumn.Serialize(["abcdefghij", "klmnopqrst", "uvwxyzabcd", "efghijklmn", "opqrstuvwx"]);
 
@@ -48,14 +48,14 @@ internal sealed class PageSizeTests
     public void OptionalColumnSplitsByTargetPageSize()
     {
         var schema = new PlankParquetSchema([
-            new PlankColumn("id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
         ]);
         using var stream = new MemoryStream();
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
             TargetDataPageSizeBytes = 9
         });
-        var idColumn = writer.CreateSerializedColumn<int?>(schema.Columns[0]);
+        var idColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
 
         idColumn.Serialize([1, 2, null, 3]);
 
@@ -66,7 +66,7 @@ internal sealed class PageSizeTests
     public void DictionaryColumnSplitsDataPagesByTargetPageSize()
     {
         var schema = new PlankParquetSchema([
-            new PlankColumn("name", ParquetPhysicalType.ByteArray,
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)))
         ]);
         using var stream = new MemoryStream();
@@ -74,7 +74,7 @@ internal sealed class PageSizeTests
         {
             TargetDataPageSizeBytes = 4
         });
-        var nameColumn = writer.CreateSerializedColumn<string>(schema.Columns[0]);
+        var nameColumn = writer.CreateSerializedColumn<string>(schema.LeafColumns[0]);
         var values = new string[100];
         for (var i = 0; i < values.Length; i++)
             values[i] = i % 2 == 0 ? "a" : "b";
@@ -83,6 +83,25 @@ internal sealed class PageSizeTests
 
         AssertDictionaryPageCount(nameColumn.Pages, 1);
         AssertDataPageCountGreaterThan(nameColumn.Pages, 1);
+    }
+
+    [Test]
+    public void NestedLeafUsesStrategyFromDefinition()
+    {
+        var strategy = new FixedRowsPageStrategy(2);
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.RequiredGroup("group",
+                ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int32, pageStrategy: strategy))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream);
+        var column = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+
+        column.Serialize([1, 2, 3, 4, 5]);
+
+        if (!ReferenceEquals(schema.LeafColumns[0].PageStrategy, strategy))
+            throw new InvalidOperationException("The projected leaf did not retain its declared page strategy.");
+        AssertDataPageRows(column.Pages, [2, 2, 1]);
     }
 
     static void AssertDataPageRows(PageList pages, ReadOnlySpan<int> expectedRows)
@@ -127,5 +146,22 @@ internal sealed class PageSizeTests
 
         if (count <= minExclusive)
             throw new InvalidOperationException($"Expected more than {minExclusive} data pages, got {count}.");
+    }
+
+    sealed class FixedRowsPageStrategy : IPageStrategy
+    {
+        readonly uint _rowsPerPage;
+
+        internal FixedRowsPageStrategy(uint rowsPerPage)
+            => _rowsPerPage = rowsPerPage;
+
+        public DictionaryMode GetDictionaryMode()
+            => DictionaryMode.Disabled;
+
+        public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
+            => false;
+
+        public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
+            => currentPageRowCount >= _rowsPerPage;
     }
 }

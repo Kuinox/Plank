@@ -2,7 +2,6 @@ using System.Collections.Immutable;
 using Plank.Schema;
 using Plank.Tests.E2E.Interop;
 using Plank.Writing;
-using PlankColumn = Plank.Schema.Column;
 
 namespace Plank.Tests.E2E;
 
@@ -468,7 +467,7 @@ internal sealed class WriterInteropE2ETests
         {
             Compression = compression
         });
-        var columns = schema.Columns;
+        var columns = schema.LeafColumns;
         var int32Column = writer.CreateSerializedColumn<int>(columns[0]);
         var int64Column = writer.CreateSerializedColumn<long>(columns[1]);
         var doubleColumn = writer.CreateSerializedColumn<double>(columns[2]);
@@ -498,13 +497,13 @@ internal sealed class WriterInteropE2ETests
         EncodingKind int64Encoding = EncodingKind.Plain, EncodingKind doubleEncoding = EncodingKind.Plain,
         EncodingKind binaryEncoding = EncodingKind.Plain)
         => new([
-            new PlankColumn(WriterInteropSchema.Int32ColumnName, ParquetPhysicalType.Int32,
+            Plank.Schema.ColumnDefinition.Leaf(WriterInteropSchema.Int32ColumnName, ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(int32Encoding))),
-            new PlankColumn(WriterInteropSchema.Int64ColumnName, ParquetPhysicalType.Int64,
+            Plank.Schema.ColumnDefinition.Leaf(WriterInteropSchema.Int64ColumnName, ParquetPhysicalType.Int64,
                 new ColumnOptions(encodings: ImmutableArray.Create(int64Encoding))),
-            new PlankColumn(WriterInteropSchema.DoubleColumnName, ParquetPhysicalType.Double,
+            Plank.Schema.ColumnDefinition.Leaf(WriterInteropSchema.DoubleColumnName, ParquetPhysicalType.Double,
                 new ColumnOptions(encodings: ImmutableArray.Create(doubleEncoding))),
-            new PlankColumn(WriterInteropSchema.BinaryColumnName, ParquetPhysicalType.ByteArray,
+            Plank.Schema.ColumnDefinition.Leaf(WriterInteropSchema.BinaryColumnName, ParquetPhysicalType.ByteArray,
                 new ColumnOptions(encodings: ImmutableArray.Create(binaryEncoding)))
         ]);
 

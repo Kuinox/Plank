@@ -7,7 +7,6 @@ using Plank.Reading;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
-using PlankColumn = Plank.Schema.Column;
 using PlankSchema = Plank.Schema.ParquetSchema;
 
 namespace Plank.Benchmarks;
@@ -152,23 +151,23 @@ public class RowReaderBenchmark
             labels[i] = System.Text.Encoding.UTF8.GetBytes($"label-{i % 1000}");
         }
 
-        var idColumn = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
+        var idColumn = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         idColumn.Serialize(ids);
         rowGroup.Write(idColumn);
 
-        var timestampColumn = rowGroup.CreateSerializedColumn<long>(schema.Columns[1]);
+        var timestampColumn = rowGroup.CreateSerializedColumn<long>(schema.LeafColumns[1]);
         timestampColumn.Serialize(timestamps);
         rowGroup.Write(timestampColumn);
 
-        var valueColumn = rowGroup.CreateSerializedColumn<double>(schema.Columns[2]);
+        var valueColumn = rowGroup.CreateSerializedColumn<double>(schema.LeafColumns[2]);
         valueColumn.Serialize(values);
         rowGroup.Write(valueColumn);
 
-        var categoryColumn = rowGroup.CreateSerializedColumn<int>(schema.Columns[3]);
+        var categoryColumn = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[3]);
         categoryColumn.Serialize(categories);
         rowGroup.Write(categoryColumn);
 
-        var labelColumn = rowGroup.CreateSerializedColumn<byte[]>(schema.Columns[4]);
+        var labelColumn = rowGroup.CreateSerializedColumn<byte[]>(schema.LeafColumns[4]);
         labelColumn.Serialize(labels);
         rowGroup.Write(labelColumn);
 
@@ -191,27 +190,20 @@ public class RowReaderBenchmark
         var byteArrayOptions = new ColumnOptions(ParquetRepetition.Required, ImmutableArray.Create(byteArrayEncoding));
 
         var columns = ImmutableArray.Create(
-            new PlankColumn("id", ParquetPhysicalType.Int32, numericOptions),
-            new PlankColumn("timestamp", ParquetPhysicalType.Int64, numericOptions),
-            new PlankColumn("value", ParquetPhysicalType.Double,
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32, numericOptions),
+            Plank.Schema.ColumnDefinition.Leaf("timestamp", ParquetPhysicalType.Int64, numericOptions),
+            Plank.Schema.ColumnDefinition.Leaf("value", ParquetPhysicalType.Double,
                 new ColumnOptions(ParquetRepetition.Required, ImmutableArray.Create(
                     isIntEncoding ? EncodingKind.Plain : numericEncoding))),
-            new PlankColumn("category", ParquetPhysicalType.Int32, numericOptions),
-            new PlankColumn("label", ParquetPhysicalType.ByteArray, byteArrayOptions));
+            Plank.Schema.ColumnDefinition.Leaf("category", ParquetPhysicalType.Int32, numericOptions),
+            Plank.Schema.ColumnDefinition.Leaf("label", ParquetPhysicalType.ByteArray, byteArrayOptions));
 
         if (encoding != "dictionary")
             return new PlankSchema(columns);
 
-        return new PlankSchema(columns)
-        {
-            PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
-                .WithComparers(StringComparer.Ordinal)
-                .Add("id", ForceDictionaryPageStrategy.Shared)
-                .Add("timestamp", ForceDictionaryPageStrategy.Shared)
-                .Add("value", ForceDictionaryPageStrategy.Shared)
-                .Add("category", ForceDictionaryPageStrategy.Shared)
-                .Add("label", ForceDictionaryPageStrategy.Shared)
-        };
+        return new PlankSchema(columns
+            .Select(static column => column with { PageStrategy = ForceDictionaryPageStrategy.Shared })
+            .ToImmutableArray());
     }
 
     static EncodingKind MapNumericEncoding(string encoding)

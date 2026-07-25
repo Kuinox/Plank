@@ -1,4 +1,3 @@
-using System.Threading;
 using Plank.Schema;
 
 namespace Plank.Writing.PageStrategy;
@@ -7,7 +6,6 @@ sealed class DefaultStrategy : IPageStrategy
 {
     readonly DictionaryMode _dictionaryMode;
     readonly uint _targetDataPageSizeBytes;
-    int _dictionarySortOrder = (int)DictionarySortOrder.Unknown;
 
     public DefaultStrategy(Column column, uint targetDataPageSizeBytes)
     {
@@ -25,16 +23,6 @@ sealed class DefaultStrategy : IPageStrategy
 
     public DictionaryMode GetDictionaryMode()
         => _dictionaryMode;
-
-    public DictionarySortOrder GetDictionarySortOrder()
-        => (DictionarySortOrder)Volatile.Read(ref _dictionarySortOrder);
-
-    public void SetDictionarySortOrder(DictionarySortOrder sortOrder)
-    {
-        if (sortOrder is < DictionarySortOrder.Unknown or > DictionarySortOrder.Unsorted)
-            throw new ArgumentOutOfRangeException(nameof(sortOrder), sortOrder, "Unknown dictionary sort order.");
-        Volatile.Write(ref _dictionarySortOrder, (int)sortOrder);
-    }
 
     public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
     {

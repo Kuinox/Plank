@@ -4,7 +4,7 @@ using Parquet;
 using ParquetSharp;
 using Plank.Schema;
 using Plank.Writing;
-using PlankColumn = Plank.Schema.Column;
+using PlankColumn = Plank.Schema.LeafColumn;
 using PlankParquetSchema = Plank.Schema.ParquetSchema;
 using PlankWriter = Plank.Writing.ParquetWriter;
 
@@ -99,7 +99,7 @@ internal sealed class EncodingTypeMatrixE2ETests
                     Compression = CompressionKind.None
                 });
                 var rowGroup = writer.StartRowGroup();
-                WriteValues(writer, rowGroup, schema.Columns[0], testCase.PhysicalType);
+                WriteValues(writer, rowGroup, schema.LeafColumns[0], testCase.PhysicalType);
                 writer.CloseFile();
             }
 
@@ -138,7 +138,7 @@ internal sealed class EncodingTypeMatrixE2ETests
             Exception? failure = null;
             try
             {
-                WriteValues(writer, rowGroup, schema.Columns[0], testCase.PhysicalType);
+                WriteValues(writer, rowGroup, schema.LeafColumns[0], testCase.PhysicalType);
                 writer.CloseFile();
             }
             catch (NotSupportedException ex)
@@ -182,7 +182,7 @@ internal sealed class EncodingTypeMatrixE2ETests
             : new ColumnOptions(encodings: ImmutableArray.Create(encoding));
 
         return new PlankParquetSchema([
-            new PlankColumn("V", physicalType, options)
+            Plank.Schema.ColumnDefinition.Leaf("V", physicalType, options)
         ]);
     }
 

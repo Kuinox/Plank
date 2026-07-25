@@ -1,5 +1,7 @@
 - name: Overview
   href: index.md
+- name: Schema
+  href: articles/schema.md
 - name: Reading
   href: articles/reading/index.md
 - name: Writing

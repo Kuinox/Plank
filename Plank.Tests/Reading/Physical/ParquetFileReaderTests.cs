@@ -165,7 +165,7 @@ internal sealed class ParquetFileReaderTests
     static MemoryStream CreateFile(CompressionKind compression)
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
         ]);
         var stream = new MemoryStream();
@@ -173,7 +173,7 @@ internal sealed class ParquetFileReaderTests
         {
             Compression = compression
         });
-        var serialized = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+        var serialized = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         serialized.Serialize([1, 2, 3]);
         writer.StartRowGroup().Write(serialized);
         writer.CloseFile();
@@ -183,18 +183,18 @@ internal sealed class ParquetFileReaderTests
     static MemoryStream CreateTwoColumnTwoRowGroupFile()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32),
-            new Column("Other", ParquetPhysicalType.Int64)
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32),
+            ColumnDefinition.Leaf("Other", ParquetPhysicalType.Int64)
         ]);
         var stream = new MemoryStream();
         var writer = schema.CreateWriter(stream);
         for (var i = 0; i < 2; i++)
         {
             var rowGroup = writer.StartRowGroup();
-            var value = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
+            var value = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[0]);
             value.Serialize([i]);
             rowGroup.Write(value);
-            var other = rowGroup.CreateSerializedColumn<long>(schema.Columns[1]);
+            var other = rowGroup.CreateSerializedColumn<long>(schema.LeafColumns[1]);
             other.Serialize([i]);
             rowGroup.Write(other);
         }

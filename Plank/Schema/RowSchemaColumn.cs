@@ -1,15 +1,18 @@
+using Plank.Writing.PageStrategy;
+
 namespace Plank.Schema;
 
 public sealed record RowSchemaColumn
 {
     public RowSchemaColumn(string name, ParquetPhysicalType physicalType, Type clrType, ColumnOptions? options = null,
-        LogicalType? logicalType = null)
+        LogicalType? logicalType = null, IPageStrategy? pageStrategy = null)
     {
         Name = name;
         PhysicalType = physicalType;
         ClrType = clrType;
         Options = options ?? ColumnOptions.Default;
         LogicalType = logicalType;
+        PageStrategy = pageStrategy;
         EncodingCompatibility.Validate(Name, PhysicalType, Options);
     }
 
@@ -23,7 +26,9 @@ public sealed record RowSchemaColumn
 
     public LogicalType? LogicalType { get; }
 
-    internal Column ToColumn()
-        => new(Name, PhysicalType, Options, LogicalType);
+    public IPageStrategy? PageStrategy { get; }
+
+    internal ColumnDefinition ToDefinition()
+        => ColumnDefinition.Leaf(Name, PhysicalType, Options, LogicalType, PageStrategy);
 
 }

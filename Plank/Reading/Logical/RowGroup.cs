@@ -34,23 +34,27 @@ public readonly struct RowGroup
     internal InternalColumnChunkMetadata[] PreviousColumns
         => Metadata.Columns ?? [];
 
-    public RowGroupColumn<T> Column<T>(Column column)
+    public RowGroupColumn<T> Column<T>(LeafColumn column)
     {
         ArgumentNullException.ThrowIfNull(column);
         var reader = GetReader();
         reader.ValidateRowGroup(this);
-        return new RowGroupColumn<T>(this, column, reader.GetColumnOrdinal(column));
+        var columnOrdinal = reader.GetColumnOrdinal(column);
+        ValidatePhysicalType<T>(column.Column);
+        return new RowGroupColumn<T>(this, column, columnOrdinal);
     }
 
     public RowGroupColumn<T> Column<T>(int columnOrdinal)
     {
         var reader = GetReader();
         reader.ValidateRowGroup(this);
-        var columns = reader.Schema.Columns;
+        var columns = reader.Schema.LeafColumns;
         if ((uint)columnOrdinal >= (uint)columns.Length)
             throw new ArgumentOutOfRangeException(nameof(columnOrdinal), columnOrdinal,
                 "Column ordinal is outside the reader schema.");
-        return new RowGroupColumn<T>(this, columns[columnOrdinal], columnOrdinal);
+        var column = columns[columnOrdinal];
+        ValidatePhysicalType<T>(column.Column);
+        return new RowGroupColumn<T>(this, column, columnOrdinal);
     }
 
     internal ColumnBufferEnumerable<T> EnumerateBuffers<T>(Column column, int columnOrdinal)
@@ -72,4 +76,18 @@ public readonly struct RowGroup
 
     ParquetReader GetReader()
         => Reader ?? throw new InvalidOperationException("The row group is not initialized.");
+
+    static void ValidatePhysicalType<T>(Column column)
+    {
+        var resolution = ParquetTypeMap.ResolvePhysicalType<T>();
+        if (!resolution.IsSuccess)
+            throw new NotSupportedException(resolution.ErrorMessage);
+        if (resolution.PhysicalType == column.PhysicalType)
+            return;
+        if (resolution.PhysicalType == ParquetPhysicalType.ByteArray && typeof(T) == typeof(byte[]) &&
+            column.PhysicalType is ParquetPhysicalType.FixedLenByteArray or ParquetPhysicalType.Int96)
+            return;
+        throw new InvalidOperationException(
+            $"Column '{column.Name}' has physical type {column.PhysicalType} and cannot be read as '{typeof(T)}'.");
+    }
 }

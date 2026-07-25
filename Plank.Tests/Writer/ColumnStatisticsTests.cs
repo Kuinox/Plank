@@ -8,7 +8,6 @@ using Plank.Reading.Logical.Internal;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
-using PlankColumn = Plank.Schema.Column;
 using PlankLogicalType = Plank.Schema.LogicalType;
 using PlankParquetSchema = Plank.Schema.ParquetSchema;
 
@@ -19,7 +18,7 @@ internal sealed class ColumnStatisticsTests
     [Test]
     public void FloatStatisticsIgnoreNaNs()
     {
-        var column = new PlankColumn("value", ParquetPhysicalType.Float);
+        var column = new Plank.Schema.Column("value", ParquetPhysicalType.Float);
         var statistics = ColumnStatistics.Create(column,
             [float.NaN, 3.5f, 1.25f, float.NaN, 9.75f, 2f, 4f, 8f, 6f], 0);
 
@@ -34,7 +33,7 @@ internal sealed class ColumnStatisticsTests
     [Test]
     public void FloatStatisticsOmitMinMaxWhenAllValuesAreNaN()
     {
-        var column = new PlankColumn("value", ParquetPhysicalType.Float);
+        var column = new Plank.Schema.Column("value", ParquetPhysicalType.Float);
         var statistics = ColumnStatistics.Create(column, [float.NaN, float.NaN], 0);
 
         if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
@@ -44,7 +43,7 @@ internal sealed class ColumnStatisticsTests
     [Test]
     public void DoubleStatisticsIgnoreNaNs()
     {
-        var column = new PlankColumn("value", ParquetPhysicalType.Double);
+        var column = new Plank.Schema.Column("value", ParquetPhysicalType.Double);
         var statistics = ColumnStatistics.Create(column,
             [double.NaN, 3.5d, 1.25d, double.NaN, 9.75d, 2d, 4d, 8d, 6d], 0);
 
@@ -59,7 +58,7 @@ internal sealed class ColumnStatisticsTests
     [Test]
     public void DoubleStatisticsOmitMinMaxWhenAllValuesAreNaN()
     {
-        var column = new PlankColumn("value", ParquetPhysicalType.Double);
+        var column = new Plank.Schema.Column("value", ParquetPhysicalType.Double);
         var statistics = ColumnStatistics.Create(column, [double.NaN, double.NaN], 0);
 
         if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
@@ -71,10 +70,10 @@ internal sealed class ColumnStatisticsTests
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-statistics-{Guid.NewGuid():N}.parquet");
         var schema = new PlankParquetSchema([
-            new PlankColumn("id", ParquetPhysicalType.Int32),
-            new PlankColumn("optional_id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional)),
-            new PlankColumn("name", ParquetPhysicalType.ByteArray, null, new PlankLogicalType.String()),
-            new PlankColumn("active", ParquetPhysicalType.Boolean)
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32),
+            Plank.Schema.ColumnDefinition.Leaf("optional_id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional)),
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray, null, new PlankLogicalType.String()),
+            Plank.Schema.ColumnDefinition.Leaf("active", ParquetPhysicalType.Boolean)
         ]);
 
         try
@@ -82,10 +81,10 @@ internal sealed class ColumnStatisticsTests
             using (var stream = File.Create(path))
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
-                var idColumn = writer.CreateSerializedColumn<int>(schema.Columns[0]);
-                var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.Columns[1]);
-                var nameColumn = writer.CreateSerializedColumn<string>(schema.Columns[2]);
-                var activeColumn = writer.CreateSerializedColumn<bool>(schema.Columns[3]);
+                var idColumn = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+                var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[1]);
+                var nameColumn = writer.CreateSerializedColumn<string>(schema.LeafColumns[2]);
+                var activeColumn = writer.CreateSerializedColumn<bool>(schema.LeafColumns[3]);
                 var rowGroup = writer.StartRowGroup();
                 idColumn.Serialize([30, 10, 20]);
                 optionalIdColumn.Serialize([3, null, 1]);
@@ -117,7 +116,7 @@ internal sealed class ColumnStatisticsTests
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-statistics-all-null-{Guid.NewGuid():N}.parquet");
         var schema = new PlankParquetSchema([
-            new PlankColumn("optional_id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
+            Plank.Schema.ColumnDefinition.Leaf("optional_id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
         ]);
 
         try
@@ -125,7 +124,7 @@ internal sealed class ColumnStatisticsTests
             using (var stream = File.Create(path))
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
-                var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.Columns[0]);
+                var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
                 var rowGroup = writer.StartRowGroup();
                 optionalIdColumn.Serialize([null, null, null]);
                 rowGroup.Write(optionalIdColumn);
@@ -148,7 +147,7 @@ internal sealed class ColumnStatisticsTests
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-statistics-repeated-{Guid.NewGuid():N}.parquet");
         var schema = new PlankParquetSchema([
-            ColumnDef.List("numbers", ColumnDef.RequiredLeaf("element", ParquetPhysicalType.Int32),
+            ColumnDefinition.List("numbers", ColumnDefinition.RequiredLeaf("element", ParquetPhysicalType.Int32),
                 repetition: ParquetRepetition.Required)
         ]);
 
@@ -164,7 +163,7 @@ internal sealed class ColumnStatisticsTests
             using (var stream = File.Create(path))
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
-                var numbersColumn = writer.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                var numbersColumn = writer.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
                 var rowGroup = writer.StartRowGroup();
                 numbersColumn.Serialize(rows);
                 rowGroup.Write(numbersColumn);
@@ -187,14 +186,11 @@ internal sealed class ColumnStatisticsTests
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-page-index-{Guid.NewGuid():N}.parquet");
         var schema = new PlankParquetSchema([
-            new PlankColumn("id", ParquetPhysicalType.Int32),
-            new PlankColumn("optional_id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
-        ])
-        {
-            PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
-                .Add("id", new FixedRowsPageStrategy(2))
-                .Add("optional_id", new FixedRowsPageStrategy(2))
-        };
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.Leaf("optional_id", ParquetPhysicalType.Int32,
+                new ColumnOptions(ParquetRepetition.Optional), pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
 
         try
         {
@@ -204,8 +200,8 @@ internal sealed class ColumnStatisticsTests
                 {
                     WritePageIndexes = true
                 });
-                var idColumn = writer.CreateSerializedColumn<int>(schema.Columns[0]);
-                var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.Columns[1]);
+                var idColumn = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+                var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[1]);
                 var rowGroup = writer.StartRowGroup();
                 idColumn.Serialize([10, 20, 30, 40, 50]);
                 optionalIdColumn.Serialize([1, null, 3, 4, null]);
@@ -236,14 +232,11 @@ internal sealed class ColumnStatisticsTests
     {
         using var stream = new MemoryStream();
         var schema = new PlankParquetSchema([
-            new PlankColumn("id", ParquetPhysicalType.Int32)
-        ])
-        {
-            PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
-                .Add("id", new FixedRowsPageStrategy(2))
-        };
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32,
+                pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
-        var idColumn = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+        var idColumn = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
 
         idColumn.Serialize([10, 50, -5, 40, 0]);
 
@@ -257,22 +250,19 @@ internal sealed class ColumnStatisticsTests
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-page-index-duckdb-{Guid.NewGuid():N}.parquet");
         var schema = new PlankParquetSchema([
-            new PlankColumn("id", ParquetPhysicalType.Int32),
-            new PlankColumn("optional_id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
-        ])
-        {
-            PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
-                .Add("id", new FixedRowsPageStrategy(2))
-                .Add("optional_id", new FixedRowsPageStrategy(2))
-        };
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.Leaf("optional_id", ParquetPhysicalType.Int32,
+                new ColumnOptions(ParquetRepetition.Optional), pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
 
         try
         {
             using (var stream = File.Create(path))
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
-                var idColumn = writer.CreateSerializedColumn<int>(schema.Columns[0]);
-                var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.Columns[1]);
+                var idColumn = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+                var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[1]);
                 var rowGroup = writer.StartRowGroup();
                 idColumn.Serialize([10, 20, 30, 40, 50]);
                 optionalIdColumn.Serialize([1, null, 3, 4, null]);
@@ -524,13 +514,6 @@ internal sealed class ColumnStatisticsTests
 
         public DictionaryMode GetDictionaryMode()
             => DictionaryMode.Disabled;
-
-        public DictionarySortOrder GetDictionarySortOrder()
-            => DictionarySortOrder.Unknown;
-
-        public void SetDictionarySortOrder(DictionarySortOrder sortOrder)
-        {
-        }
 
         public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
             => false;

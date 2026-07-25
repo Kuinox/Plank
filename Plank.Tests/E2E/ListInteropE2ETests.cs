@@ -21,7 +21,7 @@ internal sealed class ListInteropE2ETests
         };
 
         var schema = new PlankSchema([
-            ColumnDef.List("numbers", ColumnDef.RequiredLeaf("element", ParquetPhysicalType.Int32),
+            ColumnDefinition.List("numbers", ColumnDefinition.RequiredLeaf("element", ParquetPhysicalType.Int32),
                 repetition: ParquetRepetition.Required)
         ]);
 
@@ -34,7 +34,7 @@ internal sealed class ListInteropE2ETests
                     Compression = CompressionKind.None
                 });
                 var rowGroup = writer.StartRowGroup();
-                var serialized = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                var serialized = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
                 serialized.Serialize(rows);
                 rowGroup.Write(serialized);
                 writer.CloseFile();
@@ -63,7 +63,7 @@ internal sealed class ListInteropE2ETests
         };
 
         var schema = new PlankSchema([
-            ColumnDef.List("numbers", ColumnDef.RequiredLeaf("element", ParquetPhysicalType.Int32),
+            ColumnDefinition.List("numbers", ColumnDefinition.RequiredLeaf("element", ParquetPhysicalType.Int32),
                 repetition: ParquetRepetition.Required)
         ]);
 
@@ -76,7 +76,7 @@ internal sealed class ListInteropE2ETests
                     Compression = CompressionKind.None
                 });
                 var rowGroup = writer.StartRowGroup();
-                var serialized = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                var serialized = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
                 serialized.Serialize(rows);
                 rowGroup.Write(serialized);
                 writer.CloseFile();
@@ -105,7 +105,7 @@ internal sealed class ListInteropE2ETests
         ];
 
         var schema = new PlankSchema([
-            ColumnDef.List("numbers", ColumnDef.RequiredLeaf("element", ParquetPhysicalType.Int32),
+            ColumnDefinition.List("numbers", ColumnDefinition.RequiredLeaf("element", ParquetPhysicalType.Int32),
                 repetition: ParquetRepetition.Optional)
         ]);
 
@@ -118,7 +118,7 @@ internal sealed class ListInteropE2ETests
                     Compression = CompressionKind.None
                 });
                 var rowGroup = writer.StartRowGroup();
-                var serialized = rowGroup.CreateSerializedColumn<int[]>(schema.Columns[0]);
+                var serialized = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
                 serialized.Serialize(rows);
                 rowGroup.Write(serialized);
                 writer.CloseFile();
@@ -147,7 +147,7 @@ internal sealed class ListInteropE2ETests
         ];
 
         var schema = new PlankSchema([
-            ColumnDef.List("numbers", ColumnDef.OptionalLeaf("element", ParquetPhysicalType.Int32),
+            ColumnDefinition.List("numbers", ColumnDefinition.OptionalLeaf("element", ParquetPhysicalType.Int32),
                 repetition: ParquetRepetition.Optional)
         ]);
 
@@ -160,7 +160,7 @@ internal sealed class ListInteropE2ETests
                     Compression = CompressionKind.None
                 });
                 var rowGroup = writer.StartRowGroup();
-                var serialized = rowGroup.CreateSerializedColumn<int?[]>(schema.Columns[0]);
+                var serialized = rowGroup.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
                 serialized.Serialize(rows);
                 rowGroup.Write(serialized);
                 writer.CloseFile();
@@ -189,7 +189,7 @@ internal sealed class ListInteropE2ETests
         ];
 
         var schema = new PlankSchema([
-            ColumnDef.List("numbers", ColumnDef.OptionalLeaf("element", ParquetPhysicalType.Int32),
+            ColumnDefinition.List("numbers", ColumnDefinition.OptionalLeaf("element", ParquetPhysicalType.Int32),
                 repetition: ParquetRepetition.Optional)
         ]);
 
@@ -202,7 +202,7 @@ internal sealed class ListInteropE2ETests
                     Compression = CompressionKind.Snappy
                 });
                 var rowGroup = writer.StartRowGroup();
-                var serialized = rowGroup.CreateSerializedColumn<int?[]>(schema.Columns[0]);
+                var serialized = rowGroup.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
                 serialized.Serialize(rows);
                 rowGroup.Write(serialized);
                 writer.CloseFile();

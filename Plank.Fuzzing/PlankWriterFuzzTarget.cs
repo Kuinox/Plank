@@ -4,7 +4,7 @@ using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing;
-using PlankColumn = Plank.Schema.Column;
+using PlankColumn = Plank.Schema.ColumnDefinition;
 using PlankReader = Plank.Reading.Logical.ParquetReader;
 using PlankRowGroup = Plank.Reading.Logical.RowGroup;
 using PlankRowGroupWriter = Plank.Writing.RowGroupWriter;
@@ -71,7 +71,8 @@ public static class PlankWriterFuzzTarget
         });
         var serializedColumns = new object[fuzzCase.Columns.Count];
         for (var columnIndex = 0; columnIndex < serializedColumns.Length; columnIndex++)
-            serializedColumns[columnIndex] = CreateSerializedColumn(writer, fuzzCase.Columns[columnIndex]);
+            serializedColumns[columnIndex] = CreateSerializedColumn(writer, fuzzCase.Schema.LeafColumns[columnIndex],
+                fuzzCase.Columns[columnIndex]);
 
         for (var rowGroupIndex = 0; rowGroupIndex < fuzzCase.RowGroups.Count; rowGroupIndex++)
         {
@@ -86,12 +87,12 @@ public static class PlankWriterFuzzTarget
         writer.CloseFile();
     }
 
-    static object CreateSerializedColumn(PlankWriter writer, ColumnSpec spec)
-        => spec.ClrType == typeof(bool) ? writer.CreateSerializedColumn<bool>(spec.Column)
-        : spec.ClrType == typeof(int) ? writer.CreateSerializedColumn<int>(spec.Column)
-        : spec.ClrType == typeof(long) ? writer.CreateSerializedColumn<long>(spec.Column)
-        : spec.ClrType == typeof(double) ? writer.CreateSerializedColumn<double>(spec.Column)
-        : writer.CreateSerializedColumn<byte[]>(spec.Column);
+    static object CreateSerializedColumn(PlankWriter writer, LeafColumn column, ColumnSpec spec)
+        => spec.ClrType == typeof(bool) ? writer.CreateSerializedColumn<bool>(column)
+        : spec.ClrType == typeof(int) ? writer.CreateSerializedColumn<int>(column)
+        : spec.ClrType == typeof(long) ? writer.CreateSerializedColumn<long>(column)
+        : spec.ClrType == typeof(double) ? writer.CreateSerializedColumn<double>(column)
+        : writer.CreateSerializedColumn<byte[]>(column);
 
     static void SerializeColumn(object serializedColumn, Array values)
     {
@@ -150,7 +151,8 @@ public static class PlankWriterFuzzTarget
         {
             for (var columnIndex = 0; columnIndex < fuzzCase.Columns.Count; columnIndex++)
             {
-                var actual = ReadPlankColumn(rowGroup, fuzzCase.Columns[columnIndex]);
+                var actual = ReadPlankColumn(rowGroup, fuzzCase.Schema.LeafColumns[columnIndex],
+                    fuzzCase.Columns[columnIndex]);
                 AssertArraysEqual("Plank", fuzzCase, rowGroupIndex, columnIndex,
                     fuzzCase.RowGroups[rowGroupIndex][columnIndex], actual);
             }
@@ -162,12 +164,12 @@ public static class PlankWriterFuzzTarget
                 $"Plank row-group count mismatch. Expected {fuzzCase.RowGroups.Count}, got {rowGroupIndex}.");
     }
 
-    static Array ReadPlankColumn(PlankRowGroup rowGroup, ColumnSpec spec)
-        => spec.ClrType == typeof(bool) ? ReadAllBuffers(rowGroup.Column<bool>(spec.Column))
-        : spec.ClrType == typeof(int) ? ReadAllBuffers(rowGroup.Column<int>(spec.Column))
-        : spec.ClrType == typeof(long) ? ReadAllBuffers(rowGroup.Column<long>(spec.Column))
-        : spec.ClrType == typeof(double) ? ReadAllBuffers(rowGroup.Column<double>(spec.Column))
-        : ReadAllBuffers(rowGroup.Column<byte[]>(spec.Column));
+    static Array ReadPlankColumn(PlankRowGroup rowGroup, LeafColumn column, ColumnSpec spec)
+        => spec.ClrType == typeof(bool) ? ReadAllBuffers(rowGroup.Column<bool>(column))
+        : spec.ClrType == typeof(int) ? ReadAllBuffers(rowGroup.Column<int>(column))
+        : spec.ClrType == typeof(long) ? ReadAllBuffers(rowGroup.Column<long>(column))
+        : spec.ClrType == typeof(double) ? ReadAllBuffers(rowGroup.Column<double>(column))
+        : ReadAllBuffers(rowGroup.Column<byte[]>(column));
 
     static void AssertParquetSharpCanRead(string path, FuzzCase fuzzCase)
     {
@@ -288,8 +290,11 @@ public static class PlankWriterFuzzTarget
 
     public readonly record struct ColumnSpec(PlankColumn Column, Type ClrType)
     {
+        public EncodingKind Encoding
+            => Column.Options!.Encodings[0];
+
         public string Describe()
-            => $"{Column.PhysicalType}/{Column.Options.Encodings[0]}";
+            => $"{Column.PhysicalType}/{Encoding}";
     }
 
     sealed class Decoder
@@ -326,7 +331,7 @@ public static class PlankWriterFuzzTarget
             };
 
         ColumnSpec CreateBooleanColumn(int columnIndex)
-            => new(new PlankColumn($"c{columnIndex}_bool", ParquetPhysicalType.Boolean,
+            => new(Plank.Schema.ColumnDefinition.Leaf($"c{columnIndex}_bool", ParquetPhysicalType.Boolean,
                 new ColumnOptions(encodings: SingleEncoding(EncodingKind.Plain))), typeof(bool));
 
         ColumnSpec CreateInt32Column(int columnIndex)
@@ -337,7 +342,7 @@ public static class PlankWriterFuzzTarget
                 EncodingKind.PlainDictionary,
                 EncodingKind.RleDictionary
             ]);
-            return new ColumnSpec(new PlankColumn($"c{columnIndex}_i32", ParquetPhysicalType.Int32,
+            return new ColumnSpec(Plank.Schema.ColumnDefinition.Leaf($"c{columnIndex}_i32", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: SingleEncoding(encoding))), typeof(int));
         }
 
@@ -349,7 +354,7 @@ public static class PlankWriterFuzzTarget
                 EncodingKind.PlainDictionary,
                 EncodingKind.RleDictionary
             ]);
-            return new ColumnSpec(new PlankColumn($"c{columnIndex}_i64", ParquetPhysicalType.Int64,
+            return new ColumnSpec(Plank.Schema.ColumnDefinition.Leaf($"c{columnIndex}_i64", ParquetPhysicalType.Int64,
                 new ColumnOptions(encodings: SingleEncoding(encoding))), typeof(long));
         }
 
@@ -359,7 +364,7 @@ public static class PlankWriterFuzzTarget
                 EncodingKind.Plain,
                 EncodingKind.ByteStreamSplit
             ]);
-            return new ColumnSpec(new PlankColumn($"c{columnIndex}_dbl", ParquetPhysicalType.Double,
+            return new ColumnSpec(Plank.Schema.ColumnDefinition.Leaf($"c{columnIndex}_dbl", ParquetPhysicalType.Double,
                 new ColumnOptions(encodings: SingleEncoding(encoding))), typeof(double));
         }
 
@@ -370,7 +375,7 @@ public static class PlankWriterFuzzTarget
                 EncodingKind.DeltaLengthByteArray,
                 EncodingKind.DeltaByteArray
             ]);
-            return new ColumnSpec(new PlankColumn($"c{columnIndex}_bin", ParquetPhysicalType.ByteArray,
+            return new ColumnSpec(Plank.Schema.ColumnDefinition.Leaf($"c{columnIndex}_bin", ParquetPhysicalType.ByteArray,
                 new ColumnOptions(encodings: SingleEncoding(encoding))), typeof(byte[]));
         }
 
@@ -394,10 +399,10 @@ public static class PlankWriterFuzzTarget
 
         Array CreateValues(ColumnSpec spec, int rowCount)
             => spec.ClrType == typeof(bool) ? CreateBooleanValues(rowCount)
-            : spec.ClrType == typeof(int) ? CreateInt32Values(spec.Column.Options.Encodings[0], rowCount)
-            : spec.ClrType == typeof(long) ? CreateInt64Values(spec.Column.Options.Encodings[0], rowCount)
+            : spec.ClrType == typeof(int) ? CreateInt32Values(spec.Encoding, rowCount)
+            : spec.ClrType == typeof(long) ? CreateInt64Values(spec.Encoding, rowCount)
             : spec.ClrType == typeof(double) ? CreateDoubleValues(rowCount)
-            : CreateByteArrayValues(spec.Column.Options.Encodings[0], rowCount);
+            : CreateByteArrayValues(spec.Encoding, rowCount);
 
         bool[] CreateBooleanValues(int rowCount)
         {

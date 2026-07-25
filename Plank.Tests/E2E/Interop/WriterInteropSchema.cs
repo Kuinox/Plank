@@ -1,5 +1,4 @@
 using Plank.Schema;
-using PlankColumn = Plank.Schema.Column;
 
 namespace Plank.Tests.E2E.Interop;
 
@@ -11,9 +10,9 @@ static class WriterInteropSchema
     public const string BinaryColumnName = "BIN";
 
     public static readonly ParquetSchema Schema = new([
-        new PlankColumn(Int32ColumnName, ParquetPhysicalType.Int32, ColumnOptions.Default),
-        new PlankColumn(Int64ColumnName, ParquetPhysicalType.Int64, ColumnOptions.Default),
-        new PlankColumn(DoubleColumnName, ParquetPhysicalType.Double, ColumnOptions.Default),
-        new PlankColumn(BinaryColumnName, ParquetPhysicalType.ByteArray, ColumnOptions.Default)
+        Plank.Schema.ColumnDefinition.Leaf(Int32ColumnName, ParquetPhysicalType.Int32, ColumnOptions.Default),
+        Plank.Schema.ColumnDefinition.Leaf(Int64ColumnName, ParquetPhysicalType.Int64, ColumnOptions.Default),
+        Plank.Schema.ColumnDefinition.Leaf(DoubleColumnName, ParquetPhysicalType.Double, ColumnOptions.Default),
+        Plank.Schema.ColumnDefinition.Leaf(BinaryColumnName, ParquetPhysicalType.ByteArray, ColumnOptions.Default)
     ]);
 }

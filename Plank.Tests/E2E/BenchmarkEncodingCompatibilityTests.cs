@@ -8,7 +8,6 @@ using Plank.Writing;
 using Plank.Writing.PageStrategy;
 using CompressionMethod = Parquet.CompressionMethod;
 using ParquetEncoding = ParquetSharp.Encoding;
-using PlankColumn = Plank.Schema.Column;
 using PlankSchema = Plank.Schema.ParquetSchema;
 using PlankWriter = Plank.Writing.ParquetWriter;
 
@@ -97,51 +96,47 @@ internal sealed class BenchmarkEncodingCompatibilityTests
 
     static void WritePlank(string path, string dataType, string encoding)
     {
-        var column = new PlankColumn(
+        var column = Plank.Schema.ColumnDefinition.Leaf(
             "value",
             MapPlankPhysicalType(dataType),
             new ColumnOptions(ParquetRepetition.Required, [MapPlankEncoding(encoding)]));
-        var schema = string.Equals(encoding, "dictionary", StringComparison.Ordinal)
-            ? new PlankSchema([column])
-            {
-                PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
-                    .WithComparers(StringComparer.Ordinal)
-                    .Add(column.Name, ForceDictionaryPageStrategy.Shared)
-            }
-            : new PlankSchema([column]);
+        if (string.Equals(encoding, "dictionary", StringComparison.Ordinal))
+            column = column with { PageStrategy = ForceDictionaryPageStrategy.Shared };
+        var schema = new PlankSchema([column]);
 
         using var stream = File.Create(path);
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions { Compression = CompressionKind.None });
         var rowGroup = writer.StartRowGroup();
+        var leaf = schema.LeafColumns[0];
         switch (dataType)
         {
             case "bool":
-                var boolSerialized = writer.CreateSerializedColumn<bool>(column);
+                var boolSerialized = writer.CreateSerializedColumn<bool>(leaf);
                 boolSerialized.Serialize(CreateBooleanValues(RowCount));
                 rowGroup.Write(boolSerialized);
                 break;
             case "int32":
-                var int32Serialized = writer.CreateSerializedColumn<int>(column);
+                var int32Serialized = writer.CreateSerializedColumn<int>(leaf);
                 int32Serialized.Serialize(CreateInt32Values(RowCount));
                 rowGroup.Write(int32Serialized);
                 break;
             case "int64":
-                var int64Serialized = writer.CreateSerializedColumn<long>(column);
+                var int64Serialized = writer.CreateSerializedColumn<long>(leaf);
                 int64Serialized.Serialize(CreateInt64Values(RowCount));
                 rowGroup.Write(int64Serialized);
                 break;
             case "float":
-                var floatSerialized = writer.CreateSerializedColumn<float>(column);
+                var floatSerialized = writer.CreateSerializedColumn<float>(leaf);
                 floatSerialized.Serialize(CreateFloatValues(RowCount));
                 rowGroup.Write(floatSerialized);
                 break;
             case "double":
-                var doubleSerialized = writer.CreateSerializedColumn<double>(column);
+                var doubleSerialized = writer.CreateSerializedColumn<double>(leaf);
                 doubleSerialized.Serialize(CreateDoubleValues(RowCount));
                 rowGroup.Write(doubleSerialized);
                 break;
             case "string":
-                var stringSerialized = writer.CreateSerializedColumn<byte[]>(column);
+                var stringSerialized = writer.CreateSerializedColumn<byte[]>(leaf);
                 stringSerialized.Serialize(CreateStringBytes(RowCount));
                 rowGroup.Write(stringSerialized);
                 break;

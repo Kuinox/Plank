@@ -25,7 +25,7 @@ internal sealed class ReaderAllocationTests
     public void RowGroupIndexAccessDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32)
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32)
         ]);
         var path = CreateFile(schema, CreateValues(16));
         try
@@ -57,7 +57,7 @@ internal sealed class ReaderAllocationTests
     public void RowGroupEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
         ]);
         var path = CreateFile(schema, CreateValues(4096));
@@ -92,7 +92,7 @@ internal sealed class ReaderAllocationTests
     public void PhysicalReaderMetadataAndPageIterationDoNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
         ]);
         var path = CreateFile(schema, CreateValues(4096));
@@ -131,7 +131,7 @@ internal sealed class ReaderAllocationTests
     public void ColumnBufferEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
         ]);
         var path = CreateFile(schema, CreateValues(4096));
@@ -141,14 +141,14 @@ internal sealed class ReaderAllocationTests
             using var reader = schema.CreateReader(stream);
             var rowGroup = reader.RowGroups[0];
             for (var i = 0; i < 8; i++)
-                _ = SumValues(rowGroup, schema.Columns[0]);
+                _ = SumValues(rowGroup, schema.LeafColumns[0]);
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            _ = SumValues(rowGroup, schema.Columns[0]);
+            _ = SumValues(rowGroup, schema.LeafColumns[0]);
             var after = GC.GetAllocatedBytesForCurrentThread();
             var allocated = after - before;
 
@@ -166,14 +166,10 @@ internal sealed class ReaderAllocationTests
     public void DictionaryColumnBufferEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
-                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)))
-        ])
-        {
-            PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
-                .WithComparers(StringComparer.Ordinal)
-                .Add("Value", ForceDictionaryPageStrategy.Shared)
-        };
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)),
+                pageStrategy: ForceDictionaryPageStrategy.Shared)
+        ]);
         var path = CreateFile(schema, CreateLowCardinalityValues(4096));
         try
         {
@@ -181,14 +177,14 @@ internal sealed class ReaderAllocationTests
             using var reader = schema.CreateReader(stream);
             var rowGroup = reader.RowGroups[0];
             for (var i = 0; i < 8; i++)
-                _ = SumValues(rowGroup, schema.Columns[0]);
+                _ = SumValues(rowGroup, schema.LeafColumns[0]);
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            _ = SumValues(rowGroup, schema.Columns[0]);
+            _ = SumValues(rowGroup, schema.LeafColumns[0]);
             var after = GC.GetAllocatedBytesForCurrentThread();
             var allocated = after - before;
 
@@ -206,7 +202,7 @@ internal sealed class ReaderAllocationTests
     public void DeltaBinaryPackedColumnBufferEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.DeltaBinaryPacked)))
         ]);
         var path = CreateFile(schema, CreateValues(4096));
@@ -215,20 +211,20 @@ internal sealed class ReaderAllocationTests
             using var stream = File.OpenRead(path);
             using var reader = schema.CreateReader(stream);
             var rowGroup = reader.RowGroups[0];
-            var firstBuffer = rowGroup.Column<int>(schema.Columns[0]).GetEnumerator();
+            var firstBuffer = rowGroup.Column<int>(schema.LeafColumns[0]).GetEnumerator();
             if (!firstBuffer.MoveNext())
                 throw new InvalidOperationException("Expected test data.");
             firstBuffer.Dispose();
 
             for (var i = 0; i < 8; i++)
-                _ = SumValues(rowGroup, schema.Columns[0]);
+                _ = SumValues(rowGroup, schema.LeafColumns[0]);
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            _ = SumValues(rowGroup, schema.Columns[0]);
+            _ = SumValues(rowGroup, schema.LeafColumns[0]);
             var after = GC.GetAllocatedBytesForCurrentThread();
             var allocated = after - before;
 
@@ -246,7 +242,7 @@ internal sealed class ReaderAllocationTests
     public void BooleanRleColumnBufferEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Boolean,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Boolean,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Rle)))
         ]);
         var path = CreateFile(schema, CreateBooleanValues(4096));
@@ -257,14 +253,14 @@ internal sealed class ReaderAllocationTests
             var rowGroup = reader.RowGroups[0];
 
             for (var i = 0; i < 8; i++)
-                _ = CountTrueValues(rowGroup, schema.Columns[0]);
+                _ = CountTrueValues(rowGroup, schema.LeafColumns[0]);
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            _ = CountTrueValues(rowGroup, schema.Columns[0]);
+            _ = CountTrueValues(rowGroup, schema.LeafColumns[0]);
             var after = GC.GetAllocatedBytesForCurrentThread();
             var allocated = after - before;
 
@@ -282,7 +278,7 @@ internal sealed class ReaderAllocationTests
     public void ByteStreamSplitColumnBufferEnumerationDoesNotAllocateAfterWarmup()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.ByteStreamSplit)))
         ]);
         var path = CreateFile(schema, CreateValues(4096));
@@ -293,14 +289,14 @@ internal sealed class ReaderAllocationTests
             var rowGroup = reader.RowGroups[0];
 
             for (var i = 0; i < 8; i++)
-                _ = SumValues(rowGroup, schema.Columns[0]);
+                _ = SumValues(rowGroup, schema.LeafColumns[0]);
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            _ = SumValues(rowGroup, schema.Columns[0]);
+            _ = SumValues(rowGroup, schema.LeafColumns[0]);
             var after = GC.GetAllocatedBytesForCurrentThread();
             var allocated = after - before;
 
@@ -396,7 +392,7 @@ internal sealed class ReaderAllocationTests
         {
             Compression = compression
         });
-        var serialized = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+        var serialized = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         serialized.Serialize(values);
         writer.StartRowGroup().Write(serialized);
         writer.CloseFile();
@@ -411,7 +407,7 @@ internal sealed class ReaderAllocationTests
         {
             Compression = CompressionKind.None
         });
-        var serialized = writer.CreateSerializedColumn<bool>(schema.Columns[0]);
+        var serialized = writer.CreateSerializedColumn<bool>(schema.LeafColumns[0]);
         serialized.Serialize(values);
         writer.StartRowGroup().Write(serialized);
         writer.CloseFile();
@@ -426,14 +422,14 @@ internal sealed class ReaderAllocationTests
         {
             Compression = CompressionKind.None
         });
-        var serialized = writer.CreateSerializedColumn<byte[]>(schema.Columns[0]);
+        var serialized = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
         serialized.Serialize(values);
         writer.StartRowGroup().Write(serialized);
         writer.CloseFile();
         return path;
     }
 
-    static int SumValues(RowGroup rowGroup, Column column)
+    static int SumValues(RowGroup rowGroup, LeafColumn column)
     {
         var sum = 0;
         foreach (var buffer in rowGroup.Column<int>(column))
@@ -442,7 +438,7 @@ internal sealed class ReaderAllocationTests
         return sum;
     }
 
-    static int CountTrueValues(RowGroup rowGroup, Column column)
+    static int CountTrueValues(RowGroup rowGroup, LeafColumn column)
     {
         var count = 0;
         foreach (var buffer in rowGroup.Column<bool>(column))
@@ -452,7 +448,7 @@ internal sealed class ReaderAllocationTests
         return count;
     }
 
-    static int SumByteLengths(RowGroup rowGroup, Column column)
+    static int SumByteLengths(RowGroup rowGroup, LeafColumn column)
     {
         var sum = 0;
         foreach (var buffer in rowGroup.Column<byte[]>(column))
@@ -464,7 +460,7 @@ internal sealed class ReaderAllocationTests
     static void AssertByteArrayColumnBufferEnumerationDoesNotAllocateAfterWarmup(EncodingKind encoding)
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.ByteArray,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.ByteArray,
                 new ColumnOptions(encodings: ImmutableArray.Create(encoding)))
         ]);
         var path = CreateFile(schema, CreateByteArrayValues(4096));
@@ -475,14 +471,14 @@ internal sealed class ReaderAllocationTests
             var rowGroup = reader.RowGroups[0];
 
             for (var i = 0; i < 8; i++)
-                _ = SumByteLengths(rowGroup, schema.Columns[0]);
+                _ = SumByteLengths(rowGroup, schema.LeafColumns[0]);
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            _ = SumByteLengths(rowGroup, schema.Columns[0]);
+            _ = SumByteLengths(rowGroup, schema.LeafColumns[0]);
             var after = GC.GetAllocatedBytesForCurrentThread();
             var allocated = after - before;
 
@@ -519,7 +515,7 @@ internal sealed class ReaderAllocationTests
     static long MeasureCompressedColumnBufferEnumerationAllocations(CompressionKind compression)
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
         ]);
         var path = CreateFile(schema, CreateValues(4096), compression);
@@ -529,14 +525,14 @@ internal sealed class ReaderAllocationTests
             using var reader = schema.CreateReader(stream);
             var rowGroup = reader.RowGroups[0];
             for (var i = 0; i < 8; i++)
-                _ = SumValues(rowGroup, schema.Columns[0]);
+                _ = SumValues(rowGroup, schema.LeafColumns[0]);
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            _ = SumValues(rowGroup, schema.Columns[0]);
+            _ = SumValues(rowGroup, schema.LeafColumns[0]);
             var after = GC.GetAllocatedBytesForCurrentThread();
             return after - before;
         }

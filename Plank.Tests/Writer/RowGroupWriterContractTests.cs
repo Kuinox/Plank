@@ -1,24 +1,39 @@
 using System.Collections.Immutable;
 using Plank.Schema;
 using Plank.Writing;
-using PlankColumn = Plank.Schema.Column;
 
 namespace Plank.Tests.Writer;
 
 internal sealed class RowGroupWriterContractTests
 {
     [Test]
+    public async Task RejectsLeafColumnFromAnotherSchema()
+    {
+        using var stream = new MemoryStream();
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("A", ParquetPhysicalType.Int32)
+        ]);
+        var otherSchema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("A", ParquetPhysicalType.Int32)
+        ]);
+        var writer = schema.CreateWriter(stream);
+
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await Task.Run(() => writer.CreateSerializedColumn<int>(otherSchema.LeafColumns[0])).ConfigureAwait(false));
+    }
+
+    [Test]
     public async Task ThrowsWhenColumnsAreWrittenOutOfOrder()
     {
         using var stream = new MemoryStream();
         var schema = new ParquetSchema([
-            new PlankColumn("A", ParquetPhysicalType.Int32, ColumnOptions.Default),
-            new PlankColumn("B", ParquetPhysicalType.Int32, ColumnOptions.Default)
+            Plank.Schema.ColumnDefinition.Leaf("A", ParquetPhysicalType.Int32, ColumnOptions.Default),
+            Plank.Schema.ColumnDefinition.Leaf("B", ParquetPhysicalType.Int32, ColumnOptions.Default)
         ]);
         var writer = schema.CreateWriter(stream);
         var rowGroup = writer.StartRowGroup();
-        var first = writer.CreateSerializedColumn<int>(schema.Columns[0]);
-        var second = writer.CreateSerializedColumn<int>(schema.Columns[1]);
+        var first = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        var second = writer.CreateSerializedColumn<int>(schema.LeafColumns[1]);
 
         second.Serialize([1, 2]);
         first.Serialize([3, 4]);
@@ -32,13 +47,13 @@ internal sealed class RowGroupWriterContractTests
     {
         using var stream = new MemoryStream();
         var schema = new ParquetSchema([
-            new PlankColumn("A", ParquetPhysicalType.Int32, ColumnOptions.Default),
-            new PlankColumn("B", ParquetPhysicalType.Int32, ColumnOptions.Default)
+            Plank.Schema.ColumnDefinition.Leaf("A", ParquetPhysicalType.Int32, ColumnOptions.Default),
+            Plank.Schema.ColumnDefinition.Leaf("B", ParquetPhysicalType.Int32, ColumnOptions.Default)
         ]);
         var writer = schema.CreateWriter(stream);
         var rowGroup = writer.StartRowGroup();
-        var first = writer.CreateSerializedColumn<int>(schema.Columns[0]);
-        var second = writer.CreateSerializedColumn<int>(schema.Columns[1]);
+        var first = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        var second = writer.CreateSerializedColumn<int>(schema.LeafColumns[1]);
 
         first.Serialize([1, 2, 3]);
         second.Serialize([4, 5]);
@@ -53,11 +68,11 @@ internal sealed class RowGroupWriterContractTests
     {
         using var stream = new MemoryStream();
         var schema = new ParquetSchema([
-            new PlankColumn("A", ParquetPhysicalType.Int32, ColumnOptions.Default)
+            Plank.Schema.ColumnDefinition.Leaf("A", ParquetPhysicalType.Int32, ColumnOptions.Default)
         ]);
         var writer = schema.CreateWriter(stream);
         var rowGroup = writer.StartRowGroup();
-        var col = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+        var col = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
 
         col.Serialize([1, 2, 3]);
         rowGroup.Write(col); // completes the row group
@@ -71,7 +86,7 @@ internal sealed class RowGroupWriterContractTests
     public async Task ThrowsWhenRleEncodingIsUsedForNonBooleanColumn()
     {
         await Assert.ThrowsAsync<NotSupportedException>(async () =>
-            await Task.Run(() => new PlankColumn("A", ParquetPhysicalType.Int32,
+            await Task.Run(() => Plank.Schema.ColumnDefinition.Leaf("A", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Rle)))).ConfigureAwait(false));
     }
 
@@ -79,7 +94,7 @@ internal sealed class RowGroupWriterContractTests
     public async Task ThrowsWhenBitPackedEncodingIsUsedForDataColumn()
     {
         await Assert.ThrowsAsync<NotSupportedException>(async () =>
-            await Task.Run(() => new PlankColumn("A", ParquetPhysicalType.Int32,
+            await Task.Run(() => Plank.Schema.ColumnDefinition.Leaf("A", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.BitPacked)))).ConfigureAwait(false));
     }
 
@@ -88,12 +103,12 @@ internal sealed class RowGroupWriterContractTests
     {
         using var stream = new NonClosingMemoryStream();
         var schema = new ParquetSchema([
-            new PlankColumn("A", ParquetPhysicalType.ByteArray,
+            Plank.Schema.ColumnDefinition.Leaf("A", ParquetPhysicalType.ByteArray,
                 new ColumnOptions(repetition: ParquetRepetition.Optional))
         ]);
         var writer = schema.CreateWriter(stream);
         var rowGroup = writer.StartRowGroup();
-        var serialized = writer.CreateSerializedColumn<string>(schema.Columns[0]);
+        var serialized = writer.CreateSerializedColumn<string>(schema.LeafColumns[0]);
 
         serialized.Serialize(["a", null!, "bbb"]);
         rowGroup.Write(serialized);
@@ -112,13 +127,13 @@ internal sealed class RowGroupWriterContractTests
         // Schema selector byte 0x04 = schema 4 (int32 RleDictionary) prepended so the fixture matches
         // the fuzz-format used by ParquetReaderRobustnessTests.
         var schema = new ParquetSchema([
-            new PlankColumn("val", ParquetPhysicalType.Int32,
+            Plank.Schema.ColumnDefinition.Leaf("val", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)))
         ]);
         using var stream = new MemoryStream();
         var writer = schema.CreateWriter(stream);
         var rowGroup = writer.StartRowGroup();
-        var col = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+        var col = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         col.Serialize([1, 2, 3, 4, 5, 6, 7, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
         rowGroup.Write(col);
         writer.CloseFile();

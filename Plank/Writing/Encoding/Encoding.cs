@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using TextEncoding = System.Text.Encoding;
 using Plank.Schema;
 using Plank.Writing.PageStrategy;
@@ -12,13 +13,14 @@ static class Encoding
     static readonly TextEncoding Utf8 = TextEncoding.UTF8;
 
     internal static void Encode<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
-        IPageStrategy strategy, PageList pages, LeafProjectionInfo leafProjectionInfo,
+        PageStrategyContext strategyContext, PageList pages, LeafProjectionInfo leafProjectionInfo,
         ReusableDictionaryState<T> dictionaryState)
         where T : notnull
     {
         ArgumentNullException.ThrowIfNull(column);
-        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(strategyContext);
         ArgumentNullException.ThrowIfNull(pages);
+        var strategy = strategyContext.Strategy;
 
         pages.Clear();
         if (values.Length == 0)
@@ -32,7 +34,7 @@ static class Encoding
 
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
-        var useDictionary = TryWriteDictionaryPage(bufferWriters, column, values, strategy, pages, dictionaryState,
+        var useDictionary = TryWriteDictionaryPage(bufferWriters, column, values, strategyContext, pages, dictionaryState,
             out var dictionaryValueCount, out var dictionaryIndexesBytes);
         var dictionaryIndexes = useDictionary && dictionaryIndexesBytes is not null
             ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBytes.AsSpan(0, checked(values.Length * sizeof(int))))
@@ -310,12 +312,12 @@ static class Encoding
     }
 
     internal static void EncodeOptional<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T?> values,
-        IPageStrategy strategy, PageList pages, LeafProjectionInfo leafProjectionInfo,
+        PageStrategyContext strategyContext, PageList pages, LeafProjectionInfo leafProjectionInfo,
         ReusableDictionaryState<T> dictionaryState)
         where T : struct
     {
         ArgumentNullException.ThrowIfNull(column);
-        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(strategyContext);
         ArgumentNullException.ThrowIfNull(pages);
         if (column.Options.Repetition != ParquetRepetition.Optional)
             throw new InvalidOperationException(
@@ -334,7 +336,8 @@ static class Encoding
         CopyPresentValues(values, densePresentValues);
         try
         {
-            EncodeOptionalFlatValues(bufferWriters, column, values, strategy, pages, densePresentValues, dictionaryState);
+            EncodeOptionalFlatValues(bufferWriters, column, values, strategyContext, pages, densePresentValues,
+                dictionaryState);
         }
         finally
         {
@@ -343,12 +346,12 @@ static class Encoding
     }
 
     internal static void EncodeOptional<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
-        IPageStrategy strategy, PageList pages, LeafProjectionInfo leafProjectionInfo,
+        PageStrategyContext strategyContext, PageList pages, LeafProjectionInfo leafProjectionInfo,
         ReusableDictionaryState<T> dictionaryState)
         where T : class
     {
         ArgumentNullException.ThrowIfNull(column);
-        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(strategyContext);
         ArgumentNullException.ThrowIfNull(pages);
         if (column.Options.Repetition != ParquetRepetition.Optional)
             throw new InvalidOperationException(
@@ -364,7 +367,8 @@ static class Encoding
         var presentCount = CountPresentValues(values);
         if (presentCount == values.Length)
         {
-            EncodeOptionalFlatReferences(bufferWriters, column, values, strategy, pages, values, dictionaryState);
+            EncodeOptionalFlatReferences(bufferWriters, column, values, strategyContext, pages, values,
+                dictionaryState);
             return;
         }
 
@@ -373,7 +377,8 @@ static class Encoding
         CopyPresentValues(values, densePresentValues);
         try
         {
-            EncodeOptionalFlatReferences(bufferWriters, column, values, strategy, pages, densePresentValues, dictionaryState);
+            EncodeOptionalFlatReferences(bufferWriters, column, values, strategyContext, pages, densePresentValues,
+                dictionaryState);
         }
         finally
         {
@@ -382,8 +387,8 @@ static class Encoding
     }
 
     static bool TryWriteDictionaryPage<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
-        IPageStrategy strategy, PageList pages, ReusableDictionaryState<T> dictionaryState, out int dictionaryValueCount,
-        out byte[]? dictionaryIndexesBytes)
+        PageStrategyContext strategyContext, PageList pages, ReusableDictionaryState<T> dictionaryState,
+        out int dictionaryValueCount, out byte[]? dictionaryIndexesBytes)
         where T : notnull
     {
         dictionaryValueCount = 0;
@@ -392,6 +397,7 @@ static class Encoding
         if (values.IsEmpty)
             return false;
 
+        var strategy = strategyContext.Strategy;
         var dictionaryMode = strategy.GetDictionaryMode();
         if (dictionaryMode == DictionaryMode.Disabled)
         {
@@ -420,7 +426,7 @@ static class Encoding
                 ? GetInitialForcedDictionaryCapacity(values.Length)
                 : Math.Max(256, values.Length / 2);
             var comparer = GetDictionaryComparer<T>();
-            var knownSortOrder = strategy.GetDictionarySortOrder();
+            var knownSortOrder = (DictionarySortOrder)Volatile.Read(ref strategyContext.DictionarySortOrder);
             dictionaryState.Reset(initialUniqueCapacity, knownSortOrder == DictionarySortOrder.Unsorted, comparer);
             indexes[0] = dictionaryState.AddFirst(values[0]);
 
@@ -458,7 +464,8 @@ static class Encoding
                     {
                         if (knownSortOrder != DictionarySortOrder.Unsorted)
                         {
-                            strategy.SetDictionarySortOrder(DictionarySortOrder.Unsorted);
+                            Volatile.Write(ref strategyContext.DictionarySortOrder,
+                                (int)DictionarySortOrder.Unsorted);
                             knownSortOrder = DictionarySortOrder.Unsorted;
                         }
                         dictionaryState.EnableMap();
@@ -498,7 +505,7 @@ static class Encoding
                     _ => DictionarySortOrder.Unknown
                 };
                 if (discoveredSortOrder != knownSortOrder)
-                    strategy.SetDictionarySortOrder(discoveredSortOrder);
+                    Volatile.Write(ref strategyContext.DictionarySortOrder, (int)discoveredSortOrder);
             }
 
             PlainEncoding.WriteValues(column, dictionaryState.AsSpan(), ref dictionaryPage.Content);
@@ -517,13 +524,15 @@ static class Encoding
     }
 
     static void EncodeOptionalFlatValues<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T?> values,
-        IPageStrategy strategy, PageList pages, ReadOnlySpan<T> denseValues, ReusableDictionaryState<T> dictionaryState)
+        PageStrategyContext strategyContext, PageList pages, ReadOnlySpan<T> denseValues,
+        ReusableDictionaryState<T> dictionaryState)
         where T : struct
     {
+        var strategy = strategyContext.Strategy;
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
-        var useDictionary = TryWriteDictionaryPage(bufferWriters, column, denseValues, strategy, pages, dictionaryState,
-            out var dictionaryValueCount, out var dictionaryIndexesBytes);
+        var useDictionary = TryWriteDictionaryPage(bufferWriters, column, denseValues, strategyContext, pages,
+            dictionaryState, out var dictionaryValueCount, out var dictionaryIndexesBytes);
         var dictionaryIndexes = useDictionary && dictionaryIndexesBytes is not null
             ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBytes.AsSpan(0, checked(denseValues.Length * sizeof(int))))
             : default;
@@ -593,13 +602,15 @@ static class Encoding
     }
 
     static void EncodeOptionalFlatReferences<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
-        IPageStrategy strategy, PageList pages, ReadOnlySpan<T> denseValues, ReusableDictionaryState<T> dictionaryState)
+        PageStrategyContext strategyContext, PageList pages, ReadOnlySpan<T> denseValues,
+        ReusableDictionaryState<T> dictionaryState)
         where T : class
     {
+        var strategy = strategyContext.Strategy;
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
-        var useDictionary = TryWriteDictionaryPage(bufferWriters, column, denseValues, strategy, pages, dictionaryState,
-            out var dictionaryValueCount, out var dictionaryIndexesBytes);
+        var useDictionary = TryWriteDictionaryPage(bufferWriters, column, denseValues, strategyContext, pages,
+            dictionaryState, out var dictionaryValueCount, out var dictionaryIndexesBytes);
         var dictionaryIndexes = useDictionary && dictionaryIndexesBytes is not null
             ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBytes.AsSpan(0, checked(denseValues.Length * sizeof(int))))
             : default;

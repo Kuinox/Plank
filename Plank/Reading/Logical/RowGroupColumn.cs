@@ -8,7 +8,7 @@ public readonly struct RowGroupColumn<T>
     readonly RowGroup _rowGroup;
     readonly int _columnOrdinal;
 
-    internal RowGroupColumn(RowGroup rowGroup, Column column, int columnOrdinal)
+    internal RowGroupColumn(RowGroup rowGroup, LeafColumn column, int columnOrdinal)
     {
         ArgumentNullException.ThrowIfNull(column);
 
@@ -17,10 +17,10 @@ public readonly struct RowGroupColumn<T>
         _columnOrdinal = columnOrdinal;
     }
 
-    public Column Definition { get; }
+    public LeafColumn Definition { get; }
 
     public Enumerator GetEnumerator()
-        => new(_rowGroup.EnumerateBuffers<T>(Definition, _columnOrdinal).GetEnumerator());
+        => new(_rowGroup.EnumerateBuffers<T>(Definition.Column, _columnOrdinal).GetEnumerator());
 
     public struct Enumerator : IDisposable
     {

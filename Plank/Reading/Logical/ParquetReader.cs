@@ -33,7 +33,7 @@ public sealed class ParquetReader : IDisposable
         {
             BufferPool = readerOptions.BufferPool
         });
-        Schema = new ParquetSchema(System.Collections.Immutable.ImmutableArray<Column>.Empty);
+        Schema = new ParquetSchema(System.Collections.Immutable.ImmutableArray<ColumnDefinition>.Empty);
         _footer = InternalParquetFooter.Empty;
         Metadata = default;
         _footerVersion = 0;
@@ -142,15 +142,12 @@ public sealed class ParquetReader : IDisposable
             throw new InvalidOperationException("The row group collection is stale because the reader was reset.");
     }
 
-    internal int GetColumnOrdinal(Column column)
+    internal int GetColumnOrdinal(LeafColumn column)
     {
-        var ordinal = Schema.Columns.IndexOf(column);
-        if (ordinal >= 0)
+        var ordinal = column.Ordinal;
+        if ((uint)ordinal < (uint)Schema.LeafColumns.Length &&
+            ReferenceEquals(Schema.LeafColumns[ordinal], column))
             return ordinal;
-
-        for (var i = 0; i < Schema.Columns.Length; i++)
-            if (Schema.Columns[i].Name == column.Name && Schema.Columns[i].PhysicalType == column.PhysicalType)
-                return i;
 
         throw new ArgumentException("Column does not belong to this schema.", nameof(column));
     }

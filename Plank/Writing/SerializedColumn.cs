@@ -29,17 +29,20 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     delegate ColumnStatistics PageStatisticsFactory<TValue>(ReadOnlySpan<TValue> values, long nullCount);
 
     readonly ParquetWriter _owner;
+    readonly LeafColumn _leafColumn;
     readonly Column _column;
     object? _dictionaryState;
     byte[]? _statisticsMinValueBuffer;
     byte[]? _statisticsMaxValueBuffer;
 
-    public SerializedColumn(ParquetWriter owner, Column column, uint initialPageCapacity)
+    internal SerializedColumn(ParquetWriter owner, LeafColumn column, uint initialPageCapacity)
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(column);
         _owner = owner;
-        _column = column;
+        _ = owner.GetColumnOrdinal(column);
+        _leafColumn = column;
+        _column = column.Column;
         Pages = new PageList(initialPageCapacity);
         ColumnOrdinal = 0;
         RowCount = 0;
@@ -549,36 +552,36 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeTyped<TValue>(ReadOnlySpan<TValue> values)
         where TValue : notnull
     {
-        var columnOrdinal = _owner.GetColumnOrdinal(_column);
-        SerializeCore(values, columnOrdinal, _owner.GetPageStrategy(columnOrdinal));
+        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        SerializeCore(values, columnOrdinal, _owner.GetPageStrategyContext(columnOrdinal));
     }
 
     void SerializeOptionalTyped<TValue>(ReadOnlySpan<TValue?> values)
         where TValue : struct
     {
-        var columnOrdinal = _owner.GetColumnOrdinal(_column);
-        SerializeOptionalCore(values, columnOrdinal, _owner.GetPageStrategy(columnOrdinal));
+        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        SerializeOptionalCore(values, columnOrdinal, _owner.GetPageStrategyContext(columnOrdinal));
     }
 
     void SerializeOptionalReference<TValue>(ReadOnlySpan<TValue> values)
         where TValue : class
     {
-        var columnOrdinal = _owner.GetColumnOrdinal(_column);
-        SerializeOptionalCore(values, columnOrdinal, _owner.GetPageStrategy(columnOrdinal));
+        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        SerializeOptionalCore(values, columnOrdinal, _owner.GetPageStrategyContext(columnOrdinal));
     }
 
     void SerializeRepeated(ReadOnlySpan<T> values)
     {
-        var columnOrdinal = _owner.GetColumnOrdinal(_column);
+        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
 #pragma warning disable CS8714
-        SerializeCore(values, columnOrdinal, _owner.GetPageStrategy(columnOrdinal));
+        SerializeCore(values, columnOrdinal, _owner.GetPageStrategyContext(columnOrdinal));
 #pragma warning restore CS8714
     }
 
-    void SerializeCore<TValue>(ReadOnlySpan<TValue> values, uint columnOrdinal, IPageStrategy strategy)
+    void SerializeCore<TValue>(ReadOnlySpan<TValue> values, uint columnOrdinal, PageStrategyContext strategyContext)
         where TValue : notnull
     {
-        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(strategyContext);
         if (HasPendingData)
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
@@ -587,7 +590,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         RowCount = checked((uint)values.Length);
         HasPendingData = true;
 
-        Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategy, Pages,
+        Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategyContext, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
         if (_owner.WritePageIndexes && TryAssignInt32ColumnAndPageStatistics(values))
             return;
@@ -598,10 +601,11 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             AssignPageStatistics(values);
     }
 
-    void SerializeOptionalCore<TValue>(ReadOnlySpan<TValue?> values, uint columnOrdinal, IPageStrategy strategy)
+    void SerializeOptionalCore<TValue>(ReadOnlySpan<TValue?> values, uint columnOrdinal,
+        PageStrategyContext strategyContext)
         where TValue : struct
     {
-        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(strategyContext);
         if (HasPendingData)
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
@@ -611,16 +615,17 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Statistics = ColumnStatistics.CreateOptional(_column, values);
         HasPendingData = true;
 
-        Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategy, Pages,
+        Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategyContext, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
             AssignOptionalPageStatistics(values);
     }
 
-    void SerializeOptionalCore<TValue>(ReadOnlySpan<TValue> values, uint columnOrdinal, IPageStrategy strategy)
+    void SerializeOptionalCore<TValue>(ReadOnlySpan<TValue> values, uint columnOrdinal,
+        PageStrategyContext strategyContext)
         where TValue : class
     {
-        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(strategyContext);
         if (HasPendingData)
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
@@ -630,7 +635,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Statistics = ColumnStatistics.CreateOptional(_column, values, _owner.BufferWriters.BufferPool);
         HasPendingData = true;
 
-        Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategy, Pages,
+        Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategyContext, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
             AssignOptionalPageStatistics(values);

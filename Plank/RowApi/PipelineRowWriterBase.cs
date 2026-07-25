@@ -3,6 +3,11 @@ using Plank.Writing;
 
 namespace Plank.RowApi;
 
+/// <summary>Coordinates buffered row batches for a generated pipeline row writer.</summary>
+/// <typeparam name="TSlot">The generated buffer-slot type.</typeparam>
+/// <remarks>
+/// This unstable API supports Plank-generated code and is not intended for direct use by applications.
+/// </remarks>
 public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
     where TSlot : RowBufferSlot
 {
@@ -10,6 +15,14 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
     TSlot _active;
     bool _completed;
 
+    /// <summary>Initializes the infrastructure for a generated pipeline row writer.</summary>
+    /// <param name="stream">The destination stream.</param>
+    /// <param name="schema">The generated Parquet schema.</param>
+    /// <param name="maxParallelism">The maximum number of serialization workers.</param>
+    /// <param name="onFlush">An optional callback invoked with each flushed row count.</param>
+    /// <param name="options">The Parquet writer options.</param>
+    /// <param name="rowBatchSize">The number of rows in each generated buffer slot.</param>
+    /// <param name="workerThreadNamePrefix">The worker-thread name prefix.</param>
     protected PipelineRowWriterBase(Stream stream, ParquetSchema schema, uint maxParallelism, Action<int>? onFlush,
         ParquetWriterOptions options, int rowBatchSize, string workerThreadNamePrefix)
         : base(stream, schema, maxParallelism, options)
@@ -26,22 +39,30 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         _completed = false;
     }
 
+    /// <summary>Gets the generated writer's row-batch size.</summary>
     protected int RowBatchSize { get; }
 
+    /// <inheritdoc />
     protected override void SerializeSlot(TSlot slot)
         => slot.SerializeColumns();
 
+    /// <inheritdoc />
     protected override void WriteSerializedSlot(TSlot slot, RowGroupWriter rowGroupWriter)
         => slot.WriteSerialized(rowGroupWriter);
 
+    /// <inheritdoc />
     protected override void OnSlotWritten(TSlot slot)
         => _onFlush?.Invoke(slot.Count);
 
+    /// <inheritdoc />
     protected override void ResetSlotForReuse(TSlot slot)
         => slot.ResetForReuse();
 
+    /// <inheritdoc />
     protected override string WorkerThreadNamePrefix { get; }
 
+    /// <summary>Gets the current buffer slot for generated row assignment.</summary>
+    /// <returns>The current writable slot.</returns>
     protected TSlot GetSlotForRow()
     {
         ThrowIfFaulted();
@@ -50,6 +71,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         return _active;
     }
 
+    /// <summary>Advances the generated writer to its next row.</summary>
     protected void NextRow()
     {
         ThrowIfFaulted();
@@ -63,6 +85,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         _active = EnqueueAndTakeFree(_active);
     }
 
+    /// <summary>Flushes pending rows and completes the generated writer.</summary>
     protected void CompleteWriter()
     {
         ThrowIfFaulted();

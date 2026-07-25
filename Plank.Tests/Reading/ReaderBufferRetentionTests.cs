@@ -65,7 +65,7 @@ internal sealed class ReaderBufferRetentionTests
     public void ReferenceBufferReportsThatRetentionIsUnavailable()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.ByteArray,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.ByteArray,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
         ]);
         var path = Path.Combine(Path.GetTempPath(), $"plank-reference-retention-{Guid.NewGuid():N}.parquet");
@@ -74,7 +74,7 @@ internal sealed class ReaderBufferRetentionTests
             using (var stream = File.Create(path))
             {
                 var writer = schema.CreateWriter(stream);
-                var column = writer.CreateSerializedColumn<byte[]>(schema.Columns[0]);
+                var column = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
                 column.Serialize([[1], [2]]);
                 writer.StartRowGroup().Write(column);
                 writer.CloseFile();
@@ -102,7 +102,7 @@ internal sealed class ReaderBufferRetentionTests
     public void NullableBufferIsRetainable()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(ParquetRepetition.Optional,
                     ImmutableArray.Create(EncodingKind.Plain)))
         ]);
@@ -114,14 +114,10 @@ internal sealed class ReaderBufferRetentionTests
     public void DictionaryValuesBufferIsRetainable()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
-                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)))
-        ])
-        {
-            PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
-                .WithComparers(StringComparer.Ordinal)
-                .Add("Value", ForceDictionaryPageStrategy.Shared)
-        };
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)),
+                pageStrategy: ForceDictionaryPageStrategy.Shared)
+        ]);
         var expected = new[] { 7, 7, 9, 7, 9, 11 };
         AssertRetainedValues(schema, expected, expected);
     }
@@ -130,27 +126,23 @@ internal sealed class ReaderBufferRetentionTests
     public void UnmanagedNullableAndDictionaryPagesDoNotRentManagedArrays()
     {
         var optionalSchema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(ParquetRepetition.Optional, ImmutableArray.Create(EncodingKind.Plain)))
         ]);
         AssertNoManagedReaderBuffers(optionalSchema, new int?[] { 1, null, 3, null, 5 });
 
         var dictionarySchema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
-                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)))
-        ])
-        {
-            PageStrategiesByColumnName = ImmutableDictionary<string, IPageStrategy>.Empty
-                .WithComparers(StringComparer.Ordinal)
-                .Add("Value", ForceDictionaryPageStrategy.Shared)
-        };
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)),
+                pageStrategy: ForceDictionaryPageStrategy.Shared)
+        ]);
         AssertNoManagedReaderBuffers(dictionarySchema, new[] { 7, 7, 9, 7, 9, 11 });
     }
 
     static string CreateFile()
     {
         var schema = new ParquetSchema([
-            new Column("Value", ParquetPhysicalType.Int32,
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
         ]);
         var path = Path.Combine(Path.GetTempPath(), $"plank-native-retention-{Guid.NewGuid():N}.parquet");
@@ -160,7 +152,7 @@ internal sealed class ReaderBufferRetentionTests
             Compression = CompressionKind.None,
             TargetDataPageSizeBytes = 64
         });
-        var column = writer.CreateSerializedColumn<int>(schema.Columns[0]);
+        var column = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         column.Serialize(Enumerable.Range(0, 4096).ToArray());
         writer.StartRowGroup().Write(column);
         writer.CloseFile();
@@ -175,7 +167,7 @@ internal sealed class ReaderBufferRetentionTests
             using (var stream = File.Create(path))
             {
                 var writer = schema.CreateWriter(stream);
-                var column = writer.CreateSerializedColumn<T>(schema.Columns[0]);
+                var column = writer.CreateSerializedColumn<T>(schema.LeafColumns[0]);
                 column.Serialize(values);
                 writer.StartRowGroup().Write(column);
                 writer.CloseFile();
@@ -208,7 +200,7 @@ internal sealed class ReaderBufferRetentionTests
             using (var stream = File.Create(path))
             {
                 var writer = schema.CreateWriter(stream);
-                var column = writer.CreateSerializedColumn<T>(schema.Columns[0]);
+                var column = writer.CreateSerializedColumn<T>(schema.LeafColumns[0]);
                 column.Serialize(values);
                 writer.StartRowGroup().Write(column);
                 writer.CloseFile();

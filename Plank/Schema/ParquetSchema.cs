@@ -2,45 +2,33 @@ using System.Collections.Immutable;
 using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Writing;
-using Plank.Writing.PageStrategy;
 
 namespace Plank.Schema;
 
 public sealed record ParquetSchema
 {
-    static readonly ImmutableDictionary<string, IPageStrategy> EmptyPageStrategies =
-        ImmutableDictionary.Create<string, IPageStrategy>(StringComparer.Ordinal);
-
-    public ParquetSchema(ImmutableArray<Column> columns)
-    {
-        Columns = columns.IsDefault ? [] : columns;
-        Definitions = NormalizeDefinitions(Columns);
-        LeafPaths = BuildFlatLeafPaths(Columns);
-        LeafProjectionInfos = BuildFlatLeafProjectionInfos(Columns);
-    }
-
     public ParquetSchema(ImmutableArray<ColumnDefinition> definitions)
     {
         Definitions = definitions.IsDefault ? [] : definitions;
         if (TryProjectLeafColumns(Definitions, out var projectedColumns, out var projectedPaths, out var projectedInfos))
         {
             Columns = projectedColumns;
+            LeafColumns = BuildLeafColumns(projectedColumns);
             LeafPaths = projectedPaths;
             LeafProjectionInfos = projectedInfos;
         }
         else
         {
             Columns = [];
+            LeafColumns = [];
             LeafPaths = [];
             LeafProjectionInfos = [];
         }
     }
 
-    public ImmutableArray<Column> Columns { get; }
-
     public ImmutableArray<ColumnDefinition> Definitions { get; }
 
-    public ImmutableDictionary<string, IPageStrategy> PageStrategiesByColumnName { get; init; } = EmptyPageStrategies;
+    public ImmutableArray<LeafColumn> LeafColumns { get; }
 
     public ParquetReader CreateReader(Stream stream, ParquetReaderOptions? options = null)
     {
@@ -65,53 +53,18 @@ public sealed record ParquetSchema
 
     internal ImmutableArray<LeafProjectionInfo> LeafProjectionInfos { get; }
 
-    static ImmutableArray<ColumnDefinition> NormalizeDefinitions(ImmutableArray<Column> columns)
+    static ImmutableArray<LeafColumn> BuildLeafColumns(ImmutableArray<Column> columns)
     {
         if (columns.IsDefaultOrEmpty)
             return [];
 
-        var builder = ImmutableArray.CreateBuilder<ColumnDefinition>(columns.Length);
-        foreach (var column in columns)
-        {
-            ArgumentNullException.ThrowIfNull(column);
-            builder.Add(new ColumnDefinition
-            {
-                Name = column.Name,
-                Kind = NodeKind.Leaf,
-                Repetition = column.Options.Repetition == ParquetRepetition.Unspecified
-                    ? ParquetRepetition.Required
-                    : column.Options.Repetition,
-                PhysicalType = column.PhysicalType,
-                LogicalType = column.LogicalType,
-                Options = column.Options
-            });
-        }
-
-        return builder.MoveToImmutable();
-    }
-
-    static ImmutableArray<ImmutableArray<string>> BuildFlatLeafPaths(ImmutableArray<Column> columns)
-    {
-        if (columns.IsDefaultOrEmpty)
-            return [];
-
-        var builder = ImmutableArray.CreateBuilder<ImmutableArray<string>>(columns.Length);
+        var builder = ImmutableArray.CreateBuilder<LeafColumn>(columns.Length);
         for (var i = 0; i < columns.Length; i++)
-            builder.Add([columns[i].Name]);
+            builder.Add(new LeafColumn(columns[i], i));
         return builder.MoveToImmutable();
     }
 
-    static ImmutableArray<LeafProjectionInfo> BuildFlatLeafProjectionInfos(ImmutableArray<Column> columns)
-    {
-        if (columns.IsDefaultOrEmpty)
-            return [];
-
-        var builder = ImmutableArray.CreateBuilder<LeafProjectionInfo>(columns.Length);
-        for (var i = 0; i < columns.Length; i++)
-            builder.Add(new LeafProjectionInfo(IsList: false, ListOptional: false, ElementOptional: false,
-                MaxRepetitionLevel: 0, MaxDefinitionLevel: columns[i].Options.Repetition == ParquetRepetition.Optional ? 1 : 0));
-        return builder.MoveToImmutable();
-    }
+    internal ImmutableArray<Column> Columns { get; }
 
     static bool TryProjectLeafColumns(ImmutableArray<ColumnDefinition> definitions, out ImmutableArray<Column> columns,
         out ImmutableArray<ImmutableArray<string>> leafPaths, out ImmutableArray<LeafProjectionInfo> leafInfos)
@@ -170,7 +123,8 @@ public sealed record ParquetSchema
                         options = new ColumnOptions(repetition, options.Encodings, options.TypeLength);
                     var path = pathBuffer.ToArray().ToImmutableArray();
                     var columnName = string.Join(".", path);
-                    columnsBuilder.Add(new Column(columnName, node.PhysicalType.Value, options, node.LogicalType));
+                    columnsBuilder.Add(new Column(columnName, node.PhysicalType.Value, options, node.LogicalType,
+                        node.PageStrategy));
                     pathsBuilder.Add(path);
                     infosBuilder.Add(new LeafProjectionInfo(isListLeaf, listOptional, elementOptional,
                         MaxRepetitionLevel: nextRepeatedLevel, MaxDefinitionLevel: nextDefinitionLevel));

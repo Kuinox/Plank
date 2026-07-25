@@ -3,7 +3,6 @@ using Parquet.Schema;
 using ParquetSharp;
 using Plank.Schema;
 using Plank.Writing;
-using PlankColumn = Plank.Schema.Column;
 using PlankLogicalType = Plank.Schema.LogicalType;
 using PlankParquetSchema = Plank.Schema.ParquetSchema;
 
@@ -34,15 +33,15 @@ internal sealed class OptionalFlatInteropE2ETests
     static void WriteOptionalFlatFile(string path, int?[] ids, string[] names)
     {
         var schema = new PlankParquetSchema([
-            new PlankColumn("id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional)),
-            new PlankColumn("name", ParquetPhysicalType.ByteArray, new ColumnOptions(ParquetRepetition.Optional),
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional)),
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray, new ColumnOptions(ParquetRepetition.Optional),
                 new PlankLogicalType.String())
         ]);
 
         using var stream = File.Create(path);
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
-        var idColumn = writer.CreateSerializedColumn<int?>(schema.Columns[0]);
-        var nameColumn = writer.CreateSerializedColumn<string>(schema.Columns[1]);
+        var idColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
+        var nameColumn = writer.CreateSerializedColumn<string>(schema.LeafColumns[1]);
         var rowGroup = writer.StartRowGroup();
         idColumn.Serialize(ids);
         nameColumn.Serialize(names);

@@ -45,6 +45,43 @@ internal sealed class GeneratedRowReaderE2ETests
     }
 
     [Test]
+    public async Task GeneratedColumnReaderExposesTypedColumnsOnRowGroups()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-generated-column-reader-{Guid.NewGuid():N}.parquet");
+
+        try
+        {
+            WriteEncodedRows(path);
+
+            using var stream = File.OpenRead(path);
+            using var reader = EncodedRowSchema.CreateReader(stream);
+            var ids = new List<ulong>();
+            var tags = new List<string?>();
+
+            foreach (var rowGroup in reader.RowGroups)
+            {
+                foreach (var buffer in rowGroup.IdColumn)
+                    foreach (var id in buffer.Values)
+                        ids.Add(id);
+
+                foreach (var buffer in rowGroup.TagColumn)
+                    foreach (var tag in buffer.Values)
+                        tags.Add(tag);
+            }
+
+            await Assert.That(reader.RowGroups.Count).IsEqualTo(2);
+            await Assert.That(reader.RowGroups[0].RowCount).IsEqualTo(2UL);
+            await Assert.That(ids).IsEquivalentTo([10UL, 20UL, 30UL, 40UL]);
+            await Assert.That(tags).IsEquivalentTo(["a", null, "c", "d"]);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
     public async Task GeneratedRowReaderMaterializesAddedLaterColumn()
     {
         using var stream = CreateEvolvingFile(includeAdded: false, addedOptional: false, idPhysicalType: Plank.Schema.ParquetPhysicalType.Int32,
@@ -200,25 +237,25 @@ internal sealed class GeneratedRowReaderE2ETests
         try
         {
             var schema = new ParquetSchema([
-                new Column("id", ParquetPhysicalType.Int32),
-                EncodedRowSchema.Schema.Columns[1],
-                EncodedRowSchema.Schema.Columns[2],
-                EncodedRowSchema.Schema.Columns[3]
+                ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32),
+                EncodedRowSchema.Schema.Definitions[1],
+                EncodedRowSchema.Schema.Definitions[2],
+                EncodedRowSchema.Schema.Definitions[3]
             ]);
             using (var stream = File.Create(path))
             {
                 var writer = schema.CreateWriter(stream);
                 var rowGroup = writer.StartRowGroup();
-                var id = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
+                var id = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[0]);
                 id.Serialize([42]);
                 rowGroup.Write(id);
-                var tag = rowGroup.CreateSerializedColumn<string>(schema.Columns[1]);
+                var tag = rowGroup.CreateSerializedColumn<string>(schema.LeafColumns[1]);
                 tag.Serialize(["tag"]);
                 rowGroup.Write(tag);
-                var payload = rowGroup.CreateSerializedColumn<byte[]>(schema.Columns[2]);
+                var payload = rowGroup.CreateSerializedColumn<byte[]>(schema.LeafColumns[2]);
                 payload.Serialize([new byte[] { 8, 7 }]);
                 rowGroup.Write(payload);
-                var defaultValue = rowGroup.CreateSerializedColumn<uint>(schema.Columns[3]);
+                var defaultValue = rowGroup.CreateSerializedColumn<uint>(schema.LeafColumns[3]);
                 defaultValue.Serialize([9U]);
                 rowGroup.Write(defaultValue);
                 writer.CloseFile();
@@ -251,18 +288,18 @@ internal sealed class GeneratedRowReaderE2ETests
     static MemoryStream CreateEvolvingFile(bool includeAdded, bool addedOptional, Plank.Schema.ParquetPhysicalType idPhysicalType,
         bool maybeOptional)
     {
-        var columns = new List<Plank.Schema.Column>
+        var columns = new List<Plank.Schema.ColumnDefinition>
         {
-            new("id", idPhysicalType)
+            Plank.Schema.ColumnDefinition.Leaf("id", idPhysicalType)
         };
         if (includeAdded)
         {
             var repetition = addedOptional ? Plank.Schema.ParquetRepetition.Optional : Plank.Schema.ParquetRepetition.Required;
-            columns.Add(new Plank.Schema.Column("added", Plank.Schema.ParquetPhysicalType.Int32,
+            columns.Add(Plank.Schema.ColumnDefinition.Leaf("added", Plank.Schema.ParquetPhysicalType.Int32,
                 new Plank.Schema.ColumnOptions(repetition)));
         }
 
-        columns.Add(new Plank.Schema.Column("maybe", Plank.Schema.ParquetPhysicalType.Int32,
+        columns.Add(Plank.Schema.ColumnDefinition.Leaf("maybe", Plank.Schema.ParquetPhysicalType.Int32,
             new Plank.Schema.ColumnOptions(maybeOptional ? Plank.Schema.ParquetRepetition.Optional : Plank.Schema.ParquetRepetition.Required)));
 
         var schema = new Plank.Schema.ParquetSchema([.. columns]);
@@ -272,13 +309,13 @@ internal sealed class GeneratedRowReaderE2ETests
 
         if (idPhysicalType == Plank.Schema.ParquetPhysicalType.Int64)
         {
-            var id = rowGroup.CreateSerializedColumn<long>(schema.Columns[0]);
+            var id = rowGroup.CreateSerializedColumn<long>(schema.LeafColumns[0]);
             id.Serialize([1L, 2L, 3L]);
             rowGroup.Write(id);
         }
         else
         {
-            var id = rowGroup.CreateSerializedColumn<int>(schema.Columns[0]);
+            var id = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[0]);
             id.Serialize([1, 2, 3]);
             rowGroup.Write(id);
         }
@@ -288,13 +325,13 @@ internal sealed class GeneratedRowReaderE2ETests
         {
             if (addedOptional)
             {
-                var added = rowGroup.CreateSerializedColumn<int?>(schema.Columns[1]);
+                var added = rowGroup.CreateSerializedColumn<int?>(schema.LeafColumns[1]);
                 added.Serialize([100, null, 300]);
                 rowGroup.Write(added);
             }
             else
             {
-                var added = rowGroup.CreateSerializedColumn<int>(schema.Columns[1]);
+                var added = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[1]);
                 added.Serialize([100, 200, 300]);
                 rowGroup.Write(added);
             }
@@ -304,13 +341,13 @@ internal sealed class GeneratedRowReaderE2ETests
 
         if (maybeOptional)
         {
-            var maybe = rowGroup.CreateSerializedColumn<int?>(schema.Columns[maybeOrdinal]);
+            var maybe = rowGroup.CreateSerializedColumn<int?>(schema.LeafColumns[maybeOrdinal]);
             maybe.Serialize([10, null, 30]);
             rowGroup.Write(maybe);
         }
         else
         {
-            var maybe = rowGroup.CreateSerializedColumn<int>(schema.Columns[maybeOrdinal]);
+            var maybe = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[maybeOrdinal]);
             maybe.Serialize([10, 20, 30]);
             rowGroup.Write(maybe);
         }
@@ -350,29 +387,29 @@ internal sealed class GeneratedRowReaderE2ETests
     static void WriteReorderedRows(string path)
     {
         var schema = new ParquetSchema([
-            EncodedRowSchema.Schema.Columns[2],
-            EncodedRowSchema.Schema.Columns[0],
-            EncodedRowSchema.Schema.Columns[3],
-            EncodedRowSchema.Schema.Columns[1]
+            EncodedRowSchema.Schema.Definitions[2],
+            EncodedRowSchema.Schema.Definitions[0],
+            EncodedRowSchema.Schema.Definitions[3],
+            EncodedRowSchema.Schema.Definitions[1]
         ]);
 
         using var stream = File.Create(path);
         var writer = schema.CreateWriter(stream);
         var rowGroup = writer.StartRowGroup();
 
-        var payload = rowGroup.CreateSerializedColumn<byte[]>(schema.Columns[0]);
+        var payload = rowGroup.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
         payload.Serialize([new byte[] { 8, 7 }]);
         rowGroup.Write(payload);
 
-        var id = rowGroup.CreateSerializedColumn<ulong>(schema.Columns[1]);
+        var id = rowGroup.CreateSerializedColumn<ulong>(schema.LeafColumns[1]);
         id.Serialize([42UL]);
         rowGroup.Write(id);
 
-        var defaultValue = rowGroup.CreateSerializedColumn<uint>(schema.Columns[2]);
+        var defaultValue = rowGroup.CreateSerializedColumn<uint>(schema.LeafColumns[2]);
         defaultValue.Serialize([9U]);
         rowGroup.Write(defaultValue);
 
-        var tag = rowGroup.CreateSerializedColumn<string>(schema.Columns[3]);
+        var tag = rowGroup.CreateSerializedColumn<string>(schema.LeafColumns[3]);
         tag.Serialize(["tag"]);
         rowGroup.Write(tag);
 

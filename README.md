@@ -22,6 +22,10 @@ Minimal Parquet writer under construction.
 
 ## TODO:
 
+Make read schemas not require an encoding to be specified, while write schemas must specify one.
+
+logical type widening.
+
 we have a leak currently in the dict since we dont completly reset the dicts.
 
   ---                                                                                                                              

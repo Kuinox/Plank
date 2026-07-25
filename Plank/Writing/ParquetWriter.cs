@@ -13,7 +13,7 @@ public sealed class ParquetWriter
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
     internal readonly Column[] ColumnsByOrdinal;
-    readonly IPageStrategy[] _pageStrategiesByOrdinal;
+    readonly PageStrategyContext[] _pageStrategyContextsByOrdinal;
     internal readonly string[][] ColumnPathsByOrdinal;
     internal readonly LeafProjectionInfo[] ColumnProjectionInfosByOrdinal;
     internal readonly int ColumnCount;
@@ -54,7 +54,7 @@ public sealed class ParquetWriter
         if (ColumnProjectionInfosByOrdinal.Length != ColumnsByOrdinal.Length)
             throw new InvalidOperationException("Leaf projection metadata did not match projected column count.");
         ColumnCount = ColumnsByOrdinal.Length;
-        _pageStrategiesByOrdinal = CreateColumnPageStrategies(ColumnsByOrdinal, _schema.PageStrategiesByColumnName,
+        _pageStrategyContextsByOrdinal = CreateColumnPageStrategyContexts(ColumnsByOrdinal,
             _options.TargetDataPageSizeBytes);
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
             _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
@@ -72,7 +72,7 @@ public sealed class ParquetWriter
     public uint RowApiMaxParallelism
         => _options.RowApiMaxParallelism;
 
-    public SerializedColumn<T> CreateSerializedColumn<T>(Column column)
+    public SerializedColumn<T> CreateSerializedColumn<T>(LeafColumn column)
         => new(this, column, _options.InitialPageCapacity);
 
     public void Reset(Stream stream)
@@ -142,32 +142,28 @@ public sealed class ParquetWriter
         _stream.SetLength(0);
     }
 
-    internal uint GetColumnOrdinal(Column column)
+    internal uint GetColumnOrdinal(LeafColumn column)
     {
-        var ordinal = Array.IndexOf(ColumnsByOrdinal, column);
-        if (ordinal >= 0)
+        var ordinal = column.Ordinal;
+        if ((uint)ordinal < (uint)ColumnsByOrdinal.Length &&
+            ReferenceEquals(ColumnsByOrdinal[ordinal], column.Column))
             return (uint)ordinal;
 
-        throw new ArgumentException("SerializedColumn column does not belong to this schema.", nameof(column));
+        throw new ArgumentException("Leaf column does not belong to this writer's schema.", nameof(column));
     }
 
-    internal IPageStrategy GetPageStrategy(uint columnOrdinal)
-        => _pageStrategiesByOrdinal[columnOrdinal];
+    internal PageStrategyContext GetPageStrategyContext(uint columnOrdinal)
+        => _pageStrategyContextsByOrdinal[columnOrdinal];
 
-    static IPageStrategy[] CreateColumnPageStrategies(Column[] columns,
-        IReadOnlyDictionary<string, IPageStrategy> pageStrategiesByColumnName, uint targetDataPageSizeBytes)
+    static PageStrategyContext[] CreateColumnPageStrategyContexts(Column[] columns, uint targetDataPageSizeBytes)
     {
         if (columns.Length == 0)
             return [];
 
-        var result = new IPageStrategy[columns.Length];
+        var result = new PageStrategyContext[columns.Length];
         for (var i = 0; i < result.Length; i++)
-        {
-            if (pageStrategiesByColumnName.TryGetValue(columns[i].Name, out var overrideStrategy))
-                result[i] = overrideStrategy;
-            else
-                result[i] = new DefaultStrategy(columns[i], targetDataPageSizeBytes);
-        }
+            result[i] = new PageStrategyContext(columns[i].PageStrategy
+                ?? new DefaultStrategy(columns[i], targetDataPageSizeBytes));
         return result;
     }
 

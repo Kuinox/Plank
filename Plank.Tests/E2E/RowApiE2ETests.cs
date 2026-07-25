@@ -3,7 +3,6 @@ using Parquet.Schema;
 using ParquetSharp;
 using Plank.Schema;
 using Plank.Writing;
-using PlankColumn = Plank.Schema.Column;
 using PlankParquetSchema = Plank.Schema.ParquetSchema;
 using PlankParquetWriter = Plank.Writing.ParquetWriter;
 using PlankRowGroupWriter = Plank.Writing.RowGroupWriter;
@@ -252,7 +251,7 @@ internal sealed class RowApiE2ETests
     sealed class TestIntPipelineWriter : RowWriterBase<TestIntSlot>
     {
         internal static readonly PlankParquetSchema Schema =
-            new([new PlankColumn("value", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Required))]);
+            new([Plank.Schema.ColumnDefinition.Leaf("value", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Required))]);
 
         readonly int _rowBatchSize;
         TestIntSlot _active;
@@ -327,7 +326,7 @@ internal sealed class RowApiE2ETests
             _rowCount = rowCount;
             _index = 0;
             _values = rowCount == 0 ? [] : new int[rowCount];
-            _serialized = writer.CreateSerializedColumn<int>(TestIntPipelineWriter.Schema.Columns[0]);
+            _serialized = writer.CreateSerializedColumn<int>(TestIntPipelineWriter.Schema.LeafColumns[0]);
         }
 
         internal bool IsFull => _index == _rowCount;
@@ -428,7 +427,7 @@ internal sealed class RowApiE2ETests
         {
             _rowCount = rowCount;
             _values = rowCount == 0 ? [] : new int[rowCount];
-            _serialized = writer.CreateSerializedColumn<int>(TestIntPipelineWriter.Schema.Columns[0]);
+            _serialized = writer.CreateSerializedColumn<int>(TestIntPipelineWriter.Schema.LeafColumns[0]);
             _serializeStarted = serializeStarted;
             _releaseSerialize = releaseSerialize;
         }
@@ -460,11 +459,11 @@ internal sealed class RowApiE2ETests
     sealed class BlockingFiveColumnPipelineWriter : RowWriterBase<BlockingFiveColumnSlot>
     {
         internal static readonly PlankParquetSchema Schema = new([
-            new PlankColumn("c0", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Required)),
-            new PlankColumn("c1", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Required)),
-            new PlankColumn("c2", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Required)),
-            new PlankColumn("c3", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Required)),
-            new PlankColumn("c4", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Required))
+            Plank.Schema.ColumnDefinition.Leaf("c0", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Required)),
+            Plank.Schema.ColumnDefinition.Leaf("c1", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Required)),
+            Plank.Schema.ColumnDefinition.Leaf("c2", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Required)),
+            Plank.Schema.ColumnDefinition.Leaf("c3", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Required)),
+            Plank.Schema.ColumnDefinition.Leaf("c4", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Required))
         ]);
 
         readonly int _rowBatchSize;
@@ -544,11 +543,11 @@ internal sealed class RowApiE2ETests
             _c2 = rowCount == 0 ? [] : new int[rowCount];
             _c3 = rowCount == 0 ? [] : new int[rowCount];
             _c4 = rowCount == 0 ? [] : new int[rowCount];
-            _s0 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.Columns[0]);
-            _s1 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.Columns[1]);
-            _s2 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.Columns[2]);
-            _s3 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.Columns[3]);
-            _s4 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.Columns[4]);
+            _s0 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.LeafColumns[0]);
+            _s1 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.LeafColumns[1]);
+            _s2 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.LeafColumns[2]);
+            _s3 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.LeafColumns[3]);
+            _s4 = writer.CreateSerializedColumn<int>(BlockingFiveColumnPipelineWriter.Schema.LeafColumns[4]);
             _serializeStarted = serializeStarted;
             _releaseSerialize = releaseSerialize;
         }

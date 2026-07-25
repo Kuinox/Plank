@@ -24,7 +24,7 @@ internal sealed class GeneratedRowSchemaEncodingTests
     [Test]
     public void GeneratedSchemaCarriesRequestedEncodings()
     {
-        var columns = EncodedRowSchema.Schema.Columns;
+        var columns = EncodedRowSchema.Schema.LeafColumns;
 
         AssertEncodingOptions(columns[0].Options.Encodings, [EncodingKind.DeltaBinaryPacked]);
         AssertEncodingOptions(columns[1].Options.Encodings, [EncodingKind.RleDictionary]);
