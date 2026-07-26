@@ -1,3 +1,5 @@
+using Plank.Schema;
+
 namespace Plank.Writing.Compression;
 
 static class Compression

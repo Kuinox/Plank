@@ -14,7 +14,7 @@ public sealed partial class EventSchema
 {
     public int Id { get; init; }
 
-    public string? Name { get; init; }
+    public byte[]? Name { get; init; }
 
     public DateTimeOffset OccurredAt { get; init; }
 }
@@ -33,7 +33,7 @@ Use [`[ParquetColumn]`](xref:Plank.Schema.ParquetColumnAttribute) to change a co
     "event_name",
     LogicalType = LogicalTypeKind.String,
     Encodings = [EncodingKind.RleDictionary])]
-public string? Name { get; init; }
+public byte[]? Name { get; init; }
 ```
 
 Plank validates that the selected options are compatible with the property type.
@@ -47,12 +47,15 @@ Plank validates that the selected options are compatible with the property type.
 | `long`, `ulong` | `Int64` |
 | `float` | `Float` |
 | `double` | `Double` |
-| `string`, `byte[]`, `ReadOnlyMemory<byte>` | `ByteArray` |
+| `byte[]`, `ReadOnlyMemory<byte>` | `ByteArray` |
 | `DateOnly` | `Int32` with `Date` |
 | `TimeOnly` | `Int64` with `Time` |
 | `DateTime`, `DateTimeOffset` | `Int64` with `Timestamp` |
 
 Nullable forms use the same type and create an optional column.
+
+String logical annotations use UTF-8 bytes supplied as `byte[]` or `ReadOnlyMemory<byte>`; Plank does not
+encode or decode CLR `string` values.
 
 ## Runtime schemas
 

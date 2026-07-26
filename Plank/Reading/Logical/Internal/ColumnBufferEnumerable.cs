@@ -1,6 +1,5 @@
 using Plank.Reading.Physical;
 using Plank.Schema;
-using Plank.Writing;
 
 namespace Plank.Reading.Logical.Internal;
 
@@ -10,12 +9,11 @@ readonly struct ColumnBufferEnumerable<T>
     readonly int _rowGroupOrdinal;
     readonly int _columnOrdinal;
     readonly Column _column;
-    readonly InternalColumnChunkMetadata _columnChunk;
     readonly IParquetBufferPool _bufferPool;
     readonly ulong _rowCount;
 
     internal ColumnBufferEnumerable(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
-        Column column, InternalColumnChunkMetadata columnChunk, IParquetBufferPool bufferPool, ulong rowCount)
+        Column column, IParquetBufferPool bufferPool, ulong rowCount)
     {
         ArgumentNullException.ThrowIfNull(physicalReader);
         ArgumentNullException.ThrowIfNull(column);
@@ -25,13 +23,12 @@ readonly struct ColumnBufferEnumerable<T>
         _rowGroupOrdinal = rowGroupOrdinal;
         _columnOrdinal = columnOrdinal;
         _column = column;
-        _columnChunk = columnChunk;
         _bufferPool = bufferPool;
         _rowCount = rowCount;
     }
 
     internal Enumerator GetEnumerator()
-        => new(_physicalReader, _rowGroupOrdinal, _columnOrdinal, _column, _columnChunk, _bufferPool, _rowCount);
+        => new(_physicalReader, _rowGroupOrdinal, _columnOrdinal, _column, _bufferPool, _rowCount);
 
     internal struct Enumerator : IDisposable
     {
@@ -39,7 +36,6 @@ readonly struct ColumnBufferEnumerable<T>
         readonly int _rowGroupOrdinal;
         readonly int _columnOrdinal;
         readonly Column _column;
-        readonly InternalColumnChunkMetadata _columnChunk;
         readonly IParquetBufferPool _bufferPool;
         readonly ulong _rowCount;
         ParquetPageCursor _cursor;
@@ -47,7 +43,7 @@ readonly struct ColumnBufferEnumerable<T>
         bool _openedCursor;
 
         internal Enumerator(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal, Column column,
-            InternalColumnChunkMetadata columnChunk, IParquetBufferPool bufferPool, ulong rowCount)
+            IParquetBufferPool bufferPool, ulong rowCount)
         {
             ArgumentNullException.ThrowIfNull(physicalReader);
             ArgumentNullException.ThrowIfNull(column);
@@ -57,7 +53,6 @@ readonly struct ColumnBufferEnumerable<T>
             _rowGroupOrdinal = rowGroupOrdinal;
             _columnOrdinal = columnOrdinal;
             _column = column;
-            _columnChunk = columnChunk;
             _bufferPool = bufferPool;
             _rowCount = rowCount;
             _cursor = default;
@@ -98,14 +93,9 @@ readonly struct ColumnBufferEnumerable<T>
                     return true;
                 }
 
-                if (!ColumnChunkReader.TryDecodePage(_cursor.CurrentHeader, _cursor.CurrentPayload, _column,
-                        _columnChunk, _rowCount, ref _buffers.ManagedDictionary,
-                        ref _buffers.ManagedDictionaryBuffer, ref _buffers.ManagedValuesBuffer,
-                        _bufferPool, ref _buffers.Scratch, out var values, out _))
-                    continue;
-
-                Current = _buffers.CreateBuffer(values, _bufferPool);
-                return true;
+                throw new NotSupportedException(
+                    $"Page type '{_cursor.CurrentHeader.Type}' with encoding '{_cursor.CurrentHeader.Encoding}' " +
+                    $"for column '{_column.Name}' cannot be decoded into pooled values of type '{typeof(T)}'.");
             }
 
             return false;
@@ -115,7 +105,7 @@ readonly struct ColumnBufferEnumerable<T>
         {
             if (_openedCursor)
                 _cursor.Dispose();
-            _buffers.Dispose(_bufferPool);
+            _buffers.Dispose();
             _openedCursor = false;
             Current = default;
         }

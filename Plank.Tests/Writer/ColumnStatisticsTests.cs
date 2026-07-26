@@ -83,12 +83,12 @@ internal sealed class ColumnStatisticsTests
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
                 var idColumn = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
                 var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[1]);
-                var nameColumn = writer.CreateSerializedColumn<string>(schema.LeafColumns[2]);
+                var nameColumn = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[2]);
                 var activeColumn = writer.CreateSerializedColumn<bool>(schema.LeafColumns[3]);
                 var rowGroup = writer.StartRowGroup();
                 idColumn.Serialize([30, 10, 20]);
                 optionalIdColumn.Serialize([3, null, 1]);
-                nameColumn.Serialize(["beta", "alpha", "gamma"]);
+                nameColumn.Serialize(["beta"u8.ToArray(), "alpha"u8.ToArray(), "gamma"u8.ToArray()]);
                 activeColumn.Serialize([true, false, true]);
                 rowGroup.Write(idColumn);
                 rowGroup.Write(optionalIdColumn);

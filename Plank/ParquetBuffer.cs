@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 
-namespace Plank.Writing;
+namespace Plank;
 
 /// <summary>Owns a slice of reference-counted unmanaged storage.</summary>
 /// <remarks>Copying this struct creates an alias. Call <see cref="Retain"/> for independent ownership.</remarks>

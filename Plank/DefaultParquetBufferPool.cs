@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace Plank.Writing;
+namespace Plank;
 
 public sealed unsafe class DefaultParquetBufferPool : IParquetBufferPool
 {

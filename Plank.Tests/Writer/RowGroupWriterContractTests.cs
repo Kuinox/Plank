@@ -99,7 +99,7 @@ internal sealed class RowGroupWriterContractTests
     }
 
     [Test]
-    public async Task WritesOptionalFlatStringColumnWithNulls()
+    public async Task WritesOptionalFlatBinaryColumnWithNulls()
     {
         using var stream = new NonClosingMemoryStream();
         var schema = new ParquetSchema([
@@ -108,9 +108,9 @@ internal sealed class RowGroupWriterContractTests
         ]);
         var writer = schema.CreateWriter(stream);
         var rowGroup = writer.StartRowGroup();
-        var serialized = writer.CreateSerializedColumn<string>(schema.LeafColumns[0]);
+        var serialized = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
 
-        serialized.Serialize(["a", null!, "bbb"]);
+        serialized.Serialize(["a"u8.ToArray(), null!, "bbb"u8.ToArray()]);
         rowGroup.Write(serialized);
         writer.CloseFile();
 

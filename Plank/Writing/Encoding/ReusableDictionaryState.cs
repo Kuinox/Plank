@@ -10,7 +10,7 @@ namespace Plank.Writing.Encoding;
 ///   - Each slot is a single uint: top 8 bits = fingerprint tag, low 24 bits = (index+1). Zero = empty.
 ///   - 25% load factor keeps average probe distance ~1.17 → almost always 1–2 reads per lookup.
 ///   - Touched-slot list: Reset only zeroes occupied slots instead of clearing the full table.
-/// Hash function: wyhash (MemoryMarshal raw bytes for string/ROM&lt;byte&gt;/byte[],
+/// Hash function: wyhash (raw bytes for ROM&lt;byte&gt;/byte[],
 ///                         GetHashCode() for value types).
 /// </summary>
 sealed class ReusableDictionaryState<T>
@@ -206,8 +206,6 @@ sealed class ReusableDictionaryState<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static int HashKey(T key)
     {
-        if (typeof(T) == typeof(string))
-            return WyHashing.Hash(MemoryMarshal.AsBytes(Unsafe.As<T, string>(ref key).AsSpan())) & int.MaxValue;
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
             return WyHashing.Hash(Unsafe.As<T, ReadOnlyMemory<byte>>(ref key).Span) & int.MaxValue;
         if (typeof(T) == typeof(byte[]))
@@ -241,8 +239,6 @@ sealed class ReusableDictionaryState<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static bool KeysEqual(T a, T b)
     {
-        if (typeof(T) == typeof(string))
-            return string.Equals(Unsafe.As<T, string>(ref a), Unsafe.As<T, string>(ref b), StringComparison.Ordinal);
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
             return Unsafe.As<T, ReadOnlyMemory<byte>>(ref a).Span.SequenceEqual(
                 Unsafe.As<T, ReadOnlyMemory<byte>>(ref b).Span);

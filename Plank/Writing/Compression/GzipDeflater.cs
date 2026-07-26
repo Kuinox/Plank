@@ -20,7 +20,7 @@ unsafe sealed class GzipDeflater
         System.Runtime.InteropServices.NativeMemory.Free(_stream);
     }
 
-    internal void Compress(ReadOnlySpan<byte> input, byte[] outputBuffer, ref BufferWriter destination)
+    internal void Compress(ReadOnlySpan<byte> input, Span<byte> outputBuffer, ref BufferWriter destination)
     {
         EnsureInitialized();
 
@@ -30,14 +30,14 @@ unsafe sealed class GzipDeflater
 
         fixed (byte* output = outputBuffer)
         {
-            if (input.Length == 0)
+            if (input.IsEmpty)
             {
-                DeflateInput(_stream, null, 0, output, outputBuffer, ref destination);
+                DeflateInput(_stream, null, 0, output, outputBuffer.Length, ref destination);
                 return;
             }
 
             fixed (byte* inputStart = input)
-                DeflateInput(_stream, inputStart, input.Length, output, outputBuffer, ref destination);
+                DeflateInput(_stream, inputStart, input.Length, output, outputBuffer.Length, ref destination);
         }
     }
 
@@ -56,19 +56,19 @@ unsafe sealed class GzipDeflater
         _initialized = true;
     }
 
-    static void DeflateInput(void* stream, byte* input, int inputLength, byte* output, byte[] outputBuffer,
+    static void DeflateInput(void* stream, byte* input, int inputLength, byte* output, int outputLength,
         ref BufferWriter destination)
     {
         ZlibNative.SetInput(stream, input, inputLength);
 
         while (true)
         {
-            ZlibNative.SetOutput(stream, output, outputBuffer.Length);
+            ZlibNative.SetOutput(stream, output, outputLength);
 
             var resultCode = ZlibNative.Deflate(stream, ZlibNative.FlushFinish);
-            var written = outputBuffer.Length - checked((int)ZlibNative.GetAvailableOutput(stream));
+            var written = outputLength - checked((int)ZlibNative.GetAvailableOutput(stream));
             if (written > 0)
-                destination.Write(outputBuffer.AsSpan(0, written));
+                destination.Write(new ReadOnlySpan<byte>(output, written));
 
             if (resultCode == ZlibNative.ResultStreamEnd)
                 return;

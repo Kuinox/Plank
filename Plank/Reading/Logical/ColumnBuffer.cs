@@ -1,58 +1,110 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using Plank.Writing;
+using Plank.Reading.Logical.Internal;
 
 namespace Plank.Reading.Logical;
 
 public readonly struct ColumnBuffer<T>
 {
     readonly ParquetBuffer _nativeValues;
-    readonly ReadOnlyMemory<T> _managedValues;
     readonly int _valueCount;
-
-    internal ColumnBuffer(ReadOnlyMemory<T> values)
-    {
-        _nativeValues = default;
-        _managedValues = values;
-        _valueCount = values.Length;
-        CanRetain = false;
-    }
+    readonly bool _isVariableLength;
 
     internal ColumnBuffer(ParquetBuffer values, int valueCount)
     {
         _nativeValues = values;
-        _managedValues = default;
         _valueCount = valueCount;
-        CanRetain = true;
+        _isVariableLength = false;
+    }
+
+    internal ColumnBuffer(ParquetBuffer values, int valueCount, bool isVariableLength)
+    {
+        if (!isVariableLength || typeof(T) != typeof(byte))
+            throw new ArgumentException("Variable-length buffers must contain bytes.",
+                nameof(isVariableLength));
+
+        _nativeValues = values;
+        _valueCount = valueCount;
+        _isVariableLength = true;
     }
 
     public ReadOnlySpan<T> Values
-        => CanRetain ? ParquetBuffer.AsReadOnlySpan<T>(_nativeValues, _valueCount) : _managedValues.Span;
+        => _isVariableLength
+            ? ProjectBytes(GetVariableLengthPayload())
+            : ParquetBuffer.AsReadOnlySpan<T>(_nativeValues, _valueCount);
 
-    public bool CanRetain { get; }
+    public int Count
+        => _valueCount;
+
+    public bool IsNull(int index)
+    {
+        ValidateIndex(index);
+        return _isVariableLength
+            ? GetVariableLengthDescriptor(index).IsNull
+            : Values[index] is null;
+    }
+
+    public ReadOnlySpan<T> GetValue(int index)
+    {
+        ValidateIndex(index);
+        return _isVariableLength
+            ? ProjectBytes(GetVariableLengthDescriptor(index).Span)
+            : Values.Slice(index, 1);
+    }
 
     public ParquetBuffer Retain()
     {
-        if (!CanRetain)
-            throw new NotSupportedException(
-                $"Buffers containing {typeof(T)} values do not use retainable unmanaged storage yet.");
         if (_valueCount == 0)
             return default;
-        return _nativeValues.RetainSlice(0, checked(_valueCount * Unsafe.SizeOf<T>()));
+        var byteLength = _isVariableLength
+            ? checked(_valueCount * Unsafe.SizeOf<BinaryValueDescriptor>())
+            : checked(_valueCount * Unsafe.SizeOf<T>());
+        return _nativeValues.RetainSlice(0, byteLength);
     }
 
     internal int ValueCount
         => _valueCount;
 
+    internal ParquetBuffer NativeValues
+        => _nativeValues;
+
     internal Span<T> WritableValues
     {
         get
         {
-            if (CanRetain)
-                return ParquetBuffer.AsSpan<T>(_nativeValues, _valueCount);
-            if (MemoryMarshal.TryGetArray(_managedValues, out var segment) && segment.Array is not null)
-                return segment.Array.AsSpan(segment.Offset, segment.Count);
-            throw new InvalidOperationException("Managed buffer values are not array-backed.");
+            if (_isVariableLength)
+                throw new InvalidOperationException("Variable-length buffers are not writable.");
+            return ParquetBuffer.AsSpan<T>(_nativeValues, _valueCount);
         }
+    }
+
+    BinaryValueDescriptor GetVariableLengthDescriptor(int index)
+        => ParquetBuffer.AsReadOnlySpan<BinaryValueDescriptor>(_nativeValues, _valueCount)[index];
+
+    ReadOnlySpan<byte> GetVariableLengthPayload()
+    {
+        var descriptors = ParquetBuffer.AsReadOnlySpan<BinaryValueDescriptor>(_nativeValues, _valueCount);
+        var payloadByteLength = 0;
+        for (var i = 0; i < descriptors.Length; i++)
+            payloadByteLength = checked(payloadByteLength + descriptors[i].Length);
+
+        var descriptorByteLength = checked(_valueCount * Unsafe.SizeOf<BinaryValueDescriptor>());
+        return _nativeValues.Span.Slice(descriptorByteLength, payloadByteLength);
+    }
+
+    static ReadOnlySpan<T> ProjectBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (typeof(T) != typeof(byte))
+            throw new InvalidOperationException("Variable-length buffers must contain bytes.");
+        if (bytes.IsEmpty)
+            return [];
+        return MemoryMarshal.CreateReadOnlySpan(
+            ref Unsafe.As<byte, T>(ref MemoryMarshal.GetReference(bytes)), bytes.Length);
+    }
+
+    void ValidateIndex(int index)
+    {
+        if ((uint)index >= (uint)_valueCount)
+            throw new ArgumentOutOfRangeException(nameof(index));
     }
 }

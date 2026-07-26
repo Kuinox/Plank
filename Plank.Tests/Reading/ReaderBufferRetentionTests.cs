@@ -33,8 +33,6 @@ internal sealed class ReaderBufferRetentionTests
                         throw new InvalidOperationException("Expected a value buffer.");
 
                     var first = buffers.Current;
-                    if (!first.CanRetain)
-                        throw new InvalidOperationException("Expected an unmanaged buffer to be retainable.");
                     expected = first.Values.ToArray();
                     retained = first.Retain();
                     var firstAddress = retained.DangerousGetAddress();
@@ -62,7 +60,7 @@ internal sealed class ReaderBufferRetentionTests
     }
 
     [Test]
-    public void ReferenceBufferReportsThatRetentionIsUnavailable()
+    public void PackedBinaryBufferIsRetainable()
     {
         var schema = new ParquetSchema([
             ColumnDefinition.Leaf("Value", ParquetPhysicalType.ByteArray,
@@ -85,11 +83,10 @@ internal sealed class ReaderBufferRetentionTests
             if (reader.RowGroups.Count == 0)
                 throw new InvalidOperationException("Expected a row group.");
             var rowGroup = reader.RowGroups[0];
-            var buffers = rowGroup.Column<byte[]>(0).GetEnumerator();
+            var buffers = rowGroup.Column<byte>(0).GetEnumerator();
             if (!buffers.MoveNext())
                 throw new InvalidOperationException("Expected a value buffer.");
-            if (buffers.Current.CanRetain)
-                throw new InvalidOperationException("Reference-containing buffers must remain managed for now.");
+            using var retained = buffers.Current.Retain();
             buffers.Dispose();
         }
         finally

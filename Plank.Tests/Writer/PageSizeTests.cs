@@ -37,9 +37,15 @@ internal sealed class PageSizeTests
         {
             TargetDataPageSizeBytes = 32
         });
-        var nameColumn = writer.CreateSerializedColumn<string>(schema.LeafColumns[0]);
+        var nameColumn = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
 
-        nameColumn.Serialize(["abcdefghij", "klmnopqrst", "uvwxyzabcd", "efghijklmn", "opqrstuvwx"]);
+        nameColumn.Serialize([
+            "abcdefghij"u8.ToArray(),
+            "klmnopqrst"u8.ToArray(),
+            "uvwxyzabcd"u8.ToArray(),
+            "efghijklmn"u8.ToArray(),
+            "opqrstuvwx"u8.ToArray()
+        ]);
 
         AssertDataPageRows(nameColumn.Pages, [2, 2, 1]);
     }
@@ -74,10 +80,10 @@ internal sealed class PageSizeTests
         {
             TargetDataPageSizeBytes = 4
         });
-        var nameColumn = writer.CreateSerializedColumn<string>(schema.LeafColumns[0]);
-        var values = new string[100];
+        var nameColumn = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+        var values = new byte[100][];
         for (var i = 0; i < values.Length; i++)
-            values[i] = i % 2 == 0 ? "a" : "b";
+            values[i] = i % 2 == 0 ? "a"u8.ToArray() : "b"u8.ToArray();
 
         nameColumn.Serialize(values);
 

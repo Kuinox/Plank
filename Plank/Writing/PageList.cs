@@ -42,6 +42,13 @@ internal sealed class PageList
         Count--;
     }
 
+    internal void ReleaseBuffers()
+    {
+        for (var i = 0; i < _pages.Length; i++)
+            _pages[i].ReleaseBuffers();
+        Count = 0;
+    }
+
     void EnsureCapacity(int required)
     {
         if (required <= _pages.Length)

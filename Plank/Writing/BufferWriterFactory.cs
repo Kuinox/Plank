@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Plank.Writing;
 
 internal readonly struct BufferWriterFactory
@@ -41,12 +43,16 @@ internal readonly struct BufferWriterFactory
     internal BufferWriter CreateMetadataBufferWriter()
         => new(BufferPool, _bufferChunkSizeBytes, _initialMetadataBufferBytes);
 
-    internal T[] RentScratch<T>(uint minimumLength)
-        => ArrayRenter<T>.Shared.Rent(minimumLength);
+    internal ParquetBuffer RentScratch<T>(uint minimumLength)
+    {
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+            throw new NotSupportedException($"{typeof(T)} cannot be stored in a ParquetBuffer.");
+        return BufferPool.Rent(checked(minimumLength * (uint)Unsafe.SizeOf<T>()));
+    }
 
-    internal byte[] RentScratch(uint minimumLength)
-        => RentScratch<byte>(minimumLength);
+    internal ParquetBuffer RentScratch(uint minimumByteLength)
+        => BufferPool.Rent(minimumByteLength);
 
-    internal void ReturnScratch<T>(T[] buffer, bool clearArray = false)
-        => ArrayRenter<T>.Shared.Return(buffer, clearArray);
+    internal void ReturnScratch(ParquetBuffer buffer)
+        => buffer.Dispose();
 }

@@ -21,7 +21,14 @@ public sealed class RowApiColumnDescriptor<T> : RowApiColumnDescriptor
     }
 
     internal override RowApiColumnReadState CreateState()
-        => new RowApiColumnReadState<T>(this);
+    {
+        if (typeof(T) == typeof(byte[]) ||
+            typeof(T) == typeof(ReadOnlyMemory<byte>) ||
+            typeof(T) == typeof(ReadOnlyMemory<byte>?))
+            return new RowApiBinaryColumnReadState(this,
+                missingIsNull: typeof(T) != typeof(ReadOnlyMemory<byte>));
+        return new RowApiColumnReadState<T>(this);
+    }
 
     internal override RowApiColumnWriteState CreateWriteState(RowGroupWriter rowGroupWriter, int rowCount)
         => new RowApiColumnWriteState<T>(this, rowGroupWriter, rowCount);

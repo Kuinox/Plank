@@ -24,18 +24,19 @@ internal sealed class GeneratedRowReaderE2ETests
             using var reader = EncodedRowSchema.CreateRowReader(stream,
                 EncodedRowSchema.Projection.Id | EncodedRowSchema.Projection.Tag);
             var ids = new List<ulong>();
-            var tags = new List<string?>();
+            var tags = new List<byte[]?>();
 
             while (reader.MoveNext())
             {
                 var row = reader.Current;
                 ids.Add(row.Id);
-                tags.Add(row.Tag);
+                tags.Add(row.TagIsNull ? null : row.Tag.ToArray());
                 AssertUnprojectedDefaultValueThrows(row);
+                AssertUnprojectedPayloadThrows(row);
             }
 
             await Assert.That(ids).IsEquivalentTo([10UL, 20UL, 30UL, 40UL]);
-            await Assert.That(tags).IsEquivalentTo(["a", null, "c", "d"]);
+            AssertNullableByteArrays(tags, ["a"u8.ToArray(), null, "c"u8.ToArray(), "d"u8.ToArray()]);
         }
         finally
         {
@@ -56,7 +57,7 @@ internal sealed class GeneratedRowReaderE2ETests
             using var stream = File.OpenRead(path);
             using var reader = EncodedRowSchema.CreateReader(stream);
             var ids = new List<ulong>();
-            var tags = new List<string?>();
+            var tags = new List<byte[]?>();
 
             foreach (var rowGroup in reader.RowGroups)
             {
@@ -65,14 +66,14 @@ internal sealed class GeneratedRowReaderE2ETests
                         ids.Add(id);
 
                 foreach (var buffer in rowGroup.TagColumn)
-                    foreach (var tag in buffer.Values)
-                        tags.Add(tag);
+                    for (var i = 0; i < buffer.Count; i++)
+                        tags.Add(buffer.IsNull(i) ? null : buffer.GetValue(i).ToArray());
             }
 
             await Assert.That(reader.RowGroups.Count).IsEqualTo(2);
             await Assert.That(reader.RowGroups[0].RowCount).IsEqualTo(2UL);
             await Assert.That(ids).IsEquivalentTo([10UL, 20UL, 30UL, 40UL]);
-            await Assert.That(tags).IsEquivalentTo(["a", null, "c", "d"]);
+            AssertNullableByteArrays(tags, ["a"u8.ToArray(), null, "c"u8.ToArray(), "d"u8.ToArray()]);
         }
         finally
         {
@@ -184,7 +185,7 @@ internal sealed class GeneratedRowReaderE2ETests
             while (reader.MoveNext())
             {
                 var row = reader.Current;
-                payloads.Add(row.Payload);
+                payloads.Add(row.Payload.ToArray());
                 defaultValues.Add(row.DefaultValue);
             }
 
@@ -215,11 +216,11 @@ internal sealed class GeneratedRowReaderE2ETests
             var row = reader.Current;
             if (row.Id != 42UL)
                 throw new InvalidOperationException($"Expected id 42, got {row.Id}.");
-            if (row.Tag != "tag")
-                throw new InvalidOperationException($"Expected tag 'tag', got '{row.Tag}'.");
+            if (row.TagIsNull || !row.Tag.SequenceEqual("tag"u8))
+                throw new InvalidOperationException("Expected tag 'tag'.");
             if (row.DefaultValue != 9U)
                 throw new InvalidOperationException($"Expected default value 9, got {row.DefaultValue}.");
-            if (!row.Payload.AsSpan().SequenceEqual(new byte[] { 8, 7 }))
+            if (!row.Payload.SequenceEqual(new byte[] { 8, 7 }))
                 throw new InvalidOperationException("Payload was not read from the reordered file column.");
         }
         finally
@@ -249,8 +250,8 @@ internal sealed class GeneratedRowReaderE2ETests
                 var id = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[0]);
                 id.Serialize([42]);
                 rowGroup.Write(id);
-                var tag = rowGroup.CreateSerializedColumn<string>(schema.LeafColumns[1]);
-                tag.Serialize(["tag"]);
+                var tag = rowGroup.CreateSerializedColumn<byte[]>(schema.LeafColumns[1]);
+                tag.Serialize(["tag"u8.ToArray()]);
                 rowGroup.Write(tag);
                 var payload = rowGroup.CreateSerializedColumn<byte[]>(schema.LeafColumns[2]);
                 payload.Serialize([new byte[] { 8, 7 }]);
@@ -364,7 +365,7 @@ internal sealed class GeneratedRowReaderE2ETests
         var first = writer.StartRowGroup();
         first.Id.Serialize([10UL, 20UL]);
         first.Write(first.Id);
-        first.Tag.Serialize(["a", null]);
+        first.Tag.Serialize(["a"u8.ToArray(), null]);
         first.Write(first.Tag);
         first.Payload.Serialize([new byte[] { 1, 2 }, new byte[] { 3 }]);
         first.Write(first.Payload);
@@ -374,7 +375,7 @@ internal sealed class GeneratedRowReaderE2ETests
         var second = writer.StartRowGroup();
         second.Id.Serialize([30UL, 40UL]);
         second.Write(second.Id);
-        second.Tag.Serialize(["c", "d"]);
+        second.Tag.Serialize(["c"u8.ToArray(), "d"u8.ToArray()]);
         second.Write(second.Tag);
         second.Payload.Serialize([new byte[] { 4, 5, 6 }, new byte[] { 7 }]);
         second.Write(second.Payload);
@@ -409,19 +410,31 @@ internal sealed class GeneratedRowReaderE2ETests
         defaultValue.Serialize([9U]);
         rowGroup.Write(defaultValue);
 
-        var tag = rowGroup.CreateSerializedColumn<string>(schema.LeafColumns[3]);
-        tag.Serialize(["tag"]);
+        var tag = rowGroup.CreateSerializedColumn<byte[]>(schema.LeafColumns[3]);
+        tag.Serialize(["tag"u8.ToArray()]);
         rowGroup.Write(tag);
 
         writer.CloseFile();
     }
 
-    static void AssertUnprojectedDefaultValueThrows(EncodedRowSchema.Row row)
+    static void AssertUnprojectedDefaultValueThrows(EncodedRowSchema.ReadRow row)
     {
         try
         {
             _ = row.DefaultValue;
             throw new InvalidOperationException("Expected skipped column access to throw.");
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("was not selected", StringComparison.Ordinal))
+        {
+        }
+    }
+
+    static void AssertUnprojectedPayloadThrows(EncodedRowSchema.ReadRow row)
+    {
+        try
+        {
+            _ = row.Payload;
+            throw new InvalidOperationException("Expected skipped binary column access to throw.");
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("was not selected", StringComparison.Ordinal))
         {
@@ -436,5 +449,24 @@ internal sealed class GeneratedRowReaderE2ETests
         for (var i = 0; i < actual.Count; i++)
             if (!actual[i].AsSpan().SequenceEqual(expected[i]))
                 throw new InvalidOperationException($"Byte array at index {i} did not match.");
+    }
+
+    static void AssertNullableByteArrays(IReadOnlyList<byte[]?> actual, IReadOnlyList<byte[]?> expected)
+    {
+        if (actual.Count != expected.Count)
+            throw new InvalidOperationException($"Expected {expected.Count} byte arrays, got {actual.Count}.");
+
+        for (var i = 0; i < actual.Count; i++)
+        {
+            if (actual[i] is null || expected[i] is null)
+            {
+                if (actual[i] is not null || expected[i] is not null)
+                    throw new InvalidOperationException($"Byte array nullability at index {i} did not match.");
+                continue;
+            }
+
+            if (!actual[i]!.AsSpan().SequenceEqual(expected[i]))
+                throw new InvalidOperationException($"Byte array at index {i} did not match.");
+        }
     }
 }

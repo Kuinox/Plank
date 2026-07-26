@@ -26,9 +26,9 @@ internal struct Page
 
     internal ColumnStatistics Statistics;
 
-    internal byte[]? StatisticsMinValueBuffer;
+    internal ParquetBuffer StatisticsMinValueBuffer;
 
-    internal byte[]? StatisticsMaxValueBuffer;
+    internal ParquetBuffer StatisticsMaxValueBuffer;
 
     public void ResetMetadata()
     {
@@ -67,6 +67,15 @@ internal struct Page
         RepetitionLevelsByteLength = 0;
         DefinitionLevelsByteLength = 0;
         Encoding = EncodingKind.Plain;
+        Statistics = default;
+    }
+
+    internal void ReleaseBuffers()
+    {
+        Header.Dispose();
+        Content.Dispose();
+        StatisticsMinValueBuffer.Dispose();
+        StatisticsMaxValueBuffer.Dispose();
         Statistics = default;
     }
 }

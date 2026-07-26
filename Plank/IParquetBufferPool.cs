@@ -1,4 +1,4 @@
-namespace Plank.Writing;
+namespace Plank;
 
 public interface IParquetBufferPool
 {

@@ -1,8 +1,6 @@
-using System.Buffers;
-
 namespace Plank.Writing;
 
-public struct BufferWriter : IBufferWriter<byte>
+struct BufferWriter : IDisposable
 {
     Segment[]? _segments;
     readonly IParquetBufferPool? _pool;
@@ -36,7 +34,7 @@ public struct BufferWriter : IBufferWriter<byte>
         WrittenLength = 0;
     }
 
-    public void Advance(int count)
+    internal void Advance(int count)
     {
         if (count < 0)
             throw new ArgumentOutOfRangeException(nameof(count), count, "Advance count must be non-negative.");
@@ -52,16 +50,10 @@ public struct BufferWriter : IBufferWriter<byte>
         WrittenLength += count;
     }
 
-    public Memory<byte> GetMemory(int sizeHint = 0)
+    internal Span<byte> GetSpan(int sizeHint = 0)
     {
         EnsureWritable(sizeHint);
-        return _segments![_currentSegmentIndex].Buffer.AsMemory(_currentSegmentWritten);
-    }
-
-    public Span<byte> GetSpan(int sizeHint = 0)
-    {
-        EnsureWritable(sizeHint);
-        return _segments![_currentSegmentIndex].Buffer.AsSpan(_currentSegmentWritten);
+        return _segments![_currentSegmentIndex].Buffer.Span[_currentSegmentWritten..];
     }
 
     internal bool IsInitialized
@@ -97,7 +89,7 @@ public struct BufferWriter : IBufferWriter<byte>
             return true;
         }
 
-        span = _segments[segmentWithData].Buffer.AsSpan(0, _segments[segmentWithData].Written);
+        span = _segments[segmentWithData].Buffer.Span[.._segments[segmentWithData].Written];
         return true;
     }
 
@@ -125,7 +117,7 @@ public struct BufferWriter : IBufferWriter<byte>
             var written = _segments[i].Written;
             if (written == 0)
                 continue;
-            stream.Write(_segments[i].Buffer, 0, written);
+            stream.Write(_segments[i].Buffer.Span[..written]);
         }
     }
 
@@ -143,7 +135,7 @@ public struct BufferWriter : IBufferWriter<byte>
             if (written == 0)
                 continue;
 
-            _segments[i].Buffer.AsSpan(0, written).CopyTo(destination[offset..]);
+            _segments[i].Buffer.Span[..written].CopyTo(destination[offset..]);
             offset += written;
         }
     }
@@ -171,8 +163,26 @@ public struct BufferWriter : IBufferWriter<byte>
             var written = source._segments[i].Written;
             if (written == 0)
                 continue;
-            Write(source._segments[i].Buffer.AsSpan(0, written));
+            Write(source._segments[i].Buffer.Span[..written]);
         }
+    }
+
+    public void Dispose()
+    {
+        if (_segments is null)
+            return;
+
+        for (var i = 0; i < _segmentCount; i++)
+        {
+            _segments[i].Buffer.Dispose();
+            _segments[i] = default;
+        }
+
+        _segments = null;
+        _segmentCount = 0;
+        _currentSegmentIndex = 0;
+        _currentSegmentWritten = 0;
+        WrittenLength = 0;
     }
 
     void EnsureWritable(int sizeHint)
@@ -227,7 +237,7 @@ public struct BufferWriter : IBufferWriter<byte>
             return;
 
         var minimumSize = Math.Max(_chunkSizeBytes, sizeHint);
-        var buffer = ArrayRenter<byte>.Shared.Rent(checked((uint)minimumSize));
+        var buffer = _pool.Rent(checked((uint)minimumSize));
         _segments[_currentSegmentIndex] = new Segment(buffer);
         _segmentCount = _currentSegmentIndex + 1;
     }
@@ -258,10 +268,10 @@ public struct BufferWriter : IBufferWriter<byte>
 
     struct Segment
     {
-        internal readonly byte[] Buffer;
+        internal ParquetBuffer Buffer;
         internal int Written;
 
-        internal Segment(byte[] buffer)
+        internal Segment(ParquetBuffer buffer)
         {
             Buffer = buffer;
             Written = 0;

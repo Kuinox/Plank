@@ -1,3 +1,4 @@
+using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.Compression;
 
@@ -58,19 +59,28 @@ internal sealed class CompressionAllocationTests
         var context = new CompressionContext(factory);
         var source = factory.CreatePageBufferWriter();
         var destination = factory.CreatePageBufferWriter();
-        PopulateSource(ref source, multiSegmentInput ? 48 * 1024 : 32 * 1024);
+        try
+        {
+            PopulateSource(ref source, multiSegmentInput ? 48 * 1024 : 32 * 1024);
 
-        for (var i = 0; i < 8; i++)
+            for (var i = 0; i < 8; i++)
+                Compression.Compress(codec, context, ref source, ref destination);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
             Compression.Compress(codec, context, ref source, ref destination);
-
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        Compression.Compress(codec, context, ref source, ref destination);
-        var after = GC.GetAllocatedBytesForCurrentThread();
-        return after - before;
+            var after = GC.GetAllocatedBytesForCurrentThread();
+            return after - before;
+        }
+        finally
+        {
+            source.Dispose();
+            destination.Dispose();
+            context.Dispose();
+        }
     }
 
     static void PopulateSource(ref BufferWriter source, int size)

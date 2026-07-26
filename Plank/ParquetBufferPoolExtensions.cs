@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace Plank.Writing;
+namespace Plank;
 
 public static class ParquetBufferPoolExtensions
 {

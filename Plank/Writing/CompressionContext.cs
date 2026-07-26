@@ -3,11 +3,11 @@ using Plank.Writing.Compression;
 
 namespace Plank.Writing;
 
-internal sealed class CompressionContext
+internal sealed class CompressionContext : IDisposable
 {
     readonly BufferWriterFactory _bufferWriters;
-    byte[]? _sourceScratch;
-    byte[]? _gzipOutputBuffer;
+    ParquetBuffer _sourceScratch;
+    ParquetBuffer _gzipOutputBuffer;
     GzipDeflater? _gzipDeflater;
     Compressor? _zstdCompressor;
 
@@ -20,21 +20,20 @@ internal sealed class CompressionContext
             return span;
 
         var scratch = EnsureSourceScratch(source.WrittenLength);
-        source.CopyTo(scratch.AsSpan(0, source.WrittenLength));
-        return scratch.AsSpan(0, source.WrittenLength);
+        source.CopyTo(scratch);
+        return scratch;
     }
 
-    internal byte[] GetGzipOutputBuffer(int minimumLength)
+    internal Span<byte> GetGzipOutputBuffer(int minimumLength)
     {
-        if (_gzipOutputBuffer is null || _gzipOutputBuffer.Length < minimumLength)
+        if (_gzipOutputBuffer.Length < minimumLength)
         {
             var replacement = _bufferWriters.RentScratch(checked((uint)minimumLength));
-            if (_gzipOutputBuffer is not null)
-                _bufferWriters.ReturnScratch(_gzipOutputBuffer);
+            _gzipOutputBuffer.Dispose();
             _gzipOutputBuffer = replacement;
         }
 
-        return _gzipOutputBuffer;
+        return _gzipOutputBuffer.Span;
     }
 
     internal GzipDeflater GetGzipDeflater()
@@ -43,16 +42,21 @@ internal sealed class CompressionContext
     internal Compressor GetZstdCompressor()
         => _zstdCompressor ??= new Compressor(1);
 
-    byte[] EnsureSourceScratch(int minimumLength)
+    Span<byte> EnsureSourceScratch(int minimumLength)
     {
-        if (_sourceScratch is null || _sourceScratch.Length < minimumLength)
+        if (_sourceScratch.Length < minimumLength)
         {
             var replacement = _bufferWriters.RentScratch(checked((uint)minimumLength));
-            if (_sourceScratch is not null)
-                _bufferWriters.ReturnScratch(_sourceScratch);
+            _sourceScratch.Dispose();
             _sourceScratch = replacement;
         }
 
-        return _sourceScratch;
+        return _sourceScratch.Span[..minimumLength];
+    }
+
+    public void Dispose()
+    {
+        _sourceScratch.Dispose();
+        _gzipOutputBuffer.Dispose();
     }
 }

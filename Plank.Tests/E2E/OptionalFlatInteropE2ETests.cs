@@ -41,10 +41,10 @@ internal sealed class OptionalFlatInteropE2ETests
         using var stream = File.Create(path);
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
         var idColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
-        var nameColumn = writer.CreateSerializedColumn<string>(schema.LeafColumns[1]);
+        var nameColumn = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[1]);
         var rowGroup = writer.StartRowGroup();
         idColumn.Serialize(ids);
-        nameColumn.Serialize(names);
+        nameColumn.Serialize(names.Select(static value => System.Text.Encoding.UTF8.GetBytes(value)).ToArray());
         rowGroup.Write(idColumn);
         rowGroup.Write(nameColumn);
         writer.CloseFile();

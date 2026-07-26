@@ -304,7 +304,7 @@ internal sealed class ReaderRoundTripFuzzTests
         => spec.ClrType == typeof(int) ? ReadAllBuffers(rowGroup.Column<int>(column))
         : spec.ClrType == typeof(long) ? ReadAllBuffers(rowGroup.Column<long>(column))
         : spec.ClrType == typeof(double) ? ReadAllBuffers(rowGroup.Column<double>(column))
-        : spec.ClrType == typeof(byte[]) ? ReadAllBuffers(rowGroup.Column<byte[]>(column))
+        : spec.ClrType == typeof(byte[]) ? ReadAllBinaryBuffers(rowGroup.Column<byte>(column))
         : ReadAllBuffers(rowGroup.Column<bool>(column));
 
     static void AssertArraysEqual(int seed, int rowGroupIndex, ColumnSpec spec, Array expected, Array actual)
@@ -339,6 +339,19 @@ internal sealed class ReaderRoundTripFuzzTests
         foreach (var buffer in buffers)
             foreach (var value in buffer.Values)
                 values.Add(value);
+        return values.ToArray();
+    }
+
+    static byte[][] ReadAllBinaryBuffers(RowGroupColumn<byte> buffers)
+    {
+        var values = new List<byte[]>();
+        foreach (var buffer in buffers)
+            for (var i = 0; i < buffer.Count; i++)
+            {
+                if (buffer.IsNull(i))
+                    throw new InvalidOperationException("Required binary column contained a null value.");
+                values.Add(buffer.GetValue(i).ToArray());
+            }
         return values.ToArray();
     }
 

@@ -77,7 +77,6 @@ static class ParquetTypeMap
                 physicalType = ParquetPhysicalType.Double;
                 return true;
             case var t when t == typeof(byte[]):
-            case var t2 when t2 == typeof(string):
                 physicalType = ParquetPhysicalType.ByteArray;
                 return true;
             default:

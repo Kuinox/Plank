@@ -23,6 +23,7 @@ public sealed class ParquetWriter
     internal readonly CompressionContext CompressionContext;
     internal readonly ColumnChunkMetadata[] OpenRowGroupColumnMetadata;
     readonly RowGroupWriter _rowGroupWriter;
+    readonly List<ISerializedColumn> _serializedColumns;
     internal BufferWriter SerializedRowGroupsMetadata;
     internal BufferWriter SerializedFileMetadata;
     internal long FileOffset;
@@ -63,6 +64,7 @@ public sealed class ParquetWriter
         CompressionContext = new CompressionContext(BufferWriters);
         OpenRowGroupColumnMetadata = ColumnCount == 0 ? [] : new ColumnChunkMetadata[ColumnCount];
         _rowGroupWriter = new RowGroupWriter(this);
+        _serializedColumns = [];
         SerializedRowGroupsMetadata = BufferWriters.CreateMetadataBufferWriter();
         SerializedFileMetadata = BufferWriters.CreateMetadataBufferWriter();
         FileOffset = 0;
@@ -73,7 +75,11 @@ public sealed class ParquetWriter
         => _options.RowApiMaxParallelism;
 
     public SerializedColumn<T> CreateSerializedColumn<T>(LeafColumn column)
-        => new(this, column, _options.InitialPageCapacity);
+    {
+        var serialized = new SerializedColumn<T>(this, column, _options.InitialPageCapacity);
+        _serializedColumns.Add(serialized);
+        return serialized;
+    }
 
     public void Reset(Stream stream)
     {
@@ -116,6 +122,7 @@ public sealed class ParquetWriter
 
         WriteFileFooter();
         DisposeCurrentStream();
+        ReleaseBuffers();
     }
 
     void ThrowIfStreamClosed()
@@ -181,9 +188,25 @@ public sealed class ParquetWriter
         _totalRowCount = 0;
         _rowGroupOpen = false;
         FileOffset = 0;
-        SerializedRowGroupsMetadata.Reset();
-        SerializedFileMetadata.Reset();
+        if (!SerializedRowGroupsMetadata.IsInitialized)
+            SerializedRowGroupsMetadata = BufferWriters.CreateMetadataBufferWriter();
+        else
+            SerializedRowGroupsMetadata.Reset();
+        if (!SerializedFileMetadata.IsInitialized)
+            SerializedFileMetadata = BufferWriters.CreateMetadataBufferWriter();
+        else
+            SerializedFileMetadata.Reset();
         WriteFileHeader();
+    }
+
+    void ReleaseBuffers()
+    {
+        SerializedRowGroupsMetadata.Dispose();
+        SerializedFileMetadata.Dispose();
+        _rowGroupWriter.ReleaseBuffers();
+        CompressionContext.Dispose();
+        for (var i = 0; i < _serializedColumns.Count; i++)
+            _serializedColumns[i].ReleaseBuffers();
     }
 
     void WriteFileHeader()

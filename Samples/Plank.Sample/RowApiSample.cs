@@ -16,9 +16,9 @@ static class RowApiSample
             row.Id = i + 1;
             row.Name = i switch
             {
-                0 => "created",
-                1 => "updated",
-                _ => "deleted"
+                0 => "created"u8.ToArray(),
+                1 => "updated"u8.ToArray(),
+                _ => "deleted"u8.ToArray()
             };
             row.OccurredAt = now.AddMinutes(i);
             rowWriter.Next();

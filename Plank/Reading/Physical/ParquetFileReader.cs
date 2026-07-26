@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using Plank.Reading.Physical.Internal;
 using Plank.Schema;
-using Plank.Writing;
 
 namespace Plank.Reading.Physical;
 

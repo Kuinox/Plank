@@ -514,11 +514,18 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     static void AppendRowApiColumnDescriptors(StringBuilder builder, ImmutableArray<MappedColumn> columns)
     {
+        for (var i = 0; i < columns.Length; i++)
+        {
+            builder.Append("    static readonly global::Plank.RowApi.RowApiColumnDescriptor<")
+                .Append(columns[i].ClrTypeName).Append("> ")
+                .Append(GetRowApiColumnFieldName(columns[i].PropertyName))
+                .Append(" = new(\"").Append(Escape(columns[i].PropertyName))
+                .Append("\", Schema.LeafColumns[").Append(i).AppendLine("]);");
+        }
+        builder.AppendLine();
         builder.AppendLine("    static readonly global::Plank.RowApi.RowApiColumnDescriptor[] s_rowApiColumns = [");
         for (var i = 0; i < columns.Length; i++)
-            builder.Append("        new global::Plank.RowApi.RowApiColumnDescriptor<")
-                .Append(columns[i].ClrTypeName).Append(">(\"").Append(Escape(columns[i].PropertyName))
-                .Append("\", Schema.LeafColumns[").Append(i).AppendLine("]),");
+            builder.Append("        ").Append(GetRowApiColumnFieldName(columns[i].PropertyName)).AppendLine(",");
         builder.AppendLine("    ];");
     }
 
@@ -592,10 +599,20 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         for (var i = 0; i < columns.Length; i++)
         {
             builder.AppendLine();
-            builder.Append("        public global::Plank.Reading.Logical.RowGroupColumn<")
-                .Append(columns[i].ClrTypeName).Append("> ").Append(columns[i].PropertyName)
-                .Append("Column => _rowGroup.Column<").Append(columns[i].ClrTypeName)
-                .Append(">(Schema.LeafColumns[").Append(i).AppendLine("]);");
+            if (IsUtf8ByteArrayClr(columns[i].ClrTypeName))
+            {
+                builder.Append("        public global::Plank.Reading.Logical.RowGroupColumn<byte> ")
+                    .Append(columns[i].PropertyName)
+                    .Append("Column => _rowGroup.Column<byte>(Schema.LeafColumns[")
+                    .Append(i).AppendLine("]);");
+            }
+            else
+            {
+                builder.Append("        public global::Plank.Reading.Logical.RowGroupColumn<")
+                    .Append(columns[i].ClrTypeName).Append("> ").Append(columns[i].PropertyName)
+                    .Append("Column => _rowGroup.Column<").Append(columns[i].ClrTypeName)
+                    .Append(">(Schema.LeafColumns[").Append(i).AppendLine("]);");
+            }
         }
         builder.AppendLine("    }");
     }
@@ -604,12 +621,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     {
         builder.AppendLine("    public readonly struct Projection");
         builder.AppendLine("    {");
-        builder.AppendLine("        readonly int[]? _columnIndices;");
+        builder.AppendLine("        readonly global::Plank.RowApi.RowApiColumnDescriptor[]? _columns;");
         builder.AppendLine();
-        builder.AppendLine("        Projection(int[] columnIndices)");
-        builder.AppendLine("            => _columnIndices = columnIndices;");
+        builder.AppendLine("        Projection(global::Plank.RowApi.RowApiColumnDescriptor[] columns)");
+        builder.AppendLine("            => _columns = columns;");
         builder.AppendLine();
-        builder.AppendLine("        internal int[]? ColumnIndices => _columnIndices;");
+        builder.AppendLine("        internal global::Plank.RowApi.RowApiColumnDescriptor[]? Columns => _columns;");
         builder.AppendLine();
         builder.AppendLine("        public static Projection All => default;");
         builder.AppendLine();
@@ -618,21 +635,22 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         {
             builder.AppendLine();
             builder.Append("        public static Projection ").Append(columns[i].PropertyName)
-                .Append(" { get; } = new([").Append(i).AppendLine("]);");
+                .Append(" { get; } = new([")
+                .Append(GetRowApiColumnFieldName(columns[i].PropertyName)).AppendLine("]);");
         }
         builder.AppendLine();
         builder.AppendLine("        public static Projection operator |(Projection left, Projection right)");
         builder.AppendLine("        {");
-        builder.AppendLine("            if (left._columnIndices is null || right._columnIndices is null)");
+        builder.AppendLine("            if (left._columns is null || right._columns is null)");
         builder.AppendLine("                return All;");
-        builder.AppendLine("            if (left._columnIndices.Length == 0)");
+        builder.AppendLine("            if (left._columns.Length == 0)");
         builder.AppendLine("                return right;");
-        builder.AppendLine("            if (right._columnIndices.Length == 0)");
+        builder.AppendLine("            if (right._columns.Length == 0)");
         builder.AppendLine("                return left;");
         builder.AppendLine();
-        builder.AppendLine("            var combined = new int[left._columnIndices.Length + right._columnIndices.Length];");
-        builder.AppendLine("            left._columnIndices.CopyTo(combined, 0);");
-        builder.AppendLine("            right._columnIndices.CopyTo(combined, left._columnIndices.Length);");
+        builder.AppendLine("            var combined = new global::Plank.RowApi.RowApiColumnDescriptor[left._columns.Length + right._columns.Length];");
+        builder.AppendLine("            left._columns.CopyTo(combined, 0);");
+        builder.AppendLine("            right._columns.CopyTo(combined, left._columns.Length);");
         builder.AppendLine("            return new Projection(combined);");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
@@ -646,22 +664,22 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        internal RowReader(global::System.IO.Stream stream, Projection projection, global::Plank.RowApi.RowReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
         builder.AppendLine("        {");
-        builder.AppendLine("            _core = new global::Plank.RowApi.RowReaderCore(stream, Schema, s_rowApiColumns, projection.ColumnIndices, options, schemaEvolution);");
+        builder.AppendLine("            _core = new global::Plank.RowApi.RowReaderCore(stream, Schema, s_rowApiColumns, projection.Columns, options, schemaEvolution);");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        internal RowReader(global::Plank.Reading.IParquetReadSource source, Projection projection, global::Plank.RowApi.RowReaderOptions options, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution)");
         builder.AppendLine("        {");
-        builder.AppendLine("            _core = new global::Plank.RowApi.RowReaderCore(source, Schema, s_rowApiColumns, projection.ColumnIndices, options, schemaEvolution);");
+        builder.AppendLine("            _core = new global::Plank.RowApi.RowReaderCore(source, Schema, s_rowApiColumns, projection.Columns, options, schemaEvolution);");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        public Enumerator GetEnumerator()");
         builder.AppendLine("            => new(this);");
         builder.AppendLine();
         builder.AppendLine("        public void Reset(global::System.IO.Stream stream, Projection projection = default, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
-        builder.AppendLine("            => _core.Reset(stream, projection.ColumnIndices, schemaEvolution);");
+        builder.AppendLine("            => _core.Reset(stream, projection.Columns, schemaEvolution);");
         builder.AppendLine();
         builder.AppendLine("        public void Reset(global::Plank.Reading.IParquetReadSource source, Projection projection = default, global::Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null)");
-        builder.AppendLine("            => _core.Reset(source, projection.ColumnIndices, schemaEvolution);");
+        builder.AppendLine("            => _core.Reset(source, projection.Columns, schemaEvolution);");
         builder.AppendLine();
         builder.AppendLine("        public readonly struct Enumerator : global::System.IDisposable");
         builder.AppendLine("        {");
@@ -670,7 +688,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            internal Enumerator(RowReader reader)");
         builder.AppendLine("                => _reader = reader ?? throw new global::System.ArgumentNullException(nameof(reader));");
         builder.AppendLine();
-        builder.AppendLine("            public Row Current => _reader.Current;");
+        builder.AppendLine("            public ReadRow Current => _reader.Current;");
         builder.AppendLine();
         builder.AppendLine("            public bool MoveNext()");
         builder.AppendLine("                => _reader.MoveNext();");
@@ -680,20 +698,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            }");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        public Row Current");
+        builder.AppendLine("        public ReadRow Current");
         builder.AppendLine("        {");
         builder.AppendLine("            get");
         builder.AppendLine("            {");
         builder.AppendLine("                _core.ThrowIfNotPositioned();");
-        builder.Append("                return new Row(");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            if (i > 0)
-                builder.Append(", ");
-            builder.Append("_core.GetCurrentSpan<").Append(columns[i].ClrTypeName).Append(">(").Append(i)
-                .Append("), _core.GetCurrentIndex(").Append(i).Append(')');
-        }
-        builder.AppendLine(");");
+        builder.AppendLine("                return new ReadRow(_core);");
         builder.AppendLine("            }");
         builder.AppendLine("        }");
         builder.AppendLine();
@@ -702,6 +712,44 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        public void Dispose()");
         builder.AppendLine("            => _core.Dispose();");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        AppendReadRow(builder, columns);
+    }
+
+    static void AppendReadRow(StringBuilder builder, ImmutableArray<MappedColumn> columns)
+    {
+        builder.AppendLine("    public readonly ref struct ReadRow");
+        builder.AppendLine("    {");
+        builder.AppendLine("        readonly global::Plank.RowApi.RowReaderCore _core;");
+        builder.AppendLine();
+        builder.AppendLine("        internal ReadRow(global::Plank.RowApi.RowReaderCore core)");
+        builder.AppendLine("            => _core = core;");
+        builder.AppendLine();
+        for (var i = 0; i < columns.Length; i++)
+        {
+            var propertyName = columns[i].PropertyName;
+            var descriptorName = GetRowApiColumnFieldName(propertyName);
+            if (IsUtf8ByteArrayClr(columns[i].ClrTypeName))
+            {
+                builder.Append("        public global::System.ReadOnlySpan<byte> ")
+                    .Append(propertyName).AppendLine();
+                builder.Append("            => _core.GetCurrentBinary(").Append(descriptorName)
+                    .AppendLine(").Value;");
+                builder.AppendLine();
+                builder.Append("        public bool ").Append(propertyName).AppendLine("IsNull");
+                builder.Append("            => _core.GetCurrentBinary(").Append(descriptorName)
+                    .AppendLine(").IsNull;");
+            }
+            else
+            {
+                builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ')
+                    .Append(propertyName).AppendLine();
+                builder.Append("            => ref _core.GetCurrent(").Append(descriptorName).AppendLine(");");
+            }
+            if (i < columns.Length - 1)
+                builder.AppendLine();
+        }
         builder.AppendLine("    }");
     }
 
@@ -725,7 +773,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     or "global::System.TimeOnly" or "global::System.TimeOnly?",
                 "Float" => clrType is "float" or "float?",
                 "Double" => clrType is "double" or "double?",
-                "ByteArray" => clrType is "string" or "string?" or "byte[]" or "byte[]?" or "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?",
+                "ByteArray" => clrType is "byte[]" or "byte[]?" or "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?",
                 _ => false
             };
 
@@ -738,7 +786,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 or "global::System.DateTime" or "global::System.DateTimeOffset" or "global::System.TimeOnly",
             "Float" => clrType == "float",
             "Double" => clrType == "double",
-            "ByteArray" => clrType is "string" or "byte[]" or "global::System.ReadOnlyMemory<byte>",
+            "ByteArray" => clrType is "byte[]" or "global::System.ReadOnlyMemory<byte>",
             _ => false
         };
     }
@@ -754,7 +802,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "ulong" or "ulong?" or
             "float" or "float?" or
             "double" or "double?" or
-            "string" or "string?" or
             "byte[]" or "byte[]?" or
             "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?" or
             "global::System.DateOnly" or "global::System.DateOnly?" or
@@ -784,6 +831,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     static string ToParameterName(string propertyName)
         => $"p{propertyName}";
+
+    static string GetRowApiColumnFieldName(string propertyName)
+        => $"s_{propertyName}RowApiColumn";
 
     static string GetAccessibilityKeyword(Accessibility accessibility)
         => accessibility switch
@@ -1058,7 +1108,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "ulong" => "Int64",
             "float" => "Float",
             "double" => "Double",
-            "string" => "ByteArray",
             "byte[]" => "ByteArray",
             "global::System.ReadOnlyMemory<byte>" => "ByteArray",
             "global::System.DateOnly" => "Int32",
@@ -1220,9 +1269,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (column.PhysicalType != "ByteArray")
                     diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
                         $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires physical type 'ByteArray'."));
-                if (!IsUtf8ByteArrayClr(column.ClrTypeName) && !IsStringClr(column.ClrTypeName))
+                if (!IsUtf8ByteArrayClr(column.ClrTypeName))
                     diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
-                        $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires CLR type string/string? or ReadOnlyMemory<byte>/ReadOnlyMemory<byte>?/byte[]/byte[]?."));
+                        $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires CLR type ReadOnlyMemory<byte>/ReadOnlyMemory<byte>?/byte[]/byte[]?."));
                 break;
             case "Uuid":
                 if (column.PhysicalType != "FixedLenByteArray")
@@ -1280,9 +1329,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "global::System.DateTime" or "global::System.DateTime?"
             or "global::System.DateTimeOffset" or "global::System.DateTimeOffset?";
 
-    static bool IsStringClr(string clrType)
-        => clrType is "string" or "string?";
-
     static bool IsUtf8ByteArrayClr(string clrType)
         => clrType is
             "byte[]" or "byte[]?" or
@@ -1311,7 +1357,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             SpecialType.System_UInt64 => isNullable ? "ulong?" : "ulong",
             SpecialType.System_Single => isNullable ? "float?" : "float",
             SpecialType.System_Double => isNullable ? "double?" : "double",
-            SpecialType.System_String => nullableAnnotation == NullableAnnotation.Annotated ? "string?" : "string",
             _ => string.Empty
         };
         if (clrTypeName.Length > 0)

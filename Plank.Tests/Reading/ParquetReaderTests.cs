@@ -295,13 +295,15 @@ internal sealed class ParquetReaderTests
                 {
                     await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.LeafColumns[0]))).IsEquivalentTo([1, 2]);
                     await Assert.That(ReadAllBuffers(rowGroup.Column<double>(schema.LeafColumns[1]))).IsEquivalentTo([1.5, 2.5]);
-                    await AssertByteArraysEqual(ReadAllBuffers(rowGroup.Column<byte[]>(schema.LeafColumns[2])), [Bytes(1), Bytes(2)]);
+                    await AssertByteArraysEqual(ReadAllBinaryBuffers(rowGroup.Column<byte>(schema.LeafColumns[2])),
+                        [Bytes(1), Bytes(2)]);
                 }
                 else
                 {
                     await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.LeafColumns[0]))).IsEquivalentTo([3]);
                     await Assert.That(ReadAllBuffers(rowGroup.Column<double>(schema.LeafColumns[1]))).IsEquivalentTo([3.5]);
-                    await AssertByteArraysEqual(ReadAllBuffers(rowGroup.Column<byte[]>(schema.LeafColumns[2])), [Bytes(3)]);
+                    await AssertByteArraysEqual(ReadAllBinaryBuffers(rowGroup.Column<byte>(schema.LeafColumns[2])),
+                        [Bytes(3)]);
                 }
                 rowGroupIndex++;
             }
@@ -421,7 +423,7 @@ internal sealed class ParquetReaderTests
 
             await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.LeafColumns[0]))).IsEquivalentTo([10, 20, 30]);
             await Assert.That(ReadAllBuffers(rowGroup.Column<double>(schema.LeafColumns[1]))).IsEquivalentTo([1.25, 2.25, 3.25]);
-            await AssertByteArraysEqual(ReadAllBuffers(rowGroup.Column<byte[]>(schema.LeafColumns[2])),
+            await AssertByteArraysEqual(ReadAllBinaryBuffers(rowGroup.Column<byte>(schema.LeafColumns[2])),
                 [Bytes(1, 1), Bytes(1, 2), Bytes(1, 3)]);
             await Assert.That(ReadAllBuffers(rowGroup.Column<int>(schema.LeafColumns[3]))).IsEquivalentTo([7, 7, 9]);
         }
@@ -580,7 +582,7 @@ internal sealed class ParquetReaderTests
             Plank.Schema.ColumnDefinition.Leaf("BinOpt", ParquetPhysicalType.ByteArray,
                 new ColumnOptions(ParquetRepetition.Optional))
         ]);
-        string?[] strValues = ["hello", null, "world", null, "!"];
+        byte[]?[] utf8Values = ["hello"u8.ToArray(), null, "world"u8.ToArray(), null, "!"u8.ToArray()];
         byte[]?[] binValues = [new byte[] { 1 }, null, new byte[] { 3, 4 }, null, new byte[] { 5 }];
         try
         {
@@ -589,9 +591,9 @@ internal sealed class ParquetReaderTests
                 var writer = schema.CreateWriter(writeStream);
                 var rowGroup = writer.StartRowGroup();
 
-                var strCol = rowGroup.CreateSerializedColumn<string>(schema.LeafColumns[0]);
-                strCol.Serialize([.. strValues]);
-                rowGroup.Write(strCol);
+                var utf8Col = rowGroup.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+                utf8Col.Serialize([.. utf8Values]);
+                rowGroup.Write(utf8Col);
 
                 var binCol = rowGroup.CreateSerializedColumn<byte[]>(schema.LeafColumns[1]);
                 binCol.Serialize([.. binValues]);
@@ -604,10 +606,17 @@ internal sealed class ParquetReaderTests
             using var reader = schema.CreateReader(readStream);
             var rowGroup2 = reader.RowGroups[0];
 
-            var actualStr = ReadAllBuffers(rowGroup2.Column<string>(schema.LeafColumns[0]));
-            await Assert.That(actualStr).IsEquivalentTo(strValues);
+            var actualUtf8 = ReadAllBinaryBuffers(rowGroup2.Column<byte>(schema.LeafColumns[0]));
+            await Assert.That(actualUtf8.Length).IsEqualTo(utf8Values.Length);
+            for (var i = 0; i < utf8Values.Length; i++)
+            {
+                if (utf8Values[i] is null)
+                    await Assert.That(actualUtf8[i]).IsNull();
+                else
+                    await Assert.That(actualUtf8[i]).IsEquivalentTo(utf8Values[i]!);
+            }
 
-            var actualBin = ReadAllBuffers(rowGroup2.Column<byte[]>(schema.LeafColumns[1]));
+            var actualBin = ReadAllBinaryBuffers(rowGroup2.Column<byte>(schema.LeafColumns[1]));
             await Assert.That(actualBin.Length).IsEqualTo(binValues.Length);
             for (var i = 0; i < binValues.Length; i++)
             {
@@ -718,7 +727,7 @@ internal sealed class ParquetReaderTests
         rowGroup.Write(dictionaryColumn);
     }
 
-    static async Task AssertByteArraysEqual(byte[][] actual, byte[][] expected)
+    static async Task AssertByteArraysEqual(byte[]?[] actual, byte[][] expected)
     {
         await Assert.That(actual.Length).IsEqualTo(expected.Length);
         for (var i = 0; i < expected.Length; i++)
@@ -787,6 +796,15 @@ internal sealed class ParquetReaderTests
         foreach (var buffer in buffers)
             foreach (var value in buffer.Values)
                 values.Add(value);
+        return values.ToArray();
+    }
+
+    static byte[]?[] ReadAllBinaryBuffers(RowGroupColumn<byte> buffers)
+    {
+        var values = new List<byte[]?>();
+        foreach (var buffer in buffers)
+            for (var i = 0; i < buffer.Count; i++)
+                values.Add(buffer.IsNull(i) ? null : buffer.GetValue(i).ToArray());
         return values.ToArray();
     }
 

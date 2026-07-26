@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using Plank.Schema;
-using Plank.Writing;
 
 namespace Plank.Reading.Physical.Internal;
 

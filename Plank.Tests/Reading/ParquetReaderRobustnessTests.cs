@@ -99,7 +99,7 @@ internal sealed class ParquetReaderRobustnessTests
             case ParquetPhysicalType.Double:
                 DrainBuffers(rowGroup.Column<double>(column)); break;
             case ParquetPhysicalType.ByteArray:
-                DrainBuffers(rowGroup.Column<byte[]>(column)); break;
+                DrainBuffers(rowGroup.Column<byte>(column)); break;
         }
     }
 

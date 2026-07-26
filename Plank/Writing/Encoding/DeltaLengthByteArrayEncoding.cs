@@ -35,7 +35,7 @@ static class DeltaLengthByteArrayEncoding
     {
         var byteLength = checked(values.Length * sizeof(int));
         var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
-        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.AsSpan(0, byteLength));
+        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.Span[..byteLength]);
         var totalPayloadBytes = 0;
 
         try
@@ -75,7 +75,7 @@ static class DeltaLengthByteArrayEncoding
     {
         var byteLength = checked(values.Length * sizeof(int));
         var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
-        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.AsSpan(0, byteLength));
+        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.Span[..byteLength]);
         var totalPayloadBytes = 0;
 
         try
@@ -96,6 +96,108 @@ static class DeltaLengthByteArrayEncoding
             for (var i = 0; i < values.Length; i++)
             {
                 var value = values[i];
+                value.Span.CopyTo(payload[payloadOffset..]);
+                payloadOffset += value.Length;
+            }
+
+            writer.Advance(payloadOffset);
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rentedLengthsBytes);
+        }
+    }
+
+    internal static void WriteOptionalByteArrayValues(Column column, ReadOnlySpan<byte[]> values,
+        BufferWriterFactory bufferWriters, ref BufferWriter writer)
+    {
+        var presentCount = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i] is not null)
+                presentCount++;
+        if (presentCount == 0)
+            return;
+
+        var byteLength = checked(presentCount * sizeof(int));
+        var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
+        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.Span[..byteLength]);
+        var totalPayloadBytes = 0;
+
+        try
+        {
+            var denseIndex = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var value = values[i];
+                if (value is null)
+                    continue;
+                lengths[denseIndex++] = value.Length;
+                totalPayloadBytes = checked(totalPayloadBytes + value.Length);
+            }
+
+            DeltaBinaryPackedEncoding.WriteInt32(lengths, ref writer);
+            if (totalPayloadBytes == 0)
+                return;
+
+            var payload = writer.GetSpan(totalPayloadBytes);
+            var payloadOffset = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var value = values[i];
+                if (value is null)
+                    continue;
+                value.CopyTo(payload[payloadOffset..]);
+                payloadOffset += value.Length;
+            }
+
+            writer.Advance(payloadOffset);
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rentedLengthsBytes);
+        }
+    }
+
+    internal static void WriteOptionalMemoryValues(Column column, ReadOnlySpan<ReadOnlyMemory<byte>?> values,
+        BufferWriterFactory bufferWriters, ref BufferWriter writer)
+    {
+        var presentCount = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i].HasValue)
+                presentCount++;
+        if (presentCount == 0)
+            return;
+
+        var byteLength = checked(presentCount * sizeof(int));
+        var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
+        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.Span[..byteLength]);
+        var totalPayloadBytes = 0;
+
+        try
+        {
+            var denseIndex = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var nullableValue = values[i];
+                if (!nullableValue.HasValue)
+                    continue;
+                var value = nullableValue.Value;
+                lengths[denseIndex++] = value.Length;
+                totalPayloadBytes = checked(totalPayloadBytes + value.Length);
+            }
+
+            DeltaBinaryPackedEncoding.WriteInt32(lengths, ref writer);
+            if (totalPayloadBytes == 0)
+                return;
+
+            var payload = writer.GetSpan(totalPayloadBytes);
+            var payloadOffset = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var nullableValue = values[i];
+                if (!nullableValue.HasValue)
+                    continue;
+                var value = nullableValue.Value;
                 value.Span.CopyTo(payload[payloadOffset..]);
                 payloadOffset += value.Length;
             }

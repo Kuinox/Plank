@@ -26,11 +26,12 @@ public sealed class RowReaderCore : IDisposable
     /// <param name="stream">The source stream.</param>
     /// <param name="schema">The generated row schema.</param>
     /// <param name="columns">The generated column descriptors.</param>
-    /// <param name="projection">The selected column indices, or <see langword="null"/> for all columns.</param>
+    /// <param name="projection">The selected columns, or <see langword="null"/> for all columns.</param>
     /// <param name="options">The row reader options.</param>
     /// <param name="schemaEvolution">The optional schema-evolution policy.</param>
     public RowReaderCore(Stream stream, ParquetSchema schema, RowApiColumnDescriptor[] columns,
-        int[]? projection, RowReaderOptions options, ParquetSchemaEvolutionOptions? schemaEvolution)
+        RowApiColumnDescriptor[]? projection, RowReaderOptions options,
+        ParquetSchemaEvolutionOptions? schemaEvolution)
         : this(new StreamReadSource(stream), schema, columns, projection, options, schemaEvolution)
     {
     }
@@ -39,11 +40,12 @@ public sealed class RowReaderCore : IDisposable
     /// <param name="source">The random-access source.</param>
     /// <param name="schema">The generated row schema.</param>
     /// <param name="columns">The generated column descriptors.</param>
-    /// <param name="projection">The selected column indices, or <see langword="null"/> for all columns.</param>
+    /// <param name="projection">The selected columns, or <see langword="null"/> for all columns.</param>
     /// <param name="options">The row reader options.</param>
     /// <param name="schemaEvolution">The optional schema-evolution policy.</param>
     public RowReaderCore(IParquetReadSource source, ParquetSchema schema, RowApiColumnDescriptor[] columns,
-        int[]? projection, RowReaderOptions options, ParquetSchemaEvolutionOptions? schemaEvolution)
+        RowApiColumnDescriptor[]? projection, RowReaderOptions options,
+        ParquetSchemaEvolutionOptions? schemaEvolution)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(schema);
@@ -56,7 +58,7 @@ public sealed class RowReaderCore : IDisposable
 
         _schemaEvolution = schemaEvolution;
         _streamSource = source as StreamReadSource;
-        _states = CreateStates(columns);
+        _states = CreateStates(schema, columns);
         _reader = new ParquetReader(CreateLooseReaderOptions(options));
         _reader.Reset(source);
         _rowGroup = default;
@@ -81,9 +83,10 @@ public sealed class RowReaderCore : IDisposable
 
     /// <summary>Resets the generated row reader to a stream and projection.</summary>
     /// <param name="stream">The new source stream.</param>
-    /// <param name="projection">The selected column indices, or <see langword="null"/> for all columns.</param>
+    /// <param name="projection">The selected columns, or <see langword="null"/> for all columns.</param>
     /// <param name="schemaEvolution">An optional replacement schema-evolution policy.</param>
-    public void Reset(Stream stream, int[]? projection, ParquetSchemaEvolutionOptions? schemaEvolution = null)
+    public void Reset(Stream stream, RowApiColumnDescriptor[]? projection,
+        ParquetSchemaEvolutionOptions? schemaEvolution = null)
     {
         if (_streamSource is null)
             _streamSource = new StreamReadSource(stream);
@@ -94,9 +97,10 @@ public sealed class RowReaderCore : IDisposable
 
     /// <summary>Resets the generated row reader to a random-access source and projection.</summary>
     /// <param name="source">The new random-access source.</param>
-    /// <param name="projection">The selected column indices, or <see langword="null"/> for all columns.</param>
+    /// <param name="projection">The selected columns, or <see langword="null"/> for all columns.</param>
     /// <param name="schemaEvolution">An optional replacement schema-evolution policy.</param>
-    public void Reset(IParquetReadSource source, int[]? projection, ParquetSchemaEvolutionOptions? schemaEvolution = null)
+    public void Reset(IParquetReadSource source, RowApiColumnDescriptor[]? projection,
+        ParquetSchemaEvolutionOptions? schemaEvolution = null)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
@@ -114,22 +118,27 @@ public sealed class RowReaderCore : IDisposable
         ResolveFileSchema();
     }
 
-    /// <summary>Gets the typed buffer containing a generated property's current value.</summary>
+    /// <summary>Gets a generated property's current value.</summary>
     /// <typeparam name="T">The column's generated CLR value type.</typeparam>
-    /// <param name="columnIndex">The column index in the generated row schema.</param>
-    /// <returns>The current typed column buffer.</returns>
-    public Span<T> GetCurrentSpan<T>(int columnIndex)
-        => GetState<T>(columnIndex).CurrentSpan;
-
-    /// <summary>Gets the current value index within a generated column buffer.</summary>
-    /// <param name="columnIndex">The column index in the generated row schema.</param>
-    /// <returns>The current index.</returns>
-    public int GetCurrentIndex(int columnIndex)
+    /// <param name="column">The generated property column.</param>
+    /// <returns>A reference to the current value.</returns>
+    public ref T GetCurrent<T>(RowApiColumnDescriptor<T> column)
     {
-        if ((uint)columnIndex >= (uint)_states.Length)
-            throw new ArgumentOutOfRangeException(nameof(columnIndex), columnIndex,
-                "Column index is outside the row API schema.");
-        return _states[columnIndex].CurrentIndex;
+        ThrowIfNotPositioned();
+        var state = GetState<T>(column);
+        var values = state.CurrentSpan;
+        return ref values[state.CurrentIndex];
+    }
+
+    /// <summary>Gets the current zero-copy value for a variable-length byte column.</summary>
+    /// <typeparam name="T">The column's generated CLR binary type.</typeparam>
+    /// <param name="column">The generated property column.</param>
+    /// <returns>The current binary value and its null state.</returns>
+    public RowReaderBinaryValue GetCurrentBinary<T>(RowApiColumnDescriptor<T> column)
+    {
+        ThrowIfNotPositioned();
+        var state = GetBinaryState(column);
+        return new RowReaderBinaryValue(state.CurrentValue, state.CurrentIsNull);
     }
 
     /// <summary>Throws if the generated reader is not positioned on a row.</summary>
@@ -151,13 +160,17 @@ public sealed class RowReaderCore : IDisposable
         _disposed = true;
     }
 
-    static RowApiColumnReadState[] CreateStates(RowApiColumnDescriptor[] columns)
+    static RowApiColumnReadState[] CreateStates(ParquetSchema schema, RowApiColumnDescriptor[] columns)
     {
         var states = new RowApiColumnReadState[columns.Length];
         for (var i = 0; i < columns.Length; i++)
         {
             var column = columns[i] ?? throw new ArgumentException("Row API column descriptors cannot contain null values.",
                 nameof(columns));
+            if (!ReferenceEquals(column.Column, schema.LeafColumns[i]))
+                throw new ArgumentException(
+                    "Row API column descriptors must match their row API schema columns.",
+                    nameof(columns));
             states[i] = column.CreateState();
         }
 
@@ -171,7 +184,7 @@ public sealed class RowReaderCore : IDisposable
             Strict = false
         };
 
-    void ApplyProjection(int[]? projection)
+    void ApplyProjection(RowApiColumnDescriptor[]? projection)
     {
         if (projection is null)
         {
@@ -183,11 +196,8 @@ public sealed class RowReaderCore : IDisposable
         var projected = new bool[_states.Length];
         for (var i = 0; i < projection.Length; i++)
         {
-            var columnIndex = projection[i];
-            if ((uint)columnIndex >= (uint)_states.Length)
-                throw new ArgumentOutOfRangeException(nameof(projection), columnIndex,
-                    "Projection column index is outside the row API schema.");
-            projected[columnIndex] = true;
+            var state = GetSchemaState(projection[i], nameof(projection));
+            projected[state.Descriptor.Column.Ordinal] = true;
         }
 
         for (var i = 0; i < _states.Length; i++)
@@ -357,16 +367,42 @@ public sealed class RowReaderCore : IDisposable
             throw new ObjectDisposedException(nameof(RowReaderCore));
     }
 
-    RowApiColumnReadState<T> GetState<T>(int columnIndex)
+    RowApiColumnReadState GetSchemaState(RowApiColumnDescriptor column, string parameterName)
     {
-        if ((uint)columnIndex >= (uint)_states.Length)
-            throw new ArgumentOutOfRangeException(nameof(columnIndex), columnIndex,
-                "Column index is outside the row API schema.");
+        ArgumentNullException.ThrowIfNull(column, parameterName);
+        var columnIndex = column.Column.Ordinal;
+        if ((uint)columnIndex < (uint)_states.Length &&
+            ReferenceEquals(_states[columnIndex].Descriptor, column))
+            return _states[columnIndex];
 
-        if (_states[columnIndex] is RowApiColumnReadState<T> state)
-            return state;
+        throw new ArgumentException("The column does not belong to this row API schema.", parameterName);
+    }
+
+    RowApiColumnReadState GetSelectedState(RowApiColumnDescriptor column)
+    {
+        var state = GetSchemaState(column, nameof(column));
+        if (!state.Projected && !state.Materialized)
+            throw new InvalidOperationException($"Column '{state.PropertyName}' was not selected.");
+        return state;
+    }
+
+    RowApiColumnReadState<T> GetState<T>(RowApiColumnDescriptor<T> column)
+    {
+        var state = GetSelectedState(column);
+        if (state is RowApiColumnReadState<T> typedState)
+            return typedState;
 
         throw new InvalidOperationException(
-            $"Row API column '{_states[columnIndex].PropertyName}' cannot be read as {typeof(T)}.");
+            $"Row API column '{state.PropertyName}' cannot be read as {typeof(T)}.");
+    }
+
+    RowApiBinaryColumnReadState GetBinaryState<T>(RowApiColumnDescriptor<T> column)
+    {
+        var state = GetSelectedState(column);
+        if (state is RowApiBinaryColumnReadState binaryState)
+            return binaryState;
+
+        throw new InvalidOperationException(
+            $"Row API column '{state.PropertyName}' is not a variable-length byte column.");
     }
 }

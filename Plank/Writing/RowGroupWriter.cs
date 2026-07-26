@@ -294,4 +294,13 @@ public sealed class RowGroupWriter
         metadata.OffsetIndexLength = checked((uint)_offsetIndexBuffer.WrittenLength);
         _writer.WriteBuffer(ref _offsetIndexBuffer);
     }
+
+    internal void ReleaseBuffers()
+    {
+        _compressedContent.Dispose();
+        _compressionInput.Dispose();
+        _compressedValues.Dispose();
+        _columnIndexBuffer.Dispose();
+        _offsetIndexBuffer.Dispose();
+    }
 }

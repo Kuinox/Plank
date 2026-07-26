@@ -20,6 +20,8 @@ internal interface ISerializedColumn
     bool HasPendingData { get; }
 
     void Consume();
+
+    void ReleaseBuffers();
 }
 
 public sealed class SerializedColumn<T> : ISerializedColumn
@@ -32,8 +34,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     readonly LeafColumn _leafColumn;
     readonly Column _column;
     object? _dictionaryState;
-    byte[]? _statisticsMinValueBuffer;
-    byte[]? _statisticsMaxValueBuffer;
+    ParquetBuffer _statisticsMinValueBuffer;
+    ParquetBuffer _statisticsMaxValueBuffer;
 
     internal SerializedColumn(ParquetWriter owner, LeafColumn column, uint initialPageCapacity)
     {
@@ -206,15 +208,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
         }
 
-        if (typeof(T) == typeof(string))
-        {
-            if (_column.Options.Repetition == ParquetRepetition.Optional)
-                SerializeOptionalReference(AsAnySpan<string>(values));
-            else
-                SerializeTyped(AsAnySpan<string>(values));
-            return;
-        }
-
         if (typeof(T) == typeof(DateOnly?))
         {
             SerializeNullableDateOnly(AsNullableSpan<DateOnly>(values));
@@ -275,7 +268,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<int>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<int>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i].DayNumber - UnixEpochDate.DayNumber;
             SerializeTyped(converted);
@@ -292,7 +285,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<int?>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<int?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? value.DayNumber - UnixEpochDate.DayNumber : null;
             SerializeOptionalTyped(converted);
@@ -308,7 +301,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<int>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<int>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i];
             SerializeTyped(converted);
@@ -326,7 +319,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<int?>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<int?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i];
             SerializeOptionalTyped(converted);
@@ -344,7 +337,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<int>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<int>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i];
             SerializeTyped(converted);
@@ -362,7 +355,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<int?>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<int?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i];
             SerializeOptionalTyped(converted);
@@ -380,7 +373,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<int>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<int>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = unchecked((int)values[i]);
             SerializeTyped(converted);
@@ -398,7 +391,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<int?>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<int?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? unchecked((int)value) : null;
             SerializeOptionalTyped(converted);
@@ -417,7 +410,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = ToUnixTime(values[i], timestamp.Unit);
             SerializeTyped(converted);
@@ -434,7 +427,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? ToUnixTime(value, timestamp.Unit) : null;
             SerializeOptionalTyped(converted);
@@ -450,7 +443,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = unchecked((long)values[i]);
             SerializeTyped(converted);
@@ -468,7 +461,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? unchecked((long)value) : null;
             SerializeOptionalTyped(converted);
@@ -487,7 +480,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = ToUnixTime(values[i], timestamp.Unit);
             SerializeTyped(converted);
@@ -504,7 +497,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? ToUnixTime(value, timestamp.Unit) : null;
             SerializeOptionalTyped(converted);
@@ -521,7 +514,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = ToTimeValue(values[i], time.Unit);
             SerializeTyped(converted);
@@ -538,7 +531,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
         try
         {
-            var converted = rented.AsSpan(0, values.Length);
+            var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? ToTimeValue(value, time.Unit) : null;
             SerializeOptionalTyped(converted);
@@ -612,7 +605,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = checked((uint)values.Length);
-        Statistics = ColumnStatistics.CreateOptional(_column, values);
+        Statistics = ColumnStatistics.CreateOptionalWithReusableBinaryBuffers(_column, values,
+            ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategyContext, Pages,
@@ -632,7 +626,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = checked((uint)values.Length);
-        Statistics = ColumnStatistics.CreateOptional(_column, values, _owner.BufferWriters.BufferPool);
+        Statistics = ColumnStatistics.CreateOptionalWithReusableBinaryBuffers(_column, values,
+            ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategyContext, Pages,
@@ -646,6 +641,18 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     internal void Consume()
         => HasPendingData = false;
+
+    void ISerializedColumn.ReleaseBuffers()
+        => ReleaseBuffers();
+
+    internal void ReleaseBuffers()
+    {
+        Pages.ReleaseBuffers();
+        _statisticsMinValueBuffer.Dispose();
+        _statisticsMaxValueBuffer.Dispose();
+        Statistics = default;
+        HasPendingData = false;
+    }
 
     bool TryAssignSingleDataPageStatistics(ColumnStatistics statistics)
     {
@@ -765,7 +772,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 continue;
             var pageRowCount = checked((int)page.RowCount);
             var pageRows = values.Slice(rowOffset, pageRowCount);
-            page.Statistics = ColumnStatistics.CreateOptional(_column, pageRows);
+            page.Statistics = ColumnStatistics.CreateOptionalWithReusableBinaryBuffers(_column, pageRows,
+                ref page.StatisticsMinValueBuffer, ref page.StatisticsMaxValueBuffer,
+                _owner.BufferWriters.BufferPool);
             rowOffset += pageRowCount;
         }
     }
@@ -781,7 +790,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 continue;
             var pageRowCount = checked((int)page.RowCount);
             var pageRows = values.Slice(rowOffset, pageRowCount);
-            page.Statistics = ColumnStatistics.CreateOptional(_column, pageRows, _owner.BufferWriters.BufferPool);
+            page.Statistics = ColumnStatistics.CreateOptionalWithReusableBinaryBuffers(_column, pageRows,
+                ref page.StatisticsMinValueBuffer, ref page.StatisticsMaxValueBuffer,
+                _owner.BufferWriters.BufferPool);
             rowOffset += pageRowCount;
         }
     }

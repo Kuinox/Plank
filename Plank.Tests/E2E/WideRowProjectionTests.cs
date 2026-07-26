@@ -57,7 +57,7 @@ internal sealed class WideRowProjectionTests
             throw new InvalidOperationException("Expected one generated row.");
     }
 
-    static void AssertColumn0WasNotSelected(WideRowSchema.Row row)
+    static void AssertColumn0WasNotSelected(WideRowSchema.ReadRow row)
     {
         try
         {
@@ -69,7 +69,7 @@ internal sealed class WideRowProjectionTests
         }
     }
 
-    static void AssertColumn64WasNotSelected(WideRowSchema.Row row)
+    static void AssertColumn64WasNotSelected(WideRowSchema.ReadRow row)
     {
         try
         {

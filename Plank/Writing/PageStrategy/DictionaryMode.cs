@@ -1,4 +1,4 @@
-namespace Plank.Writing;
+namespace Plank.Writing.PageStrategy;
 
 public enum DictionaryMode
 {

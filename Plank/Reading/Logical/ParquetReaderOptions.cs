@@ -1,7 +1,5 @@
 namespace Plank.Reading.Logical;
 
-using Plank.Writing;
-
 public sealed class ParquetReaderOptions
 {
     public static ParquetReaderOptions Default { get; } = new();

@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Plank.Reading.Logical.Internal;
 
 static class DeltaBinaryPackedDecoder
@@ -19,6 +21,10 @@ static class DeltaBinaryPackedDecoder
 
     internal static int ReadInt32(ReadOnlySpan<byte> payload, Span<int> destination)
         => ReadInt32Core(payload, destination);
+
+    internal static int ReadNarrowInt32<T>(ReadOnlySpan<byte> payload, Span<T> destination)
+        where T : unmanaged
+        => ReadNarrowInt32Core(payload, destination);
 
     internal static int ReadInt64(ReadOnlySpan<byte> payload, Span<long> destination)
         => ReadInt64Core(payload, destination);
@@ -150,6 +156,59 @@ static class DeltaBinaryPackedDecoder
         return reader.Offset;
     }
 
+    static int ReadNarrowInt32Core<T>(ReadOnlySpan<byte> payload, Span<T> destination)
+        where T : unmanaged
+    {
+        if (typeof(T) != typeof(byte) && typeof(T) != typeof(ushort))
+            throw new InvalidOperationException($"Cannot narrow Int32 values into '{typeof(T)}'.");
+
+        var reader = new DeltaBinaryPackedReader(payload);
+        var blockSize = ReadHeaderVarUInt32(ref reader, "block size");
+        var miniBlockCount = ReadHeaderVarUInt32(ref reader, "mini-block count");
+        var valueCount = ReadHeaderVarUInt32(ref reader, "value count");
+        if (blockSize != BlockSize || miniBlockCount != MiniBlockCount)
+            throw new NotSupportedException(
+                $"Delta binary packed decoding currently supports block size {BlockSize} and mini-block count {MiniBlockCount} only.");
+        if ((uint)destination.Length != valueCount)
+            throw new CorruptParquetException(
+                $"DeltaBinaryPacked encoded value count {valueCount} does not match expected {destination.Length}.");
+
+        if (valueCount == 0)
+        {
+            _ = reader.ReadUnsignedVarInt();
+            return reader.Offset;
+        }
+
+        var previous = reader.ReadZigZagInt64();
+        StoreNarrowInt32(destination, 0, NarrowInt32(previous));
+        var index = 1U;
+        var miniBlockSize = blockSize / miniBlockCount;
+        Span<byte> bitWidths = stackalloc byte[checked((int)MiniBlockCount)];
+
+        while (index < valueCount)
+        {
+            var minDelta = reader.ReadZigZagInt64();
+            for (var i = 0U; i < MiniBlockCount; i++)
+                bitWidths[checked((int)i)] = reader.ReadByte();
+
+            for (var miniBlock = 0U; miniBlock < MiniBlockCount; miniBlock++)
+            {
+                var bitWidth = bitWidths[checked((int)miniBlock)];
+                for (var i = 0U; i < miniBlockSize; i++)
+                {
+                    var delta = bitWidth == 0 ? 0UL : reader.ReadPackedUnsigned(bitWidth);
+                    if (index < valueCount)
+                    {
+                        previous = unchecked(previous + minDelta + (long)delta);
+                        StoreNarrowInt32(destination, checked((int)index++), NarrowInt32(previous));
+                    }
+                }
+            }
+        }
+
+        return reader.Offset;
+    }
+
     static (long[] Values, int ConsumedBytes) ReadInt64Core(ReadOnlySpan<byte> payload)
     {
         var reader = new DeltaBinaryPackedReader(payload);
@@ -257,6 +316,18 @@ static class DeltaBinaryPackedDecoder
             throw new CorruptParquetException($"Delta binary packed Int32 value {value} is outside the Int32 range.");
 
         return (int)value;
+    }
+
+    static void StoreNarrowInt32<T>(Span<T> destination, int index, int value)
+        where T : unmanaged
+    {
+        if (typeof(T) == typeof(byte))
+        {
+            Unsafe.As<Span<T>, Span<byte>>(ref destination)[index] = unchecked((byte)value);
+            return;
+        }
+
+        Unsafe.As<Span<T>, Span<ushort>>(ref destination)[index] = unchecked((ushort)value);
     }
 
     static uint ReadHeaderVarUInt32(ref DeltaBinaryPackedReader reader, string fieldName)

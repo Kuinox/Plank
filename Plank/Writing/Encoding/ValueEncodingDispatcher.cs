@@ -39,4 +39,44 @@ static class ValueEncodingDispatcher
                 throw new NotSupportedException($"Encoding '{encoding}' is not supported.");
         }
     }
+
+    internal static void WriteOptionalByteArrayValues(EncodingKind encoding, Column column,
+        ReadOnlySpan<byte[]> values, BufferWriterFactory bufferWriters, ref BufferWriter writer)
+    {
+        switch (encoding)
+        {
+            case EncodingKind.Plain:
+                PlainEncoding.WriteOptionalByteArrayValues(column, values, ref writer);
+                return;
+            case EncodingKind.DeltaLengthByteArray:
+                DeltaLengthByteArrayEncoding.WriteOptionalByteArrayValues(column, values, bufferWriters, ref writer);
+                return;
+            case EncodingKind.DeltaByteArray:
+                DeltaByteArrayEncoding.WriteOptionalByteArrayValues(column, values, bufferWriters, ref writer);
+                return;
+            default:
+                throw new NotSupportedException(
+                    $"Encoding '{encoding}' is not supported for optional byte-array values.");
+        }
+    }
+
+    internal static void WriteOptionalMemoryValues(EncodingKind encoding, Column column,
+        ReadOnlySpan<ReadOnlyMemory<byte>?> values, BufferWriterFactory bufferWriters, ref BufferWriter writer)
+    {
+        switch (encoding)
+        {
+            case EncodingKind.Plain:
+                PlainEncoding.WriteOptionalMemoryValues(column, values, ref writer);
+                return;
+            case EncodingKind.DeltaLengthByteArray:
+                DeltaLengthByteArrayEncoding.WriteOptionalMemoryValues(column, values, bufferWriters, ref writer);
+                return;
+            case EncodingKind.DeltaByteArray:
+                DeltaByteArrayEncoding.WriteOptionalMemoryValues(column, values, bufferWriters, ref writer);
+                return;
+            default:
+                throw new NotSupportedException(
+                    $"Encoding '{encoding}' is not supported for optional byte-array values.");
+        }
+    }
 }

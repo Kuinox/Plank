@@ -3,7 +3,6 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Plank.Reading.Physical;
 using Plank.Schema;
-using Plank.Writing;
 using PhysicalFileMetadata = Plank.Reading.Physical.ParquetFileMetadata;
 
 namespace Plank.Reading.Logical.Internal;

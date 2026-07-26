@@ -1,6 +1,6 @@
 namespace Plank.Reading.Physical;
 
-using Plank.Writing;
+using Plank.Schema;
 
 public struct ParquetPageCursor : IDisposable
 {
@@ -136,7 +136,7 @@ public struct ParquetPageCursor : IDisposable
 
     bool RequiresDecompression(PageHeader header, int payloadLength)
     {
-        if (_chunk.Compression == Writing.CompressionKind.None || payloadLength == 0)
+        if (_chunk.Compression == CompressionKind.None || payloadLength == 0)
             return false;
         return header.Type != PageHeaderType.DataPageV2 || header.IsCompressed;
     }

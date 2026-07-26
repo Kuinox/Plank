@@ -347,6 +347,20 @@ internal sealed class ReaderAllocationTests
         => AssertByteArrayColumnBufferEnumerationDoesNotAllocateAfterWarmup(EncodingKind.DeltaByteArray);
 
     [Test]
+    public void OptionalPackedBinaryColumnEnumerationDoesNotAllocateAfterWarmup()
+    {
+        var encodings = new[]
+        {
+            EncodingKind.Plain,
+            EncodingKind.DeltaLengthByteArray,
+            EncodingKind.DeltaByteArray,
+            EncodingKind.RleDictionary
+        };
+        foreach (var encoding in encodings)
+            AssertByteArrayColumnBufferEnumerationDoesNotAllocateAfterWarmup(encoding, optional: true);
+    }
+
+    [Test]
     public void GeneratedRowReaderDoesNotAllocateBatchBuffersAfterWarmup()
     {
         var path = CreateFile(ReaderAllocationRowSchema.Schema, CreateValues(4096));
@@ -374,6 +388,46 @@ internal sealed class ReaderAllocationTests
             if (allocated != 0)
                 throw new InvalidOperationException(
                     $"Expected generated row reader steady-state iteration to allocate zero bytes but saw {allocated} bytes.");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public void GeneratedBinaryRowReaderDoesNotAllocateValuesAfterWarmup()
+    {
+        byte[]?[] values = CreateByteArrayValues(4096);
+        for (var i = 0; i < values.Length; i += 7)
+            values[i] = null;
+        var path = CreateFile(ReaderAllocationBinaryRowSchema.Schema, values);
+        try
+        {
+            var bytes = File.ReadAllBytes(path);
+            var source = new MemoryReadSource(bytes);
+            using var reader = ReaderAllocationBinaryRowSchema.CreateRowReader(source);
+            for (var i = 0; i < 8; i++)
+            {
+                reader.Reset(source);
+                _ = SumGeneratedBinaryRows(reader);
+            }
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            reader.Reset(source);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var byteCount = SumGeneratedBinaryRows(reader);
+            var after = GC.GetAllocatedBytesForCurrentThread();
+            var allocated = after - before;
+
+            if (byteCount == 0)
+                throw new InvalidOperationException("Expected generated binary values.");
+            if (allocated != 0)
+                throw new InvalidOperationException(
+                    $"Expected generated binary row iteration to allocate zero bytes but saw {allocated} bytes.");
         }
         finally
         {
@@ -414,7 +468,7 @@ internal sealed class ReaderAllocationTests
         return path;
     }
 
-    static string CreateFile(ParquetSchema schema, byte[][] values)
+    static string CreateFile(ParquetSchema schema, byte[]?[] values)
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-reader-alloc-{Guid.NewGuid():N}.parquet");
         using var stream = File.Create(path);
@@ -423,7 +477,7 @@ internal sealed class ReaderAllocationTests
             Compression = CompressionKind.None
         });
         var serialized = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
-        serialized.Serialize(values);
+        serialized.Serialize((byte[][])(object)values);
         writer.StartRowGroup().Write(serialized);
         writer.CloseFile();
         return path;
@@ -451,19 +505,25 @@ internal sealed class ReaderAllocationTests
     static int SumByteLengths(RowGroup rowGroup, LeafColumn column)
     {
         var sum = 0;
-        foreach (var buffer in rowGroup.Column<byte[]>(column))
-            foreach (var value in buffer.Values)
-                sum += value.Length;
+        foreach (var buffer in rowGroup.Column<byte>(column))
+            for (var i = 0; i < buffer.Count; i++)
+                sum += buffer.GetValue(i).Length;
         return sum;
     }
 
-    static void AssertByteArrayColumnBufferEnumerationDoesNotAllocateAfterWarmup(EncodingKind encoding)
+    static void AssertByteArrayColumnBufferEnumerationDoesNotAllocateAfterWarmup(EncodingKind encoding,
+        bool optional = false)
     {
         var schema = new ParquetSchema([
             ColumnDefinition.Leaf("Value", ParquetPhysicalType.ByteArray,
-                new ColumnOptions(encodings: ImmutableArray.Create(encoding)))
+                new ColumnOptions(optional ? ParquetRepetition.Optional : ParquetRepetition.Required,
+                    ImmutableArray.Create(encoding)))
         ]);
-        var path = CreateFile(schema, CreateByteArrayValues(4096));
+        byte[]?[] values = CreateByteArrayValues(4096);
+        if (optional)
+            for (var i = 0; i < values.Length; i += 7)
+                values[i] = null;
+        var path = CreateFile(schema, values);
         try
         {
             using var stream = File.OpenRead(path);
@@ -497,6 +557,18 @@ internal sealed class ReaderAllocationTests
         var sum = 0;
         while (reader.MoveNext())
             sum += reader.Current.Value;
+        return sum;
+    }
+
+    static int SumGeneratedBinaryRows(ReaderAllocationBinaryRowSchema.RowReader reader)
+    {
+        var sum = 0;
+        while (reader.MoveNext())
+        {
+            var row = reader.Current;
+            if (!row.ValueIsNull)
+                sum += row.Value.Length;
+        }
         return sum;
     }
 

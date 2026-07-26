@@ -1,36 +1,31 @@
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Plank.Reading.Logical;
 
 namespace Plank.RowApi;
 
-sealed class RowApiColumnReadState<T> : RowApiColumnReadState
+sealed class RowApiBinaryColumnReadState : RowApiColumnReadState
 {
-    RowGroupColumn<T>.Enumerator _buffers;
-    ColumnBuffer<T> _buffer;
-    T _missing;
+    readonly bool _missingIsNull;
+    RowGroupColumn<byte>.Enumerator _buffers;
+    ColumnBuffer<byte> _buffer;
     bool _usingMissing;
     bool _buffersOpen;
 
-    internal RowApiColumnReadState(RowApiColumnDescriptor<T> descriptor)
+    internal RowApiBinaryColumnReadState(RowApiColumnDescriptor descriptor, bool missingIsNull)
         : base(descriptor)
     {
-        if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
-            throw new NotSupportedException(
-                $"Row reader values containing {typeof(T)} require the variable-length byte state.");
-
+        _missingIsNull = missingIsNull;
         _buffers = default;
         _buffer = default;
-        _missing = default!;
         _usingMissing = false;
         CurrentIndex = -1;
         _buffersOpen = false;
     }
 
-    internal Span<T> CurrentSpan
-        => _usingMissing
-            ? MemoryMarshal.CreateSpan(ref _missing, 1)
-            : _buffer.WritableValues;
+    internal ReadOnlySpan<byte> CurrentValue
+        => _usingMissing || CurrentIndex < 0 ? [] : _buffer.GetValue(CurrentIndex);
+
+    internal bool CurrentIsNull
+        => _usingMissing ? _missingIsNull : CurrentIndex >= 0 && _buffer.IsNull(CurrentIndex);
 
     internal override void ResetBufferState()
     {
@@ -43,7 +38,7 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
     internal override void SetMissingValue()
     {
         DisposeBuffers();
-        _missing = default!;
+        _buffer = default;
         _usingMissing = true;
         CurrentIndex = 0;
     }
@@ -51,7 +46,7 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
     internal override void Open(RowGroup rowGroup)
     {
         DisposeBuffers();
-        _buffers = rowGroup.Column<T>(Ordinal).GetEnumerator();
+        _buffers = rowGroup.Column<byte>(Ordinal).GetEnumerator();
         _buffersOpen = true;
         _buffer = default;
         _usingMissing = false;

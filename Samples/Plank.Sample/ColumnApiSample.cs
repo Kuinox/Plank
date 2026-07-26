@@ -15,7 +15,7 @@ static class ColumnApiSample
         rowGroup.Write(ids);
 
         var names = rowGroup.Name;
-        names.Serialize(["created", "updated", "deleted"]);
+        names.Serialize(["created"u8.ToArray(), "updated"u8.ToArray(), "deleted"u8.ToArray()]);
         rowGroup.Write(names);
 
         var times = rowGroup.OccurredAt;

@@ -10,7 +10,7 @@ public sealed partial class EncodedRowSchema
     public ulong Id { get; set; }
 
     [ParquetColumn("tag", Encodings = [EncodingKind.RleDictionary])]
-    public string? Tag { get; set; }
+    public byte[]? Tag { get; set; }
 
     [ParquetColumn("payload", Encodings = [EncodingKind.Plain])]
     public byte[] Payload { get; set; } = [];
@@ -49,7 +49,7 @@ internal sealed class GeneratedRowSchemaEncodingTests
                 rowGroup.Write(ids);
 
                 var tags = rowGroup.Tag;
-                tags.Serialize(["a", "b", "a"]);
+                tags.Serialize(["a"u8.ToArray(), "b"u8.ToArray(), "a"u8.ToArray()]);
                 rowGroup.Write(tags);
 
                 var payloads = rowGroup.Payload;

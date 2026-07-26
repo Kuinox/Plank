@@ -20,22 +20,48 @@ public readonly struct RowGroupColumn<T>
     public LeafColumn Definition { get; }
 
     public Enumerator GetEnumerator()
-        => new(_rowGroup.EnumerateBuffers<T>(Definition.Column, _columnOrdinal).GetEnumerator());
+    {
+        if (typeof(T) == typeof(byte) &&
+            Definition.PhysicalType is ParquetPhysicalType.ByteArray
+                or ParquetPhysicalType.FixedLenByteArray
+                or ParquetPhysicalType.Int96)
+            return new(_rowGroup.EnumerateVariableLengthBuffers<T>(Definition.Column, _columnOrdinal)
+                .GetEnumerator());
+        return new(_rowGroup.EnumerateBuffers<T>(Definition.Column, _columnOrdinal).GetEnumerator());
+    }
 
     public struct Enumerator : IDisposable
     {
         ColumnBufferEnumerable<T>.Enumerator _inner;
+        VariableLengthColumnBufferEnumerable<T>.Enumerator _variableLengthInner;
+        readonly bool _isVariableLength;
 
         internal Enumerator(ColumnBufferEnumerable<T>.Enumerator inner)
-            => _inner = inner;
+        {
+            _inner = inner;
+            _variableLengthInner = default;
+            _isVariableLength = false;
+        }
+
+        internal Enumerator(VariableLengthColumnBufferEnumerable<T>.Enumerator inner)
+        {
+            _inner = default;
+            _variableLengthInner = inner;
+            _isVariableLength = true;
+        }
 
         public ColumnBuffer<T> Current
-            => _inner.Current;
+            => _isVariableLength ? _variableLengthInner.Current : _inner.Current;
 
         public bool MoveNext()
-            => _inner.MoveNext();
+            => _isVariableLength ? _variableLengthInner.MoveNext() : _inner.MoveNext();
 
         public void Dispose()
-            => _inner.Dispose();
+        {
+            if (_isVariableLength)
+                _variableLengthInner.Dispose();
+            else
+                _inner.Dispose();
+        }
     }
 }

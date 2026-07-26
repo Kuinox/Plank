@@ -68,9 +68,38 @@ Each [`ColumnBuffer<T>`](xref:Plank.Reading.Logical.ColumnBuffer`1) contains one
 
 Nullable schema properties generate nullable column types such as [`RowGroupColumn<int?>`](xref:Plank.Reading.Logical.RowGroupColumn`1).
 
+## Read binary values
+
+Binary columns use the same generic column API as other unmanaged values. Each generated binary
+column is a [`RowGroupColumn<byte>`](xref:Plank.Reading.Logical.RowGroupColumn`1):
+
+```csharp
+foreach (ColumnBuffer<byte> buffer in rowGroup.NameColumn)
+{
+    for (int i = 0; i < buffer.Count; i++)
+    {
+        if (buffer.IsNull(i))
+            continue;
+
+        Consume(buffer.GetValue(i));
+    }
+}
+```
+
+Each page stores its internal descriptor table and all referenced bytes in one pooled
+[`ParquetBuffer`](xref:Plank.Writing.ParquetBuffer). An empty value has a zero-length span while
+`IsNull(i)` returns `false`; optional nulls return `true`.
+
+For binary columns, `Count` is the number of logical byte arrays, `GetValue(i)` preserves their
+individual boundaries, and `Values` is the concatenated non-null byte payload.
+
+Call `buffer.GetValue(i).ToArray()` only when an owning `byte[]` is required. That call is the
+explicit allocation boundary. Runtime schemas can request the same zero-allocation view with
+`rowGroup.Column<byte>(column)`.
+
 ## Retain a buffer
 
-Most fixed-width value buffers can be retained beyond the current enumeration step:
+Value buffers can be retained beyond the current enumeration step:
 
 ```csharp
 using Plank.Reading.Logical;
@@ -78,13 +107,20 @@ using Plank.Writing;
 
 foreach (ColumnBuffer<int> buffer in rowGroup.IdColumn)
 {
-    if (!buffer.CanRetain)
-        continue;
-
     using ParquetBuffer retained = buffer.Retain();
     foreach (int id in retained.AsSpan<int>())
         Console.WriteLine(id);
 }
 ```
 
-Check [`CanRetain`](xref:Plank.Reading.Logical.ColumnBuffer`1.CanRetain) first. [`Retain`](xref:Plank.Reading.Logical.ColumnBuffer`1.Retain) returns a reference-counted [`ParquetBuffer`](xref:Plank.Writing.ParquetBuffer); dispose it when it is no longer needed. For non-retainable buffers, copy [`Values`](xref:Plank.Reading.Logical.ColumnBuffer`1.Values) if the data must outlive the current iteration.
+[`Retain`](xref:Plank.Reading.Logical.ColumnBuffer`1.Retain) returns a reference-counted
+[`ParquetBuffer`](xref:Plank.Writing.ParquetBuffer); dispose it when it is no longer needed.
+
+Keep a binary `ColumnBuffer<byte>` value and its retained lease
+together while accessing values:
+
+```csharp
+ColumnBuffer<byte> buffer = binaryBuffers.Current;
+using ParquetBuffer retained = buffer.Retain();
+Consume(buffer.GetValue(0));
+```

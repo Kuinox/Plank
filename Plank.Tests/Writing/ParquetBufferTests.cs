@@ -1,5 +1,3 @@
-using Plank.Writing;
-
 namespace Plank.Tests.Writing;
 
 [NotInParallel]

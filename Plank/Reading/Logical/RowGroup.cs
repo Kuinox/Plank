@@ -71,14 +71,28 @@ public readonly struct RowGroup
             ? columnChunk.PhysicalColumnOrdinal
             : columnOrdinal;
         return new ColumnBufferEnumerable<T>(reader.PhysicalReader, Metadata.RowGroupOrdinal,
-            physicalColumnOrdinal, column, columnChunk, reader.Options.BufferPool, Metadata.RowCount);
+            physicalColumnOrdinal, column, reader.Options.BufferPool, Metadata.RowCount);
     }
+
+    internal VariableLengthColumnBufferEnumerable<T> EnumerateVariableLengthBuffers<T>(Column column,
+        int columnOrdinal)
+        => new(EnumerateBuffers<BinaryValueDescriptor>(column, columnOrdinal));
 
     ParquetReader GetReader()
         => Reader ?? throw new InvalidOperationException("The row group is not initialized.");
 
     static void ValidatePhysicalType<T>(Column column)
     {
+        if (typeof(T) == typeof(byte[]) ||
+            typeof(T) == typeof(ReadOnlyMemory<byte>) ||
+            typeof(T) == typeof(ReadOnlyMemory<byte>?))
+            throw new NotSupportedException(
+                $"Column '{column.Name}' contains variable-length bytes and must be read as '{typeof(byte)}'.");
+        if (typeof(T) == typeof(byte) &&
+            column.PhysicalType is ParquetPhysicalType.ByteArray
+                or ParquetPhysicalType.FixedLenByteArray
+                or ParquetPhysicalType.Int96)
+            return;
         var resolution = ParquetTypeMap.ResolvePhysicalType<T>();
         if (!resolution.IsSuccess)
             throw new NotSupportedException(resolution.ErrorMessage);

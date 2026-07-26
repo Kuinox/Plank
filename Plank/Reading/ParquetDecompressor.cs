@@ -1,6 +1,6 @@
 using System.IO.Compression;
 using K4os.Compression.LZ4;
-using Plank.Writing;
+using Plank.Schema;
 using ZstdSharp;
 
 namespace Plank.Reading;
