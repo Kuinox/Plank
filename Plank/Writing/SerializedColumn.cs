@@ -208,6 +208,24 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
         }
 
+        if (typeof(T) == typeof(string))
+        {
+            SerializeStrings(AsAnySpan<string>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(Guid?))
+        {
+            SerializeNullableGuids(AsNullableSpan<Guid>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(Guid))
+        {
+            SerializeGuids(AsSpan<Guid>(values));
+            return;
+        }
+
         if (typeof(T) == typeof(DateOnly?))
         {
             SerializeNullableDateOnly(AsNullableSpan<DateOnly>(values));
@@ -261,6 +279,31 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     public void Serialize(T[] values)
         => Serialize(values.AsSpan());
+
+    void SerializeStrings(ReadOnlySpan<string> values)
+    {
+        var encoded = new byte[values.Length][];
+        for (var i = 0; i < values.Length; i++)
+            if (values[i] is { } value)
+                encoded[i] = System.Text.Encoding.UTF8.GetBytes(value);
+
+        if (_column.Options.Repetition == ParquetRepetition.Optional)
+            SerializeOptionalReference(encoded);
+        else
+            SerializeTyped(encoded);
+    }
+
+    void SerializeGuids(ReadOnlySpan<Guid> values)
+    {
+        RequireUuidLogicalType(_column);
+        SerializeTyped(values);
+    }
+
+    void SerializeNullableGuids(ReadOnlySpan<Guid?> values)
+    {
+        RequireUuidLogicalType(_column);
+        SerializeOptionalTyped(values);
+    }
 
     void SerializeDateOnly(ReadOnlySpan<DateOnly> values)
     {
@@ -923,5 +966,16 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         throw new InvalidOperationException(
             $"Column '{column.Name}' must declare logical type '{typeof(LogicalType.Timestamp)}' for timestamp serialization.");
+    }
+
+    static void RequireUuidLogicalType(Column column)
+    {
+        if (column.LogicalType is LogicalType.Uuid &&
+            column.PhysicalType == ParquetPhysicalType.FixedLenByteArray &&
+            column.Options.TypeLength == 16)
+            return;
+
+        throw new InvalidOperationException(
+            $"Column '{column.Name}' must be a 16-byte fixed-length column with UUID logical type for Guid serialization.");
     }
 }

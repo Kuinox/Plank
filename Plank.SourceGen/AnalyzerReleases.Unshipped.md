@@ -17,3 +17,4 @@ PLANKGEN012 | Plank.SourceGen | Error | Logical and CLR type mismatch.
 PLANKGEN013 | Plank.SourceGen | Error | Invalid logical time unit.
 PLANKGEN014 | Plank.SourceGen | Error | Invalid decimal definition.
 PLANKGEN015 | Plank.SourceGen | Error | Decimal physical type mismatch.
+PLANKGEN016 | Plank.SourceGen | Error | Allocating schema value requires opt-in.

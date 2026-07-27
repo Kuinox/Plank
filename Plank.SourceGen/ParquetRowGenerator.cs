@@ -128,6 +128,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    static readonly DiagnosticDescriptor AllocatingValueNotAllowed = new(
+        id: "PLANKGEN016",
+        title: "Allocating schema value requires opt-in",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var schemaTypes = context.SyntaxProvider.ForAttributeWithMetadataName(
@@ -157,6 +165,21 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
             context.ReportDiagnostic(Diagnostic.Create(InvalidTypeHint, schemaType.Locations.FirstOrDefault(), extractError));
             return;
+        }
+
+        if (!AllowsAllocatingValues(schemaType))
+        {
+            foreach (var column in columns)
+            {
+                if (!IsStringClr(column.ClrTypeName))
+                    continue;
+
+                context.ReportDiagnostic(Diagnostic.Create(AllocatingValueNotAllowed,
+                    schemaType.Locations.FirstOrDefault(),
+                    $"Column '{column.Name}' uses string, which allocates during UTF-8 conversion. " +
+                    "Set [ParquetSchema(AllowAllocatingValues = true)] to opt in."));
+                return;
+            }
         }
 
         var schemaDiagnostics = ValidateSchemaColumns(columns);
@@ -599,7 +622,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         for (var i = 0; i < columns.Length; i++)
         {
             builder.AppendLine();
-            if (IsUtf8ByteArrayClr(columns[i].ClrTypeName))
+            if (IsUtf8ByteArrayClr(columns[i].ClrTypeName) ||
+                IsStringClr(columns[i].ClrTypeName) ||
+                IsGuidClr(columns[i].ClrTypeName))
             {
                 builder.Append("        public global::Plank.Reading.Logical.RowGroupColumn<byte> ")
                     .Append(columns[i].PropertyName)
@@ -730,7 +755,38 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         {
             var propertyName = columns[i].PropertyName;
             var descriptorName = GetRowApiColumnFieldName(propertyName);
-            if (IsUtf8ByteArrayClr(columns[i].ClrTypeName))
+            if (IsStringClr(columns[i].ClrTypeName))
+            {
+                builder.Append("        public ").Append(columns[i].ClrTypeName).Append(' ')
+                    .Append(propertyName).AppendLine();
+                builder.AppendLine("        {");
+                builder.AppendLine("            get");
+                builder.AppendLine("            {");
+                builder.Append("                var value = _core.GetCurrentBinary(").Append(descriptorName)
+                    .AppendLine(");");
+                builder.AppendLine("                if (value.IsNull)");
+                builder.AppendLine("                    return null!;");
+                builder.AppendLine("                return global::System.Text.Encoding.UTF8.GetString(value.Value);");
+                builder.AppendLine("            }");
+                builder.AppendLine("        }");
+            }
+            else if (IsGuidClr(columns[i].ClrTypeName))
+            {
+                builder.Append("        public ").Append(columns[i].ClrTypeName).Append(' ')
+                    .Append(propertyName).AppendLine();
+                builder.AppendLine("        {");
+                builder.AppendLine("            get");
+                builder.AppendLine("            {");
+                builder.Append("                var value = _core.GetCurrentBinary(").Append(descriptorName)
+                    .AppendLine(");");
+                if (columns[i].ClrTypeName.EndsWith("?", StringComparison.Ordinal))
+                    builder.AppendLine("                return value.IsNull ? null : new global::System.Guid(value.Value, bigEndian: true);");
+                else
+                    builder.AppendLine("                return new global::System.Guid(value.Value, bigEndian: true);");
+                builder.AppendLine("            }");
+                builder.AppendLine("        }");
+            }
+            else if (IsUtf8ByteArrayClr(columns[i].ClrTypeName))
             {
                 builder.Append("        public global::System.ReadOnlySpan<byte> ")
                     .Append(propertyName).AppendLine();
@@ -773,7 +829,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     or "global::System.TimeOnly" or "global::System.TimeOnly?",
                 "Float" => clrType is "float" or "float?",
                 "Double" => clrType is "double" or "double?",
-                "ByteArray" => clrType is "byte[]" or "byte[]?" or "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?",
+                "ByteArray" => clrType is
+                    "byte[]" or "byte[]?"
+                    or "string" or "string?"
+                    or "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?",
+                "FixedLenByteArray" => clrType is "global::System.Guid" or "global::System.Guid?",
                 _ => false
             };
 
@@ -786,7 +846,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 or "global::System.DateTime" or "global::System.DateTimeOffset" or "global::System.TimeOnly",
             "Float" => clrType == "float",
             "Double" => clrType == "double",
-            "ByteArray" => clrType is "byte[]" or "global::System.ReadOnlyMemory<byte>",
+            "ByteArray" => clrType is "byte[]" or "string" or "global::System.ReadOnlyMemory<byte>",
+            "FixedLenByteArray" => clrType == "global::System.Guid",
             _ => false
         };
     }
@@ -802,12 +863,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "ulong" or "ulong?" or
             "float" or "float?" or
             "double" or "double?" or
+            "string" or "string?" or
             "byte[]" or "byte[]?" or
             "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?" or
             "global::System.DateOnly" or "global::System.DateOnly?" or
             "global::System.DateTime" or "global::System.DateTime?" or
             "global::System.DateTimeOffset" or "global::System.DateTimeOffset?" or
-            "global::System.TimeOnly" or "global::System.TimeOnly?";
+            "global::System.TimeOnly" or "global::System.TimeOnly?" or
+            "global::System.Guid" or "global::System.Guid?";
 
     static string Escape(string value)
         => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
@@ -852,6 +915,19 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     static bool SupportsOwnerSetter(string clrTypeName)
         => clrTypeName is "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?";
+
+    static bool AllowsAllocatingValues(INamedTypeSymbol schemaType)
+    {
+        var attribute = schemaType.GetAttributes().FirstOrDefault(static attribute =>
+            attribute.AttributeClass?.ToDisplayString() == "Plank.Schema.ParquetSchemaAttribute");
+        if (attribute is null)
+            return false;
+
+        foreach (var argument in attribute.NamedArguments)
+            if (argument.Key == "AllowAllocatingValues" && argument.Value.Value is true)
+                return true;
+        return false;
+    }
 
     static bool TryExtractColumns(INamedTypeSymbol schemaType, out ImmutableArray<SchemaColumn> columns, out string error)
     {
@@ -914,7 +990,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
 
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
-        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType, property.Name, encodings);
+        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType, property.Name, encodings,
+            IsGuidClr(clrTypeName) ? 16u : 0u);
         return true;
     }
 
@@ -1108,12 +1185,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "ulong" => "Int64",
             "float" => "Float",
             "double" => "Double",
+            "string" => "ByteArray",
             "byte[]" => "ByteArray",
             "global::System.ReadOnlyMemory<byte>" => "ByteArray",
             "global::System.DateOnly" => "Int32",
             "global::System.DateTime" => "Int64",
             "global::System.DateTimeOffset" => "Int64",
             "global::System.TimeOnly" => "Int64",
+            "global::System.Guid" => "FixedLenByteArray",
             _ => string.Empty
         };
 
@@ -1130,6 +1209,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "global::System.TimeOnly" => new LogicalTypeSpec("Time", unit: "Micros", isAdjustedToUtc: false),
             "global::System.DateTime" => new LogicalTypeSpec("Timestamp", unit: "Micros", isAdjustedToUtc: true),
             "global::System.DateTimeOffset" => new LogicalTypeSpec("Timestamp", unit: "Micros", isAdjustedToUtc: true),
+            "string" => new LogicalTypeSpec("String"),
+            "global::System.Guid" => new LogicalTypeSpec("Uuid"),
             _ => null
         };
         return true;
@@ -1269,17 +1350,17 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (column.PhysicalType != "ByteArray")
                     diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
                         $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires physical type 'ByteArray'."));
-                if (!IsUtf8ByteArrayClr(column.ClrTypeName))
+                if (!IsUtf8ByteArrayClr(column.ClrTypeName) && !IsStringClr(column.ClrTypeName))
                     diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
-                        $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires CLR type ReadOnlyMemory<byte>/ReadOnlyMemory<byte>?/byte[]/byte[]?."));
+                        $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires CLR type string/string?/ReadOnlyMemory<byte>/ReadOnlyMemory<byte>?/byte[]/byte[]?."));
                 break;
             case "Uuid":
                 if (column.PhysicalType != "FixedLenByteArray")
                     diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
                         $"Column '{column.Name}' logical type 'Uuid' requires physical type 'FixedLenByteArray'."));
-                if (!IsUtf8ByteArrayClr(column.ClrTypeName))
+                if (!IsUtf8ByteArrayClr(column.ClrTypeName) && !IsGuidClr(column.ClrTypeName))
                     diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
-                        $"Column '{column.Name}' logical type 'Uuid' requires CLR type ReadOnlyMemory<byte>/ReadOnlyMemory<byte>?/byte[]/byte[]?."));
+                        $"Column '{column.Name}' logical type 'Uuid' requires CLR type Guid/Guid?/ReadOnlyMemory<byte>/ReadOnlyMemory<byte>?/byte[]/byte[]?."));
                 break;
             case "Decimal":
                 if (logicalType.Value.Precision is not int precision || precision <= 0)
@@ -1334,6 +1415,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "byte[]" or "byte[]?" or
             "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?";
 
+    static bool IsStringClr(string clrType)
+        => clrType is "string" or "string?";
+
+    static bool IsGuidClr(string clrType)
+        => clrType is "global::System.Guid" or "global::System.Guid?";
+
     static bool IsTimeUnit(string unit)
         => unit is "Millis" or "Micros" or "Nanos";
 
@@ -1357,6 +1444,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             SpecialType.System_UInt64 => isNullable ? "ulong?" : "ulong",
             SpecialType.System_Single => isNullable ? "float?" : "float",
             SpecialType.System_Double => isNullable ? "double?" : "double",
+            SpecialType.System_String => nullableAnnotation == NullableAnnotation.Annotated ? "string?" : "string",
             _ => string.Empty
         };
         if (clrTypeName.Length > 0)
@@ -1385,6 +1473,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "global::System.DateTime" => isNullable ? "global::System.DateTime?" : "global::System.DateTime",
             "global::System.DateTimeOffset" => isNullable ? "global::System.DateTimeOffset?" : "global::System.DateTimeOffset",
             "global::System.TimeOnly" => isNullable ? "global::System.TimeOnly?" : "global::System.TimeOnly",
+            "global::System.Guid" => isNullable ? "global::System.Guid?" : "global::System.Guid",
             _ => string.Empty
         };
 
@@ -1411,6 +1500,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append(')');
         }
 
+        if (column.TypeLength > 0)
+        {
+            if (column.Encodings.IsDefaultOrEmpty)
+                builder.Append(", default");
+            builder.Append(", ").Append(column.TypeLength);
+        }
+
         builder.Append(')');
         return builder.ToString();
     }
@@ -1418,7 +1514,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     readonly struct SchemaColumn
     {
         public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName,
-            LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings)
+            LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings, uint typeLength)
         {
             Name = name;
             PhysicalType = physicalType;
@@ -1427,6 +1523,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             LogicalType = logicalType;
             RowPropertyName = rowPropertyName;
             Encodings = encodings;
+            TypeLength = typeLength;
         }
 
         public string Name { get; }
@@ -1442,6 +1539,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public string RowPropertyName { get; }
 
         public ImmutableArray<string> Encodings { get; }
+
+        public uint TypeLength { get; }
     }
 
     readonly struct LogicalTypeSpec

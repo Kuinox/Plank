@@ -519,6 +519,8 @@ Plank.Schema.ParquetSchema.Definitions.get -> System.Collections.Immutable.Immut
 Plank.Schema.ParquetSchema.LeafColumns.get -> System.Collections.Immutable.ImmutableArray<Plank.Schema.LeafColumn!>
 Plank.Schema.ParquetSchema.ParquetSchema(System.Collections.Immutable.ImmutableArray<Plank.Schema.ColumnDefinition!> definitions) -> void
 Plank.Schema.ParquetSchemaAttribute
+Plank.Schema.ParquetSchemaAttribute.AllowAllocatingValues.get -> bool
+Plank.Schema.ParquetSchemaAttribute.AllowAllocatingValues.set -> void
 Plank.Schema.ParquetSchemaAttribute.ParquetSchemaAttribute() -> void
 Plank.Schema.RowSchema
 Plank.Schema.RowSchema.Columns.get -> System.Collections.Immutable.ImmutableArray<Plank.Schema.RowSchemaColumn!>

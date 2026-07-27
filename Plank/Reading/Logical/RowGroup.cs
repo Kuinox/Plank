@@ -85,7 +85,10 @@ public readonly struct RowGroup
     {
         if (typeof(T) == typeof(byte[]) ||
             typeof(T) == typeof(ReadOnlyMemory<byte>) ||
-            typeof(T) == typeof(ReadOnlyMemory<byte>?))
+            typeof(T) == typeof(ReadOnlyMemory<byte>?) ||
+            typeof(T) == typeof(string) ||
+            typeof(T) == typeof(Guid) ||
+            typeof(T) == typeof(Guid?))
             throw new NotSupportedException(
                 $"Column '{column.Name}' contains variable-length bytes and must be read as '{typeof(byte)}'.");
         if (typeof(T) == typeof(byte) &&

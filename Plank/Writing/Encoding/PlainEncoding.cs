@@ -326,6 +326,32 @@ static class PlainEncoding
     internal static void WriteOptionalByteArrayValues(Column column, ReadOnlySpan<byte[]> values,
         ref BufferWriter writer)
     {
+        if (column.PhysicalType is ParquetPhysicalType.FixedLenByteArray or ParquetPhysicalType.Int96)
+        {
+            var valueLength = column.PhysicalType == ParquetPhysicalType.Int96 ? 12 : GetFixedLength(column);
+            var presentCount = 0;
+            for (var i = 0; i < values.Length; i++)
+                if (values[i] is not null)
+                    presentCount++;
+
+            var fixedDestination = writer.GetSpan(checked(presentCount * valueLength));
+            var fixedOffset = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var value = values[i];
+                if (value is null)
+                    continue;
+                if (value.Length != valueLength)
+                    throw new InvalidOperationException(
+                        $"Column '{column.Name}' expects fixed-length values of {valueLength} bytes, but got {value.Length}.");
+                value.CopyTo(fixedDestination[fixedOffset..]);
+                fixedOffset += valueLength;
+            }
+
+            writer.Advance(fixedOffset);
+            return;
+        }
+
         var byteCount = 0;
         for (var i = 0; i < values.Length; i++)
         {
@@ -416,11 +442,25 @@ static class PlainEncoding
     static void WriteFixedLengthByteArrayValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
+        var valueLength = GetFixedLength(column);
+        if (typeof(T) == typeof(Guid))
+        {
+            if (valueLength != 16)
+                throw new InvalidOperationException(
+                    $"Column '{column.Name}' expects Guid values in fixed-length payloads of 16 bytes, but has length {valueLength}.");
+
+            var guidValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<Guid>>(ref values);
+            var guidDestination = writer.GetSpan(checked(guidValues.Length * 16));
+            for (var i = 0; i < guidValues.Length; i++)
+                guidValues[i].TryWriteBytes(guidDestination.Slice(i * 16, 16), bigEndian: true, out _);
+            writer.Advance(checked(guidValues.Length * 16));
+            return;
+        }
+
         if (typeof(T) != typeof(byte[]))
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.FixedLenByteArray}' values as byte[] payloads, but got '{typeof(T)}'.");
 
-        var valueLength = GetFixedLength(column);
         var fixedLengthValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
         var byteCount = checked(fixedLengthValues.Length * valueLength);
         if (byteCount == 0)

@@ -24,9 +24,15 @@ public sealed class RowApiColumnDescriptor<T> : RowApiColumnDescriptor
     {
         if (typeof(T) == typeof(byte[]) ||
             typeof(T) == typeof(ReadOnlyMemory<byte>) ||
-            typeof(T) == typeof(ReadOnlyMemory<byte>?))
+            typeof(T) == typeof(ReadOnlyMemory<byte>?) ||
+            typeof(T) == typeof(string) ||
+            typeof(T) == typeof(Guid) ||
+            typeof(T) == typeof(Guid?))
             return new RowApiBinaryColumnReadState(this,
-                missingIsNull: typeof(T) != typeof(ReadOnlyMemory<byte>));
+                missingIsNull: typeof(T) == typeof(byte[]) ||
+                    typeof(T) == typeof(ReadOnlyMemory<byte>?) ||
+                    typeof(T) == typeof(string) ||
+                    typeof(T) == typeof(Guid?));
         return new RowApiColumnReadState<T>(this);
     }
 

@@ -47,15 +47,29 @@ Plank validates that the selected options are compatible with the property type.
 | `long`, `ulong` | `Int64` |
 | `float` | `Float` |
 | `double` | `Double` |
+| `string` | `ByteArray` with `String` |
 | `byte[]`, `ReadOnlyMemory<byte>` | `ByteArray` |
+| `Guid` | 16-byte `FixedLenByteArray` with `Uuid` |
 | `DateOnly` | `Int32` with `Date` |
 | `TimeOnly` | `Int64` with `Time` |
 | `DateTime`, `DateTimeOffset` | `Int64` with `Timestamp` |
 
 Nullable forms use the same type and create an optional column.
 
-String logical annotations use UTF-8 bytes supplied as `byte[]` or `ReadOnlyMemory<byte>`; Plank does not
-encode or decode CLR `string` values.
+CLR strings require an explicit opt-in because UTF-8 encoding and decoding allocates:
+
+```csharp
+[ParquetSchema(AllowAllocatingValues = true)]
+public sealed partial class SimpleSchema
+{
+    public string Name { get; init; } = string.Empty;
+
+    public Guid Id { get; init; }
+}
+```
+
+Without `AllowAllocatingValues`, the source generator reports an error for every `string` property. Use
+`byte[]` or `ReadOnlyMemory<byte>` when allocation-free access is required.
 
 ## Runtime schemas
 
