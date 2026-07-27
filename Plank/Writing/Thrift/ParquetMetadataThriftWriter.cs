@@ -52,14 +52,18 @@ static class ParquetMetadataThriftWriter
         writer.EndStruct(previous);
     }
 
-    internal static void WriteColumnIndex(ref BufferWriter destination, ReadOnlySpan<ColumnStatistics> statistics)
+    internal static void WriteColumnIndex(ref BufferWriter destination, ReadOnlySpan<ColumnStatistics> statistics,
+        ReadOnlySpan<bool> nullPages)
     {
+        if (statistics.Length != nullPages.Length)
+            throw new ArgumentException("Statistics and null-page flags must have the same length.", nameof(nullPages));
+
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
         writer.WriteFieldHeader(1, CompactType.List);
         writer.WriteListHeader(statistics.Length, CompactType.BooleanTrue);
         for (var i = 0; i < statistics.Length; i++)
-            writer.WriteBool(statistics[i].ValueKind == ColumnStatistics.ColumnStatisticsValueKind.None);
+            writer.WriteBool(nullPages[i]);
 
         writer.WriteFieldHeader(2, CompactType.List);
         writer.WriteListHeader(statistics.Length, CompactType.Binary);
@@ -108,7 +112,22 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldHeader(4, CompactType.List);
         writer.WriteListHeader(rowGroupCount, CompactType.Struct);
         writer.WriteRaw(ref serializedRowGroups);
+        WriteColumnOrders(ref writer, schema.Columns.Length);
         writer.EndStruct(previous);
+    }
+
+    static void WriteColumnOrders(ref CompactWriter writer, int columnCount)
+    {
+        writer.WriteFieldHeader(7, CompactType.List);
+        writer.WriteListHeader(columnCount, CompactType.Struct);
+        for (var i = 0; i < columnCount; i++)
+        {
+            var previousOrder = writer.BeginStruct();
+            writer.WriteFieldHeader(1, CompactType.Struct);
+            var previousTypeOrder = writer.BeginStruct();
+            writer.EndStruct(previousTypeOrder);
+            writer.EndStruct(previousOrder);
+        }
     }
 
     internal static void WriteRowGroup(ref BufferWriter destination, ReadOnlySpan<Column> columns,
@@ -136,7 +155,7 @@ static class ParquetMetadataThriftWriter
             totalCompressedSize = checked(totalCompressedSize + chunk.TotalCompressedSize);
             if (hasRowGroupOffset)
                 continue;
-            rowGroupOffset = chunk.DataPageOffset;
+            rowGroupOffset = GetColumnChunkOffset(chunk);
             hasRowGroupOffset = true;
         }
 
@@ -471,7 +490,7 @@ static class ParquetMetadataThriftWriter
         in ColumnChunkMetadata metadata)
     {
         var previousChunk = writer.BeginStruct();
-        writer.WriteFieldI64(2, metadata.DataPageOffset);
+        writer.WriteFieldI64(2, GetColumnChunkOffset(metadata));
         writer.WriteFieldHeader(3, CompactType.Struct);
 
         var previousMetadata = writer.BeginStruct();
@@ -501,6 +520,9 @@ static class ParquetMetadataThriftWriter
         writer.EndStruct(previousChunk);
     }
 
+    static long GetColumnChunkOffset(in ColumnChunkMetadata metadata)
+        => metadata.HasDictionaryPage ? metadata.DictionaryPageOffset : metadata.DataPageOffset;
+
     static void WriteStatistics(ref CompactWriter writer, in ColumnStatistics statistics)
     {
         if (!statistics.HasStatistics)
@@ -508,9 +530,13 @@ static class ParquetMetadataThriftWriter
 
         writer.WriteFieldHeader(12, CompactType.Struct);
         var previous = writer.BeginStruct();
-        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
+        var writeLegacyMinMax = statistics.ValueKind is not
+            (ColumnStatistics.ColumnStatisticsValueKind.None or
+            ColumnStatistics.ColumnStatisticsValueKind.UInt32 or
+            ColumnStatistics.ColumnStatisticsValueKind.UInt64);
+        if (writeLegacyMinMax)
             WriteStatisticsValue(ref writer, 1, statistics, writeMax: true);
-        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
+        if (writeLegacyMinMax)
             WriteStatisticsValue(ref writer, 2, statistics, writeMax: false);
         writer.WriteFieldI64(3, statistics.NullCount);
         if (statistics.DistinctCount >= 0)
@@ -679,7 +705,7 @@ static class ParquetMetadataThriftWriter
             CompressionKind.Snappy => (int)CompressionCodec.Snappy,
             CompressionKind.Gzip => (int)CompressionCodec.Gzip,
             CompressionKind.Brotli => (int)CompressionCodec.Brotli,
-            CompressionKind.Lz4 => (int)CompressionCodec.Lz4,
+            CompressionKind.Lz4 => (int)CompressionCodec.Lz4Raw,
             CompressionKind.Zstd => (int)CompressionCodec.Zstd,
             _ => throw new NotSupportedException($"Compression '{compression}' is not supported.")
         };
@@ -733,8 +759,8 @@ static class ParquetMetadataThriftWriter
         Snappy = 1,
         Gzip = 2,
         Brotli = 4,
-        Lz4 = 5,
-        Zstd = 6
+        Zstd = 6,
+        Lz4Raw = 7
     }
 
     enum PageType

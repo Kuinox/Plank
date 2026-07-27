@@ -14,6 +14,7 @@ public sealed class RowGroupWriter
     BufferWriter _columnIndexBuffer;
     BufferWriter _offsetIndexBuffer;
     ColumnStatistics[][] _pageStatisticsByColumn;
+    bool[][] _nullPagesByColumn;
     PageLocation[][] _pageLocationsByColumn;
     uint _nextColumnOrdinal;
     uint? _rowCount;
@@ -25,6 +26,7 @@ public sealed class RowGroupWriter
         _compressionInput = default;
         _compressedValues = default;
         _pageStatisticsByColumn = writer.ColumnCount == 0 ? [] : new ColumnStatistics[writer.ColumnCount][];
+        _nullPagesByColumn = writer.ColumnCount == 0 ? [] : new bool[writer.ColumnCount][];
         _pageLocationsByColumn = writer.ColumnCount == 0 ? [] : new PageLocation[writer.ColumnCount][];
         ResetForNewRowGroup();
     }
@@ -76,6 +78,7 @@ public sealed class RowGroupWriter
             _compressedValues = _writer.BufferWriters.CreatePageBufferWriter();
         long totalUncompressedSize = 0;
         long totalCompressedSize = 0;
+        long valueCount = 0;
         var dataPageOffset = -1L;
         var dictionaryPageOffset = 0L;
         var hasDictionaryPage = false;
@@ -84,6 +87,7 @@ public sealed class RowGroupWriter
         if (writePageIndexes)
             EnsurePageIndexCapacity(columnOrdinal, pages.Count);
         var pageStatistics = writePageIndexes ? _pageStatisticsByColumn[columnOrdinal] : [];
+        var nullPages = writePageIndexes ? _nullPagesByColumn[columnOrdinal] : [];
         var pageLocations = writePageIndexes ? _pageLocationsByColumn[columnOrdinal] : [];
         var dataPageCount = 0;
         var firstRowIndex = 0L;
@@ -129,6 +133,7 @@ public sealed class RowGroupWriter
                 {
                     var dataPageRowCount = page.RowCount;
                     var dataPageValueCount = page.ValueCount;
+                    valueCount = checked(valueCount + dataPageValueCount);
                     var dataPageNullCount = page.NullCount;
                     nullCount = checked(nullCount + dataPageNullCount);
                     var repetitionLevelsByteLength = page.RepetitionLevelsByteLength;
@@ -205,6 +210,7 @@ public sealed class RowGroupWriter
                 pageStatistics[dataPageCount] = page.Statistics.HasStatistics
                     ? page.Statistics.WithNullCount(page.NullCount)
                     : ColumnStatistics.Empty(page.NullCount);
+                nullPages[dataPageCount] = page.NullCount == page.ValueCount;
                 pageLocations[dataPageCount] = new PageLocation(pageOffset, checked((uint)(headerSize + storedContentSize)),
                     firstRowIndex);
             }
@@ -218,7 +224,7 @@ public sealed class RowGroupWriter
         ref var columnMetadata = ref _writer.OpenRowGroupColumnMetadata[columnOrdinal];
         columnMetadata.DataPageOffset = dataPageOffset;
         columnMetadata.DictionaryPageOffset = dictionaryPageOffset;
-        columnMetadata.ValueCount = state.RowCount;
+        columnMetadata.ValueCount = valueCount;
         columnMetadata.TotalUncompressedSize = totalUncompressedSize;
         columnMetadata.TotalCompressedSize = totalCompressedSize;
         columnMetadata.DataEncoding = dataEncoding;
@@ -232,7 +238,7 @@ public sealed class RowGroupWriter
         columnMetadata.OffsetIndexOffset = 0;
         columnMetadata.OffsetIndexLength = 0;
         columnMetadata.PageIndex = writePageIndexes
-            ? new PageIndex(pageStatistics, pageLocations, dataPageCount)
+            ? new PageIndex(pageStatistics, nullPages, pageLocations, dataPageCount)
             : default;
 
         state.Consume();
@@ -257,6 +263,13 @@ public sealed class RowGroupWriter
         }
 
         var locations = _pageLocationsByColumn[columnOrdinal];
+        var nullPages = _nullPagesByColumn[columnOrdinal];
+        if (nullPages is null || nullPages.Length < pageCount)
+        {
+            Array.Resize(ref nullPages, pageCount);
+            _nullPagesByColumn[columnOrdinal] = nullPages;
+        }
+
         if (locations is not null && locations.Length >= pageCount)
             return;
 
@@ -282,7 +295,8 @@ public sealed class RowGroupWriter
 
         _columnIndexBuffer.Reset();
         ParquetMetadataThriftWriter.WriteColumnIndex(ref _columnIndexBuffer,
-            metadata.PageIndex.Statistics.AsSpan(0, metadata.PageIndex.Count));
+            metadata.PageIndex.Statistics.AsSpan(0, metadata.PageIndex.Count),
+            metadata.PageIndex.NullPages.AsSpan(0, metadata.PageIndex.Count));
         metadata.ColumnIndexOffset = _writer.FileOffset;
         metadata.ColumnIndexLength = checked((uint)_columnIndexBuffer.WrittenLength);
         _writer.WriteBuffer(ref _columnIndexBuffer);
