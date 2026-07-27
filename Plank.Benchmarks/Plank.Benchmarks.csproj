@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.15.6" />
+    <PackageReference Include="BenchmarkDotNet.Diagnostics.Windows" Version="0.15.6" />
     <PackageReference Include="Parquet.Net" Version="6.0.0-pre.8" />
     <PackageReference Include="ParquetSharp" Version="23.0.0.2" />
   </ItemGroup>

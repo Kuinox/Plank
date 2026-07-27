@@ -1,4 +1,7 @@
+using System.Buffers.Binary;
+using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Plank.Schema;
 
 namespace Plank.Writing.Encoding;
@@ -201,37 +204,62 @@ static class DeltaBinaryPackedEncoding
         for (var block = 0; block < MiniBlockCount; block++)
         {
             var width = bitWidths[block];
-            WritePackedUnsignedValues(deltas[(block * MiniBlockSize)..((block + 1) * MiniBlockSize)], width, ref writer);
+            if (width != 0)
+                WritePackedUnsignedValues(
+                    deltas[(block * MiniBlockSize)..((block + 1) * MiniBlockSize)], width, ref writer);
         }
     }
 
-    static void WritePackedUnsignedValues(ReadOnlySpan<long> values, int bitWidth, ref BufferWriter writer)
+    internal static void WritePackedUnsignedValues(ReadOnlySpan<long> values, int bitWidth, ref BufferWriter writer)
     {
         if (bitWidth == 0)
             return;
+        if (values.Length != MiniBlockSize)
+            throw new ArgumentException(
+                "Delta binary packed mini-blocks must contain exactly 32 values.", nameof(values));
 
         var byteCount = checked((values.Length * bitWidth + 7) >> 3);
         var destination = writer.GetSpan(byteCount);
-        destination[..byteCount].Clear();
-        var bitOffset = 0;
         var mask = bitWidth == 64 ? ulong.MaxValue : (1UL << bitWidth) - 1UL;
-        for (var i = 0; i < values.Length; i++)
+        ulong low = 0;
+        ulong high = 0;
+        var bufferedBits = 0;
+        var outputOffset = 0;
+        ref var input = ref MemoryMarshal.GetReference(values);
+        ref var output = ref MemoryMarshal.GetReference(destination);
+        for (var i = 0; i < MiniBlockSize; i++)
         {
-            var value = (ulong)values[i] & mask;
-            var remainingBits = bitWidth;
-            while (remainingBits > 0)
+            var value = (ulong)Unsafe.Add(ref input, i) & mask;
+            if (bufferedBits == 0)
             {
-                var byteIndex = bitOffset >> 3;
-                var bitIndex = bitOffset & 7;
-                var byteRemainingBits = 8 - bitIndex;
-                var bitsToWrite = Math.Min(byteRemainingBits, remainingBits);
-                var chunkMask = (1UL << bitsToWrite) - 1UL;
-                var chunk = (byte)(value & chunkMask);
-                destination[byteIndex] |= (byte)(chunk << bitIndex);
-                value >>= bitsToWrite;
-                bitOffset += bitsToWrite;
-                remainingBits -= bitsToWrite;
+                low = value;
             }
+            else
+            {
+                low |= value << bufferedBits;
+                high = value >> (64 - bufferedBits);
+            }
+
+            bufferedBits += bitWidth;
+
+            if (bufferedBits >= 64)
+            {
+                var word = BitConverter.IsLittleEndian ? low : BinaryPrimitives.ReverseEndianness(low);
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, outputOffset), word);
+                outputOffset += sizeof(ulong);
+                low = high;
+                high = 0;
+                bufferedBits -= 64;
+            }
+        }
+
+        // A 32-value mini-block has either no remainder (even width) or exactly 32 bits (odd width).
+        if (bufferedBits > 0)
+        {
+            var tail = (uint)low;
+            if (!BitConverter.IsLittleEndian)
+                tail = BinaryPrimitives.ReverseEndianness(tail);
+            Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, outputOffset), tail);
         }
 
         writer.Advance(byteCount);
@@ -252,19 +280,7 @@ static class DeltaBinaryPackedEncoding
     }
 
     static byte GetBitWidth(ulong value)
-    {
-        if (value == 0)
-            return 0;
-
-        byte width = 0;
-        while (value != 0)
-        {
-            width++;
-            value >>= 1;
-        }
-
-        return width;
-    }
+        => (byte)(64 - BitOperations.LeadingZeroCount(value));
 
     static ulong ZigZag32(int value)
         => (uint)((value << 1) ^ (value >> 31));
