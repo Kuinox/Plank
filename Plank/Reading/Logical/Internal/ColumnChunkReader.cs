@@ -109,12 +109,10 @@ static class ColumnChunkReader
         }
         else if (column.Options.Repetition == ParquetRepetition.Optional)
         {
-            if (header.DefinitionLevelEncoding != EncodingKind.Rle)
-                throw new NotSupportedException(
-                    $"DataPageV1 definition level encoding '{header.DefinitionLevelEncoding}' is not supported.");
-            var definitionLength = ReadLengthPrefixedLevelPayloadLength(payload, "definition");
-            definitionPayload = payload.Slice(sizeof(int), definitionLength);
-            dataPayload = payload[(sizeof(int) + definitionLength)..];
+            var definitionLength = GetDataPageV1LevelPayloadLength(payload, header.ValueCount,
+                header.DefinitionLevelEncoding, bitWidth: 1, "definition", out var definitionOffset);
+            definitionPayload = payload.Slice(definitionOffset, definitionLength);
+            dataPayload = payload[(definitionOffset + definitionLength)..];
         }
         else
         {
@@ -126,14 +124,17 @@ static class ColumnChunkReader
         var physicalCount = valueCount;
         if (!definitionPayload.IsEmpty)
         {
-            DecodeDefinitionLevels(definitionPayload, valueCount, [], out physicalCount);
+            DecodeDefinitionLevels(definitionPayload, valueCount, header.DefinitionLevelEncoding,
+                [], out physicalCount);
             if (header.Type == PageHeaderType.DataPageV2 && physicalCount != expectedPhysicalCount)
                 throw new CorruptParquetException(
                     $"Definition levels contain {physicalCount} values, expected {expectedPhysicalCount}.");
         }
 
         var decoded = TryDecodeNullableValuesByPhysicalType(dataPayload, definitionPayload, valueCount,
-            physicalCount, column, header.Encoding, physicalType, ref state, bufferPool);
+            physicalCount, column, header.Encoding,
+            header.Type == PageHeaderType.DataPage ? header.DefinitionLevelEncoding : EncodingKind.Rle,
+            physicalType, ref state, bufferPool);
         if (!decoded)
             return false;
 
@@ -143,51 +144,52 @@ static class ColumnChunkReader
 
     static bool TryDecodeNullableValuesByPhysicalType<T>(ReadOnlySpan<byte> payload,
         ReadOnlySpan<byte> definitionPayload, int valueCount, int physicalCount, Column column,
-        EncodingKind encoding, Type physicalType, ref ColumnReadBuffers<T> state,
+        EncodingKind encoding, EncodingKind definitionLevelEncoding, Type physicalType, ref ColumnReadBuffers<T> state,
         IParquetBufferPool bufferPool)
     {
         if (physicalType == typeof(int))
             return TryDecodeNullableValues<T, int>(payload, definitionPayload, valueCount, physicalCount,
-                column, encoding, ref state, bufferPool);
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(long))
             return TryDecodeNullableValues<T, long>(payload, definitionPayload, valueCount, physicalCount,
-                column, encoding, ref state, bufferPool);
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(bool))
             return TryDecodeNullableValues<T, bool>(payload, definitionPayload, valueCount, physicalCount,
-                column, encoding, ref state, bufferPool);
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(float))
             return TryDecodeNullableValues<T, float>(payload, definitionPayload, valueCount, physicalCount,
-                column, encoding, ref state, bufferPool);
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(double))
             return TryDecodeNullableValues<T, double>(payload, definitionPayload, valueCount, physicalCount,
-                column, encoding, ref state, bufferPool);
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(byte))
             return TryDecodeNullableValues<T, byte>(payload, definitionPayload, valueCount, physicalCount,
-                column, encoding, ref state, bufferPool);
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(ushort))
             return TryDecodeNullableValues<T, ushort>(payload, definitionPayload, valueCount, physicalCount,
-                column, encoding, ref state, bufferPool);
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(uint))
             return TryDecodeNullableValues<T, uint>(payload, definitionPayload, valueCount, physicalCount,
-                column, encoding, ref state, bufferPool);
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(ulong))
             return TryDecodeNullableValues<T, ulong>(payload, definitionPayload, valueCount, physicalCount,
-                column, encoding, ref state, bufferPool);
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(DateOnly))
             return TryDecodeNullableValues<T, DateOnly>(payload, definitionPayload, valueCount, physicalCount,
-                column, encoding, ref state, bufferPool);
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(DateTime))
             return TryDecodeNullableValues<T, DateTime>(payload, definitionPayload, valueCount, physicalCount,
-                column, encoding, ref state, bufferPool);
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(DateTimeOffset))
             return TryDecodeNullableValues<T, DateTimeOffset>(payload, definitionPayload, valueCount, physicalCount,
-                column, encoding, ref state, bufferPool);
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         return false;
     }
 
     static bool TryDecodeNullableValues<T, TValue>(ReadOnlySpan<byte> payload,
         ReadOnlySpan<byte> definitionPayload, int valueCount, int physicalCount, Column column,
-        EncodingKind encoding, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
+        EncodingKind encoding, EncodingKind definitionLevelEncoding, ref ColumnReadBuffers<T> state,
+        IParquetBufferPool bufferPool)
         where TValue : struct
     {
         if (typeof(T) != typeof(TValue?))
@@ -201,7 +203,8 @@ static class ColumnChunkReader
         if (definitionPayload.IsEmpty)
             definitions.Fill(1);
         else
-            DecodeDefinitionLevels(definitionPayload, valueCount, definitions, out _);
+            DecodeDefinitionLevels(definitionPayload, valueCount,
+                definitionLevelEncoding, definitions, out _);
         var physicalValues = MemoryMarshal.Cast<byte, TValue>(
             scratch.Slice(physicalOffset, physicalByteLength));
 
@@ -344,12 +347,10 @@ static class ColumnChunkReader
         }
         else if (optional)
         {
-            if (header.DefinitionLevelEncoding != EncodingKind.Rle)
-                throw new NotSupportedException(
-                    $"DataPageV1 definition level encoding '{header.DefinitionLevelEncoding}' is not supported.");
-            var definitionLength = ReadLengthPrefixedLevelPayloadLength(payload, "definition");
-            definitionPayload = payload.Slice(sizeof(int), definitionLength);
-            dataPayload = payload[(sizeof(int) + definitionLength)..];
+            var definitionLength = GetDataPageV1LevelPayloadLength(payload, header.ValueCount,
+                header.DefinitionLevelEncoding, bitWidth: 1, "definition", out var definitionOffset);
+            definitionPayload = payload.Slice(definitionOffset, definitionLength);
+            dataPayload = payload[(definitionOffset + definitionLength)..];
         }
         else
         {
@@ -364,7 +365,8 @@ static class ColumnChunkReader
         var physicalCount = valueCount;
         if (optional && !definitionPayload.IsEmpty)
         {
-            DecodeDefinitionLevels(definitionPayload, valueCount, definitions, out physicalCount);
+            DecodeDefinitionLevels(definitionPayload, valueCount, header.DefinitionLevelEncoding,
+                definitions, out physicalCount);
             if (header.Type == PageHeaderType.DataPageV2 && physicalCount != expectedPhysicalCount)
                 throw new CorruptParquetException(
                     $"Definition levels contain {physicalCount} values, expected {expectedPhysicalCount}.");
@@ -998,7 +1000,7 @@ static class ColumnChunkReader
         {
             if (needsNullExpansion)
                 return DecodeValuesWithNullExpansion<T>(dataPayload, definitionPayload, column, totalValueCount,
-                    physicalValueCount, header.Encoding, header.NullCount > 0);
+                    physicalValueCount, header.Encoding, EncodingKind.Rle, header.NullCount > 0);
             if (header.NullCount > 0 && defLen > 0)
                 return (T[])DecodeValues(dataPayload, column, physicalValueCount, header.Encoding, typeof(T));
             if (TryDecodeValuesIntoBuffer(dataPayload, column, physicalValueCount, header.Encoding, ref valuesBuffer,
@@ -1009,7 +1011,7 @@ static class ColumnChunkReader
 
         if (header.NullCount > 0 && defLen > 0)
             return DecodeDictionaryIndexesWithNulls<T>(dataPayload, totalValueCount, physicalValueCount, dictionary,
-                definitionPayload);
+                definitionPayload, EncodingKind.Rle);
 
         DecodeDictionaryIndexes(dataPayload, physicalValueCount, dictionary, ref valuesBuffer, out var decoded);
         return decoded;
@@ -1105,7 +1107,8 @@ static class ColumnChunkReader
                         if (needsNullExpansion)
                         {
                             values = DecodeValuesWithNullExpansion<T>(effectiveData, definitionPayload, column,
-                                totalValueCount, physicalValueCount, header.Encoding, header.NullCount > 0);
+                                totalValueCount, physicalValueCount, header.Encoding, EncodingKind.Rle,
+                                header.NullCount > 0);
                         }
                         else if (header.NullCount > 0 && defLen > 0)
                         {
@@ -1128,7 +1131,7 @@ static class ColumnChunkReader
                         if (header.NullCount > 0 && defLen > 0)
                         {
                             values = DecodeDictionaryIndexesWithNulls<T>(effectiveData, totalValueCount, physicalValueCount,
-                                dictionary, definitionPayload);
+                                dictionary, definitionPayload, EncodingKind.Rle);
                         }
                         else
                         {
@@ -1178,14 +1181,12 @@ static class ColumnChunkReader
         var nullCount = 0U;
         if (hasDefinitionLevels)
         {
-            if (header.DefinitionLevelEncoding != EncodingKind.Rle)
-                throw new NotSupportedException(
-                    $"DataPageV1 definition level encoding '{header.DefinitionLevelEncoding}' is not supported.");
-
-            var definitionLength = ReadLengthPrefixedLevelPayloadLength(remaining, "definition");
-            definitionPayload = remaining.Slice(sizeof(int), definitionLength);
-            remaining = remaining[(sizeof(int) + definitionLength)..];
-            _ = ReadDefinitionLevels(definitionPayload, header.ValueCount, out var nonNullCount);
+            var definitionLength = GetDataPageV1LevelPayloadLength(remaining, header.ValueCount,
+                header.DefinitionLevelEncoding, bitWidth: 1, "definition", out var definitionOffset);
+            definitionPayload = remaining.Slice(definitionOffset, definitionLength);
+            remaining = remaining[(definitionOffset + definitionLength)..];
+            _ = ReadDefinitionLevels(definitionPayload, header.ValueCount, header.DefinitionLevelEncoding,
+                out var nonNullCount);
             physicalValueCount = checked((uint)nonNullCount);
             nullCount = header.ValueCount - physicalValueCount;
         }
@@ -1199,7 +1200,7 @@ static class ColumnChunkReader
         {
             if (needsNullExpansion)
                 return DecodeValuesWithNullExpansion<T>(remaining, definitionPayload, column, header.ValueCount,
-                    physicalValueCount, header.Encoding, nullCount > 0);
+                    physicalValueCount, header.Encoding, header.DefinitionLevelEncoding, nullCount > 0);
             if (nullCount > 0 && hasDefinitionLevels)
                 return (T[])DecodeValues(remaining, column, physicalValueCount, header.Encoding, typeof(T));
             if (TryDecodeValuesIntoBuffer(remaining, column, physicalValueCount, header.Encoding, ref valuesBuffer,
@@ -1210,7 +1211,7 @@ static class ColumnChunkReader
 
         if (nullCount > 0 && hasDefinitionLevels)
             return DecodeDictionaryIndexesWithNulls<T>(remaining, header.ValueCount, physicalValueCount, dictionary,
-                definitionPayload);
+                definitionPayload, header.DefinitionLevelEncoding);
 
         DecodeDictionaryIndexes(remaining, physicalValueCount, dictionary, ref valuesBuffer, out var decoded);
         return decoded;
@@ -1228,6 +1229,32 @@ static class ColumnChunkReader
                 $"DataPageV1 {levelName} levels claim {length} bytes but only {remainingLength} remain.");
 
         return (int)length;
+    }
+
+    static int GetDataPageV1LevelPayloadLength(ReadOnlySpan<byte> payload, uint valueCount,
+        EncodingKind encoding, int bitWidth, string levelName, out int payloadOffset)
+    {
+        int byteLength;
+        switch (encoding)
+        {
+            case EncodingKind.Rle:
+                byteLength = ReadLengthPrefixedLevelPayloadLength(payload, levelName);
+                payloadOffset = sizeof(int);
+                break;
+            case EncodingKind.BitPacked:
+                byteLength = LegacyBitPackedDecoder.GetByteCount(checked((int)valueCount), bitWidth);
+                payloadOffset = 0;
+                break;
+            default:
+                throw new NotSupportedException(
+                    $"DataPageV1 {levelName} level encoding '{encoding}' is not supported.");
+        }
+
+        var totalLength = checked(payloadOffset + byteLength);
+        if (totalLength > payload.Length)
+            throw new CorruptParquetException(
+                $"DataPageV1 {levelName} levels require {totalLength} bytes but only {payload.Length} remain.");
+        return byteLength;
     }
 
     static bool TryDecodeValuesIntoBuffer<T>(ReadOnlySpan<byte> payload, Column column, uint valueCount,
@@ -1812,10 +1839,12 @@ static class ColumnChunkReader
     }
 
     static T[] DecodeDictionaryIndexesWithNulls<T>(ReadOnlySpan<byte> dataPayload, uint totalValueCount,
-        uint physicalValueCount, Array dictionary, ReadOnlySpan<byte> definitionPayload)
+        uint physicalValueCount, Array dictionary, ReadOnlySpan<byte> definitionPayload,
+        EncodingKind definitionLevelEncoding)
     {
         var indexes = ReadRleBitPackedHybrid(dataPayload, physicalValueCount, hasBitWidthPrefix: true);
-        var definitionLevels = ReadRleBitPackedHybrid(definitionPayload, totalValueCount, bitWidth: 1);
+        var definitionLevels = ReadDefinitionLevels(definitionPayload, totalValueCount,
+            definitionLevelEncoding, out _);
         var result = new T[(int)totalValueCount];
         var valueIndex = 0;
         for (var i = 0; i < totalValueCount; i++)
@@ -2492,7 +2521,7 @@ static class ColumnChunkReader
 
     static ReadOnlyMemory<T> DecodeValuesWithNullExpansion<T>(ReadOnlySpan<byte> dataPayload,
         ReadOnlySpan<byte> definitionPayload, Column column, uint totalValueCount, uint physicalValueCount,
-        EncodingKind encoding, bool hasNulls)
+        EncodingKind encoding, EncodingKind definitionLevelEncoding, bool hasNulls)
     {
         var physicalDecodeType = GetPhysicalDecodeType<T>();
         var physicalValues = physicalValueCount > 0
@@ -2502,7 +2531,8 @@ static class ColumnChunkReader
         if (!hasNulls)
             return ExpandAllPresent<T>(physicalValues, totalValueCount);
 
-        var definitionLevels = ReadDefinitionLevels(definitionPayload, totalValueCount, out var nonNullCount);
+        var definitionLevels = ReadDefinitionLevels(definitionPayload, totalValueCount,
+            definitionLevelEncoding, out var nonNullCount);
         if (nonNullCount != (int)physicalValueCount)
             throw new CorruptParquetException(
                 $"Definition levels indicate {nonNullCount} non-null values but page header claimed {physicalValueCount}.");
@@ -2604,11 +2634,29 @@ static class ColumnChunkReader
         return new ReadOnlyMemory<T>(result, 0, (int)valueCount);
     }
 
-    static void DecodeDefinitionLevels(ReadOnlySpan<byte> payload, int valueCount, Span<int> destination,
-        out int nonNullCount)
+    static void DecodeDefinitionLevels(ReadOnlySpan<byte> payload, int valueCount, EncodingKind encoding,
+        Span<int> destination, out int nonNullCount)
     {
         if (!destination.IsEmpty && destination.Length < valueCount)
             throw new ArgumentException("Definition-level destination is too small.", nameof(destination));
+
+        if (encoding == EncodingKind.BitPacked)
+        {
+            if (destination.IsEmpty)
+            {
+                nonNullCount = LegacyBitPackedDecoder.CountSetBits(payload, valueCount);
+                return;
+            }
+
+            var levels = destination[..valueCount];
+            LegacyBitPackedDecoder.Decode(payload, bitWidth: 1, levels);
+            nonNullCount = 0;
+            for (var i = 0; i < levels.Length; i++)
+                nonNullCount += levels[i];
+            return;
+        }
+        if (encoding != EncodingKind.Rle)
+            throw new NotSupportedException($"Definition level encoding '{encoding}' is not supported.");
 
         var valueIndex = 0;
         var count = 0;
@@ -2652,9 +2700,21 @@ static class ColumnChunkReader
         nonNullCount = count;
     }
 
-    static int[] ReadDefinitionLevels(ReadOnlySpan<byte> payload, uint valueCount, out int nonNullCount)
+    static int[] ReadDefinitionLevels(ReadOnlySpan<byte> payload, uint valueCount, EncodingKind encoding,
+        out int nonNullCount)
     {
         var values = new int[(int)valueCount];
+        if (encoding == EncodingKind.BitPacked)
+        {
+            LegacyBitPackedDecoder.Decode(payload, bitWidth: 1, values);
+            nonNullCount = 0;
+            for (var i = 0; i < values.Length; i++)
+                nonNullCount += values[i];
+            return values;
+        }
+        if (encoding != EncodingKind.Rle)
+            throw new NotSupportedException($"Definition level encoding '{encoding}' is not supported.");
+
         var valueIndex = 0U;
         var count = 0;
         while (valueIndex < valueCount)
