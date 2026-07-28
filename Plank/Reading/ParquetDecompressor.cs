@@ -1,7 +1,7 @@
 using System.IO.Compression;
 using K4os.Compression.LZ4;
 using Plank.Schema;
-using ZstdSharp;
+using ZstdSharp.Unsafe;
 
 namespace Plank.Reading;
 
@@ -14,14 +14,15 @@ static class ParquetDecompressor
         return buffer;
     }
 
-    internal static void DecompressInto(ReadOnlySpan<byte> payload, CompressionKind compression, Span<byte> destination)
+    internal static void DecompressInto(ReadOnlySpan<byte> payload, CompressionKind compression,
+        Span<byte> destination)
     {
         try
         {
             switch (compression)
             {
                 case CompressionKind.Gzip:
-                    DecompressGzipInto(payload, destination);
+                    GzipInflater.Decompress(payload, destination);
                     break;
                 case CompressionKind.Brotli:
                     DecompressBrotliInto(payload, destination);
@@ -70,25 +71,17 @@ static class ParquetDecompressor
         }
     }
 
-    // Allocates: .NET has no span-based GZip API until .NET 11 (GZipDecoder.TryDecompress, dotnet/runtime#62113).
-    static void DecompressGzipInto(ReadOnlySpan<byte> payload, Span<byte> destination)
+    static unsafe void DecompressZstdInto(ReadOnlySpan<byte> payload, Span<byte> destination)
     {
-        using var memory = new MemoryStream(payload.ToArray(), writable: false);
-        using var stream = new GZipStream(memory, CompressionMode.Decompress, leaveOpen: true);
-        stream.ReadExactly(destination);
-    }
-
-    // Allocates: .NET has no built-in Zstd API until .NET 11 (ZstandardDecoder.TryDecompress, dotnet/runtime#59591).
-    static void DecompressZstdInto(ReadOnlySpan<byte> payload, Span<byte> destination)
-    {
-        using var decompressor = new Decompressor();
-        try
+        fixed (byte* source = payload)
+        fixed (byte* output = destination)
         {
-            decompressor.Unwrap(payload, destination);
-        }
-        catch (ZstdException ex)
-        {
-            throw new CorruptParquetException("Zstd decompression failed.", ex);
+            var written = Methods.ZSTD_decompress(output, (nuint)destination.Length, source, (nuint)payload.Length);
+            if (Methods.ZSTD_isError(written))
+                throw new CorruptParquetException($"Zstd decompression failed with code {written}.");
+            if (written != (nuint)destination.Length)
+                throw new CorruptParquetException(
+                    $"Zstd decompression produced {written} bytes but {destination.Length} were expected.");
         }
     }
 }

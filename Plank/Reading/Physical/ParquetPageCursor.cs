@@ -209,8 +209,7 @@ public struct ParquetPageCursor : IDisposable
         {
             using var compressed = owner.BufferPool.Rent(checked((uint)compressedLength));
             owner.Source.ReadExactly(sourceOffset, compressed.Span[..compressedLength]);
-            ParquetDecompressor.DecompressInto(compressed.Span[..compressedLength], _chunk.Compression,
-                destination);
+            ParquetDecompressor.DecompressInto(compressed.Span[..compressedLength], _chunk.Compression, destination);
         }
 
         _payloadLength = uncompressedLength;
