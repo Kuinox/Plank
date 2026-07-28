@@ -7,6 +7,8 @@ namespace Plank.Reading.Logical.Internal;
 
 static class ColumnChunkReader
 {
+    static readonly DateOnly UnixEpochDate = new(1970, 1, 1);
+
     internal static bool TryDecodeDictionaryPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
@@ -57,6 +59,8 @@ static class ColumnChunkReader
             return TryDecodeDictionaryIntoNative<T, DateTime>(header, payload, column, ref state, bufferPool);
         if (physicalType == typeof(DateTimeOffset))
             return TryDecodeDictionaryIntoNative<T, DateTimeOffset>(header, payload, column, ref state, bufferPool);
+        if (physicalType == typeof(TimeOnly))
+            return TryDecodeDictionaryIntoNative<T, TimeOnly>(header, payload, column, ref state, bufferPool);
         return false;
     }
 
@@ -182,6 +186,9 @@ static class ColumnChunkReader
                 column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(DateTimeOffset))
             return TryDecodeNullableValues<T, DateTimeOffset>(payload, definitionPayload, valueCount, physicalCount,
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
+        if (physicalType == typeof(TimeOnly))
+            return TryDecodeNullableValues<T, TimeOnly>(payload, definitionPayload, valueCount, physicalCount,
                 column, encoding, definitionLevelEncoding, ref state, bufferPool);
         return false;
     }
@@ -789,7 +796,16 @@ static class ColumnChunkReader
             ValidatePlainPayload(payload, valueCount, sizeof(int));
             var typed = Unsafe.As<Span<T>, Span<DateOnly>>(ref destination);
             for (var i = 0; i < typed.Length; i++)
-                typed[i] = DateOnly.FromDayNumber(BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4)));
+                typed[i] = DecodeDate(BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4)));
+            return true;
+        }
+        if (typeof(T) == typeof(TimeOnly) && column.PhysicalType == ParquetPhysicalType.Int64)
+        {
+            ValidatePlainPayload(payload, valueCount, sizeof(long));
+            var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+            for (var i = 0; i < typed.Length; i++)
+                typed[i] = DecodeTime(BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8)),
+                    column.LogicalType);
             return true;
         }
         if (typeof(T) == typeof(DateTimeOffset) && column.PhysicalType == ParquetPhysicalType.Int64)
@@ -799,13 +815,7 @@ static class ColumnChunkReader
             for (var i = 0; i < typed.Length; i++)
             {
                 var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
-                typed[i] = column.LogicalType switch
-                {
-                    LogicalType.Timestamp { Unit: TimeUnit.Millis } => DateTimeOffset.FromUnixTimeMilliseconds(raw),
-                    LogicalType.Timestamp { Unit: TimeUnit.Micros } => DateTimeOffset.UnixEpoch.AddTicks(raw * 10),
-                    _ => throw new CorruptParquetException(
-                        "DateTimeOffset projection requires a timestamp logical type.")
-                };
+                typed[i] = DecodeTimestamp(raw, column.LogicalType);
             }
             return true;
         }
@@ -816,14 +826,7 @@ static class ColumnChunkReader
             for (var i = 0; i < typed.Length; i++)
             {
                 var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
-                typed[i] = column.LogicalType switch
-                {
-                    LogicalType.Timestamp { Unit: TimeUnit.Millis } =>
-                        DateTimeOffset.FromUnixTimeMilliseconds(raw).UtcDateTime,
-                    LogicalType.Timestamp { Unit: TimeUnit.Micros } =>
-                        DateTimeOffset.UnixEpoch.AddTicks(raw * 10).UtcDateTime,
-                    _ => throw new CorruptParquetException("DateTime projection requires a timestamp logical type.")
-                };
+                typed[i] = DecodeTimestamp(raw, column.LogicalType).UtcDateTime;
             }
             return true;
         }
@@ -845,6 +848,42 @@ static class ColumnChunkReader
             case ParquetPhysicalType.Int64 when typeof(T) == typeof(ulong):
                 DecodeByteStreamSplitUInt64(payload, Unsafe.As<Span<T>, Span<ulong>>(ref destination));
                 return true;
+            case ParquetPhysicalType.Int32 when typeof(T) == typeof(DateOnly):
+            {
+                var raw = Unsafe.As<Span<T>, Span<int>>(ref destination);
+                DecodeByteStreamSplitInt32(payload, raw);
+                var typed = Unsafe.As<Span<T>, Span<DateOnly>>(ref destination);
+                for (var i = 0; i < typed.Length; i++)
+                    typed[i] = DecodeDate(raw[i]);
+                return true;
+            }
+            case ParquetPhysicalType.Int64 when typeof(T) == typeof(TimeOnly):
+            {
+                var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
+                DecodeByteStreamSplitInt64(payload, raw);
+                var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+                for (var i = 0; i < typed.Length; i++)
+                    typed[i] = DecodeTime(raw[i], column.LogicalType);
+                return true;
+            }
+            case ParquetPhysicalType.Int64 when typeof(T) == typeof(DateTime):
+            {
+                var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
+                DecodeByteStreamSplitInt64(payload, raw);
+                var typed = Unsafe.As<Span<T>, Span<DateTime>>(ref destination);
+                for (var i = 0; i < typed.Length; i++)
+                    typed[i] = DecodeTimestamp(raw[i], column.LogicalType).UtcDateTime;
+                return true;
+            }
+            case ParquetPhysicalType.Int64 when typeof(T) == typeof(DateTimeOffset):
+            {
+                var raw = new long[destination.Length];
+                DecodeByteStreamSplitInt64(payload, raw);
+                var typed = Unsafe.As<Span<T>, Span<DateTimeOffset>>(ref destination);
+                for (var i = 0; i < typed.Length; i++)
+                    typed[i] = DecodeTimestamp(raw[i], column.LogicalType);
+                return true;
+            }
             case ParquetPhysicalType.Float when typeof(T) == typeof(float):
                 DecodeByteStreamSplitFloat(payload, Unsafe.As<Span<T>, Span<float>>(ref destination));
                 return true;
@@ -920,8 +959,65 @@ static class ColumnChunkReader
                 Unsafe.As<Span<T>, Span<long>>(ref destination));
             return true;
         }
+        if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(DateOnly))
+        {
+            var raw = Unsafe.As<Span<T>, Span<int>>(ref destination);
+            DeltaBinaryPackedDecoder.ReadInt32(payload, raw);
+            var typed = Unsafe.As<Span<T>, Span<DateOnly>>(ref destination);
+            for (var i = 0; i < typed.Length; i++)
+                typed[i] = DecodeDate(raw[i]);
+            return true;
+        }
+        if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(TimeOnly))
+        {
+            var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
+            DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
+            var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+            for (var i = 0; i < typed.Length; i++)
+                typed[i] = DecodeTime(raw[i], column.LogicalType);
+            return true;
+        }
+        if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTime))
+        {
+            var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
+            DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
+            var typed = Unsafe.As<Span<T>, Span<DateTime>>(ref destination);
+            for (var i = 0; i < typed.Length; i++)
+                typed[i] = DecodeTimestamp(raw[i], column.LogicalType).UtcDateTime;
+            return true;
+        }
+        if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTimeOffset))
+        {
+            var raw = new long[destination.Length];
+            DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
+            var typed = Unsafe.As<Span<T>, Span<DateTimeOffset>>(ref destination);
+            for (var i = 0; i < typed.Length; i++)
+                typed[i] = DecodeTimestamp(raw[i], column.LogicalType);
+            return true;
+        }
         return false;
     }
+
+    static DateOnly DecodeDate(int days)
+        => DateOnly.FromDayNumber(checked(UnixEpochDate.DayNumber + days));
+
+    static TimeOnly DecodeTime(long raw, LogicalType? logicalType)
+        => logicalType switch
+        {
+            LogicalType.Time { Unit: TimeUnit.Millis } => new TimeOnly(checked(raw * TimeSpan.TicksPerMillisecond)),
+            LogicalType.Time { Unit: TimeUnit.Micros } => new TimeOnly(checked(raw * 10)),
+            LogicalType.Time { Unit: TimeUnit.Nanos } => new TimeOnly(raw / 100),
+            _ => throw new CorruptParquetException("TimeOnly projection requires a time logical type.")
+        };
+
+    static DateTimeOffset DecodeTimestamp(long raw, LogicalType? logicalType)
+        => logicalType switch
+        {
+            LogicalType.Timestamp { Unit: TimeUnit.Millis } => DateTimeOffset.FromUnixTimeMilliseconds(raw),
+            LogicalType.Timestamp { Unit: TimeUnit.Micros } => DateTimeOffset.UnixEpoch.AddTicks(checked(raw * 10)),
+            LogicalType.Timestamp { Unit: TimeUnit.Nanos } => DateTimeOffset.UnixEpoch.AddTicks(raw / 100),
+            _ => throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.")
+        };
 
     internal static bool TryDecodePage<T>(PageHeader header, ReadOnlySpan<byte> payload, Column column,
         InternalColumnChunkMetadata columnChunk, ulong rowCount, ref Array? dictionary, ref T[]? dictionaryBuffer,
