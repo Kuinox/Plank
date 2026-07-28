@@ -10,6 +10,7 @@ public sealed class ParquetReader : IDisposable
     internal readonly ParquetFileReader PhysicalReader;
     InternalParquetFooter _footer;
     int _footerVersion;
+    ParquetPagePruner? _pagePruner;
     bool _disposed;
 
     public ParquetReader(ParquetReaderOptions? options = null)
@@ -37,6 +38,7 @@ public sealed class ParquetReader : IDisposable
         _footer = InternalParquetFooter.Empty;
         Metadata = default;
         _footerVersion = 0;
+        _pagePruner = null;
         _disposed = false;
     }
 
@@ -55,19 +57,24 @@ public sealed class ParquetReader : IDisposable
 
     internal ParquetReaderOptions Options { get; }
 
-    public void Reset(Stream stream)
+    internal ParquetPagePruner? PagePruner
+        => _pagePruner;
+
+    public void Reset(Stream stream, ParquetPagePruner? pagePruner = null)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(stream);
         PhysicalReader.Reset(stream);
+        _pagePruner = pagePruner;
         ResetLogicalState();
     }
 
-    public void Reset(IParquetReadSource source)
+    public void Reset(IParquetReadSource source, ParquetPagePruner? pagePruner = null)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
         PhysicalReader.Reset(source);
+        _pagePruner = pagePruner;
         ResetLogicalState();
     }
 

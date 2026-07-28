@@ -9,26 +9,30 @@ readonly struct ColumnBufferEnumerable<T>
     readonly int _rowGroupOrdinal;
     readonly int _columnOrdinal;
     readonly Column _column;
+    readonly LeafColumn _definition;
     readonly IParquetBufferPool _bufferPool;
     readonly ulong _rowCount;
+    readonly ParquetPagePruner? _pruner;
 
     internal ColumnBufferEnumerable(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
-        Column column, IParquetBufferPool bufferPool, ulong rowCount)
+        LeafColumn definition, IParquetBufferPool bufferPool, ulong rowCount, ParquetPagePruner? pruner)
     {
         ArgumentNullException.ThrowIfNull(physicalReader);
-        ArgumentNullException.ThrowIfNull(column);
+        ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(bufferPool);
 
         _physicalReader = physicalReader;
         _rowGroupOrdinal = rowGroupOrdinal;
         _columnOrdinal = columnOrdinal;
-        _column = column;
+        _column = definition.Column;
+        _definition = definition;
         _bufferPool = bufferPool;
         _rowCount = rowCount;
+        _pruner = pruner;
     }
 
     internal Enumerator GetEnumerator()
-        => new(_physicalReader, _rowGroupOrdinal, _columnOrdinal, _column, _bufferPool, _rowCount);
+        => new(_physicalReader, _rowGroupOrdinal, _columnOrdinal, _definition, _bufferPool, _rowCount, _pruner);
 
     internal struct Enumerator : IDisposable
     {
@@ -36,26 +40,33 @@ readonly struct ColumnBufferEnumerable<T>
         readonly int _rowGroupOrdinal;
         readonly int _columnOrdinal;
         readonly Column _column;
+        readonly LeafColumn _definition;
         readonly IParquetBufferPool _bufferPool;
         readonly ulong _rowCount;
+        readonly ParquetPagePruner? _pruner;
         ParquetPageCursor _cursor;
+        PageMetadataHandle _pageMetadata;
         ColumnReadBuffers<T> _buffers;
         bool _openedCursor;
 
-        internal Enumerator(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal, Column column,
-            IParquetBufferPool bufferPool, ulong rowCount)
+        internal Enumerator(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
+            LeafColumn definition,
+            IParquetBufferPool bufferPool, ulong rowCount, ParquetPagePruner? pruner)
         {
             ArgumentNullException.ThrowIfNull(physicalReader);
-            ArgumentNullException.ThrowIfNull(column);
+            ArgumentNullException.ThrowIfNull(definition);
             ArgumentNullException.ThrowIfNull(bufferPool);
 
             _physicalReader = physicalReader;
             _rowGroupOrdinal = rowGroupOrdinal;
             _columnOrdinal = columnOrdinal;
-            _column = column;
+            _column = definition.Column;
+            _definition = definition;
             _bufferPool = bufferPool;
             _rowCount = rowCount;
+            _pruner = pruner;
             _cursor = default;
+            _pageMetadata = default;
             _buffers = default;
             _openedCursor = false;
             Current = default;
@@ -67,7 +78,14 @@ readonly struct ColumnBufferEnumerable<T>
         {
             if (!_openedCursor)
             {
-                _cursor = _physicalReader.OpenPages(_rowGroupOrdinal, _columnOrdinal);
+                if (_pruner is null)
+                    _cursor = _physicalReader.OpenPages(_rowGroupOrdinal, _columnOrdinal);
+                else
+                {
+                    _pageMetadata = PageMetadataReader.OpenHandle(_physicalReader, _rowGroupOrdinal, _columnOrdinal,
+                        _definition, _rowCount);
+                    _cursor = _physicalReader.OpenPages(_rowGroupOrdinal, _columnOrdinal, _pageMetadata, _pruner);
+                }
                 _openedCursor = true;
             }
 
@@ -105,6 +123,8 @@ readonly struct ColumnBufferEnumerable<T>
         {
             if (_openedCursor)
                 _cursor.Dispose();
+            _pageMetadata.Dispose();
+            _pageMetadata = default;
             _buffers.Dispose();
             _openedCursor = false;
             Current = default;

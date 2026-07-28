@@ -72,6 +72,7 @@ internal sealed class GeneratedRowReaderE2ETests
 
             await Assert.That(reader.RowGroups.Count).IsEqualTo(2);
             await Assert.That(reader.RowGroups[0].RowCount).IsEqualTo(2UL);
+            await Assert.That(reader.RowGroups[0].IdColumn.Metadata.ValueCount).IsEqualTo(2UL);
             await Assert.That(ids).IsEquivalentTo([10UL, 20UL, 30UL, 40UL]);
             AssertNullableByteArrays(tags, ["a"u8.ToArray(), null, "c"u8.ToArray(), "d"u8.ToArray()]);
         }

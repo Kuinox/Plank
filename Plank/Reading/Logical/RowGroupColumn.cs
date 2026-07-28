@@ -19,6 +19,10 @@ public readonly struct RowGroupColumn<T>
 
     public LeafColumn Definition { get; }
 
+    /// <summary>Gets this column chunk's logical metadata view.</summary>
+    public ParquetColumnChunkMetadata Metadata
+        => _rowGroup.GetColumnMetadata(_columnOrdinal);
+
     public Enumerator GetEnumerator()
     {
         if (typeof(T) == typeof(byte) &&

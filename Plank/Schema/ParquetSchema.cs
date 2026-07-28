@@ -30,19 +30,21 @@ public sealed record ParquetSchema
 
     public ImmutableArray<LeafColumn> LeafColumns { get; }
 
-    public ParquetReader CreateReader(Stream stream, ParquetReaderOptions? options = null)
+    public ParquetReader CreateReader(Stream stream, ParquetReaderOptions? options = null,
+        ParquetPagePruner? pagePruner = null)
     {
         ArgumentNullException.ThrowIfNull(stream);
         var reader = new ParquetReader(this, options);
-        reader.Reset(stream);
+        reader.Reset(stream, pagePruner);
         return reader;
     }
 
-    public ParquetReader CreateReader(IParquetReadSource source, ParquetReaderOptions? options = null)
+    public ParquetReader CreateReader(IParquetReadSource source, ParquetReaderOptions? options = null,
+        ParquetPagePruner? pagePruner = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         var reader = new ParquetReader(this, options);
-        reader.Reset(source);
+        reader.Reset(source, pagePruner);
         return reader;
     }
 

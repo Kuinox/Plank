@@ -1,4 +1,5 @@
 using Plank.Reading.Logical.Internal;
+using Plank.Reading.Internal;
 using Plank.Schema;
 
 namespace Plank.Reading.Logical;
@@ -57,6 +58,24 @@ public readonly struct RowGroup
         return new RowGroupColumn<T>(this, column, columnOrdinal);
     }
 
+    public ParquetColumnChunkMetadata GetColumnMetadata(LeafColumn column)
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        var reader = GetReader();
+        reader.ValidateRowGroup(this);
+        return new ParquetColumnChunkMetadata(this, reader.GetColumnOrdinal(column));
+    }
+
+    public ParquetColumnChunkMetadata GetColumnMetadata(int columnOrdinal)
+    {
+        var reader = GetReader();
+        reader.ValidateRowGroup(this);
+        if ((uint)columnOrdinal >= (uint)reader.Schema.LeafColumns.Length)
+            throw new ArgumentOutOfRangeException(nameof(columnOrdinal), columnOrdinal,
+                "Column ordinal is outside the reader schema.");
+        return new ParquetColumnChunkMetadata(this, columnOrdinal);
+    }
+
     internal ColumnBufferEnumerable<T> EnumerateBuffers<T>(Column column, int columnOrdinal)
     {
         var reader = GetReader();
@@ -71,15 +90,43 @@ public readonly struct RowGroup
             ? columnChunk.PhysicalColumnOrdinal
             : columnOrdinal;
         return new ColumnBufferEnumerable<T>(reader.PhysicalReader, Metadata.RowGroupOrdinal,
-            physicalColumnOrdinal, column, reader.Options.BufferPool, Metadata.RowCount);
+            physicalColumnOrdinal, reader.Schema.LeafColumns[columnOrdinal], reader.Options.BufferPool,
+            Metadata.RowCount, reader.PagePruner);
     }
 
     internal VariableLengthColumnBufferEnumerable<T> EnumerateVariableLengthBuffers<T>(Column column,
         int columnOrdinal)
         => new(EnumerateBuffers<BinaryValueDescriptor>(column, columnOrdinal));
 
-    ParquetReader GetReader()
+    internal ParquetReader GetReader()
         => Reader ?? throw new InvalidOperationException("The row group is not initialized.");
+
+    internal LeafColumn GetColumnDefinition(int columnOrdinal)
+    {
+        var reader = GetReader();
+        reader.ValidateRowGroup(this);
+        var columns = reader.Schema.LeafColumns;
+        if ((uint)columnOrdinal >= (uint)columns.Length)
+            throw new ArgumentOutOfRangeException(nameof(columnOrdinal));
+        return columns[columnOrdinal];
+    }
+
+    internal InternalColumnChunkMetadata GetColumnChunkMetadata(int columnOrdinal)
+    {
+        var reader = GetReader();
+        reader.ValidateRowGroup(this);
+        if ((uint)columnOrdinal >= (uint)Metadata.Columns.Length)
+            throw new CorruptParquetException(
+                $"Column ordinal {columnOrdinal} is not present in row group {Index}.");
+        return Metadata.Columns[columnOrdinal];
+    }
+
+    internal ParquetStatistics CreateStatistics(LeafColumn definition, EncodedStatistics statistics)
+    {
+        var reader = GetReader();
+        reader.ValidateRowGroup(this);
+        return new ParquetStatistics(reader.PhysicalReader.Metadata.FooterBytes, statistics, definition);
+    }
 
     static void ValidatePhysicalType<T>(Column column)
     {

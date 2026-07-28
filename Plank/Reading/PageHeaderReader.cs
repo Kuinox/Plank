@@ -1,3 +1,4 @@
+using Plank.Reading.Internal;
 using Plank.Schema;
 
 namespace Plank.Reading;
@@ -15,9 +16,11 @@ static class PageHeaderReader
         var repetitionLevelsByteLength = 0U;
         var definitionLevelsByteLength = 0U;
         var nullCount = 0U;
+        var rowCount = 0U;
         var isCompressed = false;
         var repetitionLevelEncoding = EncodingKind.Rle;
         var definitionLevelEncoding = EncodingKind.Rle;
+        var statistics = default(EncodedStatistics);
 
         reader.BeginStruct();
 
@@ -35,14 +38,15 @@ static class PageHeaderReader
                     compressedPageSize = reader.ReadI32AsU32();
                     break;
                 case 5:
-                    (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding)
+                    (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding, statistics)
                         = ReadDataPageHeader(ref reader);
                     break;
                 case 7:
                     valueCount = ReadDictionaryHeader(ref reader);
                     break;
                 case 8:
-                    (valueCount, encoding, nullCount, repetitionLevelsByteLength, definitionLevelsByteLength, isCompressed)
+                    (valueCount, encoding, nullCount, rowCount, repetitionLevelsByteLength,
+                        definitionLevelsByteLength, isCompressed, statistics)
                         = ReadDataPageV2Header(ref reader);
                     break;
                 default:
@@ -53,16 +57,18 @@ static class PageHeaderReader
 
         return new PageHeader(type, uncompressedPageSize, compressedPageSize, valueCount, encoding, reader.Offset,
             repetitionLevelsByteLength, definitionLevelsByteLength, nullCount, isCompressed, repetitionLevelEncoding,
-            definitionLevelEncoding);
+            definitionLevelEncoding, rowCount, statistics);
     }
 
     static (uint ValueCount, EncodingKind Encoding, EncodingKind RepetitionLevelEncoding,
-        EncodingKind DefinitionLevelEncoding) ReadDataPageHeader(ref CompactProtocolReader reader)
+        EncodingKind DefinitionLevelEncoding, EncodedStatistics Statistics)
+        ReadDataPageHeader(ref CompactProtocolReader reader)
     {
         var valueCount = 0U;
         var encoding = EncodingKind.Plain;
         var repetitionLevelEncoding = EncodingKind.Rle;
         var definitionLevelEncoding = EncodingKind.Rle;
+        var statistics = default(EncodedStatistics);
 
         reader.BeginStruct();
 
@@ -88,13 +94,16 @@ static class PageHeaderReader
                     else
                         reader.Skip(fieldType, inlineBool);
                     break;
+                case 5:
+                    statistics = StatisticsThriftReader.Read(ref reader);
+                    break;
                 default:
                     reader.Skip(fieldType, inlineBool);
                     break;
             }
         }
 
-        return (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding);
+        return (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding, statistics);
     }
 
     static uint ReadDictionaryHeader(ref CompactProtocolReader reader)
@@ -112,15 +121,18 @@ static class PageHeaderReader
         return valueCount;
     }
 
-    static (uint ValueCount, EncodingKind Encoding, uint NullCount, uint RepetitionLevelsByteLength,
-        uint DefinitionLevelsByteLength, bool IsCompressed) ReadDataPageV2Header(ref CompactProtocolReader reader)
+    static (uint ValueCount, EncodingKind Encoding, uint NullCount, uint RowCount, uint RepetitionLevelsByteLength,
+        uint DefinitionLevelsByteLength, bool IsCompressed, EncodedStatistics Statistics)
+        ReadDataPageV2Header(ref CompactProtocolReader reader)
     {
         var valueCount = 0U;
         var encoding = EncodingKind.Plain;
         var nullCount = 0U;
+        var rowCount = 0U;
         var repetitionLevelsByteLength = 0U;
         var definitionLevelsByteLength = 0U;
         var isCompressed = true; // spec default
+        var statistics = default(EncodedStatistics);
 
         reader.BeginStruct();
 
@@ -134,6 +146,9 @@ static class PageHeaderReader
                 case 2:
                     nullCount = reader.ReadI32AsU32();
                     break;
+                case 3:
+                    rowCount = reader.ReadI32AsU32();
+                    break;
                 case 4:
                     encoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32());
                     break;
@@ -146,12 +161,16 @@ static class PageHeaderReader
                 case 7:
                     isCompressed = reader.ReadBool(inlineBool);
                     break;
+                case 8:
+                    statistics = StatisticsThriftReader.Read(ref reader);
+                    break;
                 default:
                     reader.Skip(fieldType, inlineBool);
                     break;
             }
         }
 
-        return (valueCount, encoding, nullCount, repetitionLevelsByteLength, definitionLevelsByteLength, isCompressed);
+        return (valueCount, encoding, nullCount, rowCount, repetitionLevelsByteLength, definitionLevelsByteLength,
+            isCompressed, statistics);
     }
 }

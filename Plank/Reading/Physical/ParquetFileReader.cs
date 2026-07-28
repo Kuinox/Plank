@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using Plank.Reading.Logical;
+using Plank.Reading.Logical.Internal;
 using Plank.Reading.Physical.Internal;
 using Plank.Schema;
 
@@ -73,6 +75,15 @@ public sealed class ParquetFileReader : IDisposable
         ValidateGeneration(_generation);
         ValidateOrdinal(rowGroupOrdinal, _metadata.RowGroupCount, nameof(rowGroupOrdinal));
         return new ParquetPageCursor(this, _generation, rowGroupOrdinal, columnOrdinal);
+    }
+
+    internal ParquetPageCursor OpenPages(int rowGroupOrdinal, int columnOrdinal,
+        PageMetadataHandle pageMetadata, ParquetPagePruner pruner)
+    {
+        ValidateGeneration(_generation);
+        ValidateOrdinal(rowGroupOrdinal, _metadata.RowGroupCount, nameof(rowGroupOrdinal));
+        ArgumentNullException.ThrowIfNull(pruner);
+        return new ParquetPageCursor(this, _generation, rowGroupOrdinal, columnOrdinal, pageMetadata, pruner);
     }
 
     public void Dispose()

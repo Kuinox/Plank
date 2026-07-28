@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Immutable;
 using Plank.Reading;
 using Plank.Reading.Physical;
@@ -20,6 +21,16 @@ internal sealed class ReaderAllocationTests
         CompressionKind.Lz4,
         CompressionKind.Brotli
     ];
+    static readonly ParquetPagePruner _pagePruner =
+        static (in ParquetDataPageMetadata page) => MaximumIsAtLeast6000(in page);
+
+    static bool MaximumIsAtLeast6000(in ParquetDataPageMetadata page)
+    {
+        var statistics = page.Statistics;
+        return !statistics.HasMaximum ||
+            statistics.Maximum.Length != sizeof(int) ||
+            BinaryPrimitives.ReadInt32LittleEndian(statistics.Maximum) >= 6000;
+    }
 
     [Test]
     public void RowGroupIndexAccessDoesNotAllocateAfterWarmup()
@@ -155,6 +166,91 @@ internal sealed class ReaderAllocationTests
             if (allocated != 0)
                 throw new InvalidOperationException(
                     $"Expected zero allocations for steady-state column buffer enumeration but saw {allocated} bytes.");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public void PrunedColumnBufferEnumerationDoesNotAllocateAfterWarmup()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
+        ]);
+        var path = Path.Combine(Path.GetTempPath(), $"plank-reader-pruner-alloc-{Guid.NewGuid():N}.parquet");
+        try
+        {
+            using (var output = File.Create(path))
+            {
+                var writer = schema.CreateWriter(output, new ParquetWriterOptions
+                {
+                    TargetDataPageSizeBytes = 128,
+                    WritePageIndexes = true
+                });
+                var serialized = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+                serialized.Serialize(CreateValues(4096));
+                writer.StartRowGroup().Write(serialized);
+                writer.CloseFile();
+            }
+
+            using var stream = File.OpenRead(path);
+            using var reader = schema.CreateReader(stream, pagePruner: _pagePruner);
+            var rowGroup = reader.RowGroups[0];
+            for (var i = 0; i < 8; i++)
+                _ = SumValues(rowGroup, schema.LeafColumns[0]);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var sum = SumValues(rowGroup, schema.LeafColumns[0]);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            if (sum == 0)
+                throw new InvalidOperationException("Expected the page pruner to retain values.");
+            if (allocated != 0)
+                throw new InvalidOperationException(
+                    $"Expected zero allocations for steady-state pruned enumeration but saw {allocated} bytes.");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public void PageMetadataEnumerationDoesNotAllocate()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
+        ]);
+        var path = CreateFile(schema, CreateValues(4096));
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = schema.CreateReader(stream);
+            using var pages = reader.RowGroups[0].GetColumnMetadata(0).OpenPages();
+            for (var i = 0; i < 8; i++)
+                _ = CountPageMetadata(pages);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var count = CountPageMetadata(pages);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            if (count == 0)
+                throw new InvalidOperationException("Expected page metadata.");
+            if (allocated != 0)
+                throw new InvalidOperationException(
+                    $"Expected page metadata enumeration to allocate zero bytes but saw {allocated} bytes.");
         }
         finally
         {
@@ -619,6 +715,14 @@ internal sealed class ReaderAllocationTests
         var count = 0;
         foreach (var _ in reader.RowGroups)
             count++;
+        return count;
+    }
+
+    static int CountPageMetadata(ParquetDataPageMetadataCollection pages)
+    {
+        var count = 0;
+        foreach (var page in pages)
+            count += page.PageOrdinal + 1;
         return count;
     }
 

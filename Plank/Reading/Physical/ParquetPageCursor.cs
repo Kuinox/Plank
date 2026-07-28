@@ -1,5 +1,7 @@
 namespace Plank.Reading.Physical;
 
+using Plank.Reading.Logical;
+using Plank.Reading.Logical.Internal;
 using Plank.Schema;
 
 public struct ParquetPageCursor : IDisposable
@@ -9,20 +11,30 @@ public struct ParquetPageCursor : IDisposable
     ParquetFileReader? _owner;
     readonly int _generation;
     readonly ParquetColumnChunkInfo _chunk;
+    readonly PageMetadataHandle _pageMetadata;
+    readonly ParquetPagePruner? _pruner;
     ParquetBuffer _payloadBuffer;
     int _chunkLength;
     int _offset;
     int _payloadLength;
+    int _nextCandidatePageOrdinal;
+    int _pendingPageOrdinal;
+    bool _dictionaryPending;
 
     internal ParquetPageCursor(ParquetFileReader owner, int generation, int rowGroupOrdinal, int columnOrdinal)
     {
         _owner = owner;
         _generation = generation;
         _chunk = owner.Metadata.ColumnChunk(rowGroupOrdinal, columnOrdinal);
+        _pageMetadata = default;
+        _pruner = null;
         _payloadBuffer = default;
         _chunkLength = 0;
         _offset = 0;
         _payloadLength = 0;
+        _nextCandidatePageOrdinal = 0;
+        _pendingPageOrdinal = -1;
+        _dictionaryPending = false;
         CurrentHeader = default;
 
         if (_chunk.TotalCompressedSize > int.MaxValue)
@@ -33,6 +45,16 @@ public struct ParquetPageCursor : IDisposable
                 $"Column chunk at offset {_chunk.ChunkOffset} with size {_chunk.TotalCompressedSize} exceeds source length ({owner.Source.Length}).");
 
         _chunkLength = checked((int)_chunk.TotalCompressedSize);
+    }
+
+    internal ParquetPageCursor(ParquetFileReader owner, int generation, int rowGroupOrdinal, int columnOrdinal,
+        PageMetadataHandle pageMetadata, ParquetPagePruner pruner)
+        : this(owner, generation, rowGroupOrdinal, columnOrdinal)
+    {
+        _pageMetadata = pageMetadata;
+        _pruner = pruner;
+        _dictionaryPending = _chunk.DictionaryPageOffset != 0 &&
+            _chunk.DictionaryPageOffset < _chunk.DataPageOffset;
     }
 
     public PageHeader CurrentHeader { get; private set; }
@@ -55,6 +77,8 @@ public struct ParquetPageCursor : IDisposable
     public bool MoveNext()
     {
         var owner = GetOwner();
+        if (_pruner is not null)
+            return MoveNextPruned(owner);
         if (_offset >= _chunkLength)
         {
             CurrentHeader = default;
@@ -63,12 +87,84 @@ public struct ParquetPageCursor : IDisposable
             return false;
         }
 
-        var headerProbeLength = Math.Min(_chunkLength - _offset, MaxPageHeaderLength);
+        return ReadPage(owner, _offset);
+    }
+
+    bool MoveNextPruned(ParquetFileReader owner)
+    {
+        var metadata = _pageMetadata;
+        if (_pendingPageOrdinal < 0)
+        {
+            while (_nextCandidatePageOrdinal < metadata.Count)
+            {
+                var ordinal = _nextCandidatePageOrdinal++;
+                var page = metadata.GetMetadata(ordinal);
+                var accepted = _pruner!(in page);
+                owner.ValidateGeneration(_generation);
+                if (!accepted)
+                    continue;
+                _pendingPageOrdinal = ordinal;
+                break;
+            }
+        }
+
+        if (_pendingPageOrdinal < 0)
+        {
+            CurrentHeader = default;
+            _payloadLength = 0;
+            ReturnPayloadBuffer();
+            return false;
+        }
+
+        if (_dictionaryPending)
+        {
+            _dictionaryPending = false;
+            var dictionaryOffset = checked((int)(_chunk.DictionaryPageOffset - _chunk.ChunkOffset));
+            var dictionaryLength = checked((int)(_chunk.DataPageOffset - _chunk.DictionaryPageOffset));
+            return ReadPage(owner, dictionaryOffset, dictionaryLength);
+        }
+
+        var selected = metadata.GetMetadata(_pendingPageOrdinal);
+        _pendingPageOrdinal = -1;
+        if (selected.Offset < _chunk.ChunkOffset ||
+            selected.Offset - _chunk.ChunkOffset > (ulong)_chunkLength)
+            throw new CorruptParquetException(
+                $"Selected page offset {selected.Offset} is outside its column chunk.");
+        if (selected.CompressedSize > int.MaxValue)
+            throw new NotSupportedException("Pages larger than Int32.MaxValue are not supported.");
+        return ReadPage(owner, checked((int)(selected.Offset - _chunk.ChunkOffset)),
+            checked((int)selected.CompressedSize));
+    }
+
+    bool ReadPage(ParquetFileReader owner, int pageOffset, int? boundedPageLength = null)
+    {
+        if ((uint)pageOffset >= (uint)_chunkLength)
+        {
+            CurrentHeader = default;
+            _payloadLength = 0;
+            ReturnPayloadBuffer();
+            return false;
+        }
+
+        _offset = pageOffset;
+        var remainingChunkLength = _chunkLength - _offset;
+        var headerProbeLength = Math.Min(remainingChunkLength, MaxPageHeaderLength);
+        if (boundedPageLength.HasValue)
+        {
+            if (boundedPageLength.Value <= 0 || boundedPageLength.Value > remainingChunkLength)
+                throw new CorruptParquetException(
+                    $"Indexed page size {boundedPageLength.Value} is outside its column chunk.");
+            headerProbeLength = Math.Min(headerProbeLength, boundedPageLength.Value);
+        }
         EnsurePayloadBuffer(owner, headerProbeLength);
         var headerBytes = _payloadBuffer.Span[..headerProbeLength];
         owner.Source.ReadExactly(_chunk.ChunkOffset + (ulong)_offset, headerBytes);
         var maxUncompressedPageSize = (uint)Math.Min(_chunk.TotalUncompressedSize, uint.MaxValue);
         var header = PageHeaderReader.Read(headerBytes, maxUncompressedPageSize);
+        var totalPageLength = checked(header.HeaderLength + (int)header.CompressedPageSize);
+        if (boundedPageLength.HasValue && totalPageLength > boundedPageLength.Value)
+            throw new CorruptParquetException(
+                $"Page size {totalPageLength} exceeds its indexed compressed size {boundedPageLength.Value}.");
         _offset += header.HeaderLength;
         if (header.CompressedPageSize > (uint)(_chunkLength - _offset))
             throw new CorruptParquetException(

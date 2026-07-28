@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Plank.Reading.Internal;
 using Plank.Schema;
 
 namespace Plank.Reading.Physical.Internal;
@@ -380,6 +381,7 @@ static class PhysicalMetadataThriftReader
         var dictionaryPageOffset = 0UL;
         var totalCompressedSize = 0UL;
         var totalUncompressedSize = 0UL;
+        var valueCount = 0UL;
         var columnIndexOffset = 0UL;
         var columnIndexLength = 0U;
         var offsetIndexOffset = 0UL;
@@ -387,6 +389,7 @@ static class PhysicalMetadataThriftReader
         var compression = CompressionKind.None;
         var physicalType = (ParquetPhysicalType?)null;
         var encodings = default(ParquetColumnChunkEncodings);
+        var statistics = default(EncodedStatistics);
 
         reader.BeginStruct();
 
@@ -399,8 +402,8 @@ static class PhysicalMetadataThriftReader
                     break;
                 case 3:
                     ReadColumnMetadata(ref reader, metadata, ref physicalType, ref compression, ref dataPageOffset,
-                        ref dictionaryPageOffset, ref totalCompressedSize, ref totalUncompressedSize,
-                        ref encodings, expectedColumnOrdinal);
+                        ref dictionaryPageOffset, ref totalCompressedSize, ref totalUncompressedSize, ref valueCount,
+                        ref encodings, ref statistics, expectedColumnOrdinal);
                     break;
                 case 4:
                     offsetIndexOffset = reader.ReadI64AsU64();
@@ -424,14 +427,15 @@ static class PhysicalMetadataThriftReader
             throw new CorruptParquetException("Column chunk metadata is missing a physical type.");
 
         return new ParquetColumnChunkInfo(rowGroupOrdinal, expectedColumnOrdinal, physicalType.Value, compression,
-            dataPageOffset, dictionaryPageOffset, totalCompressedSize, totalUncompressedSize, columnIndexOffset,
-            columnIndexLength, offsetIndexOffset, offsetIndexLength, encodings);
+            valueCount, dataPageOffset, dictionaryPageOffset, totalCompressedSize, totalUncompressedSize,
+            columnIndexOffset, columnIndexLength, offsetIndexOffset, offsetIndexLength, encodings, statistics);
     }
 
     static void ReadColumnMetadata(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
         ref ParquetPhysicalType? physicalType, ref CompressionKind compression, ref ulong dataPageOffset,
         ref ulong dictionaryPageOffset, ref ulong totalCompressedSize, ref ulong totalUncompressedSize,
-        ref ParquetColumnChunkEncodings encodings, int expectedColumnOrdinal)
+        ref ulong valueCount, ref ParquetColumnChunkEncodings encodings, ref EncodedStatistics statistics,
+        int expectedColumnOrdinal)
     {
         reader.BeginStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
@@ -450,6 +454,9 @@ static class PhysicalMetadataThriftReader
                 case 4:
                     compression = ParquetThriftConversions.ReadCompression(reader.ReadI32());
                     break;
+                case 5:
+                    valueCount = reader.ReadI64AsU64();
+                    break;
                 case 6:
                     totalUncompressedSize = reader.ReadI64AsU64();
                     break;
@@ -461,6 +468,9 @@ static class PhysicalMetadataThriftReader
                     break;
                 case 11:
                     dictionaryPageOffset = reader.ReadI64AsU64();
+                    break;
+                case 12:
+                    statistics = StatisticsThriftReader.Read(ref reader);
                     break;
                 default:
                     reader.Skip(type, inlineBool);
