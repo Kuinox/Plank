@@ -64,14 +64,14 @@ internal sealed class CompressionAllocationTests
             PopulateSource(ref source, multiSegmentInput ? 48 * 1024 : 32 * 1024);
 
             for (var i = 0; i < 8; i++)
-                Compression.Compress(codec, context, ref source, ref destination);
+                Compression.Compress(codec, GetDefaultCompressionLevel(codec), context, ref source, ref destination);
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            Compression.Compress(codec, context, ref source, ref destination);
+            Compression.Compress(codec, GetDefaultCompressionLevel(codec), context, ref source, ref destination);
             var after = GC.GetAllocatedBytesForCurrentThread();
             return after - before;
         }
@@ -82,6 +82,15 @@ internal sealed class CompressionAllocationTests
             context.Dispose();
         }
     }
+
+    static int GetDefaultCompressionLevel(CompressionKind codec)
+        => codec switch
+        {
+            CompressionKind.Gzip => 1,
+            CompressionKind.Zstd => 1,
+            CompressionKind.Brotli => 4,
+            _ => 0
+        };
 
     static void PopulateSource(ref BufferWriter source, int size)
     {

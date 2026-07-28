@@ -19,6 +19,7 @@ public sealed class ParquetWriter
     internal readonly int ColumnCount;
     internal readonly BufferWriterFactory BufferWriters;
     internal readonly CompressionKind Compression;
+    internal readonly int CompressionLevel;
     internal readonly bool WritePageIndexes;
     internal readonly CompressionContext CompressionContext;
     internal readonly ColumnChunkMetadata[] OpenRowGroupColumnMetadata;
@@ -60,6 +61,7 @@ public sealed class ParquetWriter
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
             _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
         Compression = _options.Compression;
+        CompressionLevel = _options.GetCompressionLevel();
         WritePageIndexes = _options.WritePageIndexes;
         CompressionContext = new CompressionContext(BufferWriters);
         OpenRowGroupColumnMetadata = ColumnCount == 0 ? [] : new ColumnChunkMetadata[ColumnCount];

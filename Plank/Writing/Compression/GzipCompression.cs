@@ -2,11 +2,11 @@ namespace Plank.Writing.Compression;
 
 static class GzipCompression
 {
-    internal static void Compress(CompressionContext context, ref BufferWriter source, ref BufferWriter destination)
+    internal static void Compress(int compressionLevel, CompressionContext context, ref BufferWriter source,
+        ref BufferWriter destination)
     {
         var input = context.GetContiguousSourceSpan(ref source);
         var outputBuffer = context.GetGzipOutputBuffer(64 * 1024);
-        var deflater = context.GetGzipDeflater();
-        deflater.Compress(input, outputBuffer, ref destination);
+        GzipDeflater.Compress(compressionLevel, input, outputBuffer, ref destination);
     }
 }

@@ -114,7 +114,7 @@ internal sealed class WriterInteropE2ETests
             CreateGeneratedRowGroup(512, offset: 1000)
         };
 
-        await WriteFileAsync(path, CompressionKind.Gzip, rowGroups).ConfigureAwait(false);
+        await WriteFileAsync(path, CompressionKind.Gzip, rowGroups, compressionLevel: 9).ConfigureAwait(false);
         try
         {
             await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
@@ -135,7 +135,56 @@ internal sealed class WriterInteropE2ETests
             CreateGeneratedRowGroup(256, offset: 5000)
         };
 
-        await WriteFileAsync(path, CompressionKind.Zstd, rowGroups).ConfigureAwait(false);
+        await WriteFileAsync(path, CompressionKind.Zstd, rowGroups, compressionLevel: 19).ConfigureAwait(false);
+        try
+        {
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task RequiredColumnsWithLz4RawCompressionAreReadableByBothImplementations()
+    {
+        var path = NewPath("lz4-raw");
+        var rowGroups = new[]
+        {
+            CreateGeneratedRowGroup(512, offset: 7000)
+        };
+
+        await WriteFileAsync(path, CompressionKind.Lz4, rowGroups, compressionLevel: 12).ConfigureAwait(false);
+        try
+        {
+            using var fileReader = new ParquetSharp.ParquetFileReader(path);
+            using var rowGroup = fileReader.RowGroup(0);
+            using var column = rowGroup.MetaData.GetColumnChunkMetaData(0);
+            if (column.Compression != ParquetSharp.Compression.Lz4)
+                throw new InvalidOperationException(
+                    $"Expected LZ4_RAW metadata, got '{column.Compression}'.");
+
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task RequiredColumnsWithBrotliCompressionAreReadableByBothImplementations()
+    {
+        var path = NewPath("brotli");
+        var rowGroups = new[]
+        {
+            CreateGeneratedRowGroup(256, offset: 8000)
+        };
+
+        await WriteFileAsync(path, CompressionKind.Brotli, rowGroups, compressionLevel: 11).ConfigureAwait(false);
         try
         {
             await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
@@ -456,16 +505,19 @@ internal sealed class WriterInteropE2ETests
     static string NewPath(string suffix)
         => Path.Combine(Path.GetTempPath(), $"plank-writer-interop-{suffix}-{Guid.NewGuid():N}.parquet");
 
-    static async Task WriteFileAsync(string path, CompressionKind compression, IReadOnlyList<ExpectedRowGroup> rowGroups)
-        => await WriteFileAsync(path, WriterInteropSchema.Schema, compression, rowGroups).ConfigureAwait(false);
+    static async Task WriteFileAsync(string path, CompressionKind compression, IReadOnlyList<ExpectedRowGroup> rowGroups,
+        int? compressionLevel = null)
+        => await WriteFileAsync(path, WriterInteropSchema.Schema, compression, rowGroups, compressionLevel)
+            .ConfigureAwait(false);
 
     static async Task WriteFileAsync(string path, ParquetSchema schema, CompressionKind compression,
-        IReadOnlyList<ExpectedRowGroup> rowGroups)
+        IReadOnlyList<ExpectedRowGroup> rowGroups, int? compressionLevel = null)
     {
         using var stream = File.Create(path);
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
-            Compression = compression
+            Compression = compression,
+            CompressionLevel = compressionLevel
         });
         var columns = schema.LeafColumns;
         var int32Column = writer.CreateSerializedColumn<int>(columns[0]);

@@ -1,1 +1,3 @@
 #nullable enable
+Plank.Writing.ParquetWriterOptions.CompressionLevel.get -> int?
+Plank.Writing.ParquetWriterOptions.CompressionLevel.init -> void

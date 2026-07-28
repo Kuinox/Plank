@@ -109,8 +109,8 @@ public sealed class RowGroupWriter
                 {
                     if (compression != CompressionKind.None && pageContentSize > 0)
                     {
-                        Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionContext,
-                            ref page.Content, ref _compressedContent);
+                        Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionLevel,
+                            _writer.CompressionContext, ref page.Content, ref _compressedContent);
                         compressedContentSize = _compressedContent.WrittenLength;
                         storedContentSize = compressedContentSize;
                         writeCompressedContent = true;
@@ -153,8 +153,8 @@ public sealed class RowGroupWriter
                     {
                         if (levelBytes == 0)
                         {
-                            Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionContext,
-                                ref page.Content, ref _compressedContent);
+                            Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionLevel,
+                                _writer.CompressionContext, ref page.Content, ref _compressedContent);
                             compressedContentSize = _compressedContent.WrittenLength;
                         }
                         else
@@ -167,8 +167,8 @@ public sealed class RowGroupWriter
                             var levels = source[..levelBytesInt32];
                             var values = source[levelBytesInt32..];
                             _compressionInput.Write(values);
-                            Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionContext,
-                                ref _compressionInput, ref _compressedValues);
+                            Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionLevel,
+                                _writer.CompressionContext, ref _compressionInput, ref _compressedValues);
                             _compressedContent.Write(levels);
                             _compressedContent.CopyFrom(ref _compressedValues);
                             compressedContentSize = _compressedContent.WrittenLength;

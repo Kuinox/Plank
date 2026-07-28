@@ -1,18 +1,23 @@
-using ZstdSharp;
+using ZstdSharp.Unsafe;
 
 namespace Plank.Writing.Compression;
 
-static class ZstdCompression
+unsafe static class ZstdCompression
 {
-    internal static void Compress(CompressionContext context, ref BufferWriter source, ref BufferWriter destination)
+    internal static void Compress(int compressionLevel, CompressionContext context, ref BufferWriter source,
+        ref BufferWriter destination)
     {
         var sourceSpan = context.GetContiguousSourceSpan(ref source);
-        var compressor = context.GetZstdCompressor();
-        compressor.ResetStream();
-        compressor.SetPledgedSrcSize((ulong)sourceSpan.Length);
-        var maxLength = Compressor.GetCompressBound(sourceSpan.Length);
+        var maxLength = checked((int)Methods.ZSTD_compressBound((nuint)sourceSpan.Length));
         var destinationSpan = destination.GetSpan(maxLength);
-        var written = compressor.Wrap(sourceSpan, destinationSpan);
-        destination.Advance(written);
+        fixed (byte* input = sourceSpan)
+        fixed (byte* output = destinationSpan)
+        {
+            var written = Methods.ZSTD_compress(output, (nuint)destinationSpan.Length, input,
+                (nuint)sourceSpan.Length, compressionLevel);
+            if (Methods.ZSTD_isError(written))
+                throw new InvalidOperationException($"Zstd compression failed with code {written}.");
+            destination.Advance(checked((int)written));
+        }
     }
 }

@@ -4,8 +4,8 @@ namespace Plank.Writing.Compression;
 
 static class Compression
 {
-    internal static void Compress(CompressionKind compression, CompressionContext context, ref BufferWriter source,
-        ref BufferWriter destination)
+    internal static void Compress(CompressionKind compression, int compressionLevel, CompressionContext context,
+        ref BufferWriter source, ref BufferWriter destination)
     {
         destination.Reset();
         switch (compression)
@@ -21,16 +21,16 @@ static class Compression
                 SnappyCompression.Compress(context, ref source, ref destination);
                 return;
             case CompressionKind.Gzip:
-                GzipCompression.Compress(context, ref source, ref destination);
+                GzipCompression.Compress(compressionLevel, context, ref source, ref destination);
                 return;
             case CompressionKind.Zstd:
-                ZstdCompression.Compress(context, ref source, ref destination);
+                ZstdCompression.Compress(compressionLevel, context, ref source, ref destination);
                 return;
             case CompressionKind.Lz4:
-                Lz4Compression.Compress(context, ref source, ref destination);
+                Lz4Compression.Compress(compressionLevel, context, ref source, ref destination);
                 return;
             case CompressionKind.Brotli:
-                BrotliCompression.Compress(context, ref source, ref destination);
+                BrotliCompression.Compress(compressionLevel, context, ref source, ref destination);
                 return;
             default:
                 throw new NotSupportedException($"Compression '{compression}' is not supported.");

@@ -9,7 +9,9 @@ Minimal Parquet writer under construction.
 - Current write path supports splitting fixed-width required columns into multiple data pages per chunk.
 - Repeated primitive columns are supported via `RowGroupWriter.WriteAsync(column, new RepeatedValues<T>(rows))` and include DataPageV2 repetition/definition levels.
 - Future work: support multiple data pages per column chunk for streaming and page sizing.
-- Writer compression is configurable via `ParquetWriterOptions.Compression` (`None`, `Gzip`, `Brotli` currently implemented).
+- Writer compression is configurable via `ParquetWriterOptions.Compression` (`None`, `Snappy`, `Gzip`, `Zstd`,
+  `Lz4`, or `Brotli`). Set `ParquetWriterOptions.CompressionLevel` to select a codec-specific level; leave it null
+  to use the default.
 - Page splitting can be tuned with `RowGroupOptions.MaxPageValueCount` and `RowGroupOptions.MaxPageBytes` (currently applied to fixed-width required columns and required byte-array columns, with soft overflow to keep value boundaries intact).
 
 ## Benchmarks
