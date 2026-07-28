@@ -12,7 +12,8 @@ if (args is ["--audit-encodings", ..])
 BenchmarkSwitcher.FromTypes([typeof(EncodingBenchmark),
     typeof(RowReaderBenchmark),
     typeof(DictionaryImplementationBenchmark),
-    typeof(DeltaBinaryPackedEncodingBenchmark)])
+    typeof(DeltaBinaryPackedEncodingBenchmark),
+    typeof(RleBitPackingHybridEncodingBenchmark)])
     .Run(args);
 
 var field = new DataField<int>("value");
