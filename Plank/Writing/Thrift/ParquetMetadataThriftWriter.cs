@@ -155,7 +155,7 @@ static class ParquetMetadataThriftWriter
             totalCompressedSize = checked(totalCompressedSize + chunk.TotalCompressedSize);
             if (hasRowGroupOffset)
                 continue;
-            rowGroupOffset = GetColumnChunkOffset(chunk);
+            rowGroupOffset = GetColumnChunkStartOffset(chunk);
             hasRowGroupOffset = true;
         }
 
@@ -490,7 +490,7 @@ static class ParquetMetadataThriftWriter
         in ColumnChunkMetadata metadata)
     {
         var previousChunk = writer.BeginStruct();
-        writer.WriteFieldI64(2, GetColumnChunkOffset(metadata));
+        writer.WriteFieldI64(2, 0);
         writer.WriteFieldHeader(3, CompactType.Struct);
 
         var previousMetadata = writer.BeginStruct();
@@ -520,7 +520,7 @@ static class ParquetMetadataThriftWriter
         writer.EndStruct(previousChunk);
     }
 
-    static long GetColumnChunkOffset(in ColumnChunkMetadata metadata)
+    static long GetColumnChunkStartOffset(in ColumnChunkMetadata metadata)
         => metadata.HasDictionaryPage ? metadata.DictionaryPageOffset : metadata.DataPageOffset;
 
     static void WriteStatistics(ref CompactWriter writer, in ColumnStatistics statistics)

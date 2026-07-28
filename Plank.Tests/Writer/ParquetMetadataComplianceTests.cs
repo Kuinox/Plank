@@ -61,7 +61,7 @@ internal sealed class ParquetMetadataComplianceTests
     }
 
     [Test]
-    public void AllNanNonNullPageIsNotMarkedAsNullPage()
+    public void AllNanNonNullPageOmitsColumnIndex()
     {
         var schema = new ParquetSchema([
             ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Float)
@@ -77,12 +77,10 @@ internal sealed class ParquetMetadataComplianceTests
             rowGroup.Write(column);
         });
         var metadata = ReadMetadata(file);
-        var nullPages = ReadNullPages(file, metadata.Column.ColumnIndexOffset, metadata.Column.ColumnIndexLength);
 
-        if (nullPages.Length != 1)
-            throw new InvalidOperationException($"Expected one null_pages entry, got {nullPages.Length}.");
-        if (nullPages[0])
-            throw new InvalidOperationException("An all-NaN page containing no nulls was marked as an all-null page.");
+        if (metadata.Column.ColumnIndexOffset != -1 || metadata.Column.ColumnIndexLength != -1)
+            throw new InvalidOperationException(
+                "A column index was emitted for an all-NaN page with no valid min/max bounds.");
     }
 
     [Test]
@@ -133,9 +131,9 @@ internal sealed class ParquetMetadataComplianceTests
         if (metadata.RowGroupFileOffset != metadata.Column.DictionaryPageOffset)
             throw new InvalidOperationException(
                 $"Expected row-group file_offset {metadata.Column.DictionaryPageOffset}, got {metadata.RowGroupFileOffset}.");
-        if (metadata.Column.FileOffset != metadata.Column.DictionaryPageOffset)
+        if (metadata.Column.FileOffset != 0)
             throw new InvalidOperationException(
-                $"Expected column-chunk file_offset {metadata.Column.DictionaryPageOffset}, got {metadata.Column.FileOffset}.");
+                $"Expected deprecated column-chunk file_offset 0, got {metadata.Column.FileOffset}.");
     }
 
     static byte[] WriteRequiredInt32File(ParquetWriterOptions options)
@@ -340,33 +338,6 @@ internal sealed class ParquetMetadataComplianceTests
         }
 
         return new StatisticsMetadata(hasLegacyMin, hasLegacyMax, hasModernMin, hasModernMax);
-    }
-
-    static bool[] ReadNullPages(byte[] file, long offset, int length)
-    {
-        if (offset < 0 || length <= 0)
-            throw new InvalidOperationException("Column index metadata was not written.");
-
-        var reader = new CompactProtocolReader(file.AsSpan(checked((int)offset), length));
-        reader.BeginStruct();
-        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
-        {
-            if (fieldId != 1)
-            {
-                reader.Skip(type, inlineBool);
-                continue;
-            }
-
-            var (count, elementType) = reader.ReadListHeader();
-            if (elementType is not (CompactProtocolType.BooleanTrue or CompactProtocolType.BooleanFalse))
-                throw new InvalidOperationException("Column index null_pages was not a bool list.");
-            var result = new bool[checked((int)count)];
-            for (var i = 0; i < result.Length; i++)
-                result[i] = reader.ReadBool(inlineBool: null);
-            return result;
-        }
-
-        throw new InvalidOperationException("Column index did not contain null_pages.");
     }
 
     sealed record FileMetadata(long RowGroupFileOffset, ColumnMetadata Column, int ColumnOrderCount);

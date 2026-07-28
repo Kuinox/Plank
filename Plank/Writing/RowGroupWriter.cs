@@ -294,12 +294,15 @@ public sealed class RowGroupWriter
             _offsetIndexBuffer = _writer.BufferWriters.CreateMetadataBufferWriter();
 
         _columnIndexBuffer.Reset();
-        ParquetMetadataThriftWriter.WriteColumnIndex(ref _columnIndexBuffer,
-            metadata.PageIndex.Statistics.AsSpan(0, metadata.PageIndex.Count),
-            metadata.PageIndex.NullPages.AsSpan(0, metadata.PageIndex.Count));
-        metadata.ColumnIndexOffset = _writer.FileOffset;
-        metadata.ColumnIndexLength = checked((uint)_columnIndexBuffer.WrittenLength);
-        _writer.WriteBuffer(ref _columnIndexBuffer);
+        var statistics = metadata.PageIndex.Statistics.AsSpan(0, metadata.PageIndex.Count);
+        var nullPages = metadata.PageIndex.NullPages.AsSpan(0, metadata.PageIndex.Count);
+        if (CanWriteColumnIndex(statistics, nullPages))
+        {
+            ParquetMetadataThriftWriter.WriteColumnIndex(ref _columnIndexBuffer, statistics, nullPages);
+            metadata.ColumnIndexOffset = _writer.FileOffset;
+            metadata.ColumnIndexLength = checked((uint)_columnIndexBuffer.WrittenLength);
+            _writer.WriteBuffer(ref _columnIndexBuffer);
+        }
 
         _offsetIndexBuffer.Reset();
         ParquetMetadataThriftWriter.WriteOffsetIndex(ref _offsetIndexBuffer,
@@ -307,6 +310,15 @@ public sealed class RowGroupWriter
         metadata.OffsetIndexOffset = _writer.FileOffset;
         metadata.OffsetIndexLength = checked((uint)_offsetIndexBuffer.WrittenLength);
         _writer.WriteBuffer(ref _offsetIndexBuffer);
+    }
+
+    static bool CanWriteColumnIndex(ReadOnlySpan<ColumnStatistics> statistics, ReadOnlySpan<bool> nullPages)
+    {
+        for (var i = 0; i < statistics.Length; i++)
+            if (!nullPages[i] && statistics[i].ValueKind == ColumnStatistics.ColumnStatisticsValueKind.None)
+                return false;
+
+        return true;
     }
 
     internal void ReleaseBuffers()
