@@ -244,6 +244,10 @@ sealed class ReusableDictionaryState<T>
                 Unsafe.As<T, ReadOnlyMemory<byte>>(ref b).Span);
         if (typeof(T) == typeof(byte[]))
             return Unsafe.As<T, byte[]>(ref a).AsSpan().SequenceEqual(Unsafe.As<T, byte[]>(ref b).AsSpan());
+        if (typeof(T) == typeof(float))
+            return Unsafe.As<T, uint>(ref a) == Unsafe.As<T, uint>(ref b);
+        if (typeof(T) == typeof(double))
+            return Unsafe.As<T, ulong>(ref a) == Unsafe.As<T, ulong>(ref b);
         return EqualityComparer<T>.Default.Equals(a, b);
     }
 

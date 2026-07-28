@@ -1704,8 +1704,32 @@ static class Encoding
             return (IEqualityComparer<T>)(object)ByteArrayComparer.Instance;
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
             return (IEqualityComparer<T>)(object)ReadOnlyMemoryByteComparer.Instance;
+        if (typeof(T) == typeof(float))
+            return (IEqualityComparer<T>)(object)FloatBitwiseComparer.Instance;
+        if (typeof(T) == typeof(double))
+            return (IEqualityComparer<T>)(object)DoubleBitwiseComparer.Instance;
 
         return EqualityComparer<T>.Default;
+    }
+
+    sealed class FloatBitwiseComparer : IEqualityComparer<float>
+    {
+        internal static FloatBitwiseComparer Instance { get; } = new();
+
+        public bool Equals(float x, float y)
+            => BitConverter.SingleToInt32Bits(x) == BitConverter.SingleToInt32Bits(y);
+
+        public int GetHashCode(float obj) => BitConverter.SingleToInt32Bits(obj);
+    }
+
+    sealed class DoubleBitwiseComparer : IEqualityComparer<double>
+    {
+        internal static DoubleBitwiseComparer Instance { get; } = new();
+
+        public bool Equals(double x, double y)
+            => BitConverter.DoubleToInt64Bits(x) == BitConverter.DoubleToInt64Bits(y);
+
+        public int GetHashCode(double obj) => BitConverter.DoubleToInt64Bits(obj).GetHashCode();
     }
 
     static int GetInitialForcedDictionaryCapacity(int rowCount)
