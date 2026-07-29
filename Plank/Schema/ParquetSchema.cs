@@ -163,11 +163,10 @@ public sealed record ParquetSchema
                 }
                 case NodeKind.Map:
                 {
-                    if (node.Children.Length != 2)
+                    if (node.Children.Length is < 1 or > 2)
                         return false;
 
                     var keyNode = node.Children[0];
-                    var valueNode = node.Children[1];
 
                     pathBuffer.Add("key_value");
                     var keyOk = TryCollectLeaves(keyNode with { Name = "key" }, columnsBuilder, pathsBuilder, pathBuffer,
@@ -180,6 +179,13 @@ public sealed record ParquetSchema
                         return false;
                     }
 
+                    if (node.Children.Length == 1)
+                    {
+                        pathBuffer.RemoveAt(pathBuffer.Count - 1);
+                        return true;
+                    }
+
+                    var valueNode = node.Children[1];
                     var valueOk = TryCollectLeaves(valueNode with { Name = "value" }, columnsBuilder, pathsBuilder, pathBuffer,
                         repeatedLevel: nextRepeatedLevel + 1, definitionLevel: nextDefinitionLevel + 1, infosBuilder,
                         isListLeaf: true, listOptional: node.Repetition == ParquetRepetition.Optional,

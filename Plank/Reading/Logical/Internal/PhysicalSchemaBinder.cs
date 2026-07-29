@@ -215,23 +215,40 @@ static class PhysicalSchemaBinder
     static ColumnDefinition BuildMapDefinition(PhysicalFileMetadata metadata, ref int index,
         ParquetSchemaNodeInfo node, string name)
     {
+        if (node.Repetition is not (ParquetRepetition.Required or ParquetRepetition.Optional))
+            throw new CorruptParquetException($"MAP schema node '{name}' must be required or optional.");
         if (node.ChildCount != 1)
             throw new CorruptParquetException($"MAP schema node '{name}' must contain exactly one key_value child.");
         if ((uint)index >= (uint)metadata.SchemaNodeCount)
             throw new CorruptParquetException($"MAP schema node '{name}' is missing its key_value child.");
 
         var keyValue = metadata.SchemaNodes[index++];
-        if (keyValue.ChildCount != 2)
-            throw new CorruptParquetException($"MAP schema node '{name}' key_value child must contain key and value.");
+        if (keyValue.PhysicalType is not null)
+            throw new CorruptParquetException($"MAP schema node '{name}' key_value child must be a group.");
+        if (keyValue.Repetition != ParquetRepetition.Repeated)
+            throw new CorruptParquetException($"MAP schema node '{name}' key_value child must be repeated.");
+        if (keyValue.ChildCount is < 1 or > 2)
+            throw new CorruptParquetException($"MAP schema node '{name}' key_value child must contain a key and optional value.");
 
         var key = BuildDefinition(metadata, ref index) with { Name = "key" };
-        var value = BuildDefinition(metadata, ref index) with { Name = "value" };
+        if (key.Repetition != ParquetRepetition.Required)
+            throw new CorruptParquetException($"MAP schema node '{name}' key must be required.");
+        ImmutableArray<ColumnDefinition> children;
+        if (keyValue.ChildCount == 1)
+            children = ImmutableArray.Create(key);
+        else
+        {
+            var value = BuildDefinition(metadata, ref index) with { Name = "value" };
+            if (value.Repetition is not (ParquetRepetition.Required or ParquetRepetition.Optional))
+                throw new CorruptParquetException($"MAP schema node '{name}' value must be required or optional.");
+            children = ImmutableArray.Create(key, value);
+        }
         return new ColumnDefinition
         {
             Name = name,
             Kind = NodeKind.Map,
             Repetition = node.Repetition,
-            Children = [key, value]
+            Children = children
         };
     }
 

@@ -197,9 +197,17 @@ static class ParquetMetadataThriftWriter
             NodeKind.Leaf => 1,
             NodeKind.Group => checked(1 + CountSchemaNodes(node.Children.AsSpan())),
             NodeKind.List => checked(2 + CountSchemaNodes(GetListElement(node))),
-            NodeKind.Map => checked(2 + CountSchemaNodes(GetMapKey(node)) + CountSchemaNodes(GetMapValue(node))),
+            NodeKind.Map => CountMapSchemaNodes(node),
             _ => throw new NotSupportedException($"Node kind '{node.Kind}' is not supported.")
         };
+
+    static int CountMapSchemaNodes(ColumnDefinition node)
+    {
+        var count = checked(2 + CountSchemaNodes(GetMapKey(node)));
+        return GetMapValue(node) is { } value
+            ? checked(count + CountSchemaNodes(value))
+            : count;
+    }
 
     static void WriteSchemaNode(ref CompactWriter writer, ColumnDefinition node, string? nameOverride = null)
     {
@@ -300,27 +308,30 @@ static class ParquetMetadataThriftWriter
         var keyValue = writer.BeginStruct();
         writer.WriteFieldI32(3, GetRepetition(ParquetRepetition.Repeated));
         writer.WriteFieldBinary(4, "key_value");
-        writer.WriteFieldI32(5, 2);
+        writer.WriteFieldI32(5, value is null ? 1 : 2);
         writer.EndStruct(keyValue);
 
         WriteSchemaNode(ref writer, ForceRepetition(key, ParquetRepetition.Required), "key");
-        WriteSchemaNode(ref writer, value, "value");
+        if (value is not null)
+            WriteSchemaNode(ref writer, value, "value");
     }
 
     static ColumnDefinition GetMapKey(ColumnDefinition node)
     {
-        if (node.Children.Length == 2)
+        if (node.Children.Length is 1 or 2)
             return node.Children[0];
 
-        throw new InvalidOperationException($"MAP node '{node.Name}' must contain exactly two child nodes (key,value).");
+        throw new InvalidOperationException($"MAP node '{node.Name}' must contain a key and optional value.");
     }
 
-    static ColumnDefinition GetMapValue(ColumnDefinition node)
+    static ColumnDefinition? GetMapValue(ColumnDefinition node)
     {
+        if (node.Children.Length == 1)
+            return null;
         if (node.Children.Length == 2)
             return node.Children[1];
 
-        throw new InvalidOperationException($"MAP node '{node.Name}' must contain exactly two child nodes (key,value).");
+        throw new InvalidOperationException($"MAP node '{node.Name}' must contain a key and optional value.");
     }
 
     static ColumnDefinition ForceRepetition(ColumnDefinition node, ParquetRepetition repetition)
