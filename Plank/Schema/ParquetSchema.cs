@@ -117,7 +117,7 @@ public sealed record ParquetSchema
                 {
                     if (node.PhysicalType is null)
                         return false;
-                    var repetition = repeatedLevel > 0
+                    var repetition = nextRepeatedLevel > 0
                         ? ParquetRepetition.Repeated
                         : nodeOptional ? ParquetRepetition.Optional : ParquetRepetition.Required;
                     var options = node.Options ?? ColumnOptions.Default;
