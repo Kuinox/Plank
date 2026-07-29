@@ -136,6 +136,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    static readonly DiagnosticDescriptor InvalidEncoding = new(
+        id: "PLANKGEN017",
+        title: "Invalid schema column encoding",
+        messageFormat: "{0}",
+        category: "Plank.SourceGen",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var schemaTypes = context.SyntaxProvider.ForAttributeWithMetadataName(
@@ -1255,6 +1263,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 diagnostics.Add(new SchemaDiagnostic(InvalidSchemaRepetition,
                     $"Column '{column.Name}' has unsupported repetition '{column.Repetition}'."));
 
+            for (var encodingIndex = 0; encodingIndex < column.Encodings.Length; encodingIndex++)
+            {
+                var encoding = column.Encodings[encodingIndex];
+                if (!IsEncodingSupported(column.PhysicalType, encoding))
+                    diagnostics.Add(new SchemaDiagnostic(InvalidEncoding,
+                        $"Encoding '{encoding}' does not support physical type '{column.PhysicalType}' for column '{column.Name}'."));
+            }
+
             ValidateLogicalType(column, diagnostics);
         }
 
@@ -1266,6 +1282,18 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     static bool IsSupportedRepetition(string repetition)
         => repetition is "Unspecified" or "Required" or "Optional" or "Repeated";
+
+    static bool IsEncodingSupported(string physicalType, string encoding)
+        => encoding switch
+        {
+            "Plain" or "PlainDictionary" or "RleDictionary" => true,
+            "Rle" => physicalType == "Boolean",
+            "BitPacked" => false,
+            "DeltaBinaryPacked" => physicalType is "Int32" or "Int64",
+            "DeltaLengthByteArray" or "DeltaByteArray" => physicalType == "ByteArray",
+            "ByteStreamSplit" => physicalType is "Int32" or "Int64" or "Float" or "Double" or "FixedLenByteArray",
+            _ => false
+        };
 
     static void ValidateLogicalType(SchemaColumn column, ImmutableArray<SchemaDiagnostic>.Builder diagnostics)
     {
