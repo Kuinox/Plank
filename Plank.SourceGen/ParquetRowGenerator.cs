@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -207,7 +208,19 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
 
         var source = BuildSource(schemaType, columns, mappedColumns.ToImmutable());
-        context.AddSource($"{schemaType.Name}.SchemaApi.g.cs", source);
+        context.AddSource(GetHintName(schemaType), source);
+    }
+
+    static string GetHintName(INamedTypeSymbol schemaType)
+    {
+        var typeName = schemaType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        using var sha256 = SHA256.Create();
+        var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(typeName));
+        const string hex = "0123456789abcdef";
+        var builder = new StringBuilder(hash.Length * 2 + ".SchemaApi.g.cs".Length);
+        for (var i = 0; i < hash.Length; i++)
+            builder.Append(hex[hash[i] >> 4]).Append(hex[hash[i] & 0xf]);
+        return builder.Append(".SchemaApi.g.cs").ToString();
     }
 
     static string BuildSource(INamedTypeSymbol schemaType, ImmutableArray<SchemaColumn> schemaColumns,
