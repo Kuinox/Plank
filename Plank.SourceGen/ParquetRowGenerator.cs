@@ -1048,7 +1048,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
             if (namedArgument.Key == "LogicalType")
             {
-                if (!TryGetLogicalTypeSpec(namedArgument.Value, out logicalType))
+                if (!TryGetLogicalTypeSpec(namedArgument.Value, logicalType, out logicalType))
                 {
                     error = $"Property '{property.Name}' declares an invalid LogicalTypeKind override.";
                     return false;
@@ -1127,7 +1127,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return physicalType.Length > 0;
     }
 
-    static bool TryGetLogicalTypeSpec(TypedConstant constant, out LogicalTypeSpec? logicalType)
+    static bool TryGetLogicalTypeSpec(TypedConstant constant, LogicalTypeSpec? inferredLogicalType,
+        out LogicalTypeSpec? logicalType)
     {
         logicalType = null;
         if (!TryGetEnumValue(constant, out var enumValue))
@@ -1139,11 +1140,20 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             1 => new LogicalTypeSpec("String"),
             2 => new LogicalTypeSpec("Json"),
             3 => new LogicalTypeSpec("Uuid"),
+            4 => ReuseInferredLogicalType(inferredLogicalType, "Date"),
+            5 => ReuseInferredLogicalType(inferredLogicalType, "Time"),
+            6 => ReuseInferredLogicalType(inferredLogicalType, "Timestamp"),
+            7 => ReuseInferredLogicalType(inferredLogicalType, "Int"),
             _ => null
         };
 
-        return enumValue is >= 0 and <= 3;
+        return enumValue is >= 0 and <= 7;
     }
+
+    static LogicalTypeSpec ReuseInferredLogicalType(LogicalTypeSpec? inferredLogicalType, string kind)
+        => inferredLogicalType is { } inferred && inferred.Kind == kind
+            ? inferred
+            : new LogicalTypeSpec(kind);
 
     static bool TryGetEnumValue(TypedConstant constant, out int value)
     {
