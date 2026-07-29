@@ -5,7 +5,7 @@ namespace Plank.SourceGen.Tests;
 internal sealed class KeywordPropertyIdentifierTests
 {
     [Test]
-    public async Task EscapedKeywordPropertyRemainsValidGeneratedSource()
+    public async Task EscapedKeywordSchemaAndPropertyRemainValidGeneratedSource()
     {
         const string source = """
             using Plank.Schema;
@@ -13,19 +13,20 @@ internal sealed class KeywordPropertyIdentifierTests
             namespace Regression;
 
             [ParquetSchema]
-            partial class KeywordPropertySchema
+            partial class @class
             {
                 public int @event { get; set; }
             }
             """;
 
         var result = GeneratorTestHarness.Run(
-            new GeneratorTestHarness.SourceFile("KeywordPropertySchema.cs", source));
+            new GeneratorTestHarness.SourceFile("KeywordIdentifiers.cs", source));
         var errors = result.CompilationDiagnostics
             .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
             .Select(diagnostic => diagnostic.ToString())
             .ToArray();
 
+        await Assert.That(result.GeneratorExceptions).IsEmpty();
         await Assert.That(errors).IsEmpty();
     }
 }
