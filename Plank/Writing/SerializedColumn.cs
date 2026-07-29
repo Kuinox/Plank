@@ -925,8 +925,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var deltaTicks = ticks - DateTime.UnixEpoch.Ticks;
         return unit switch
         {
-            TimeUnit.Millis => deltaTicks / TimeSpan.TicksPerMillisecond,
-            TimeUnit.Micros => deltaTicks / 10,
+            TimeUnit.Millis => TimestampConversion.DivideFloor(deltaTicks, TimeSpan.TicksPerMillisecond),
+            TimeUnit.Micros => TimestampConversion.DivideFloor(deltaTicks, 10),
             TimeUnit.Nanos => checked(deltaTicks * 100),
             _ => throw new ArgumentOutOfRangeException(nameof(unit), unit, "Time unit must be a defined TimeUnit value.")
         };
