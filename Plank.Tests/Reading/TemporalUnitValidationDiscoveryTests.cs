@@ -7,36 +7,45 @@ namespace Plank.Tests.Reading;
 internal sealed class TemporalUnitValidationDiscoveryTests
 {
     [Test]
-    public void TimestampWithoutUnitIsRejected()
-        => AssertRejected(CreateFile(unknownUnit: false), "A timestamp without a unit");
+    public void TimestampWithoutUnitIsRejectedAsCorruptData()
+        => AssertRejected<CorruptParquetException>(CreateFile(UnitEncoding.Missing));
 
     [Test]
-    public void TimestampWithUnknownUnitIsRejected()
-        => AssertRejected(CreateFile(unknownUnit: true), "A timestamp with an unknown unit");
+    public void TimestampWithEmptyUnitIsRejectedAsCorruptData()
+        => AssertRejected<CorruptParquetException>(CreateFile(UnitEncoding.Empty));
 
-    static void AssertRejected(byte[] file, string description)
+    [Test]
+    public void TimestampWithUnknownUnitIsRejectedAsUnsupported()
+        => AssertRejected<NotSupportedException>(CreateFile(UnitEncoding.Unknown));
+
+    [Test]
+    public void TimestampWithMultipleUnitsIsRejectedAsCorruptData()
+        => AssertRejected<CorruptParquetException>(CreateFile(UnitEncoding.Multiple));
+
+    [Test]
+    public void TimestampWithoutAdjustedToUtcIsRejectedAsCorruptData()
+        => AssertRejected<CorruptParquetException>(
+            CreateFile(UnitEncoding.Millis, AdjustedEncoding.Missing));
+
+    [Test]
+    public void TimestampWithDuplicateAdjustedToUtcIsRejectedAsCorruptData()
+        => AssertRejected<CorruptParquetException>(
+            CreateFile(UnitEncoding.Millis, AdjustedEncoding.Duplicate));
+
+    static void AssertRejected<TException>(byte[] file)
+        where TException : Exception
     {
         using var stream = new MemoryStream(file);
         using var reader = new ParquetReader();
 
-        try
-        {
-            reader.Reset(stream);
-        }
-        catch (CorruptParquetException)
-        {
-            return;
-        }
-        catch (NotSupportedException)
-        {
-            return;
-        }
-
-        var logicalType = reader.Schema.Definitions.Single().LogicalType;
-        throw new InvalidOperationException($"{description} was accepted as '{logicalType}'.");
+        var exception = Assert.Throws<TException>(() => reader.Reset(stream));
+        if (exception.GetType() != typeof(TException))
+            throw new InvalidOperationException(
+                $"Expected exact exception type {typeof(TException)}, got {exception.GetType()}.");
     }
 
-    static byte[] CreateFile(bool unknownUnit)
+    static byte[] CreateFile(UnitEncoding unitEncoding,
+        AdjustedEncoding adjustedEncoding = AdjustedEncoding.Present)
     {
         using var footerStream = new MemoryStream();
         footerStream.Write([
@@ -49,13 +58,33 @@ internal sealed class TemporalUnitValidationDiscoveryTests
             0x25, 0x00,
             0x18, 0x02, (byte)'t', (byte)'s',
             0x6C,
-            0x8C,
-            0x11
+            0x8C
         ]);
-        if (unknownUnit)
+        if (adjustedEncoding != AdjustedEncoding.Missing)
+            footerStream.WriteByte(0x11);
+        if (adjustedEncoding == AdjustedEncoding.Duplicate)
             footerStream.Write([
-                0x1C,
+                0x01, 0x02
+            ]);
+
+        if (unitEncoding != UnitEncoding.Missing)
+            footerStream.WriteByte(adjustedEncoding == AdjustedEncoding.Missing ? (byte)0x2C : (byte)0x1C);
+        if (unitEncoding == UnitEncoding.Empty)
+            footerStream.WriteByte(0x00);
+        else if (unitEncoding == UnitEncoding.Millis)
+            footerStream.Write([
+                0x1C, 0x00,
+                0x00
+            ]);
+        else if (unitEncoding == UnitEncoding.Unknown)
+            footerStream.Write([
                 0x4C, 0x00,
+                0x00
+            ]);
+        else if (unitEncoding == UnitEncoding.Multiple)
+            footerStream.Write([
+                0x1C, 0x00,
+                0x1C, 0x00,
                 0x00
             ]);
         footerStream.Write([
@@ -76,5 +105,21 @@ internal sealed class TemporalUnitValidationDiscoveryTests
         stream.Write(footerLength);
         stream.Write("PAR1"u8);
         return stream.ToArray();
+    }
+
+    enum UnitEncoding
+    {
+        Missing,
+        Empty,
+        Unknown,
+        Millis,
+        Multiple
+    }
+
+    enum AdjustedEncoding
+    {
+        Present,
+        Missing,
+        Duplicate
     }
 }
