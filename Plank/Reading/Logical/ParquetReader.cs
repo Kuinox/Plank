@@ -87,7 +87,7 @@ public sealed class ParquetReader : IDisposable
 
         var schema = _requestedSchema ?? fileSchema;
         var footerVersion = _footerVersion + 1;
-        var footer = PhysicalSchemaBinder.Bind(PhysicalReader, schema, _footer, Options.Strict,
+        var footer = PhysicalSchemaBinder.Bind(PhysicalReader, fileSchema, schema, _footer, Options.Strict,
             Options.BufferPool, footerVersion);
 
         Schema = schema;
