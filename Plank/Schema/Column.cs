@@ -13,6 +13,7 @@ internal sealed record Column
         LogicalType = logicalType;
         PageStrategy = pageStrategy;
         EncodingCompatibility.Validate(this);
+        ColumnDefinition.ValidateLogicalType(name, physicalType, logicalType);
     }
 
     public string Name { get; }
