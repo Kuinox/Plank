@@ -82,6 +82,7 @@ public sealed record ColumnDefinition
         if (normalizedOptions.Repetition != repetition)
             normalizedOptions = new ColumnOptions(repetition, normalizedOptions.Encodings, normalizedOptions.TypeLength);
         EncodingCompatibility.Validate(name, physicalType, normalizedOptions);
+        ValidateLogicalType(name, physicalType, logicalType);
 
         return new()
         {
@@ -94,5 +95,13 @@ public sealed record ColumnDefinition
             PageStrategy = pageStrategy,
             Children = []
         };
+    }
+
+    internal static void ValidateLogicalType(string name, ParquetPhysicalType physicalType, LogicalType? logicalType)
+    {
+        if (logicalType is LogicalType.Date && physicalType != ParquetPhysicalType.Int32)
+            throw new ArgumentException(
+                $"Logical type '{nameof(LogicalType.Date)}' requires physical type '{ParquetPhysicalType.Int32}' for column '{name}'.",
+                nameof(physicalType));
     }
 }
