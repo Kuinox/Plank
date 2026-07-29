@@ -167,13 +167,16 @@ static class PhysicalMetadataThriftReader
                     reader.Skip(type, inlineBool);
                     logicalType = new LogicalTypeInfo(LogicalTypeKind.String);
                     break;
+                case 2:
+                    reader.Skip(type, inlineBool);
+                    annotation = NodeKind.Map;
+                    break;
                 case 3:
                     reader.Skip(type, inlineBool);
                     annotation = NodeKind.List;
                     break;
                 case 4:
                     reader.Skip(type, inlineBool);
-                    annotation = NodeKind.Map;
                     break;
                 case 5:
                     logicalType = ReadDecimalLogicalType(ref reader);

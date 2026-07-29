@@ -303,6 +303,12 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldBinary(4, name);
         writer.WriteFieldI32(5, 1);
         writer.WriteFieldI32(6, (int)ConvertedType.Map);
+        writer.WriteFieldHeader(10, CompactType.Struct);
+        var previousLogicalType = writer.BeginStruct();
+        writer.WriteFieldHeader(2, CompactType.Struct);
+        var previousMapType = writer.BeginStruct();
+        writer.EndStruct(previousMapType);
+        writer.EndStruct(previousLogicalType);
         writer.EndStruct(mapGroup);
 
         var keyValue = writer.BeginStruct();
