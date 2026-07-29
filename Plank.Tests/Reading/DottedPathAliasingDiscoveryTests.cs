@@ -1,5 +1,5 @@
-using System.Buffers.Binary;
 using Plank.Reading.Logical;
+using Plank.Schema;
 
 namespace Plank.Tests.Reading;
 
@@ -8,49 +8,48 @@ internal sealed class DottedPathAliasingDiscoveryTests
     [Test]
     public void LiteralDottedSegmentDoesNotAliasNestedColumnPath()
     {
-        using var stream = new MemoryStream(CreateFile());
-        using var reader = new ParquetReader();
+        var fileSchema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("a.b", ParquetPhysicalType.Int32),
+            ColumnDefinition.RequiredGroup("a",
+                ColumnDefinition.RequiredLeaf("b", ParquetPhysicalType.Int64))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = fileSchema.CreateWriter(stream);
+        var writerRowGroup = writer.StartRowGroup();
+        var dotted = writerRowGroup.CreateSerializedColumn<int>(fileSchema.LeafColumns[0]);
+        dotted.Serialize([11, 12]);
+        writerRowGroup.Write(dotted);
+        var nested = writerRowGroup.CreateSerializedColumn<long>(fileSchema.LeafColumns[1]);
+        nested.Serialize([101, 102]);
+        writerRowGroup.Write(nested);
+        writer.CloseFile();
 
-        reader.Reset(stream);
+        var requested = new ParquetSchema([
+            ColumnDefinition.RequiredGroup("a",
+                ColumnDefinition.RequiredLeaf("b", ParquetPhysicalType.Int64)),
+            ColumnDefinition.RequiredLeaf("a.b", ParquetPhysicalType.Int32)
+        ]);
+        using var reader = requested.CreateReader(new MemoryStream(stream.ToArray()));
 
         if (reader.Schema.LeafColumns.Length != 2)
             throw new InvalidOperationException(
                 $"Expected two distinct physical columns, got {reader.Schema.LeafColumns.Length}.");
+
+        var rowGroup = reader.RowGroups[0];
+        var nestedActual = ReadValues(rowGroup.Column<long>(requested.LeafColumns[0]));
+        var dottedActual = ReadValues(rowGroup.Column<int>(requested.LeafColumns[1]));
+        if (!nestedActual.AsSpan().SequenceEqual([101L, 102L]))
+            throw new InvalidOperationException("The nested column was projected from the wrong physical ordinal.");
+        if (!dottedActual.AsSpan().SequenceEqual([11, 12]))
+            throw new InvalidOperationException("The dotted column was projected from the wrong physical ordinal.");
     }
 
-    static byte[] CreateFile()
+    static T[] ReadValues<T>(RowGroupColumn<T> column)
     {
-        byte[] footer =
-        [
-            0x15, 0x02,
-            0x19, 0x4C,
-            0x48, 0x06, (byte)'s', (byte)'c', (byte)'h', (byte)'e', (byte)'m', (byte)'a',
-            0x15, 0x04,
-            0x00,
-            0x15, 0x02,
-            0x25, 0x00,
-            0x18, 0x03, (byte)'a', (byte)'.', (byte)'b',
-            0x00,
-            0x35, 0x00,
-            0x18, 0x01, (byte)'a',
-            0x15, 0x02,
-            0x00,
-            0x15, 0x02,
-            0x25, 0x00,
-            0x18, 0x01, (byte)'b',
-            0x00,
-            0x16, 0x00,
-            0x19, 0x0C,
-            0x00
-        ];
-
-        using var stream = new MemoryStream();
-        stream.Write("PAR1"u8);
-        stream.Write(footer);
-        Span<byte> footerLength = stackalloc byte[sizeof(uint)];
-        BinaryPrimitives.WriteUInt32LittleEndian(footerLength, checked((uint)footer.Length));
-        stream.Write(footerLength);
-        stream.Write("PAR1"u8);
-        return stream.ToArray();
+        var values = new List<T>();
+        foreach (var buffer in column)
+            foreach (var value in buffer.Values)
+                values.Add(value);
+        return values.ToArray();
     }
 }

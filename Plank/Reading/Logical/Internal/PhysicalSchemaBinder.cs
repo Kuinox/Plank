@@ -26,8 +26,9 @@ static class PhysicalSchemaBinder
         return new ParquetSchema(definitions.MoveToImmutable());
     }
 
-    internal static InternalParquetFooter Bind(ParquetFileReader physicalReader, ParquetSchema requestedSchema,
-        InternalParquetFooter previous, bool strict, IParquetBufferPool bufferPool, int footerVersion)
+    internal static InternalParquetFooter Bind(ParquetFileReader physicalReader, ParquetSchema fileSchema,
+        ParquetSchema requestedSchema, InternalParquetFooter previous, bool strict, IParquetBufferPool bufferPool,
+        int footerVersion)
     {
         var requestedColumns = requestedSchema.Columns;
         ParquetBuffer rentedOrdinals = default;
@@ -40,7 +41,7 @@ static class PhysicalSchemaBinder
         {
             var metadata = physicalReader.Metadata;
             if (strict)
-                BuildStrictProjection(metadata, requestedSchema, projectedOrdinals, bufferPool);
+                BuildStrictProjection(metadata, fileSchema, requestedSchema, projectedOrdinals, bufferPool);
             else
                 for (var i = 0; i < projectedOrdinals.Length; i++)
                     projectedOrdinals[i] = i < metadata.ColumnCount ? i : -1;
@@ -174,24 +175,36 @@ static class PhysicalSchemaBinder
         };
     }
 
-    static void BuildStrictProjection(PhysicalFileMetadata metadata, ParquetSchema requestedSchema,
-        Span<int> projectedOrdinals, IParquetBufferPool bufferPool)
+    static void BuildStrictProjection(PhysicalFileMetadata metadata, ParquetSchema fileSchema,
+        ParquetSchema requestedSchema, Span<int> projectedOrdinals, IParquetBufferPool bufferPool)
     {
         var requestedColumns = requestedSchema.Columns;
         for (var requestedOrdinal = 0; requestedOrdinal < requestedColumns.Length; requestedOrdinal++)
         {
             var requested = requestedColumns[requestedOrdinal];
+            var requestedPath = requestedSchema.LeafPaths[requestedOrdinal];
             var match = -1;
             for (var fileOrdinal = 0; fileOrdinal < metadata.ColumnCount; fileOrdinal++)
             {
                 var fileColumn = metadata.ColumnSchema(fileOrdinal);
-                if (!PathEquals(metadata, fileColumn, requested.Name, bufferPool))
+                if (!PathEquals(metadata, fileColumn, requestedPath, bufferPool))
                     continue;
                 if (match >= 0)
                     throw new CorruptParquetException(
                         $"File schema contains duplicate column path '{requested.Name}'.");
                 match = fileOrdinal;
             }
+
+            if (match < 0)
+                for (var fileOrdinal = 0; fileOrdinal < fileSchema.Columns.Length; fileOrdinal++)
+                {
+                    if (!PathEquals(fileSchema.LeafPaths[fileOrdinal], requestedPath))
+                        continue;
+                    if (match >= 0)
+                        throw new CorruptParquetException(
+                            $"File schema contains duplicate column path '{requested.Name}'.");
+                    match = fileOrdinal;
+                }
 
             if (match < 0)
                 throw new InvalidOperationException(
@@ -236,37 +249,45 @@ static class PhysicalSchemaBinder
             _ => throw new NotSupportedException($"Logical type '{logicalType.Kind}' is not supported.")
         };
 
-    static bool PathEquals(PhysicalFileMetadata metadata, ParquetColumnSchemaInfo column, string requestedPath,
-        IParquetBufferPool bufferPool)
+    static bool PathEquals(PhysicalFileMetadata metadata, ParquetColumnSchemaInfo column,
+        ImmutableArray<string> requestedPath, IParquetBufferPool bufferPool)
     {
-        var byteCount = Encoding.UTF8.GetByteCount(requestedPath);
+        if (column.PathSegmentCount != requestedPath.Length)
+            return false;
+
+        var byteCount = 0;
+        for (var i = 0; i < requestedPath.Length; i++)
+            byteCount = Math.Max(byteCount, Encoding.UTF8.GetByteCount(requestedPath[i]));
+
         ParquetBuffer rented = default;
         Span<byte> requestedBytes = byteCount <= 1024
             ? stackalloc byte[byteCount]
             : (rented = bufferPool.Rent(checked((uint)byteCount))).Span[..byteCount];
         try
         {
-            Encoding.UTF8.GetBytes(requestedPath, requestedBytes);
-            var offset = 0;
             for (var segmentOrdinal = 0; segmentOrdinal < column.PathSegmentCount; segmentOrdinal++)
             {
+                var requestedLength = Encoding.UTF8.GetBytes(requestedPath[segmentOrdinal], requestedBytes);
                 var segment = metadata.ColumnPathSegmentUtf8(column.Ordinal, segmentOrdinal);
-                if (segmentOrdinal > 0)
-                {
-                    if ((uint)offset >= (uint)requestedBytes.Length || requestedBytes[offset++] != (byte)'.')
-                        return false;
-                }
-                if (segment.Length > requestedBytes.Length - offset ||
-                    !segment.SequenceEqual(requestedBytes.Slice(offset, segment.Length)))
+                if (!segment.SequenceEqual(requestedBytes[..requestedLength]))
                     return false;
-                offset += segment.Length;
             }
-            return offset == requestedBytes.Length;
+            return true;
         }
         finally
         {
             rented.Dispose();
         }
+    }
+
+    static bool PathEquals(ImmutableArray<string> left, ImmutableArray<string> right)
+    {
+        if (left.Length != right.Length)
+            return false;
+        for (var i = 0; i < left.Length; i++)
+            if (!string.Equals(left[i], right[i], StringComparison.Ordinal))
+                return false;
+        return true;
     }
 
     static EncodingKind[] ReuseEncodings(EncodingKind[]? previous, ParquetColumnChunkInfo chunk)
