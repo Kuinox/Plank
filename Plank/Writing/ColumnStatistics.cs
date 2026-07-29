@@ -1389,7 +1389,7 @@ internal readonly struct ColumnStatistics
                 long longValue => longValue,
                 ulong ulongValue => unchecked((long)ulongValue),
                 DateTime dateTime => ToUnixTimeForStatistics(dateTime),
-                DateTimeOffset dateTimeOffset => ToUnixTimeForStatistics(dateTimeOffset.UtcDateTime),
+                DateTimeOffset dateTimeOffset => ToUnixTimeOffsetForStatistics(dateTimeOffset),
                 TimeOnly time => ToTimeValueForStatistics(time),
                 _ => Convert.ToInt64(value)
             });
@@ -1523,12 +1523,20 @@ internal readonly struct ColumnStatistics
 
         long ToUnixTimeForStatistics(DateTime value)
         {
-            if (value.Kind != DateTimeKind.Utc)
+            var expectedKind = _column.LogicalType is LogicalType.Timestamp { IsAdjustedToUtc: false }
+                ? DateTimeKind.Unspecified
+                : DateTimeKind.Utc;
+            if (value.Kind != expectedKind)
                 throw new InvalidOperationException(
-                    $"DateTime values must have kind '{DateTimeKind.Utc}', got '{value.Kind}'.");
+                    $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
 
+            return ToUnixTimeForStatistics(value.Ticks);
+        }
+
+        long ToUnixTimeForStatistics(long ticks)
+        {
             var unit = _column.LogicalType is LogicalType.Timestamp timestamp ? timestamp.Unit : TimeUnit.Micros;
-            var deltaTicks = value.Ticks - DateTime.UnixEpoch.Ticks;
+            var deltaTicks = ticks - DateTime.UnixEpoch.Ticks;
             return unit switch
             {
                 TimeUnit.Millis => deltaTicks / TimeSpan.TicksPerMillisecond,
@@ -1536,6 +1544,15 @@ internal readonly struct ColumnStatistics
                 TimeUnit.Nanos => checked(deltaTicks * 100),
                 _ => throw new ArgumentOutOfRangeException(nameof(unit), unit, "Time unit must be a defined TimeUnit value.")
             };
+        }
+
+        long ToUnixTimeOffsetForStatistics(DateTimeOffset value)
+        {
+            if (_column.LogicalType is LogicalType.Timestamp { IsAdjustedToUtc: false })
+                throw new InvalidOperationException(
+                    "DateTimeOffset values require adjusted-to-UTC timestamp semantics.");
+
+            return ToUnixTimeForStatistics(value.UtcDateTime.Ticks);
         }
 
         long ToTimeValueForStatistics(TimeOnly value)
