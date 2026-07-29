@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using Plank.Reading;
+using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing;
 
@@ -9,6 +10,35 @@ internal sealed class MapLogicalTypeMetadataTests
 {
     [Test]
     public void MapFooterIncludesLegacyAndModernAnnotations()
+    {
+        var (hasConvertedMap, hasLogicalMap) = ReadMapAnnotations(CreateMapFile());
+        if (!hasConvertedMap)
+            throw new InvalidOperationException("MAP schema node omitted legacy ConvertedType.MAP.");
+        if (!hasLogicalMap)
+            throw new InvalidOperationException("MAP schema node omitted modern LogicalType.MAP.");
+    }
+
+    [Test]
+    public void WrittenModernMapIsDiscoveredAsMap()
+    {
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(CreateMapFile()));
+
+        if (reader.Schema.Definitions is not
+            [
+                {
+                    Kind: NodeKind.Map,
+                    Children:
+                    [
+                        { Name: "key", Repetition: ParquetRepetition.Required },
+                        { Name: "value", Repetition: ParquetRepetition.Required }
+                    ]
+                }
+            ])
+            throw new InvalidOperationException("Written LogicalType.MAP metadata was not rediscovered as a MAP.");
+    }
+
+    static byte[] CreateMapFile()
     {
         var schema = new ParquetSchema([
             ColumnDefinition.Map("scores",
@@ -29,12 +59,7 @@ internal sealed class MapLogicalTypeMetadataTests
         values.Serialize([[10]]);
         rowGroup.Write(values);
         writer.CloseFile();
-
-        var (hasConvertedMap, hasLogicalMap) = ReadMapAnnotations(stream.ToArray());
-        if (!hasConvertedMap)
-            throw new InvalidOperationException("MAP schema node omitted legacy ConvertedType.MAP.");
-        if (!hasLogicalMap)
-            throw new InvalidOperationException("MAP schema node omitted modern LogicalType.MAP.");
+        return stream.ToArray();
     }
 
     static (bool HasConvertedMap, bool HasLogicalMap) ReadMapAnnotations(ReadOnlySpan<byte> file)
