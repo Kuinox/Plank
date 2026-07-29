@@ -873,7 +873,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "global::System.Guid" or "global::System.Guid?";
 
     static string Escape(string value)
-        => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: false);
 
     static string ToIdentifier(string value)
     {
