@@ -119,7 +119,7 @@ public sealed record ParquetSchema
                         return false;
                     var repetition = nextRepeatedLevel > 0
                         ? ParquetRepetition.Repeated
-                        : nodeOptional ? ParquetRepetition.Optional : ParquetRepetition.Required;
+                        : nextDefinitionLevel > 0 ? ParquetRepetition.Optional : ParquetRepetition.Required;
                     var options = node.Options ?? ColumnOptions.Default;
                     if (options.Repetition != repetition)
                         options = new ColumnOptions(repetition, options.Encodings, options.TypeLength);
