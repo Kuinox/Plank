@@ -10,20 +10,13 @@ public sealed record ParquetSchema
     public ParquetSchema(ImmutableArray<ColumnDefinition> definitions)
     {
         Definitions = definitions.IsDefault ? [] : definitions;
-        if (TryProjectLeafColumns(Definitions, out var projectedColumns, out var projectedPaths, out var projectedInfos))
-        {
-            Columns = projectedColumns;
-            LeafColumns = BuildLeafColumns(projectedColumns);
-            LeafPaths = projectedPaths;
-            LeafProjectionInfos = projectedInfos;
-        }
-        else
-        {
-            Columns = [];
-            LeafColumns = [];
-            LeafPaths = [];
-            LeafProjectionInfos = [];
-        }
+        if (!TryProjectLeafColumns(Definitions, out var projectedColumns, out var projectedPaths, out var projectedInfos))
+            throw new ArgumentException("Schema definitions must form a valid, projectable schema.", nameof(definitions));
+
+        Columns = projectedColumns;
+        LeafColumns = BuildLeafColumns(projectedColumns);
+        LeafPaths = projectedPaths;
+        LeafProjectionInfos = projectedInfos;
     }
 
     public ImmutableArray<ColumnDefinition> Definitions { get; }
