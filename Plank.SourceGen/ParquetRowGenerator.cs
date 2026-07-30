@@ -935,7 +935,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var properties = schemaType.GetMembers()
             .OfType<IPropertySymbol>()
             .Where(static p => !p.IsStatic && !p.IsIndexer)
-            .OrderBy(static p => p.Locations.FirstOrDefault()?.SourceSpan.Start ?? int.MaxValue)
+            .OrderBy(static p => p.Locations.FirstOrDefault()?.SourceTree?.FilePath, StringComparer.Ordinal)
+            .ThenBy(static p => p.Locations.FirstOrDefault()?.SourceSpan.Start ?? int.MaxValue)
+            .ThenBy(static p => p.Name, StringComparer.Ordinal)
             .ToImmutableArray();
 
         if (properties.IsDefaultOrEmpty)
