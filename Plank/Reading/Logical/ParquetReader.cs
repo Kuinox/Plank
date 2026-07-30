@@ -162,21 +162,39 @@ public sealed class ParquetReader : IDisposable
     static void ValidateRequestedSchema(ParquetSchema requestedSchema, ParquetSchema fileSchema)
     {
         var fileColumns = fileSchema.Columns;
-        var fileColumnByPath = new Dictionary<string, Column>(fileColumns.Length, StringComparer.Ordinal);
-        for (var i = 0; i < fileColumns.Length; i++)
-            if (!fileColumnByPath.TryAdd(fileColumns[i].Name, fileColumns[i]))
-                throw new CorruptParquetException($"File schema contains duplicate leaf path '{fileColumns[i].Name}'.");
-
         var requestedColumns = requestedSchema.Columns;
         for (var i = 0; i < requestedColumns.Length; i++)
         {
             var requestedColumn = requestedColumns[i];
-            if (!fileColumnByPath.TryGetValue(requestedColumn.Name, out var fileColumn))
+            var requestedPath = requestedSchema.LeafPaths[i];
+            var match = -1;
+            for (var fileOrdinal = 0; fileOrdinal < fileColumns.Length; fileOrdinal++)
+            {
+                if (!PathEquals(fileSchema.LeafPaths[fileOrdinal], requestedPath))
+                    continue;
+                if (match >= 0)
+                    throw new CorruptParquetException(
+                        $"File schema contains duplicate leaf path '{requestedColumn.Name}'.");
+                match = fileOrdinal;
+            }
+
+            if (match < 0)
                 throw new InvalidOperationException(
                     $"Requested schema column '{requestedColumn.Name}' is not present in the file schema.");
 
-            ValidateRequestedColumn(requestedColumn, fileColumn);
+            ValidateRequestedColumn(requestedColumn, fileColumns[match]);
         }
+    }
+
+    static bool PathEquals(System.Collections.Immutable.ImmutableArray<string> left,
+        System.Collections.Immutable.ImmutableArray<string> right)
+    {
+        if (left.Length != right.Length)
+            return false;
+        for (var i = 0; i < left.Length; i++)
+            if (!string.Equals(left[i], right[i], StringComparison.Ordinal))
+                return false;
+        return true;
     }
 
     static void ValidateRequestedColumn(Column requestedColumn, Column fileColumn)
