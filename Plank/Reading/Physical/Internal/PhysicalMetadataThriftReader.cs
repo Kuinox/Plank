@@ -245,37 +245,56 @@ static class PhysicalMetadataThriftReader
 
     static LogicalTypeInfo ReadTemporalLogicalType(ref CompactProtocolReader reader, LogicalTypeKind kind)
     {
-        var isAdjustedToUtc = false;
-        var unit = TimeUnit.Millis;
+        bool? isAdjustedToUtc = null;
+        TimeUnit? unit = null;
         reader.BeginStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
             if (fieldId == 1)
+            {
+                if (isAdjustedToUtc.HasValue)
+                    throw new CorruptParquetException(
+                        $"{kind} logical type contains more than one isAdjustedToUTC value.");
                 isAdjustedToUtc = reader.ReadBool(inlineBool);
+            }
             else if (fieldId == 2)
+            {
+                if (unit.HasValue)
+                    throw new CorruptParquetException($"{kind} logical type contains more than one time unit.");
                 unit = ReadTimeUnit(ref reader);
+            }
             else
                 reader.Skip(type, inlineBool);
 
-        return new LogicalTypeInfo(kind, Unit: unit, IsAdjustedToUtc: isAdjustedToUtc);
+        if (!unit.HasValue)
+            throw new CorruptParquetException($"{kind} logical type is missing its time unit.");
+        if (!isAdjustedToUtc.HasValue)
+            throw new CorruptParquetException($"{kind} logical type is missing isAdjustedToUTC.");
+
+        return new LogicalTypeInfo(kind, Unit: unit.Value, IsAdjustedToUtc: isAdjustedToUtc.Value);
     }
 
     static TimeUnit ReadTimeUnit(ref CompactProtocolReader reader)
     {
-        var unit = TimeUnit.Millis;
+        TimeUnit? unit = null;
         reader.BeginStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
-            unit = fieldId switch
+            var current = fieldId switch
             {
-                1 => TimeUnit.Millis,
+                1 => (TimeUnit?)TimeUnit.Millis,
                 2 => TimeUnit.Micros,
                 3 => TimeUnit.Nanos,
-                _ => unit
+                _ => null
             };
             reader.Skip(type, inlineBool);
+            if (!current.HasValue)
+                throw new NotSupportedException($"Time unit variant {fieldId} is not supported.");
+            if (unit.HasValue)
+                throw new CorruptParquetException("Time unit contains more than one variant.");
+            unit = current;
         }
 
-        return unit;
+        return unit ?? throw new CorruptParquetException("Time unit does not contain a variant.");
     }
 
     static (LogicalTypeInfo LogicalType, NodeKind Annotation) ReadConvertedType(int convertedType,
