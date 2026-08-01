@@ -239,7 +239,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
 
         builder.Append(GetAccessibilityKeyword(schemaType.DeclaredAccessibility)).Append(" partial class ")
-            .Append(schemaType.Name).AppendLine();
+            .Append(EscapeIdentifier(schemaType.Name)).AppendLine();
         builder.AppendLine("{");
         builder.AppendLine("    public static global::Plank.Schema.ParquetSchema Schema { get; } = new([");
         for (var i = 0; i < schemaColumns.Length; i++)
@@ -332,7 +332,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         {
             builder.Append("        public global::Plank.Writing.SerializedColumn<")
                 .Append(columns[i].ClrTypeName).Append("> ")
-                .Append(columns[i].PropertyName).Append(" => _").Append(columns[i].PropertyName).AppendLine(";");
+                .Append(EscapeIdentifier(columns[i].PropertyName)).Append(" => _").Append(columns[i].PropertyName).AppendLine(";");
             if (i < columns.Length - 1)
                 builder.AppendLine();
         }
@@ -480,7 +480,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         for (var i = 0; i < columns.Length; i++)
         {
-            builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ').Append(columns[i].PropertyName).AppendLine();
+            builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ')
+                .Append(EscapeIdentifier(columns[i].PropertyName)).AppendLine();
             builder.AppendLine("        {");
             builder.AppendLine("            get");
             builder.AppendLine("            {");
@@ -672,7 +673,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         for (var i = 0; i < columns.Length; i++)
         {
             builder.AppendLine();
-            builder.Append("        public static Projection ").Append(columns[i].PropertyName)
+            builder.Append("        public static Projection ").Append(EscapeIdentifier(columns[i].PropertyName))
                 .Append(" { get; } = new([")
                 .Append(GetRowApiColumnFieldName(columns[i].PropertyName)).AppendLine("]);");
         }
@@ -771,7 +772,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             if (IsStringClr(columns[i].ClrTypeName))
             {
                 builder.Append("        public ").Append(columns[i].ClrTypeName).Append(' ')
-                    .Append(propertyName).AppendLine();
+                    .Append(EscapeIdentifier(propertyName)).AppendLine();
                 builder.AppendLine("        {");
                 builder.AppendLine("            get");
                 builder.AppendLine("            {");
@@ -786,7 +787,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             else if (IsGuidClr(columns[i].ClrTypeName))
             {
                 builder.Append("        public ").Append(columns[i].ClrTypeName).Append(' ')
-                    .Append(propertyName).AppendLine();
+                    .Append(EscapeIdentifier(propertyName)).AppendLine();
                 builder.AppendLine("        {");
                 builder.AppendLine("            get");
                 builder.AppendLine("            {");
@@ -802,7 +803,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             else if (IsUtf8ByteArrayClr(columns[i].ClrTypeName))
             {
                 builder.Append("        public global::System.ReadOnlySpan<byte> ")
-                    .Append(propertyName).AppendLine();
+                    .Append(EscapeIdentifier(propertyName)).AppendLine();
                 builder.Append("            => _core.GetCurrentBinary(").Append(descriptorName)
                     .AppendLine(").Value;");
                 builder.AppendLine();
@@ -813,7 +814,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             else
             {
                 builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ')
-                    .Append(propertyName).AppendLine();
+                    .Append(EscapeIdentifier(propertyName)).AppendLine();
                 builder.Append("            => ref _core.GetCurrent(").Append(descriptorName).AppendLine(");");
             }
             if (i < columns.Length - 1)
@@ -887,6 +888,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     static string Escape(string value)
         => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: false);
+
+    static string EscapeIdentifier(string value)
+        => Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(value) ==
+            Microsoft.CodeAnalysis.CSharp.SyntaxKind.None ? value : $"@{value}";
 
     static string ToIdentifier(string value)
     {
