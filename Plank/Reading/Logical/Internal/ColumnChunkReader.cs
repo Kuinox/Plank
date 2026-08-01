@@ -826,7 +826,7 @@ static class ColumnChunkReader
             for (var i = 0; i < typed.Length; i++)
             {
                 var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
-                typed[i] = DecodeTimestamp(raw, column.LogicalType).UtcDateTime;
+                typed[i] = DecodeDateTime(raw, column.LogicalType);
             }
             return true;
         }
@@ -872,7 +872,7 @@ static class ColumnChunkReader
                 DecodeByteStreamSplitInt64(payload, raw);
                 var typed = Unsafe.As<Span<T>, Span<DateTime>>(ref destination);
                 for (var i = 0; i < typed.Length; i++)
-                    typed[i] = DecodeTimestamp(raw[i], column.LogicalType).UtcDateTime;
+                    typed[i] = DecodeDateTime(raw[i], column.LogicalType);
                 return true;
             }
             case ParquetPhysicalType.Int64 when typeof(T) == typeof(DateTimeOffset):
@@ -983,7 +983,7 @@ static class ColumnChunkReader
             DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
             var typed = Unsafe.As<Span<T>, Span<DateTime>>(ref destination);
             for (var i = 0; i < typed.Length; i++)
-                typed[i] = DecodeTimestamp(raw[i], column.LogicalType).UtcDateTime;
+                typed[i] = DecodeDateTime(raw[i], column.LogicalType);
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTimeOffset))
@@ -1011,6 +1011,15 @@ static class ColumnChunkReader
         };
 
     static DateTimeOffset DecodeTimestamp(long raw, LogicalType? logicalType)
+    {
+        if (logicalType is LogicalType.Timestamp { IsAdjustedToUtc: false })
+            throw new NotSupportedException(
+                "DateTimeOffset projection is not supported for timestamps with local semantics.");
+
+        return DecodeTimestampValue(raw, logicalType);
+    }
+
+    static DateTimeOffset DecodeTimestampValue(long raw, LogicalType? logicalType)
         => logicalType switch
         {
             LogicalType.Timestamp { Unit: TimeUnit.Millis } => DateTimeOffset.FromUnixTimeMilliseconds(raw),
@@ -1018,6 +1027,14 @@ static class ColumnChunkReader
             LogicalType.Timestamp { Unit: TimeUnit.Nanos } => DateTimeOffset.UnixEpoch.AddTicks(raw / 100),
             _ => throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.")
         };
+
+    static DateTime DecodeDateTime(long raw, LogicalType? logicalType)
+    {
+        var value = DecodeTimestampValue(raw, logicalType).UtcDateTime;
+        return logicalType is LogicalType.Timestamp { IsAdjustedToUtc: false }
+            ? DateTime.SpecifyKind(value, DateTimeKind.Unspecified)
+            : value;
+    }
 
     internal static bool TryDecodePage<T>(PageHeader header, ReadOnlySpan<byte> payload, Column column,
         InternalColumnChunkMetadata columnChunk, ulong rowCount, ref Array? dictionary, ref T[]? dictionaryBuffer,
@@ -1495,12 +1512,7 @@ static class ColumnChunkReader
             for (var i = 0; i < valueCount; i++)
             {
                 var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
-                typed[i] = column.LogicalType switch
-                {
-                    LogicalType.Timestamp { Unit: TimeUnit.Millis } => DateTimeOffset.FromUnixTimeMilliseconds(raw),
-                    LogicalType.Timestamp { Unit: TimeUnit.Micros } => DateTimeOffset.UnixEpoch.AddTicks(raw * 10),
-                    _ => throw new CorruptParquetException("DateTimeOffset projection requires a timestamp logical type.")
-                };
+                typed[i] = DecodeTimestamp(raw, column.LogicalType);
             }
             values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
@@ -1513,12 +1525,7 @@ static class ColumnChunkReader
             for (var i = 0; i < valueCount; i++)
             {
                 var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
-                typed[i] = column.LogicalType switch
-                {
-                    LogicalType.Timestamp { Unit: TimeUnit.Millis } => DateTimeOffset.FromUnixTimeMilliseconds(raw).UtcDateTime,
-                    LogicalType.Timestamp { Unit: TimeUnit.Micros } => DateTimeOffset.UnixEpoch.AddTicks(raw * 10).UtcDateTime,
-                    _ => throw new CorruptParquetException("DateTime projection requires a timestamp logical type.")
-                };
+                typed[i] = DecodeDateTime(raw, column.LogicalType);
             }
             values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
             return true;
@@ -2263,22 +2270,19 @@ static class ColumnChunkReader
             for (var i = 0; i < valueCount; i++)
             {
                 var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
-                values[i] = logicalType switch
-                {
-                    LogicalType.Timestamp { Unit: TimeUnit.Millis } => DateTimeOffset.FromUnixTimeMilliseconds(raw),
-                    LogicalType.Timestamp { Unit: TimeUnit.Micros } => DateTimeOffset.UnixEpoch.AddTicks(raw * 10),
-                    _ => throw new CorruptParquetException("DateTimeOffset projection requires a timestamp logical type.")
-                };
+                values[i] = DecodeTimestamp(raw, logicalType);
             }
             return values;
         }
 
         if (targetType == typeof(DateTime))
         {
-            var offsets = (DateTimeOffset[])DecodePlainInt64(payload, valueCount, logicalType, typeof(DateTimeOffset));
-            var values = new DateTime[offsets.Length];
-            for (var i = 0; i < offsets.Length; i++)
-                values[i] = offsets[i].UtcDateTime;
+            var values = new DateTime[valueCount];
+            for (var i = 0; i < valueCount; i++)
+            {
+                var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
+                values[i] = DecodeDateTime(raw, logicalType);
+            }
             return values;
         }
 

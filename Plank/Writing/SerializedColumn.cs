@@ -455,7 +455,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         {
             var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
-                converted[i] = ToUnixTime(values[i], timestamp.Unit);
+                converted[i] = ToUnixTime(values[i], timestamp);
             SerializeTyped(converted);
         }
         finally
@@ -472,7 +472,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         {
             var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
-                converted[i] = values[i] is { } value ? ToUnixTime(value, timestamp.Unit) : null;
+                converted[i] = values[i] is { } value ? ToUnixTime(value, timestamp) : null;
             SerializeOptionalTyped(converted);
         }
         finally
@@ -519,7 +519,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     void SerializeDateTimeOffset(ReadOnlySpan<DateTimeOffset> values)
     {
-        var timestamp = RequireTimestampLogicalType(_column);
+        var timestamp = RequireAdjustedTimestampLogicalType(_column);
         var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
@@ -536,7 +536,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     void SerializeNullableDateTimeOffset(ReadOnlySpan<DateTimeOffset?> values)
     {
-        var timestamp = RequireTimestampLogicalType(_column);
+        var timestamp = RequireAdjustedTimestampLogicalType(_column);
         var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
         try
         {
@@ -908,13 +908,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         return MemoryMarshal.CreateReadOnlySpan(ref first, values.Length);
     }
 
-    static long ToUnixTime(DateTime value, TimeUnit unit)
+    static long ToUnixTime(DateTime value, LogicalType.Timestamp timestamp)
     {
-        if (value.Kind != DateTimeKind.Utc)
+        var expectedKind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+        if (value.Kind != expectedKind)
             throw new InvalidOperationException(
-                $"DateTime values must have kind '{DateTimeKind.Utc}', got '{value.Kind}'.");
+                $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
 
-        return ToUnixTimeFromTicks(value.Ticks, unit);
+        return ToUnixTimeFromTicks(value.Ticks, timestamp.Unit);
     }
 
     static long ToUnixTime(DateTimeOffset value, TimeUnit unit)
@@ -966,6 +967,16 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         throw new InvalidOperationException(
             $"Column '{column.Name}' must declare logical type '{typeof(LogicalType.Timestamp)}' for timestamp serialization.");
+    }
+
+    static LogicalType.Timestamp RequireAdjustedTimestampLogicalType(Column column)
+    {
+        var timestamp = RequireTimestampLogicalType(column);
+        if (!timestamp.IsAdjustedToUtc)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' must use adjusted-to-UTC timestamp semantics for DateTimeOffset serialization.");
+
+        return timestamp;
     }
 
     static void RequireUuidLogicalType(Column column)
