@@ -66,6 +66,56 @@ internal sealed class ColumnStatisticsTests
     }
 
     [Test]
+    public void FloatingPointStatisticsCanonicalizeSignedZeroBoundsOnVectorizedPaths()
+    {
+        var floatColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Float);
+        var floatValues = new float[System.Numerics.Vector<float>.Count * 2];
+        floatValues[System.Numerics.Vector<float>.Count] = -0.0f;
+        AssertFloatStatistics(ColumnStatistics.Create(floatColumn, floatValues, 0), int.MinValue, 0);
+
+        var doubleColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Double);
+        var doubleValues = new double[System.Numerics.Vector<double>.Count * 2];
+        doubleValues[System.Numerics.Vector<double>.Count] = -0.0d;
+        AssertDoubleStatistics(ColumnStatistics.Create(doubleColumn, doubleValues, 0), long.MinValue, 0);
+    }
+
+    [Test]
+    public void FloatingPointStatisticsCanonicalizeSignedZeroBoundsForOptionalAndRepeatedValues()
+    {
+        var optionalFloatColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Float,
+            new ColumnOptions(ParquetRepetition.Optional));
+        AssertFloatStatistics(ColumnStatistics.CreateOptional(optionalFloatColumn,
+            new float?[] { null, +0.0f, float.NaN, -0.0f }), int.MinValue, 0, nullCount: 1);
+
+        var optionalDoubleColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Double,
+            new ColumnOptions(ParquetRepetition.Optional));
+        AssertDoubleStatistics(ColumnStatistics.CreateOptional(optionalDoubleColumn,
+            new double?[] { null, +0.0d, double.NaN, -0.0d }), long.MinValue, 0, nullCount: 1);
+
+        var repeatedFloatColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Float,
+            new ColumnOptions(ParquetRepetition.Repeated));
+        AssertFloatStatistics(ColumnStatistics.Create(repeatedFloatColumn,
+            new float[][] { [+0.0f], [float.NaN, -0.0f] }, 0), int.MinValue, 0);
+
+        var repeatedDoubleColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Double,
+            new ColumnOptions(ParquetRepetition.Repeated));
+        AssertDoubleStatistics(ColumnStatistics.Create(repeatedDoubleColumn,
+            new double[][] { [+0.0d], [double.NaN, -0.0d] }, 0), long.MinValue, 0);
+    }
+
+    [Test]
+    public void FloatingPointStatisticsPreserveTheOnlyZeroSign()
+    {
+        var floatColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Float);
+        AssertFloatStatistics(ColumnStatistics.Create(floatColumn, [-0.0f], 0), int.MinValue, int.MinValue);
+        AssertFloatStatistics(ColumnStatistics.Create(floatColumn, [+0.0f], 0), 0, 0);
+
+        var doubleColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Double);
+        AssertDoubleStatistics(ColumnStatistics.Create(doubleColumn, [-0.0d], 0), long.MinValue, long.MinValue);
+        AssertDoubleStatistics(ColumnStatistics.Create(doubleColumn, [+0.0d], 0), 0, 0);
+    }
+
+    [Test]
     public void WriterEmitsColumnChunkStatistics()
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-statistics-{Guid.NewGuid():N}.parquet");
@@ -375,6 +425,36 @@ internal sealed class ColumnStatisticsTests
         AssertDuckDbInt64(reader, ordinal: 5, expected: 7);
         if (reader.Read())
             throw new InvalidOperationException("DuckDB returned more than one aggregate row.");
+    }
+
+    static void AssertFloatStatistics(ColumnStatistics statistics, int minBits, int maxBits, long nullCount = 0)
+    {
+        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Float)
+            throw new InvalidOperationException($"Expected float statistics, got {statistics.ValueKind}.");
+        if ((int)statistics.MinBits != minBits)
+            throw new InvalidOperationException(
+                $"Float min bits mismatch. Expected {minBits:X8}, got {(int)statistics.MinBits:X8}.");
+        if ((int)statistics.MaxBits != maxBits)
+            throw new InvalidOperationException(
+                $"Float max bits mismatch. Expected {maxBits:X8}, got {(int)statistics.MaxBits:X8}.");
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Float null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+    }
+
+    static void AssertDoubleStatistics(ColumnStatistics statistics, long minBits, long maxBits, long nullCount = 0)
+    {
+        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Double)
+            throw new InvalidOperationException($"Expected double statistics, got {statistics.ValueKind}.");
+        if (statistics.MinBits != minBits)
+            throw new InvalidOperationException(
+                $"Double min bits mismatch. Expected {minBits:X16}, got {statistics.MinBits:X16}.");
+        if (statistics.MaxBits != maxBits)
+            throw new InvalidOperationException(
+                $"Double max bits mismatch. Expected {maxBits:X16}, got {statistics.MaxBits:X16}.");
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Double null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
     }
 
     static void AssertDuckDbInt64(DuckDBDataReader reader, int ordinal, long expected)
