@@ -799,6 +799,15 @@ static class ColumnChunkReader
                 typed[i] = DecodeDate(BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4)));
             return true;
         }
+        if (typeof(T) == typeof(TimeOnly) && column.PhysicalType == ParquetPhysicalType.Int32)
+        {
+            ValidatePlainPayload(payload, valueCount, sizeof(int));
+            var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+            for (var i = 0; i < typed.Length; i++)
+                typed[i] = DecodeTime(BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4)),
+                    column.LogicalType);
+            return true;
+        }
         if (typeof(T) == typeof(TimeOnly) && column.PhysicalType == ParquetPhysicalType.Int64)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(long));
@@ -863,6 +872,15 @@ static class ColumnChunkReader
                 DecodeByteStreamSplitInt64(payload, raw);
                 var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
                 for (var i = 0; i < typed.Length; i++)
+                    typed[i] = DecodeTime(raw[i], column.LogicalType);
+                return true;
+            }
+            case ParquetPhysicalType.Int32 when typeof(T) == typeof(TimeOnly):
+            {
+                var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+                var raw = MemoryMarshal.Cast<TimeOnly, int>(typed)[..typed.Length];
+                DecodeByteStreamSplitInt32(payload, raw);
+                for (var i = typed.Length - 1; i >= 0; i--)
                     typed[i] = DecodeTime(raw[i], column.LogicalType);
                 return true;
             }
@@ -966,6 +984,15 @@ static class ColumnChunkReader
             var typed = Unsafe.As<Span<T>, Span<DateOnly>>(ref destination);
             for (var i = 0; i < typed.Length; i++)
                 typed[i] = DecodeDate(raw[i]);
+            return true;
+        }
+        if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(TimeOnly))
+        {
+            var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+            var raw = MemoryMarshal.Cast<TimeOnly, int>(typed)[..typed.Length];
+            DeltaBinaryPackedDecoder.ReadInt32(payload, raw);
+            for (var i = typed.Length - 1; i >= 0; i--)
+                typed[i] = DecodeTime(raw[i], column.LogicalType);
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(TimeOnly))

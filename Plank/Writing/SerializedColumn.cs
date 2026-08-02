@@ -554,6 +554,23 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeTimeOnly(ReadOnlySpan<TimeOnly> values)
     {
         var time = RequireTimeLogicalType(_column);
+        if (time.Unit == TimeUnit.Millis && _column.PhysicalType == ParquetPhysicalType.Int32)
+        {
+            var rentedMillis = _owner.BufferWriters.RentScratch<int>(checked((uint)values.Length));
+            try
+            {
+                var convertedMillis = ParquetBuffer.AsSpan<int>(rentedMillis, values.Length);
+                for (var i = 0; i < values.Length; i++)
+                    convertedMillis[i] = checked((int)ToTimeValue(values[i], time.Unit));
+                SerializeTyped(convertedMillis);
+            }
+            finally
+            {
+                _owner.BufferWriters.ReturnScratch(rentedMillis);
+            }
+            return;
+        }
+
         var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
@@ -571,6 +588,25 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeNullableTimeOnly(ReadOnlySpan<TimeOnly?> values)
     {
         var time = RequireTimeLogicalType(_column);
+        if (time.Unit == TimeUnit.Millis && _column.PhysicalType == ParquetPhysicalType.Int32)
+        {
+            var rentedMillis = _owner.BufferWriters.RentScratch<int?>(checked((uint)values.Length));
+            try
+            {
+                var convertedMillis = ParquetBuffer.AsSpan<int?>(rentedMillis, values.Length);
+                for (var i = 0; i < values.Length; i++)
+                    convertedMillis[i] = values[i] is { } value
+                        ? checked((int)ToTimeValue(value, time.Unit))
+                        : null;
+                SerializeOptionalTyped(convertedMillis);
+            }
+            finally
+            {
+                _owner.BufferWriters.ReturnScratch(rentedMillis);
+            }
+            return;
+        }
+
         var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
         try
         {
