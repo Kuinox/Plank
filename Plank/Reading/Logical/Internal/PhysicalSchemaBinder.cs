@@ -102,7 +102,7 @@ static class PhysicalSchemaBinder
                 Kind = NodeKind.Leaf,
                 Repetition = node.Repetition,
                 PhysicalType = physicalType,
-                LogicalType = ConvertLogicalType(node.LogicalType),
+                LogicalType = ConvertLogicalType(metadata, node),
                 Options = new ColumnOptions(node.Repetition, typeLength: node.TypeLength),
                 Children = []
             };
@@ -126,6 +126,7 @@ static class PhysicalSchemaBinder
             Name = name,
             Kind = NodeKind.Group,
             Repetition = node.Repetition,
+            LogicalType = ConvertLogicalType(metadata, node),
             Children = children.MoveToImmutable()
         };
     }
@@ -159,7 +160,7 @@ static class PhysicalSchemaBinder
                 Kind = NodeKind.Leaf,
                 Repetition = ParquetRepetition.Required,
                 PhysicalType = physicalType,
-                LogicalType = ConvertLogicalType(repeated.LogicalType),
+                LogicalType = ConvertLogicalType(metadata, repeated),
                 Options = new ColumnOptions(ParquetRepetition.Required, typeLength: repeated.TypeLength),
                 Children = []
             };
@@ -311,20 +312,35 @@ static class PhysicalSchemaBinder
         return builder.ToString();
     }
 
-    static LogicalType? ConvertLogicalType(LogicalTypeInfo logicalType)
-        => logicalType.Kind switch
+    static LogicalType? ConvertLogicalType(PhysicalFileMetadata metadata, ParquetSchemaNodeInfo node)
+        => node.LogicalType.Kind switch
         {
             LogicalTypeKind.None => null,
             LogicalTypeKind.String => new LogicalType.String(),
             LogicalTypeKind.Json => new LogicalType.Json(),
+            LogicalTypeKind.Bson => new LogicalType.Bson(),
+            LogicalTypeKind.Enum => new LogicalType.Enum(),
             LogicalTypeKind.Uuid => new LogicalType.Uuid(),
+            LogicalTypeKind.Float16 => new LogicalType.Float16(),
+            LogicalTypeKind.Interval => new LogicalType.Interval(),
+            LogicalTypeKind.Unknown => new LogicalType.Unknown(),
             LogicalTypeKind.Date => new LogicalType.Date(),
-            LogicalTypeKind.Time => new LogicalType.Time(logicalType.Unit, logicalType.IsAdjustedToUtc),
-            LogicalTypeKind.Timestamp => new LogicalType.Timestamp(logicalType.Unit, logicalType.IsAdjustedToUtc),
-            LogicalTypeKind.Integer => new LogicalType.Int(logicalType.BitWidth, logicalType.IsSigned),
-            LogicalTypeKind.Decimal => new LogicalType.Decimal(logicalType.Precision, logicalType.Scale),
-            _ => throw new NotSupportedException($"Logical type '{logicalType.Kind}' is not supported.")
+            LogicalTypeKind.Time => new LogicalType.Time(node.LogicalType.Unit, node.LogicalType.IsAdjustedToUtc),
+            LogicalTypeKind.Timestamp => new LogicalType.Timestamp(node.LogicalType.Unit,
+                node.LogicalType.IsAdjustedToUtc),
+            LogicalTypeKind.Integer => new LogicalType.Int(node.LogicalType.BitWidth, node.LogicalType.IsSigned),
+            LogicalTypeKind.Decimal => new LogicalType.Decimal(node.LogicalType.Precision, node.LogicalType.Scale),
+            LogicalTypeKind.Variant => new LogicalType.Variant(node.LogicalType.SpecificationVersion),
+            LogicalTypeKind.Geometry => new LogicalType.Geometry(ReadCrs(metadata, node)),
+            LogicalTypeKind.Geography => new LogicalType.Geography(ReadCrs(metadata, node),
+                node.LogicalType.Algorithm),
+            _ => throw new NotSupportedException($"Logical type '{node.LogicalType.Kind}' is not supported.")
         };
+
+    static string? ReadCrs(PhysicalFileMetadata metadata, ParquetSchemaNodeInfo node)
+        => node.LogicalType.HasCrs
+            ? Encoding.UTF8.GetString(metadata.SchemaNodeLogicalTypeCrsUtf8(node.Ordinal))
+            : null;
 
     static bool PathEquals(PhysicalFileMetadata metadata, ParquetColumnSchemaInfo column,
         ImmutableArray<string> requestedPath, IParquetBufferPool bufferPool)

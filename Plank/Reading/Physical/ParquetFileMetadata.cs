@@ -51,6 +51,12 @@ public sealed class ParquetFileMetadata
         return GetName(SchemaNodes[nodeOrdinal]);
     }
 
+    public ReadOnlySpan<byte> SchemaNodeLogicalTypeCrsUtf8(int nodeOrdinal)
+    {
+        ValidateOrdinal(nodeOrdinal, SchemaNodeCount, nameof(nodeOrdinal));
+        return GetLogicalTypeCrsUtf8(SchemaNodes[nodeOrdinal].LogicalType);
+    }
+
     public ParquetColumnSchemaInfo ColumnSchema(int columnOrdinal)
     {
         ValidateOrdinal(columnOrdinal, ColumnCount, nameof(columnOrdinal));
@@ -62,6 +68,12 @@ public sealed class ParquetFileMetadata
         var column = ColumnSchema(columnOrdinal);
         ValidateOrdinal(segmentOrdinal, column.PathSegmentCount, nameof(segmentOrdinal));
         return GetName(GetPathNodeOrdinal(column, segmentOrdinal));
+    }
+
+    public ReadOnlySpan<byte> ColumnLogicalTypeCrsUtf8(int columnOrdinal)
+    {
+        var column = ColumnSchema(columnOrdinal);
+        return GetLogicalTypeCrsUtf8(column.LogicalType);
     }
 
     public ParquetRowGroupInfo RowGroup(int rowGroupOrdinal)
@@ -95,6 +107,11 @@ public sealed class ParquetFileMetadata
 
     ReadOnlySpan<byte> GetName(ParquetSchemaNodeInfo node)
         => FooterBytes.Slice(node.NameOffset, node.NameLength);
+
+    ReadOnlySpan<byte> GetLogicalTypeCrsUtf8(LogicalTypeInfo logicalType)
+        => logicalType.HasCrs
+            ? FooterBytes.Slice(logicalType.CrsOffset, logicalType.CrsLength)
+            : [];
 
     int GetPathNodeOrdinal(ParquetColumnSchemaInfo column, int segmentOrdinal)
     {

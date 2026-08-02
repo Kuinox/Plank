@@ -30,7 +30,24 @@ public abstract record LogicalType
 
     public sealed record Json : LogicalType;
 
+    public sealed record Bson : LogicalType;
+
+    public sealed record Enum : LogicalType;
+
     public sealed record Uuid : LogicalType;
+
+    public sealed record Float16 : LogicalType;
+
+    public sealed record Interval : LogicalType;
+
+    public sealed record Unknown : LogicalType;
+
+    public sealed record Variant(sbyte? SpecificationVersion = null) : LogicalType;
+
+    public sealed record Geometry(string? Crs = null) : LogicalType;
+
+    public sealed record Geography(string? Crs = null,
+        EdgeInterpolationAlgorithm? Algorithm = null) : LogicalType;
 
     public sealed record Decimal(int Precision, int Scale) : LogicalType;
 }

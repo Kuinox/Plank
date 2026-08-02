@@ -86,3 +86,42 @@ var schema = new ParquetSchema([
 ```
 
 [`ColumnDefinition`](xref:Plank.Schema.ColumnDefinition) also supports groups, lists, and maps.
+
+## Logical annotations
+
+Runtime schemas preserve the complete parameters for the supported Parquet logical annotations. In addition to the
+CLR-oriented string, integer, decimal, UUID, date, time, and timestamp types, Plank supports these raw-value
+annotations:
+
+| Logical type | Required physical shape |
+| --- | --- |
+| `Enum`, `Bson`, `Geometry`, `Geography` | `ByteArray` |
+| `Float16` | 2-byte `FixedLenByteArray` |
+| `Interval` | 12-byte `FixedLenByteArray` |
+| `Unknown` | Any optional primitive column whose values are all null |
+| `Variant` | A group containing required `metadata` and required or optional `value` byte-array fields |
+
+`Geometry` and `Geography` retain an optional CRS, `Geography` retains its optional edge interpolation algorithm,
+and `Variant` retains its optional specification version:
+
+```csharp
+var schema = new ParquetSchema([
+    ColumnDefinition.RequiredLeaf(
+        "shape",
+        ParquetPhysicalType.ByteArray,
+        logicalType: new LogicalType.Geometry("EPSG:4326")),
+    ColumnDefinition.OptionalGroup(
+        "payload",
+        new LogicalType.Variant(1),
+        ColumnDefinition.RequiredLeaf("metadata", ParquetPhysicalType.ByteArray),
+        ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.ByteArray))
+]);
+```
+
+The physical metadata layer keeps CRS text in the footer buffer. Read it without allocating through
+[`SchemaNodeLogicalTypeCrsUtf8`](xref:Plank.Reading.Physical.ParquetFileMetadata.SchemaNodeLogicalTypeCrsUtf8(System.Int32))
+or [`ColumnLogicalTypeCrsUtf8`](xref:Plank.Reading.Physical.ParquetFileMetadata.ColumnLogicalTypeCrsUtf8(System.Int32)).
+
+For generated flat schemas, marker annotations can be selected with `LogicalTypeKind`. `Float16` and `Interval`
+automatically select fixed lengths of 2 and 12 bytes when the property uses a binary CLR carrier and explicitly
+selects `FixedLenByteArray`. Parameterized geospatial and variant annotations use runtime schemas.
