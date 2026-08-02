@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using Plank.Schema;
 
@@ -16,6 +17,10 @@ static class RleEncoding
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.Boolean}' values, but got '{typeof(T)}'.");
 
         var booleanValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool>>(ref values);
+        var lengthPrefix = writer.GetSpan(sizeof(int));
+        writer.Advance(sizeof(int));
+        var encodedStart = writer.WrittenLength;
         RleBitPackingHybridEncoding.WriteBooleans(booleanValues, ref writer);
+        BinaryPrimitives.WriteInt32LittleEndian(lengthPrefix, writer.WrittenLength - encodedStart);
     }
 }

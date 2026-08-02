@@ -204,6 +204,9 @@ internal sealed class EncodingTypeMatrixE2ETests
         if (dataColumn.Data.Length != expectedRowCount)
             throw new InvalidOperationException(
                 $"Parquet.Net row count mismatch. Expected {expectedRowCount}, got {dataColumn.Data.Length}.");
+        if (dataColumn.Data is bool[] booleanValues &&
+            !booleanValues.AsSpan().SequenceEqual(CreateBooleanValues(expectedRowCount)))
+            throw new InvalidOperationException("Parquet.Net Boolean values mismatch.");
     }
 
     static void AssertParquetSharpCanRead(string path, ParquetPhysicalType physicalType, int expectedRowCount)

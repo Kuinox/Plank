@@ -19,26 +19,19 @@ static class ParquetDecompressor
     {
         try
         {
-            switch (compression)
+            var written = compression switch
             {
-                case CompressionKind.Gzip:
-                    GzipInflater.Decompress(payload, destination);
-                    break;
-                case CompressionKind.Brotli:
-                    DecompressBrotliInto(payload, destination);
-                    break;
-                case CompressionKind.Lz4:
-                    LZ4Codec.Decode(payload, destination);
-                    break;
-                case CompressionKind.Zstd:
-                    DecompressZstdInto(payload, destination);
-                    break;
-                case CompressionKind.Snappy:
-                    DecompressSnappyInto(payload, destination);
-                    break;
-                default:
-                    throw new NotSupportedException($"Compression '{compression}' is not supported.");
-            }
+                CompressionKind.Gzip => GzipInflater.Decompress(payload, destination),
+                CompressionKind.Brotli => DecompressBrotliInto(payload, destination),
+                CompressionKind.Lz4 => DecompressLz4Into(payload, destination),
+                CompressionKind.Zstd => DecompressZstdInto(payload, destination),
+                CompressionKind.Snappy => DecompressSnappyInto(payload, destination),
+                _ => throw new NotSupportedException($"Compression '{compression}' is not supported.")
+            };
+
+            if (written != destination.Length)
+                throw new CorruptParquetException(
+                    $"{compression} decompression produced {written} bytes but {destination.Length} were expected.");
         }
         catch (Exception ex) when (ex is InvalidDataException or ArgumentException or EndOfStreamException)
         {
@@ -46,11 +39,11 @@ static class ParquetDecompressor
         }
     }
 
-    static void DecompressSnappyInto(ReadOnlySpan<byte> payload, Span<byte> destination)
+    static int DecompressSnappyInto(ReadOnlySpan<byte> payload, Span<byte> destination)
     {
         try
         {
-            Plank.Snappy.SnappyCodec.Decompress(payload, destination);
+            return Plank.Snappy.SnappyCodec.Decompress(payload, destination);
         }
         catch (InvalidOperationException ex)
         {
@@ -58,12 +51,16 @@ static class ParquetDecompressor
         }
     }
 
-    static void DecompressBrotliInto(ReadOnlySpan<byte> payload, Span<byte> destination)
+    static int DecompressLz4Into(ReadOnlySpan<byte> payload, Span<byte> destination) =>
+        LZ4Codec.Decode(payload, destination);
+
+    static int DecompressBrotliInto(ReadOnlySpan<byte> payload, Span<byte> destination)
     {
         try
         {
-            if (!BrotliDecoder.TryDecompress(payload, destination, out var written) || written != destination.Length)
+            if (!BrotliDecoder.TryDecompress(payload, destination, out var written))
                 throw new CorruptParquetException("Brotli decompression failed due to invalid compressed data.");
+            return written;
         }
         catch (InvalidOperationException ex)
         {
@@ -71,7 +68,7 @@ static class ParquetDecompressor
         }
     }
 
-    static unsafe void DecompressZstdInto(ReadOnlySpan<byte> payload, Span<byte> destination)
+    static unsafe int DecompressZstdInto(ReadOnlySpan<byte> payload, Span<byte> destination)
     {
         fixed (byte* source = payload)
         fixed (byte* output = destination)
@@ -79,9 +76,7 @@ static class ParquetDecompressor
             var written = Methods.ZSTD_decompress(output, (nuint)destination.Length, source, (nuint)payload.Length);
             if (Methods.ZSTD_isError(written))
                 throw new CorruptParquetException($"Zstd decompression failed with code {written}.");
-            if (written != (nuint)destination.Length)
-                throw new CorruptParquetException(
-                    $"Zstd decompression produced {written} bytes but {destination.Length} were expected.");
+            return checked((int)written);
         }
     }
 }

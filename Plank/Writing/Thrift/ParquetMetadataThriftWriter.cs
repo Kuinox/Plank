@@ -566,6 +566,8 @@ static class ParquetMetadataThriftWriter
             writer.WriteFieldBool(7, true);
         if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
             writer.WriteFieldBool(8, true);
+        if (statistics.NanCount >= 0)
+            writer.WriteFieldI64(9, statistics.NanCount);
         writer.EndStruct(previous);
     }
 

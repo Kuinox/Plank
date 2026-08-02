@@ -51,6 +51,35 @@ internal sealed class ReaderCorrectnessDiscoveryTests
     }
 
     [Test]
+    [Arguments(2)]
+    [Arguments(4)]
+    public void BooleanRleRejectsMismatchedEncodedLength(int encodedLength)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("Value", ParquetPhysicalType.Boolean)
+        ]);
+        var column = schema.LeafColumns[0].Column;
+        byte[] payload = new byte[sizeof(int) + 3];
+        BinaryPrimitives.WriteInt32LittleEndian(payload, encodedLength);
+        payload[sizeof(int)] = 0x10;
+        var header = CreatePageHeader(PageHeaderType.DataPage, valueCount: 8,
+            EncodingKind.Rle, payload.Length);
+        var buffers = default(ColumnReadBuffers<bool>);
+
+        try
+        {
+            Assert.Throws<CorruptParquetException>(() =>
+                ColumnChunkReader.TryDecodeRequiredPageIntoNative(
+                    header, payload, column, rowCount: 8, ref buffers,
+                    DefaultParquetBufferPool.Shared, out _));
+        }
+        finally
+        {
+            buffers.Dispose();
+        }
+    }
+
+    [Test]
     public void SnappyRejectsOutputShorterThanPageHeaderSize()
     {
         byte[] compressed = [0x04, 0x0C, 1, 2, 3, 4];
@@ -96,6 +125,36 @@ internal sealed class ReaderCorrectnessDiscoveryTests
         var header = PageHeaderReader.Read(file.AsSpan(pageOffset));
         if (!header.IsCompressed || header.UncompressedPageSize == 0 || header.CompressedPageSize > 63)
             throw new InvalidOperationException("The compressed-page test fixture has an unexpected page header.");
+
+        var compressedSizeOffset = FindThirdCompactI32ValueOffset(file.AsSpan(pageOffset));
+        file[pageOffset + compressedSizeOffset] = 0;
+
+        Assert.Throws<CorruptParquetException>(() =>
+        {
+            using var source = new MemoryStream(file, writable: false);
+            using var reader = new ParquetFileReader();
+            reader.Reset(source);
+            using var cursor = reader.OpenPages(0, 0);
+            _ = cursor.MoveNext();
+        });
+    }
+
+    [Test]
+    public void PageCursorRejectsUncompressedPageWithMismatchedSizes()
+    {
+        var file = CreateSingleValueFile(CompressionKind.None);
+        int pageOffset;
+        using (var source = new MemoryStream(file, writable: false))
+        using (var reader = new ParquetFileReader())
+        {
+            reader.Reset(source);
+            pageOffset = checked((int)reader.Metadata.ColumnChunk(0, 0).DataPageOffset);
+        }
+
+        var header = PageHeaderReader.Read(file.AsSpan(pageOffset));
+        if (header.UncompressedPageSize == 0 || header.CompressedPageSize != header.UncompressedPageSize ||
+            header.CompressedPageSize > 63)
+            throw new InvalidOperationException("The uncompressed-page test fixture has an unexpected page header.");
 
         var compressedSizeOffset = FindThirdCompactI32ValueOffset(file.AsSpan(pageOffset));
         file[pageOffset + compressedSizeOffset] = 0;

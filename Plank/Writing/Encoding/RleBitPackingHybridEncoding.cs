@@ -1,3 +1,8 @@
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+
 namespace Plank.Writing.Encoding;
 
 static class RleBitPackingHybridEncoding
@@ -33,9 +38,20 @@ static class RleBitPackingHybridEncoding
 
             var literalStart = index;
             index += runLength;
+            var previousRunWasSingle = runLength == 1;
 
             while (index < values.Length)
             {
+                if (previousRunWasSingle)
+                {
+                    var skipped = SkipDistinctAdjacentValues(values, index);
+                    if (skipped != 0)
+                    {
+                        index += skipped;
+                        continue;
+                    }
+                }
+
                 runLength = CountRunLength(values, index);
                 if (runLength >= 8)
                 {
@@ -48,8 +64,11 @@ static class RleBitPackingHybridEncoding
                     index += take;
                     if (take < runLength)
                         break;
+                    previousRunWasSingle = false;
                     continue;
                 }
+
+                previousRunWasSingle = runLength == 1;
                 index += runLength;
             }
 
@@ -130,9 +149,20 @@ static class RleBitPackingHybridEncoding
 
             var literalStart = index;
             index += runLength;
+            var previousRunWasSingle = runLength == 1;
 
             while (index < values.Length)
             {
+                if (previousRunWasSingle)
+                {
+                    var skipped = SkipDistinctAdjacentValues(values, index);
+                    if (skipped != 0)
+                    {
+                        index += skipped;
+                        continue;
+                    }
+                }
+
                 runLength = CountRunLength(values, index);
                 if (runLength >= 8)
                 {
@@ -145,8 +175,11 @@ static class RleBitPackingHybridEncoding
                     index += take;
                     if (take < runLength)
                         break;
+                    previousRunWasSingle = false;
                     continue;
                 }
+
+                previousRunWasSingle = runLength == 1;
                 index += runLength;
             }
 
@@ -175,10 +208,48 @@ static class RleBitPackingHybridEncoding
     static int CountRunLength(ReadOnlySpan<int> values, int start)
     {
         var value = values[start];
-        var length = 1;
-        while (start + length < values.Length && values[start + length] == value)
-            length++;
-        return length;
+        ref var input = ref MemoryMarshal.GetReference(values);
+        var index = start + 1;
+
+        // Establish the eight-value RLE threshold scalarly, then scan genuinely long runs a vector at a time.
+        var scalarEnd = Math.Min(values.Length, index + 7);
+        while (index < scalarEnd && Unsafe.Add(ref input, index) == value)
+            index++;
+        if (index < scalarEnd || index == values.Length)
+            return index - start;
+
+        if (Vector512.IsHardwareAccelerated && Vector512<int>.IsSupported)
+        {
+            var expected = Vector512.Create(value);
+            var lastVectorStart = values.Length - Vector512<int>.Count;
+            while (index <= lastVectorStart)
+            {
+                var current = Vector512.LoadUnsafe(ref input, (nuint)index);
+                var differentBits = ~Vector512.Equals(current, expected).ExtractMostSignificantBits()
+                    & ((1u << Vector512<int>.Count) - 1u);
+                if (differentBits != 0)
+                    return index - start + BitOperations.TrailingZeroCount(differentBits);
+                index += Vector512<int>.Count;
+            }
+        }
+        if (Vector256.IsHardwareAccelerated && Vector256<int>.IsSupported)
+        {
+            var expected = Vector256.Create(value);
+            var lastVectorStart = values.Length - Vector256<int>.Count;
+            while (index <= lastVectorStart)
+            {
+                var current = Vector256.LoadUnsafe(ref input, (nuint)index);
+                var differentBits = ~Vector256.Equals(current, expected).ExtractMostSignificantBits()
+                    & ((1u << Vector256<int>.Count) - 1u);
+                if (differentBits != 0)
+                    return index - start + BitOperations.TrailingZeroCount(differentBits);
+                index += Vector256<int>.Count;
+            }
+        }
+
+        while (index < values.Length && Unsafe.Add(ref input, index) == value)
+            index++;
+        return index - start;
     }
 
     static int CountBooleanRunLength(ReadOnlySpan<bool> values, int start)
@@ -188,6 +259,42 @@ static class RleBitPackingHybridEncoding
         while (start + length < values.Length && values[start + length] == value)
             length++;
         return length;
+    }
+
+    static int SkipDistinctAdjacentValues(ReadOnlySpan<int> values, int start)
+    {
+        ref var input = ref MemoryMarshal.GetReference(values);
+        var index = start;
+
+        // Comparing overlapping vectors identifies the first possible run while skipping literal-only regions.
+        if (Vector512.IsHardwareAccelerated && Vector512<int>.IsSupported)
+        {
+            var lastVectorStart = values.Length - Vector512<int>.Count - 1;
+            while (index <= lastVectorStart)
+            {
+                var current = Vector512.LoadUnsafe(ref input, (nuint)index);
+                var next = Vector512.LoadUnsafe(ref input, (nuint)(index + 1));
+                var equalBits = Vector512.Equals(current, next).ExtractMostSignificantBits();
+                if (equalBits != 0)
+                    return index - start + BitOperations.TrailingZeroCount(equalBits);
+                index += Vector512<int>.Count;
+            }
+        }
+        if (Vector256.IsHardwareAccelerated && Vector256<int>.IsSupported)
+        {
+            var lastVectorStart = values.Length - Vector256<int>.Count - 1;
+            while (index <= lastVectorStart)
+            {
+                var current = Vector256.LoadUnsafe(ref input, (nuint)index);
+                var next = Vector256.LoadUnsafe(ref input, (nuint)(index + 1));
+                var equalBits = Vector256.Equals(current, next).ExtractMostSignificantBits();
+                if (equalBits != 0)
+                    return index - start + BitOperations.TrailingZeroCount(equalBits);
+                index += Vector256<int>.Count;
+            }
+        }
+
+        return index - start;
     }
 
     static void WriteRleRun(int value, int runLength, int bitWidth, ref BufferWriter writer)

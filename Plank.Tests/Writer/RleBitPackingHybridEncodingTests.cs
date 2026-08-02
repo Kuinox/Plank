@@ -8,15 +8,34 @@ internal sealed class RleBitPackingHybridEncodingTests
     [Test]
     public void DictionaryIndexesMatchReferenceAcrossBitWidthsAndBoundaries()
     {
-        int[] bitWidths = [0, 1, 2, 7, 8, 9, 16, 24, 31, 32];
-        int[] lengths = [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 127];
-        foreach (var bitWidth in bitWidths)
+        int[] lengths = [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255];
+        for (var bitWidth = 0; bitWidth <= 32; bitWidth++)
         {
             foreach (var length in lengths)
                 VerifyDictionaryIndexes(CreateLiteralValues(length, bitWidth), bitWidth);
 
             if (bitWidth > 0)
                 VerifyDictionaryIndexes(CreateMixedValues(bitWidth), bitWidth);
+        }
+    }
+
+    [Test]
+    public void CheckedWriterRejectsOutOfRangeLiteralsAtCommonBitWidths()
+    {
+        VerifyCheckedWriterRejects([0, 1, 0, 1, 0, 1, 0, 2], 1);
+        VerifyCheckedWriterRejects([0, 1, 2, 3, 4, 5, 6, 256], 8);
+        VerifyCheckedWriterRejects([0, 1, 2, 3, 4, 5, 6, 65_536], 16);
+        VerifyCheckedWriterRejects([0, 1, 2, 3, 4, 5, 6, 1 << 24], 24);
+    }
+
+    [Test]
+    public void DictionaryIndexesMatchReferenceAcrossRandomMixedRunAlignments()
+    {
+        int[] bitWidths = [1, 2, 7, 8, 15, 16, 24, 31, 32];
+        foreach (var bitWidth in bitWidths)
+        {
+            for (var alignment = 0; alignment < 16; alignment++)
+                VerifyDictionaryIndexes(CreateRandomMixedValues(2_048, bitWidth, alignment), bitWidth);
         }
     }
 
@@ -52,6 +71,28 @@ internal sealed class RleBitPackingHybridEncodingTests
         if (!actual.SequenceEqual(expected))
             throw new InvalidOperationException(
                 $"RLE/bit-packed output differs from the reference for bit width {bitWidth} and {values.Length} values.");
+    }
+
+    static void VerifyCheckedWriterRejects(ReadOnlySpan<int> values, int bitWidth)
+    {
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 4096, 4096);
+        try
+        {
+            try
+            {
+                RleBitPackingHybridEncoding.Write(values, bitWidth, ref writer);
+            }
+            catch (InvalidOperationException)
+            {
+                return;
+            }
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+
+        throw new InvalidOperationException($"Expected bit width {bitWidth} to reject an out-of-range literal.");
     }
 
     static byte[] EncodeDictionaryIndexes(ReadOnlySpan<int> values, int bitWidth)
@@ -224,6 +265,56 @@ internal sealed class RleBitPackingHybridEncodingTests
         }
 
         return values;
+    }
+
+    static int[] CreateRandomMixedValues(int length, int bitWidth, int alignment)
+    {
+        var values = new int[length];
+        var mask = bitWidth == 32 ? uint.MaxValue : (1u << bitWidth) - 1u;
+        var state = unchecked(0x9E3779B9u + (uint)alignment * 7919u + (uint)bitWidth);
+        var previous = uint.MaxValue;
+        var offset = 0;
+
+        while (offset < alignment)
+        {
+            var value = GetDifferentRandomValue(mask, previous, ref state);
+            values[offset++] = unchecked((int)value);
+            previous = value;
+        }
+
+        while (offset < values.Length)
+        {
+            var selector = NextRandom(ref state) % 100;
+            var runLength = selector switch
+            {
+                < 50 => 1,
+                < 75 => 2 + (int)(NextRandom(ref state) % 6),
+                < 90 => 8 + (int)(NextRandom(ref state) % 17),
+                _ => 25 + (int)(NextRandom(ref state) % 72)
+            };
+            var value = GetDifferentRandomValue(mask, previous, ref state);
+            values.AsSpan(offset, Math.Min(runLength, values.Length - offset)).Fill(unchecked((int)value));
+            offset += runLength;
+            previous = value;
+        }
+
+        return values;
+    }
+
+    static uint GetDifferentRandomValue(uint mask, uint previous, ref uint state)
+    {
+        var value = NextRandom(ref state) & mask;
+        if (value == previous)
+            value = (value + 1) & mask;
+        return value;
+    }
+
+    static uint NextRandom(ref uint state)
+    {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        return state;
     }
 
     static bool[] CreateBooleanMixedValues()

@@ -215,9 +215,9 @@ static class ColumnChunkReader
         var physicalValues = MemoryMarshal.Cast<byte, TValue>(
             scratch.Slice(physicalOffset, physicalByteLength));
 
-        if (state.HasDictionary)
+        if (encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
         {
-            if (encoding is not (EncodingKind.RleDictionary or EncodingKind.PlainDictionary))
+            if (!state.HasDictionary)
                 return false;
             DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount),
                 state.GetDictionary<TValue>(), physicalValues);
@@ -279,9 +279,9 @@ static class ColumnChunkReader
 
         var valueCount = checked((int)header.ValueCount);
         var destination = state.GetValues<T>(valueCount, bufferPool);
-        if (state.HasDictionary)
+        if (header.Encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
         {
-            if (header.Encoding is not (EncodingKind.RleDictionary or EncodingKind.PlainDictionary))
+            if (!state.HasDictionary)
                 return false;
             DecodeDictionaryIndexesIntoBuffer(dataPayload, header.ValueCount,
                 state.GetDictionary<T>(), destination);
@@ -398,9 +398,9 @@ static class ColumnChunkReader
         int valueCount, int physicalCount, Column column, EncodingKind encoding, Span<int> scratch,
         ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
-        if (state.HasDictionary)
+        if (encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
         {
-            if (encoding is not (EncodingKind.RleDictionary or EncodingKind.PlainDictionary))
+            if (!state.HasDictionary)
                 return false;
             DecodeBinaryDictionaryValues(payload, definitions, valueCount, physicalCount,
                 scratch[..physicalCount], ref state, bufferPool);
@@ -2363,6 +2363,7 @@ static class ColumnChunkReader
         if (targetType != typeof(bool))
             throw new CorruptParquetException($"Boolean column cannot be projected to '{targetType}'.");
 
+        payload = ReadBooleanRlePayload(payload);
         var ints = ReadRleBitPackedHybrid(payload, valueCount, bitWidth: 1);
         var values = new bool[ints.Length];
         for (var i = 0; i < ints.Length; i++)
@@ -3019,6 +3020,7 @@ static class ColumnChunkReader
 
     static void DecodeBooleanRle(ReadOnlySpan<byte> payload, Span<bool> destination)
     {
+        payload = ReadBooleanRlePayload(payload);
         var valueIndex = 0U;
         var destinationLength = (uint)destination.Length;
         while (valueIndex < destinationLength)
@@ -3047,6 +3049,20 @@ static class ColumnChunkReader
                     $"Boolean RLE literal group claims {literalByteCount} bytes but only {payload.Length} remain.");
             payload = payload[(int)literalByteCount..];
         }
+    }
+
+    static ReadOnlySpan<byte> ReadBooleanRlePayload(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length < sizeof(int))
+            throw new CorruptParquetException(
+                $"Boolean RLE payload ({payload.Length} bytes) is too short for its length prefix.");
+
+        var encodedLength = BinaryPrimitives.ReadInt32LittleEndian(payload);
+        var remaining = payload[sizeof(int)..];
+        if (encodedLength != remaining.Length)
+            throw new CorruptParquetException(
+                $"Boolean RLE payload declares {encodedLength} encoded bytes but contains {remaining.Length}.");
+        return remaining;
     }
 
     static int ReadBitPackedValue(ref ReadOnlySpan<byte> payload, int bitWidth, int index)

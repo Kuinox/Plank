@@ -18,6 +18,7 @@ internal readonly struct ColumnStatistics
     internal readonly long MaxBits;
     internal readonly long NullCount;
     internal readonly long DistinctCount;
+    internal readonly long NanCount;
     internal readonly bool HasStatistics;
 
     ColumnStatistics(byte[]? minValue, byte[]? maxValue, long nullCount, bool hasStatistics)
@@ -41,6 +42,7 @@ internal readonly struct ColumnStatistics
         DistinctCount = minValue is null || maxValue is null
             ? 0
             : CompareBytes(minValue.AsSpan(0, MinValueLength), maxValue.AsSpan(0, MaxValueLength)) == 0 ? 1 : -1;
+        NanCount = -1;
         HasStatistics = hasStatistics;
     }
 
@@ -59,10 +61,12 @@ internal readonly struct ColumnStatistics
         NullCount = nullCount;
         DistinctCount = CompareBytes(GetValueSpan(minValue, minValueLength),
             GetValueSpan(maxValue, maxValueLength)) == 0 ? 1 : -1;
+        NanCount = -1;
         HasStatistics = hasStatistics;
     }
 
-    ColumnStatistics(ColumnStatisticsValueKind valueKind, long minBits, long maxBits, long nullCount, bool hasStatistics)
+    ColumnStatistics(ColumnStatisticsValueKind valueKind, long minBits, long maxBits, long nullCount,
+        bool hasStatistics, long nanCount = -1)
     {
         MinValue = null;
         MaxValue = null;
@@ -74,12 +78,18 @@ internal readonly struct ColumnStatistics
         MinBits = minBits;
         MaxBits = maxBits;
         NullCount = nullCount;
-        DistinctCount = valueKind == ColumnStatisticsValueKind.None ? -1 : minBits == maxBits ? 1 : -1;
+        DistinctCount = valueKind == ColumnStatisticsValueKind.None || nanCount > 0
+            ? -1
+            : minBits == maxBits ? 1 : -1;
+        NanCount = nanCount;
         HasStatistics = hasStatistics;
     }
 
     internal static ColumnStatistics Empty(long nullCount)
         => new(null, null, nullCount, true);
+
+    static ColumnStatistics EmptyFloating(long nullCount, long nanCount)
+        => new(ColumnStatisticsValueKind.None, 0, 0, nullCount, true, nanCount);
 
     internal ColumnStatistics WithNullCount(long nullCount)
         => ValueKind == ColumnStatisticsValueKind.Binary
@@ -87,7 +97,7 @@ internal readonly struct ColumnStatistics
                 ? new ColumnStatistics(MinValueBuffer, MinValueLength, MaxValueBuffer, MaxValueLength, nullCount,
                     HasStatistics)
                 : new ColumnStatistics(MinValue, MinValueLength, MaxValue, MaxValueLength, nullCount, HasStatistics)
-            : new ColumnStatistics(ValueKind, MinBits, MaxBits, nullCount, HasStatistics);
+            : new ColumnStatistics(ValueKind, MinBits, MaxBits, nullCount, HasStatistics, NanCount);
 
     internal static ColumnStatistics Create<T>(Column column, ReadOnlySpan<T> values, long nullCount)
         where T : notnull
@@ -636,10 +646,10 @@ internal readonly struct ColumnStatistics
 
     static ColumnStatistics CreateFloat(ReadOnlySpan<float> values, long nullCount)
     {
-        if (!TryGetFloatMinMax(values, out var min, out var max))
-            return Empty(nullCount);
+        if (!TryGetFloatMinMax(values, out var min, out var max, out var nanCount))
+            return EmptyFloating(nullCount, nanCount);
 
-        return FromFloat(min, max, nullCount);
+        return FromFloat(min, max, nullCount, nanCount);
     }
 
     static ColumnStatistics CreateNullableFloat(ReadOnlySpan<float?> values)
@@ -658,17 +668,17 @@ internal readonly struct ColumnStatistics
             nullCount++;
         }
 
-        return TryGetFloatMinMax(denseValues[..count], out var min, out var max)
-            ? FromFloat(min, max, nullCount)
-            : Empty(nullCount);
+        return TryGetFloatMinMax(denseValues[..count], out var min, out var max, out var nanCount)
+            ? FromFloat(min, max, nullCount, nanCount)
+            : EmptyFloating(nullCount, nanCount);
     }
 
     static ColumnStatistics CreateDouble(ReadOnlySpan<double> values, long nullCount)
     {
-        if (!TryGetDoubleMinMax(values, out var min, out var max))
-            return Empty(nullCount);
+        if (!TryGetDoubleMinMax(values, out var min, out var max, out var nanCount))
+            return EmptyFloating(nullCount, nanCount);
 
-        return FromDouble(min, max, nullCount);
+        return FromDouble(min, max, nullCount, nanCount);
     }
 
     static ColumnStatistics CreateNullableDouble(ReadOnlySpan<double?> values)
@@ -687,9 +697,9 @@ internal readonly struct ColumnStatistics
             nullCount++;
         }
 
-        return TryGetDoubleMinMax(denseValues[..count], out var min, out var max)
-            ? FromDouble(min, max, nullCount)
-            : Empty(nullCount);
+        return TryGetDoubleMinMax(denseValues[..count], out var min, out var max, out var nanCount)
+            ? FromDouble(min, max, nullCount, nanCount)
+            : EmptyFloating(nullCount, nanCount);
     }
 
     static ColumnStatistics CreateByteArray(Column column, ReadOnlySpan<byte[]> values, long nullCount)
@@ -910,18 +920,19 @@ internal readonly struct ColumnStatistics
         return new ColumnStatistics(minBuffer, min.Length, maxBuffer, max.Length, nullCount, true);
     }
 
-    static bool TryGetFloatMinMax(ReadOnlySpan<float> values, out float min, out float max)
+    static bool TryGetFloatMinMax(ReadOnlySpan<float> values, out float min, out float max, out long nanCount)
     {
         min = 0;
         max = 0;
+        nanCount = 0;
         if (values.Length == 0)
             return false;
         if (Vector.IsHardwareAccelerated && values.Length >= Vector<float>.Count)
-            return TryGetFloatMinMaxVectorized(values, out min, out max);
+            return TryGetFloatMinMaxVectorized(values, out min, out max, out nanCount);
 
         var first = values[0];
         if (float.IsNaN(first))
-            return TryGetFloatMinMaxScalar(values, out min, out max);
+            return TryGetFloatMinMaxScalar(values, out min, out max, out nanCount);
 
         min = first;
         max = first;
@@ -930,7 +941,10 @@ internal readonly struct ColumnStatistics
         {
             var value = values[i];
             if (float.IsNaN(value))
+            {
+                nanCount++;
                 continue;
+            }
 
             if (value < min)
                 min = value;
@@ -942,18 +956,19 @@ internal readonly struct ColumnStatistics
         return true;
     }
 
-    static bool TryGetDoubleMinMax(ReadOnlySpan<double> values, out double min, out double max)
+    static bool TryGetDoubleMinMax(ReadOnlySpan<double> values, out double min, out double max, out long nanCount)
     {
         min = 0;
         max = 0;
+        nanCount = 0;
         if (values.Length == 0)
             return false;
         if (Vector.IsHardwareAccelerated && values.Length >= Vector<double>.Count)
-            return TryGetDoubleMinMaxVectorized(values, out min, out max);
+            return TryGetDoubleMinMaxVectorized(values, out min, out max, out nanCount);
 
         var first = values[0];
         if (double.IsNaN(first))
-            return TryGetDoubleMinMaxScalar(values, out min, out max);
+            return TryGetDoubleMinMaxScalar(values, out min, out max, out nanCount);
 
         min = first;
         max = first;
@@ -962,7 +977,10 @@ internal readonly struct ColumnStatistics
         {
             var value = values[i];
             if (double.IsNaN(value))
+            {
+                nanCount++;
                 continue;
+            }
 
             if (value < min)
                 min = value;
@@ -974,12 +992,14 @@ internal readonly struct ColumnStatistics
         return true;
     }
 
-    static bool TryGetFloatMinMaxVectorized(ReadOnlySpan<float> values, out float min, out float max)
+    static bool TryGetFloatMinMaxVectorized(ReadOnlySpan<float> values, out float min, out float max,
+        out long nanCount)
     {
+        nanCount = 0;
         var width = Vector<float>.Count;
         var first = new Vector<float>(values);
         if (!Vector.EqualsAll(first, first))
-            return TryGetFloatMinMaxScalar(values, out min, out max);
+            return TryGetFloatMinMaxScalar(values, out min, out max, out nanCount);
 
         var minVector = first;
         var maxVector = first;
@@ -988,7 +1008,7 @@ internal readonly struct ColumnStatistics
         {
             var current = new Vector<float>(values[i..]);
             if (!Vector.EqualsAll(current, current))
-                return TryGetFloatMinMaxScalar(values, out min, out max);
+                return TryGetFloatMinMaxScalar(values, out min, out max, out nanCount);
 
             minVector = Vector.Min(minVector, current);
             maxVector = Vector.Max(maxVector, current);
@@ -1010,7 +1030,7 @@ internal readonly struct ColumnStatistics
         {
             var value = values[i];
             if (float.IsNaN(value))
-                return TryGetFloatMinMaxScalar(values, out min, out max);
+                return TryGetFloatMinMaxScalar(values, out min, out max, out nanCount);
             if (value < min)
                 min = value;
             if (value > max)
@@ -1021,12 +1041,14 @@ internal readonly struct ColumnStatistics
         return true;
     }
 
-    static bool TryGetDoubleMinMaxVectorized(ReadOnlySpan<double> values, out double min, out double max)
+    static bool TryGetDoubleMinMaxVectorized(ReadOnlySpan<double> values, out double min, out double max,
+        out long nanCount)
     {
+        nanCount = 0;
         var width = Vector<double>.Count;
         var first = new Vector<double>(values);
         if (!Vector.EqualsAll(first, first))
-            return TryGetDoubleMinMaxScalar(values, out min, out max);
+            return TryGetDoubleMinMaxScalar(values, out min, out max, out nanCount);
 
         var minVector = first;
         var maxVector = first;
@@ -1035,7 +1057,7 @@ internal readonly struct ColumnStatistics
         {
             var current = new Vector<double>(values[i..]);
             if (!Vector.EqualsAll(current, current))
-                return TryGetDoubleMinMaxScalar(values, out min, out max);
+                return TryGetDoubleMinMaxScalar(values, out min, out max, out nanCount);
 
             minVector = Vector.Min(minVector, current);
             maxVector = Vector.Max(maxVector, current);
@@ -1057,7 +1079,7 @@ internal readonly struct ColumnStatistics
         {
             var value = values[i];
             if (double.IsNaN(value))
-                return TryGetDoubleMinMaxScalar(values, out min, out max);
+                return TryGetDoubleMinMaxScalar(values, out min, out max, out nanCount);
             if (value < min)
                 min = value;
             if (value > max)
@@ -1068,16 +1090,21 @@ internal readonly struct ColumnStatistics
         return true;
     }
 
-    static bool TryGetFloatMinMaxScalar(ReadOnlySpan<float> values, out float min, out float max)
+    static bool TryGetFloatMinMaxScalar(ReadOnlySpan<float> values, out float min, out float max,
+        out long nanCount)
     {
         min = 0;
         max = 0;
+        nanCount = 0;
         var hasValue = false;
         for (var i = 0; i < values.Length; i++)
         {
             var value = values[i];
             if (float.IsNaN(value))
+            {
+                nanCount++;
                 continue;
+            }
 
             if (!hasValue)
             {
@@ -1174,16 +1201,21 @@ internal readonly struct ColumnStatistics
             max = hasPositiveZero ? +0.0d : -0.0d;
     }
 
-    static bool TryGetDoubleMinMaxScalar(ReadOnlySpan<double> values, out double min, out double max)
+    static bool TryGetDoubleMinMaxScalar(ReadOnlySpan<double> values, out double min, out double max,
+        out long nanCount)
     {
         min = 0;
         max = 0;
+        nanCount = 0;
         var hasValue = false;
         for (var i = 0; i < values.Length; i++)
         {
             var value = values[i];
             if (double.IsNaN(value))
+            {
+                nanCount++;
                 continue;
+            }
 
             if (!hasValue)
             {
@@ -1216,13 +1248,13 @@ internal readonly struct ColumnStatistics
     static ColumnStatistics FromUInt64(ulong min, ulong max, long nullCount)
         => new(ColumnStatisticsValueKind.UInt64, unchecked((long)min), unchecked((long)max), nullCount, true);
 
-    static ColumnStatistics FromFloat(float min, float max, long nullCount)
+    static ColumnStatistics FromFloat(float min, float max, long nullCount, long nanCount)
         => new(ColumnStatisticsValueKind.Float, BitConverter.SingleToInt32Bits(min),
-            BitConverter.SingleToInt32Bits(max), nullCount, true);
+            BitConverter.SingleToInt32Bits(max), nullCount, true, nanCount);
 
-    static ColumnStatistics FromDouble(double min, double max, long nullCount)
+    static ColumnStatistics FromDouble(double min, double max, long nullCount, long nanCount)
         => new(ColumnStatisticsValueKind.Double, BitConverter.DoubleToInt64Bits(min),
-            BitConverter.DoubleToInt64Bits(max), nullCount, true);
+            BitConverter.DoubleToInt64Bits(max), nullCount, true, nanCount);
 
     static int CompareBytes(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
@@ -1330,6 +1362,7 @@ internal readonly struct ColumnStatistics
         float _maxFloat;
         double _minDouble;
         double _maxDouble;
+        long _nanCount;
         byte[]? _minBytes;
         byte[]? _maxBytes;
 
@@ -1351,6 +1384,7 @@ internal readonly struct ColumnStatistics
             _maxFloat = 0;
             _minDouble = 0;
             _maxDouble = 0;
+            _nanCount = 0;
             _minBytes = null;
             _maxBytes = null;
         }
@@ -1371,7 +1405,13 @@ internal readonly struct ColumnStatistics
         }
 
         internal ColumnStatistics ToStatistics(long nullCount)
-            => !_hasValue ? Empty(nullCount) : _column.PhysicalType switch
+        {
+            if (!_hasValue)
+                return _column.PhysicalType is ParquetPhysicalType.Float or ParquetPhysicalType.Double
+                    ? EmptyFloating(nullCount, _nanCount)
+                    : Empty(nullCount);
+
+            return _column.PhysicalType switch
             {
                 ParquetPhysicalType.Boolean => new ColumnStatistics(ColumnStatisticsValueKind.Boolean,
                     _minBool ? 1 : 0, _maxBool ? 1 : 0, nullCount, true),
@@ -1381,12 +1421,13 @@ internal readonly struct ColumnStatistics
                 ParquetPhysicalType.Int64 when _column.LogicalType is LogicalType.Int { IsSigned: false }
                     => FromUInt64(_minUInt64, _maxUInt64, nullCount),
                 ParquetPhysicalType.Int64 => FromInt64(_minInt64, _maxInt64, nullCount),
-                ParquetPhysicalType.Float => FromFloat(_minFloat, _maxFloat, nullCount),
-                ParquetPhysicalType.Double => FromDouble(_minDouble, _maxDouble, nullCount),
+                ParquetPhysicalType.Float => FromFloat(_minFloat, _maxFloat, nullCount, _nanCount),
+                ParquetPhysicalType.Double => FromDouble(_minDouble, _maxDouble, nullCount, _nanCount),
                 ParquetPhysicalType.ByteArray or ParquetPhysicalType.FixedLenByteArray or ParquetPhysicalType.Int96
                     => _minBytes is null ? Empty(nullCount) : new ColumnStatistics(_minBytes, _maxBytes, nullCount, true),
                 _ => Empty(nullCount)
             };
+        }
 
         void AddLeaf(object value)
         {
@@ -1546,7 +1587,10 @@ internal readonly struct ColumnStatistics
         void AddFloat(float value)
         {
             if (float.IsNaN(value))
+            {
+                _nanCount++;
                 return;
+            }
 
             if (!_hasValue)
             {
@@ -1565,7 +1609,10 @@ internal readonly struct ColumnStatistics
         void AddDouble(double value)
         {
             if (double.IsNaN(value))
+            {
+                _nanCount++;
                 return;
+            }
 
             if (!_hasValue)
             {
