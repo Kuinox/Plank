@@ -28,6 +28,8 @@ internal sealed class ColumnStatisticsTests
             throw new InvalidOperationException("Float min statistic mismatch.");
         if (BitConverter.Int32BitsToSingle((int)statistics.MaxBits) != 9.75f)
             throw new InvalidOperationException("Float max statistic mismatch.");
+        if (statistics.NanCount != 2)
+            throw new InvalidOperationException($"Expected two float NaNs, got {statistics.NanCount}.");
     }
 
     [Test]
@@ -38,6 +40,8 @@ internal sealed class ColumnStatisticsTests
 
         if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
             throw new InvalidOperationException($"Expected no min/max statistics, got {statistics.ValueKind}.");
+        if (statistics.NanCount != 2)
+            throw new InvalidOperationException($"Expected two float NaNs, got {statistics.NanCount}.");
     }
 
     [Test]
@@ -53,6 +57,8 @@ internal sealed class ColumnStatisticsTests
             throw new InvalidOperationException("Double min statistic mismatch.");
         if (BitConverter.Int64BitsToDouble(statistics.MaxBits) != 9.75d)
             throw new InvalidOperationException("Double max statistic mismatch.");
+        if (statistics.NanCount != 2)
+            throw new InvalidOperationException($"Expected two double NaNs, got {statistics.NanCount}.");
     }
 
     [Test]
@@ -63,6 +69,8 @@ internal sealed class ColumnStatisticsTests
 
         if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
             throw new InvalidOperationException($"Expected no min/max statistics, got {statistics.ValueKind}.");
+        if (statistics.NanCount != 2)
+            throw new InvalidOperationException($"Expected two double NaNs, got {statistics.NanCount}.");
     }
 
     [Test]
