@@ -26,12 +26,11 @@ Plank generates the readers and writers for `EventSchema`. See [Reading](reading
 
 ## Customize a column
 
-Use [`[ParquetColumn]`](xref:Plank.Schema.ParquetColumnAttribute) to change a column's name, field ID, logical type, physical type, or encoding:
+Use [`[ParquetColumn]`](xref:Plank.Schema.ParquetColumnAttribute) to change a column's name, logical type, physical type, or encoding:
 
 ```csharp
 [ParquetColumn(
     "event_name",
-    FieldId = 12,
     LogicalType = LogicalTypeKind.String,
     Encodings = [EncodingKind.RleDictionary])]
 public byte[]? Name { get; init; }
@@ -78,14 +77,12 @@ Use [`ParquetSchema`](xref:Plank.Schema.ParquetSchema) when a schema is created 
 
 ```csharp
 var schema = new ParquetSchema([
-    ColumnDefinition.RequiredLeaf("id", ParquetPhysicalType.Int64, fieldId: 1),
+    ColumnDefinition.RequiredLeaf("id", ParquetPhysicalType.Int64),
     ColumnDefinition.OptionalLeaf(
         "name",
         ParquetPhysicalType.ByteArray,
-        fieldId: 2,
         logicalType: new LogicalType.String())
 ]);
 ```
 
 [`ColumnDefinition`](xref:Plank.Schema.ColumnDefinition) also supports groups, lists, and maps.
-Field IDs can be assigned to both leaf and group definitions and are preserved when a file schema is discovered.
