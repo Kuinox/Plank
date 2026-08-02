@@ -27,7 +27,7 @@ public sealed class ParquetWriterOptions
 
     public int? CompressionLevel { get; init; }
 
-    public string? CreatedBy { get; init; } = "Plank";
+    public string? CreatedBy { get; init; }
 
     public IReadOnlyList<ParquetKeyValueMetadata> KeyValueMetadata { get; init; } = [];
 
