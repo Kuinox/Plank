@@ -47,6 +47,9 @@ public sealed record ParquetSchema
     public ParquetWriter CreateAppender(Stream stream, ParquetAppendOptions? options = null)
         => new(stream, this, options ?? ParquetAppendOptions.Default);
 
+    public ParquetFileMerger CreateMerger(Stream destination, ParquetMergeOptions? options = null)
+        => new(destination, this, options ?? ParquetMergeOptions.Default);
+
     internal ImmutableArray<ImmutableArray<string>> LeafPaths { get; }
 
     internal ImmutableArray<LeafProjectionInfo> LeafProjectionInfos { get; }

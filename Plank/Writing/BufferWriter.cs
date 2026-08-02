@@ -106,6 +106,40 @@ struct BufferWriter : IDisposable
         WrittenLength = 0;
     }
 
+    internal void Truncate(int length)
+    {
+        if (length < 0 || length > WrittenLength)
+            throw new ArgumentOutOfRangeException(nameof(length), length,
+                $"Length must be between zero and {WrittenLength}.");
+        if (_segments is null || length == WrittenLength)
+            return;
+
+        var remaining = length;
+        var currentSegment = 0;
+        var currentWritten = 0;
+        for (var i = 0; i < _segmentCount; i++)
+        {
+            var written = _segments[i].Written;
+            var retained = Math.Min(written, remaining);
+            _segments[i].Written = retained;
+            remaining -= retained;
+            if (retained > 0 || length == 0)
+            {
+                currentSegment = i;
+                currentWritten = retained;
+            }
+        }
+        if (length == 0)
+        {
+            currentSegment = 0;
+            currentWritten = 0;
+        }
+
+        _currentSegmentIndex = currentSegment;
+        _currentSegmentWritten = currentWritten;
+        WrittenLength = length;
+    }
+
     internal void WriteTo(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);

@@ -1,6 +1,9 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Text;
+using Plank.Reading;
+using Plank.Reading.Internal;
+using Plank.Reading.Physical;
 using Plank.Schema;
 using TextEncoding = System.Text.Encoding;
 
@@ -101,6 +104,81 @@ static class ParquetMetadataThriftWriter
         writer.EndStruct(previous);
     }
 
+    internal static void RelocateOffsetIndex(ref BufferWriter destination, ReadOnlySpan<byte> source,
+        long relocation)
+    {
+        var reader = new CompactProtocolReader(source);
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        var hasPageLocations = false;
+        reader.BeginStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
+        {
+            if (fieldId != 1)
+            {
+                reader.Skip(type, inlineBool);
+                continue;
+            }
+            if (hasPageLocations)
+                throw new CorruptParquetException("Offset index contains duplicate page_locations fields.");
+            if (type != CompactProtocolType.List)
+                throw new CorruptParquetException("Offset index page_locations must be encoded as a list.");
+
+            var (count, elementType) = reader.ReadListHeader();
+            if (elementType != CompactProtocolType.Struct)
+                throw new CorruptParquetException("Offset index page_locations must contain structs.");
+            writer.WriteFieldHeader(1, CompactType.List);
+            writer.WriteListHeader(checked((int)count), CompactType.Struct);
+            for (var i = 0U; i < count; i++)
+            {
+                var offset = 0UL;
+                var compressedPageSize = 0U;
+                var firstRowIndex = 0UL;
+                var hasOffset = false;
+                var hasCompressedPageSize = false;
+                var hasFirstRowIndex = false;
+                reader.BeginStruct();
+                while (reader.TryReadFieldHeader(out var locationFieldId, out var locationType,
+                           out var locationInlineBool))
+                {
+                    switch (locationFieldId)
+                    {
+                        case 1:
+                            offset = reader.ReadI64AsU64(long.MaxValue);
+                            hasOffset = true;
+                            break;
+                        case 2:
+                            compressedPageSize = reader.ReadI32AsU32(int.MaxValue);
+                            hasCompressedPageSize = true;
+                            break;
+                        case 3:
+                            firstRowIndex = reader.ReadI64AsU64(long.MaxValue);
+                            hasFirstRowIndex = true;
+                            break;
+                        default:
+                            reader.Skip(locationType, locationInlineBool);
+                            break;
+                    }
+                }
+                if (!hasOffset || !hasCompressedPageSize || !hasFirstRowIndex)
+                    throw new CorruptParquetException(
+                        $"Offset index page location {i} is missing a required field.");
+
+                var previousLocation = writer.BeginStruct();
+                writer.WriteFieldI64(1, checked(checked((long)offset) + relocation));
+                writer.WriteFieldI32(2, checked((int)compressedPageSize));
+                writer.WriteFieldI64(3, checked((long)firstRowIndex));
+                writer.EndStruct(previousLocation);
+            }
+            hasPageLocations = true;
+        }
+        if (!hasPageLocations)
+            throw new CorruptParquetException("Offset index is missing page_locations.");
+        if (reader.Remaining != 0)
+            throw new CorruptParquetException("Offset index contains trailing bytes.");
+        writer.EndStruct(previous);
+    }
+
     internal static void WriteFileMetaData(ref BufferWriter destination, ParquetSchema schema, int rowGroupCount,
         long totalRowCount, ref BufferWriter serializedRowGroups, string? createdBy,
         ReadOnlySpan<ParquetKeyValueMetadata> keyValueMetadata)
@@ -186,6 +264,35 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI64(3, rowCount);
         if (hasRowGroupOffset)
             writer.WriteFieldI64(5, rowGroupOffset);
+        writer.WriteFieldI64(6, totalCompressedSize);
+        writer.EndStruct(previous);
+    }
+
+    internal static void WriteImportedRowGroup(ref BufferWriter destination, ReadOnlySpan<Column> columns,
+        ReadOnlySpan<string[]> columnPaths, ReadOnlySpan<ColumnChunkMetadata> relocatedMetadata,
+        ParquetFileMetadata sourceMetadata, int sourceRowGroupOrdinal, ulong rowCount)
+    {
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.List);
+        writer.WriteListHeader(columns.Length, CompactType.Struct);
+
+        long totalUncompressedSize = 0;
+        long totalCompressedSize = 0;
+        for (var i = 0; i < columns.Length; i++)
+        {
+            ref readonly var relocated = ref relocatedMetadata[i];
+            var source = sourceMetadata.ColumnChunk(sourceRowGroupOrdinal, i);
+            var path = columnPaths.IsEmpty ? GetPathSegments(columns[i].Name) : columnPaths[i];
+            WriteImportedColumnChunk(ref writer, columns[i], path, relocated, source, sourceMetadata.FooterBytes);
+            totalUncompressedSize = checked(totalUncompressedSize + relocated.TotalUncompressedSize);
+            totalCompressedSize = checked(totalCompressedSize + relocated.TotalCompressedSize);
+        }
+
+        writer.WriteFieldI64(2, totalUncompressedSize);
+        writer.WriteFieldI64(3, checked((long)rowCount));
+        if (columns.Length != 0)
+            writer.WriteFieldI64(5, GetColumnChunkStartOffset(relocatedMetadata[0]));
         writer.WriteFieldI64(6, totalCompressedSize);
         writer.EndStruct(previous);
     }
@@ -561,6 +668,40 @@ static class ParquetMetadataThriftWriter
         writer.EndStruct(previousChunk);
     }
 
+    static void WriteImportedColumnChunk(ref CompactWriter writer, Column column, ReadOnlySpan<string> path,
+        in ColumnChunkMetadata relocated, in ParquetColumnChunkInfo source, ReadOnlySpan<byte> sourceFooter)
+    {
+        var previousChunk = writer.BeginStruct();
+        writer.WriteFieldI64(2, GetColumnChunkStartOffset(relocated));
+        writer.WriteFieldHeader(3, CompactType.Struct);
+
+        var previousMetadata = writer.BeginStruct();
+        writer.WriteFieldI32(1, GetPhysicalType(column.PhysicalType));
+        WriteEncodings(ref writer, source.Encodings);
+        WritePath(ref writer, path);
+        writer.WriteFieldI32(4, GetCompression(source.Compression));
+        writer.WriteFieldI64(5, checked((long)source.ValueCount));
+        writer.WriteFieldI64(6, relocated.TotalUncompressedSize);
+        writer.WriteFieldI64(7, relocated.TotalCompressedSize);
+        writer.WriteFieldI64(9, relocated.DataPageOffset);
+        if (relocated.HasDictionaryPage)
+            writer.WriteFieldI64(11, relocated.DictionaryPageOffset);
+        WriteImportedStatistics(ref writer, source.Statistics, sourceFooter);
+        writer.EndStruct(previousMetadata);
+
+        if (relocated.OffsetIndexLength > 0)
+        {
+            writer.WriteFieldI64(4, relocated.OffsetIndexOffset);
+            writer.WriteFieldI32(5, checked((int)relocated.OffsetIndexLength));
+        }
+        if (relocated.ColumnIndexLength > 0)
+        {
+            writer.WriteFieldI64(6, relocated.ColumnIndexOffset);
+            writer.WriteFieldI32(7, checked((int)relocated.ColumnIndexLength));
+        }
+        writer.EndStruct(previousChunk);
+    }
+
     static long GetColumnChunkStartOffset(in ColumnChunkMetadata metadata)
         => metadata.HasDictionaryPage ? metadata.DictionaryPageOffset : metadata.DataPageOffset;
 
@@ -592,6 +733,31 @@ static class ParquetMetadataThriftWriter
             writer.WriteFieldBool(8, true);
         if (statistics.NanCount >= 0)
             writer.WriteFieldI64(9, statistics.NanCount);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteImportedStatistics(ref CompactWriter writer, in EncodedStatistics statistics,
+        ReadOnlySpan<byte> sourceFooter)
+    {
+        if (!statistics.HasValues)
+            return;
+
+        writer.WriteFieldHeader(12, CompactType.Struct);
+        var previous = writer.BeginStruct();
+        if (statistics.HasNullCount)
+            writer.WriteFieldI64(3, statistics.NullCount);
+        if (statistics.HasDistinctCount)
+            writer.WriteFieldI64(4, statistics.DistinctCount);
+        if (statistics.HasMaximum)
+            writer.WriteFieldBinary(5,
+                sourceFooter.Slice(statistics.MaximumOffset, statistics.MaximumLength));
+        if (statistics.HasMinimum)
+            writer.WriteFieldBinary(6,
+                sourceFooter.Slice(statistics.MinimumOffset, statistics.MinimumLength));
+        if (statistics.HasMaximum)
+            writer.WriteFieldBool(7, statistics.IsMaximumExact);
+        if (statistics.HasMinimum)
+            writer.WriteFieldBool(8, statistics.IsMinimumExact);
         writer.EndStruct(previous);
     }
 
@@ -683,6 +849,14 @@ static class ParquetMetadataThriftWriter
         writer.WriteI32(data);
         if (includeLevels)
             writer.WriteI32(levels);
+    }
+
+    static void WriteEncodings(ref CompactWriter writer, ParquetColumnChunkEncodings encodings)
+    {
+        writer.WriteFieldHeader(2, CompactType.List);
+        writer.WriteListHeader(encodings.Count, CompactType.I32);
+        for (var i = 0; i < encodings.Count; i++)
+            writer.WriteI32(GetEncoding(encodings[i]));
     }
 
     static string[] GetPathSegments(string columnName)

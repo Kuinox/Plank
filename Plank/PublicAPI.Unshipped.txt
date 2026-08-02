@@ -11,6 +11,7 @@ Plank.Reading.Physical.ParquetKeyValueMetadataInfo.KeyLength.get -> int
 Plank.Reading.Physical.ParquetKeyValueMetadataInfo.ParquetKeyValueMetadataInfo() -> void
 Plank.Reading.Physical.ParquetKeyValueMetadataInfo.ValueLength.get -> int
 Plank.Schema.ParquetSchema.CreateAppender(System.IO.Stream! stream, Plank.Writing.ParquetAppendOptions? options = null) -> Plank.Writing.ParquetWriter!
+Plank.Schema.ParquetSchema.CreateMerger(System.IO.Stream! destination, Plank.Writing.ParquetMergeOptions? options = null) -> Plank.Writing.ParquetFileMerger!
 Plank.Writing.ParquetAppendOptions
 Plank.Writing.ParquetAppendOptions.ParquetAppendOptions() -> void
 Plank.Writing.ParquetAppendOptions.PreserveExistingMetadata.get -> bool
@@ -24,6 +25,18 @@ Plank.Writing.ParquetKeyValueMetadata.ParquetKeyValueMetadata() -> void
 Plank.Writing.ParquetKeyValueMetadata.ParquetKeyValueMetadata(string! Key, string? Value) -> void
 Plank.Writing.ParquetKeyValueMetadata.Value.get -> string?
 Plank.Writing.ParquetKeyValueMetadata.Value.init -> void
+Plank.Writing.ParquetFileMerger
+Plank.Writing.ParquetFileMerger.AppendFile(System.IO.Stream! source) -> void
+Plank.Writing.ParquetFileMerger.CloseFile() -> void
+Plank.Writing.ParquetFileMerger.RowCount.get -> long
+Plank.Writing.ParquetFileMerger.RowGroupCount.get -> int
+Plank.Writing.ParquetFileMerger.SourceFileCount.get -> int
+Plank.Writing.ParquetMergeOptions
+Plank.Writing.ParquetMergeOptions.ParquetMergeOptions() -> void
+Plank.Writing.ParquetMergeOptions.PreserveFirstFileMetadata.get -> bool
+Plank.Writing.ParquetMergeOptions.PreserveFirstFileMetadata.init -> void
+Plank.Writing.ParquetMergeOptions.WriterOptions.get -> Plank.Writing.ParquetWriterOptions!
+Plank.Writing.ParquetMergeOptions.WriterOptions.init -> void
 Plank.Writing.ParquetWriterOptions.CreatedBy.get -> string?
 Plank.Writing.ParquetWriterOptions.CreatedBy.init -> void
 Plank.Writing.ParquetWriterOptions.CompressionLevel.get -> int?
@@ -31,3 +44,4 @@ Plank.Writing.ParquetWriterOptions.CompressionLevel.init -> void
 Plank.Writing.ParquetWriterOptions.KeyValueMetadata.get -> System.Collections.Generic.IReadOnlyList<Plank.Writing.ParquetKeyValueMetadata>!
 Plank.Writing.ParquetWriterOptions.KeyValueMetadata.init -> void
 static readonly Plank.Writing.ParquetAppendOptions.Default -> Plank.Writing.ParquetAppendOptions!
+static readonly Plank.Writing.ParquetMergeOptions.Default -> Plank.Writing.ParquetMergeOptions!
