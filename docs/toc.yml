@@ -1,7 +1,5 @@
 - name: Overview
   href: index.md
-- name: Feature comparison
-  href: feature-comparison.md
 - name: Schema
   href: articles/schema.md
 - name: Reading
