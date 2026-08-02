@@ -143,6 +143,10 @@ public readonly struct RowGroup
                 or ParquetPhysicalType.FixedLenByteArray
                 or ParquetPhysicalType.Int96)
             return;
+        if ((Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T)) == typeof(TimeOnly) &&
+            column.PhysicalType == ParquetPhysicalType.Int32 &&
+            column.LogicalType is LogicalType.Time { Unit: TimeUnit.Millis })
+            return;
         var resolution = ParquetTypeMap.ResolvePhysicalType<T>();
         if (!resolution.IsSuccess)
             throw new NotSupportedException(resolution.ErrorMessage);

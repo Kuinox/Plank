@@ -7,11 +7,15 @@ namespace Plank.Tests.Writer;
 internal sealed class SchemaRuntimeMismatchDiscoveryTests
 {
     [Test]
-    public void TimeOnlySupportsTheRequiredInt32PhysicalTypeForTimeMillis()
+    [Arguments(EncodingKind.Plain)]
+    [Arguments(EncodingKind.DeltaBinaryPacked)]
+    [Arguments(EncodingKind.ByteStreamSplit)]
+    [Arguments(EncodingKind.RleDictionary)]
+    public void TimeOnlySupportsTheRequiredInt32PhysicalTypeForTimeMillis(EncodingKind encoding)
     {
         var schema = new ParquetSchema([
             ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int32,
-                new ColumnOptions(encodings: [EncodingKind.Plain]),
+                new ColumnOptions(encodings: [encoding]),
                 logicalType: new LogicalType.Time(TimeUnit.Millis, IsAdjustedToUtc: false))
         ]);
         TimeOnly[] expected =
