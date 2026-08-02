@@ -732,6 +732,10 @@ static class ParquetMetadataThriftWriter
     static int GetConvertedType(LogicalType.Int integer)
         => (integer.BitWidth, integer.IsSigned) switch
         {
+            (8, true) => (int)ConvertedType.Int8,
+            (16, true) => (int)ConvertedType.Int16,
+            (32, true) => (int)ConvertedType.Int32,
+            (64, true) => (int)ConvertedType.Int64,
             (8, false) => (int)ConvertedType.Uint8,
             (16, false) => (int)ConvertedType.Uint16,
             (32, false) => (int)ConvertedType.Uint32,
@@ -810,6 +814,10 @@ static class ParquetMetadataThriftWriter
         Uint16 = 12,
         Uint32 = 13,
         Uint64 = 14,
+        Int8 = 15,
+        Int16 = 16,
+        Int32 = 17,
+        Int64 = 18,
         Json = 19
     }
 
