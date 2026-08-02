@@ -141,6 +141,19 @@ public sealed class RowReaderCore : IDisposable
         return new RowReaderBinaryValue(state.CurrentValue, state.CurrentIsNull);
     }
 
+    /// <summary>Gets an allocating generated nested property's current leaf shape.</summary>
+    /// <typeparam name="TShape">The generated jagged leaf shape.</typeparam>
+    /// <typeparam name="TElement">The dense physical leaf value type.</typeparam>
+    /// <param name="column">The generated nested leaf descriptor.</param>
+    /// <returns>A reference to the current materialized shape.</returns>
+    public ref TShape GetCurrentNested<TShape, TElement>(
+        RowApiNestedColumnDescriptor<TShape, TElement> column)
+    {
+        ThrowIfNotPositioned();
+        var state = GetNestedState(column);
+        return ref state.Current;
+    }
+
     /// <summary>Throws if the generated reader is not positioned on a row.</summary>
     public void ThrowIfNotPositioned()
     {
@@ -404,5 +417,16 @@ public sealed class RowReaderCore : IDisposable
 
         throw new InvalidOperationException(
             $"Row API column '{state.PropertyName}' is not a variable-length byte column.");
+    }
+
+    RowApiNestedColumnReadState<TShape, TElement> GetNestedState<TShape, TElement>(
+        RowApiNestedColumnDescriptor<TShape, TElement> column)
+    {
+        var state = GetSelectedState(column);
+        if (state is RowApiNestedColumnReadState<TShape, TElement> nestedState)
+            return nestedState;
+
+        throw new InvalidOperationException(
+            $"Row API column '{state.PropertyName}' cannot be read as nested shape {typeof(TShape)}.");
     }
 }

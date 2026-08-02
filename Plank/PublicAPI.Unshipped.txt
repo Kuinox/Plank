@@ -26,3 +26,12 @@ Plank.Writing.ParquetWriterOptions.CompressionLevel.get -> int?
 Plank.Writing.ParquetWriterOptions.CompressionLevel.init -> void
 Plank.Schema.LeafColumn.MaxDefinitionLevel.get -> int
 Plank.Schema.LeafColumn.MaxRepetitionLevel.get -> int
+Plank.RowApi.RowApiCollectionLevel
+Plank.RowApi.RowApiCollectionLevel.DefinedDefinitionLevel.get -> int
+Plank.RowApi.RowApiCollectionLevel.ElementDefinitionLevel.get -> int
+Plank.RowApi.RowApiCollectionLevel.RepetitionLevel.get -> int
+Plank.RowApi.RowApiCollectionLevel.RowApiCollectionLevel() -> void
+Plank.RowApi.RowApiCollectionLevel.RowApiCollectionLevel(int repetitionLevel, int definedDefinitionLevel, int elementDefinitionLevel) -> void
+Plank.RowApi.RowApiNestedColumnDescriptor<TShape, TElement>
+Plank.RowApi.RowApiNestedColumnDescriptor<TShape, TElement>.RowApiNestedColumnDescriptor(string! propertyName, Plank.Schema.LeafColumn! column, params Plank.RowApi.RowApiCollectionLevel[]! collectionLevels) -> void
+Plank.RowApi.RowReaderCore.GetCurrentNested<TShape, TElement>(Plank.RowApi.RowApiNestedColumnDescriptor<TShape, TElement>! column) -> TShape

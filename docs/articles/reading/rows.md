@@ -32,6 +32,11 @@ while (reader.MoveNext())
 
 A row is a temporary view over the reader's current buffers. Read its properties before advancing the reader. Copy any reference-backed value that must outlive the current iteration.
 
+Collection, map, and nested-record properties are available when the schema opted in with
+`AllowAllocatingValues = true`. Their generated getters materialize CLR objects, so cache a property in a local variable
+instead of reading it repeatedly when allocation cost matters. Null collections, empty collections, and null elements
+remain distinct.
+
 ## Read selected properties
 
 Pass a projection to decode only the properties you need:

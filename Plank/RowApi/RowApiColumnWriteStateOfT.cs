@@ -7,7 +7,7 @@ sealed class RowApiColumnWriteState<T> : RowApiColumnWriteState
 {
     readonly SerializedColumn<T> _serialized;
 
-    internal RowApiColumnWriteState(RowApiColumnDescriptor<T> descriptor, RowGroupWriter rowGroupWriter, int rowCount)
+    internal RowApiColumnWriteState(RowApiColumnDescriptor descriptor, RowGroupWriter rowGroupWriter, int rowCount)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentNullException.ThrowIfNull(rowGroupWriter);
@@ -16,7 +16,7 @@ sealed class RowApiColumnWriteState<T> : RowApiColumnWriteState
         _serialized = rowGroupWriter.CreateSerializedColumn<T>(descriptor.Column);
     }
 
-    internal RowApiColumnWriteState(RowApiColumnDescriptor<T> descriptor, ParquetWriter writer, int rowCount)
+    internal RowApiColumnWriteState(RowApiColumnDescriptor descriptor, ParquetWriter writer, int rowCount)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentNullException.ThrowIfNull(writer);

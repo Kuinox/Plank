@@ -26,7 +26,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
-    static readonly DiagnosticDescriptor UnsupportedSchemaDeclaration = new(
+    internal static readonly DiagnosticDescriptor UnsupportedSchemaDeclaration = new(
         id: "PLANKGEN003",
         title: "Unsupported schema declaration",
         messageFormat: "{0}",
@@ -130,7 +130,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
-    static readonly DiagnosticDescriptor AllocatingValueNotAllowed = new(
+    internal static readonly DiagnosticDescriptor AllocatingValueNotAllowed = new(
         id: "PLANKGEN016",
         title: "Allocating schema value requires opt-in",
         messageFormat: "{0}",
@@ -163,6 +163,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             context.ReportDiagnostic(Diagnostic.Create(InvalidTarget, schemaType.Locations.FirstOrDefault(), schemaType.Name));
             return;
         }
+
+        if (NestedParquetRowEmitter.TryEmit(context, schemaType))
+            return;
 
         if (!TryExtractColumns(schemaType, out var columns, out var extractError))
         {
