@@ -38,21 +38,4 @@ The appender validates the complete physical and logical schema before modifying
 groups, replaces the old footer, and preserves file key-value metadata by default. Supply `ParquetAppendOptions` to
 configure new row groups or replace the existing metadata.
 
-## Merge and compact files
-
-Create a merger for an empty, seekable destination, then append each source file in order:
-
-```csharp
-ParquetFileMerger merger = schema.CreateMerger(destination);
-merger.AppendFile(firstSource);
-merger.AppendFile(secondSource);
-merger.CloseFile();
-```
-
-Each source is schema-validated before it changes the destination. The merger copies compressed column chunks directly,
-without decoding or re-encoding values, and relocates row-group and page-index offsets in the new footer. Passing one
-source compacts that file; passing several concatenates their row groups. Source streams remain open and retain their
-positions. By default the output preserves metadata from the first source; `ParquetMergeOptions` can replace it or add
-ordered key-value entries through `WriterOptions`.
-
 TODO: write this page collaboratively.
