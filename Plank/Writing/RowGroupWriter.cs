@@ -18,6 +18,7 @@ public sealed class RowGroupWriter
     PageLocation[][] _pageLocationsByColumn;
     uint _nextColumnOrdinal;
     uint? _rowCount;
+    Dictionary<int, RepeatedRowShape>? _mapKeyShapes;
 
     internal RowGroupWriter(ParquetWriter writer)
     {
@@ -35,6 +36,7 @@ public sealed class RowGroupWriter
     {
         _nextColumnOrdinal = 0;
         _rowCount = null;
+        _mapKeyShapes?.Clear();
     }
 
     public SerializedColumn<T> CreateSerializedColumn<T>(LeafColumn column)
@@ -70,6 +72,7 @@ public sealed class RowGroupWriter
                 $"Row count mismatch for row group. Expected {_rowCount}, got {state.RowCount}.");
 
         var columnOrdinal = (int)state.ColumnOrdinal;
+        ValidateMapRowShapes(serialized.MapRowShapes, columnOrdinal);
         var column = _writer.ColumnsByOrdinal[columnOrdinal];
         var pages = state.Pages;
         var compression = _writer.Compression;
@@ -254,6 +257,59 @@ public sealed class RowGroupWriter
         ParquetMetadataThriftWriter.WriteRowGroup(ref _writer.SerializedRowGroupsMetadata, _writer.ColumnsByOrdinal,
             _writer.ColumnPathsByOrdinal, _writer.OpenRowGroupColumnMetadata, _rowCount.GetValueOrDefault());
         _writer.CompleteOpenRowGroup(_rowCount.GetValueOrDefault());
+        _mapKeyShapes?.Clear();
+    }
+
+    void ValidateMapRowShapes(RepeatedRowShape[]? shapes, int columnOrdinal)
+    {
+        var mapProjections = _writer.ColumnProjectionInfosByOrdinal[columnOrdinal].MapProjections;
+        if (mapProjections.IsDefaultOrEmpty)
+            return;
+        if (shapes is null || shapes.Length != mapProjections.Length)
+            throw new InvalidOperationException("Map serialization did not retain its row shapes.");
+
+        var path = _writer.ColumnPathsByOrdinal[columnOrdinal];
+        var mapKeyShapes = _mapKeyShapes ??= [];
+        for (var i = 0; i < mapProjections.Length; i++)
+        {
+            var mapProjection = mapProjections[i];
+            var shape = shapes[i];
+            if (!mapKeyShapes.TryGetValue(mapProjection.Id, out var expected))
+            {
+                if (!mapProjection.IsKey)
+                    throw new InvalidOperationException("Map value serialization did not follow its key serialization.");
+                mapKeyShapes.Add(mapProjection.Id, shape);
+                continue;
+            }
+
+            ValidateMapRowShape(expected, shape, path, mapProjection.PathLength, mapProjection.IsKey);
+        }
+    }
+
+    static void ValidateMapRowShape(RepeatedRowShape expectedShape, RepeatedRowShape actualShape, string[] path,
+        int mapPathLength, bool isKey)
+    {
+        var expectedOffsets = expectedShape.RowOffsets!;
+        var expectedTokens = expectedShape.Tokens!;
+        var actualOffsets = actualShape.RowOffsets!;
+        var actualTokens = actualShape.Tokens!;
+        if (expectedOffsets.Length != actualOffsets.Length)
+            throw new InvalidOperationException("Map key and value columns have different row counts.");
+
+        for (var rowIndex = 0; rowIndex < expectedOffsets.Length - 1; rowIndex++)
+        {
+            var expected = expectedTokens.AsSpan(expectedOffsets[rowIndex],
+                expectedOffsets[rowIndex + 1] - expectedOffsets[rowIndex]);
+            var actual = actualTokens.AsSpan(actualOffsets[rowIndex],
+                actualOffsets[rowIndex + 1] - actualOffsets[rowIndex]);
+            if (!expected.SequenceEqual(actual))
+            {
+                var columns = isKey ? "key columns" : "key and value columns";
+                var mapPath = string.Join('.', path.AsSpan(0, mapPathLength).ToArray());
+                throw new InvalidOperationException(
+                    $"Map {columns} have different cardinalities at row {rowIndex} for '{mapPath}'.");
+            }
+        }
     }
 
     void EnsurePageIndexCapacity(int columnOrdinal, int pageCount)

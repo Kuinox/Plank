@@ -67,9 +67,59 @@ internal sealed class SchemaRuntimeMismatchDiscoveryTests
         {
             keys.Serialize([[1, 2], [3]]);
             rowGroup.Write(keys);
-            values.Serialize([[10], [30]]);
+            values.Serialize([[10], [20, 30]]);
             rowGroup.Write(values);
             writer.CloseFile();
         });
+    }
+
+    [Test]
+    public void MapRejectsMismatchedCardinalityInEveryValueLeaf()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.Map("scores",
+                ColumnDefinition.RequiredLeaf("key", ParquetPhysicalType.Int32),
+                ColumnDefinition.RequiredGroup("value",
+                    ColumnDefinition.RequiredLeaf("first", ParquetPhysicalType.Int32),
+                    ColumnDefinition.RequiredLeaf("second", ParquetPhysicalType.Int32)))
+        ]);
+
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions { Compression = CompressionKind.None });
+        var rowGroup = writer.StartRowGroup();
+        var keys = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
+        var firstValues = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[1]);
+        var secondValues = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[2]);
+
+        keys.Serialize([[1, 2], [3]]);
+        rowGroup.Write(keys);
+        firstValues.Serialize([[10, 20], [30]]);
+        rowGroup.Write(firstValues);
+        secondValues.Serialize([[100], [200, 300]]);
+
+        Assert.Throws<InvalidOperationException>(() => rowGroup.Write(secondValues));
+    }
+
+    [Test]
+    public void MapCardinalityIgnoresValueInternalListLengths()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.Map("scores",
+                ColumnDefinition.RequiredLeaf("key", ParquetPhysicalType.Int32),
+                ColumnDefinition.List("value",
+                    ColumnDefinition.RequiredLeaf("element", ParquetPhysicalType.Int32)))
+        ]);
+
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions { Compression = CompressionKind.None });
+        var rowGroup = writer.StartRowGroup();
+        var keys = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
+        var values = rowGroup.CreateSerializedColumn<int[][]>(schema.LeafColumns[1]);
+
+        keys.Serialize([[1, 2], [3]]);
+        rowGroup.Write(keys);
+        values.Serialize([[[10, 11], [20]], [[30, 31, 32]]]);
+        rowGroup.Write(values);
+        writer.CloseFile();
     }
 }
