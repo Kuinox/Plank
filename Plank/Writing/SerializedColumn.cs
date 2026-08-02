@@ -30,7 +30,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     delegate ColumnStatistics PageStatisticsFactory<TValue>(ReadOnlySpan<TValue> values, long nullCount);
 
-    readonly ParquetWriter _owner;
+    internal readonly ParquetWriter _owner;
     readonly LeafColumn _leafColumn;
     readonly Column _column;
     object? _dictionaryState;
