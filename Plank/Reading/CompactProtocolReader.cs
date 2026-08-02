@@ -189,11 +189,13 @@ ref struct CompactProtocolReader
         {
             EnsureAvailable(1);
             var b = _buffer[_offset++];
+            if (shift == 28 && (b & 0xF0) != 0)
+                throw new CorruptParquetException("Invalid compact protocol UInt32 varint.");
             value |= (uint)(b & 0x7F) << shift;
             if ((b & 0x80) == 0)
                 return value;
             shift += 7;
-            if (shift >= 35)
+            if (shift > 28)
                 throw new CorruptParquetException("Invalid compact protocol UInt32 varint.");
         }
     }
@@ -206,11 +208,13 @@ ref struct CompactProtocolReader
         {
             EnsureAvailable(1);
             var b = _buffer[_offset++];
+            if (shift == 63 && (b & 0xFE) != 0)
+                throw new CorruptParquetException("Invalid compact protocol UInt64 varint.");
             value |= (ulong)(b & 0x7F) << shift;
             if ((b & 0x80) == 0)
                 return value;
             shift += 7;
-            if (shift >= 70)
+            if (shift > 63)
                 throw new CorruptParquetException("Invalid compact protocol UInt64 varint.");
         }
     }
