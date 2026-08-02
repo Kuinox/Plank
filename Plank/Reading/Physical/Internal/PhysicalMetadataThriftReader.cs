@@ -408,6 +408,8 @@ static class PhysicalMetadataThriftReader
         var columnIndexLength = 0U;
         var offsetIndexOffset = 0UL;
         var offsetIndexLength = 0U;
+        var bloomFilterOffset = 0UL;
+        var bloomFilterLength = 0U;
         var compression = CompressionKind.None;
         var physicalType = (ParquetPhysicalType?)null;
         var encodings = default(ParquetColumnChunkEncodings);
@@ -425,7 +427,8 @@ static class PhysicalMetadataThriftReader
                 case 3:
                     ReadColumnMetadata(ref reader, metadata, ref physicalType, ref compression, ref dataPageOffset,
                         ref dictionaryPageOffset, ref totalCompressedSize, ref totalUncompressedSize, ref valueCount,
-                        ref encodings, ref statistics, expectedColumnOrdinal);
+                        ref encodings, ref statistics, ref bloomFilterOffset, ref bloomFilterLength,
+                        expectedColumnOrdinal);
                     break;
                 case 4:
                     offsetIndexOffset = reader.ReadI64AsU64();
@@ -450,14 +453,15 @@ static class PhysicalMetadataThriftReader
 
         return new ParquetColumnChunkInfo(rowGroupOrdinal, expectedColumnOrdinal, physicalType.Value, compression,
             valueCount, dataPageOffset, dictionaryPageOffset, totalCompressedSize, totalUncompressedSize,
-            columnIndexOffset, columnIndexLength, offsetIndexOffset, offsetIndexLength, encodings, statistics);
+            columnIndexOffset, columnIndexLength, offsetIndexOffset, offsetIndexLength, bloomFilterOffset,
+            bloomFilterLength, encodings, statistics);
     }
 
     static void ReadColumnMetadata(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
         ref ParquetPhysicalType? physicalType, ref CompressionKind compression, ref ulong dataPageOffset,
         ref ulong dictionaryPageOffset, ref ulong totalCompressedSize, ref ulong totalUncompressedSize,
         ref ulong valueCount, ref ParquetColumnChunkEncodings encodings, ref EncodedStatistics statistics,
-        int expectedColumnOrdinal)
+        ref ulong bloomFilterOffset, ref uint bloomFilterLength, int expectedColumnOrdinal)
     {
         reader.BeginStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
@@ -493,6 +497,12 @@ static class PhysicalMetadataThriftReader
                     break;
                 case 12:
                     statistics = StatisticsThriftReader.Read(ref reader);
+                    break;
+                case 14:
+                    bloomFilterOffset = reader.ReadI64AsU64();
+                    break;
+                case 15:
+                    bloomFilterLength = reader.ReadI32AsU32();
                     break;
                 default:
                     reader.Skip(type, inlineBool);

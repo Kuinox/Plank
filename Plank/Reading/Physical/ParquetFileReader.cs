@@ -77,6 +77,16 @@ public sealed class ParquetFileReader : IDisposable
         return new ParquetPageCursor(this, _generation, rowGroupOrdinal, columnOrdinal);
     }
 
+    /// <summary>Loads a column chunk's split-block Bloom filter.</summary>
+    public ParquetBloomFilter OpenBloomFilter(int rowGroupOrdinal, int columnOrdinal)
+    {
+        ValidateGeneration(_generation);
+        ValidateOrdinal(rowGroupOrdinal, _metadata.RowGroupCount, nameof(rowGroupOrdinal));
+        var rowGroup = _metadata.RowGroup(rowGroupOrdinal);
+        ValidateOrdinal(columnOrdinal, rowGroup.ColumnCount, nameof(columnOrdinal));
+        return BloomFilterReader.Open(this, _metadata.ColumnChunk(rowGroupOrdinal, columnOrdinal));
+    }
+
     internal ParquetPageCursor OpenPages(int rowGroupOrdinal, int columnOrdinal,
         PageMetadataHandle pageMetadata, ParquetPagePruner pruner)
     {

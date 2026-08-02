@@ -33,6 +33,20 @@ public readonly struct ParquetColumnChunkMetadata
     public bool HasOffsetIndex
         => GetMetadata().OffsetIndexLength != 0;
 
+    /// <summary>Gets whether this column chunk has a split-block Bloom filter.</summary>
+    public bool HasBloomFilter
+        => GetMetadata().BloomFilterOffset != 0;
+
+    /// <summary>Loads this column chunk's split-block Bloom filter.</summary>
+    public Plank.Reading.Physical.ParquetBloomFilter OpenBloomFilter()
+    {
+        var metadata = GetMetadata();
+        var physicalColumnOrdinal = metadata.PhysicalColumnOrdinal >= 0
+            ? metadata.PhysicalColumnOrdinal
+            : _columnOrdinal;
+        return _rowGroup.GetReader().PhysicalReader.OpenBloomFilter(_rowGroup.Index, physicalColumnOrdinal);
+    }
+
     public ParquetStatistics Statistics
     {
         get

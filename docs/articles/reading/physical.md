@@ -43,6 +43,24 @@ for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroup
 
 [`Metadata`](xref:Plank.Reading.Physical.ParquetFileReader.Metadata) returns file-level metadata. It describes the schema, row groups, and column chunks, but it does not read column values.
 
+## Inspect a Bloom filter
+
+[`ParquetColumnChunkInfo.HasBloomFilter`](xref:Plank.Reading.Physical.ParquetColumnChunkInfo.HasBloomFilter)
+checks footer metadata without additional I/O. Load the filter only when a predicate can use it:
+
+```csharp
+ParquetColumnChunkInfo chunk = reader.Metadata.ColumnChunk(rowGroupOrdinal, columnOrdinal);
+if (chunk.HasBloomFilter)
+{
+    using ParquetBloomFilter filter = reader.OpenBloomFilter(rowGroupOrdinal, columnOrdinal);
+    if (!filter.MightContain(42))
+        return; // 42 is definitely absent from this column chunk
+}
+```
+
+`MightContain` accepts physical INT32, INT64, FLOAT, DOUBLE, binary, and UUID values. A `false` result is
+definitive; `true` means the value may be present. The loaded filter owns pooled storage and must be disposed.
+
 ## Read page bytes
 
 ```csharp
