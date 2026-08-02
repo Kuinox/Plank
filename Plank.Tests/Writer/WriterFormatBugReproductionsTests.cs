@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
+using System.Globalization;
 using ParquetSharp;
 using Plank.Reading;
 using Plank.Schema;
@@ -144,14 +145,15 @@ internal sealed class WriterFormatBugReproductionsTests
         {
             var column = writer.CreateSerializedColumn<float>(schema.LeafColumns[0]);
             var rowGroup = writer.StartRowGroup();
-            column.Serialize([float.NaN, 1.0f]);
+            column.Serialize([float.NaN, 1.0f, float.NaN]);
             rowGroup.Write(column);
         });
 
         var nanCount = ReadFirstColumnNanCount(file);
-        if (nanCount != 1)
+        if (nanCount != 2)
             throw new InvalidOperationException(
-                $"TYPE_ORDER requires nan_count=1 for these values, got {nanCount?.ToString() ?? "missing"}.");
+                "TYPE_ORDER requires nan_count=2 for these values, got " +
+                $"{nanCount?.ToString(CultureInfo.InvariantCulture) ?? "missing"}.");
     }
 
     static byte[] WriteFile(PlankParquetSchema schema, Action<ParquetWriter> write)
