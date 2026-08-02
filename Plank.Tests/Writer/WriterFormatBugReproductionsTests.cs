@@ -108,18 +108,19 @@ internal sealed class WriterFormatBugReproductionsTests
     public void DecimalByteArrayStatisticsUseSignedNumericOrdering()
     {
         var column = new Plank.Schema.Column("value", ParquetPhysicalType.ByteArray,
-            logicalType: new PlankLogicalType.Decimal(2, 0));
-        var negativeOne = new byte[] { 0xff };
-        var positiveOne = new byte[] { 0x01 };
+            logicalType: new PlankLogicalType.Decimal(3, 0));
+        var minimum = new byte[] { 0xff, 0x7f };
+        var maximum = new byte[] { 0x00, 0x80 };
 
-        var statistics = ColumnStatistics.Create(column, [negativeOne, positiveOne], 0);
+        var statistics = ColumnStatistics.Create(column,
+            [[0xff], maximum, minimum, [0x01], [0xff, 0xff], [0x00, 0x00]], 0);
 
-        if (!statistics.GetMinValue().SequenceEqual(negativeOne))
+        if (!statistics.GetMinValue().SequenceEqual(minimum))
             throw new InvalidOperationException(
-                $"Expected decimal -1 to be the minimum, got {Convert.ToHexString(statistics.GetMinValue())}.");
-        if (!statistics.GetMaxValue().SequenceEqual(positiveOne))
+                $"Expected decimal -129 to be the minimum, got {Convert.ToHexString(statistics.GetMinValue())}.");
+        if (!statistics.GetMaxValue().SequenceEqual(maximum))
             throw new InvalidOperationException(
-                $"Expected decimal +1 to be the maximum, got {Convert.ToHexString(statistics.GetMaxValue())}.");
+                $"Expected decimal +128 to be the maximum, got {Convert.ToHexString(statistics.GetMaxValue())}.");
     }
 
     [Test]
