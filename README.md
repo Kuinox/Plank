@@ -12,9 +12,6 @@ Minimal Parquet writer under construction.
 - Writer compression is configurable via `ParquetWriterOptions.Compression` (`None`, `Snappy`, `Gzip`, `Zstd`,
   `Lz4`, or `Brotli`). Set `ParquetWriterOptions.CompressionLevel` to select a codec-specific level; leave it null
   to use the default.
-- `Lz4` writes and reads the Parquet `LZ4_RAW` codec. The reader also accepts the deprecated `LZ4` codec as
-  `Lz4Legacy`, including Hadoop framing, standard LZ4 frames, and the raw-block fallback emitted by older writers.
-  `Lz4Legacy` is read-only; new files should use `Lz4`.
 - Page splitting can be tuned with `RowGroupOptions.MaxPageValueCount` and `RowGroupOptions.MaxPageBytes` (currently applied to fixed-width required columns and required byte-array columns, with soft overflow to keep value boundaries intact).
 
 ## Benchmarks
