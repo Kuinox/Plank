@@ -6,5 +6,7 @@
   href: articles/reading/index.md
 - name: Writing
   href: articles/writing.md
+- name: Apache Arrow adapter
+  href: articles/arrow.md
 - name: API reference
   href: api/

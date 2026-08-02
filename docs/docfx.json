@@ -5,7 +5,8 @@
         {
           "src": "..",
           "files": [
-            "Plank/Plank.csproj"
+            "Plank/Plank.csproj",
+            "Plank.Arrow/Plank.Arrow.csproj"
           ]
         }
       ],

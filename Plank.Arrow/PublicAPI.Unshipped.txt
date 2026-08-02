@@ -1,0 +1,19 @@
+#nullable enable
+Plank.Arrow.ArrowParquetReader
+Plank.Arrow.ArrowParquetReader.ArrowParquetReader(System.IO.Stream! source, Plank.Reading.Logical.ParquetReaderOptions? options = null) -> void
+Plank.Arrow.ArrowParquetReader.Dispose() -> void
+Plank.Arrow.ArrowParquetReader.ReadRecordBatch(int index) -> Apache.Arrow.RecordBatch!
+Plank.Arrow.ArrowParquetReader.ReadRecordBatches() -> System.Collections.Generic.IReadOnlyList<Apache.Arrow.RecordBatch!>!
+Plank.Arrow.ArrowParquetReader.ReadTable() -> Apache.Arrow.Table!
+Plank.Arrow.ArrowParquetReader.RecordBatchCount.get -> int
+Plank.Arrow.ArrowParquetReader.Schema.get -> Apache.Arrow.Schema!
+Plank.Arrow.ArrowParquetWriter
+Plank.Arrow.ArrowParquetWriter.ArrowParquetWriter(System.IO.Stream! destination, Apache.Arrow.Schema! schema, Plank.Writing.ParquetWriterOptions? options = null, bool leaveOpen = false) -> void
+Plank.Arrow.ArrowParquetWriter.Close() -> void
+Plank.Arrow.ArrowParquetWriter.Dispose() -> void
+Plank.Arrow.ArrowParquetWriter.Schema.get -> Apache.Arrow.Schema!
+Plank.Arrow.ArrowParquetWriter.WriteRecordBatch(Apache.Arrow.RecordBatch! recordBatch) -> void
+Plank.Arrow.ArrowParquetWriter.WriteTable(Apache.Arrow.Table! table) -> void
+Plank.Arrow.ArrowSchemaConverter
+static Plank.Arrow.ArrowSchemaConverter.ToArrowSchema(Plank.Schema.ParquetSchema! schema) -> Apache.Arrow.Schema!
+static Plank.Arrow.ArrowSchemaConverter.ToParquetSchema(Apache.Arrow.Schema! schema) -> Plank.Schema.ParquetSchema!

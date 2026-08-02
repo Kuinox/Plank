@@ -28,6 +28,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Fuzzing.Target", "Pla
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Fuzzing.Reader.Target", "Plank.Fuzzing.Reader.Target\Plank.Fuzzing.Reader.Target.csproj", "{F49E820C-A458-486D-ABDC-DB28CED268F8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Arrow", "Plank.Arrow\Plank.Arrow.csproj", "{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Arrow.Tests", "Plank.Arrow.Tests\Plank.Arrow.Tests.csproj", "{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -194,6 +198,30 @@ Global
 		{F49E820C-A458-486D-ABDC-DB28CED268F8}.Release|x64.Build.0 = Release|Any CPU
 		{F49E820C-A458-486D-ABDC-DB28CED268F8}.Release|x86.ActiveCfg = Release|Any CPU
 		{F49E820C-A458-486D-ABDC-DB28CED268F8}.Release|x86.Build.0 = Release|Any CPU
+		{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}.Debug|x64.Build.0 = Debug|Any CPU
+		{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}.Debug|x86.Build.0 = Debug|Any CPU
+		{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}.Release|x64.ActiveCfg = Release|Any CPU
+		{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}.Release|x64.Build.0 = Release|Any CPU
+		{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}.Release|x86.ActiveCfg = Release|Any CPU
+		{79D11566-DEC4-4C20-ACD8-CE70A7469ADF}.Release|x86.Build.0 = Release|Any CPU
+		{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}.Debug|x64.Build.0 = Debug|Any CPU
+		{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}.Debug|x86.Build.0 = Debug|Any CPU
+		{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}.Release|x64.ActiveCfg = Release|Any CPU
+		{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}.Release|x64.Build.0 = Release|Any CPU
+		{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}.Release|x86.ActiveCfg = Release|Any CPU
+		{9C1EA664-1A80-4701-BE33-D5905ADD2DAC}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
