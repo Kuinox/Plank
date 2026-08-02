@@ -1,3 +1,13 @@
 #nullable enable
 Plank.Writing.ParquetWriterOptions.CompressionLevel.get -> int?
 Plank.Writing.ParquetWriterOptions.CompressionLevel.init -> void
+Plank.Writing.ParquetWriterOptions.WritePageCrc.get -> bool
+Plank.Writing.ParquetWriterOptions.WritePageCrc.init -> void
+Plank.Reading.Physical.ParquetFileReaderOptions.VerifyPageCrc.get -> bool
+Plank.Reading.Physical.ParquetFileReaderOptions.VerifyPageCrc.init -> void
+Plank.Reading.Logical.ParquetReaderOptions.VerifyPageCrc.get -> bool
+Plank.Reading.Logical.ParquetReaderOptions.VerifyPageCrc.init -> void
+Plank.RowApi.RowReaderOptions.VerifyPageCrc.get -> bool
+Plank.RowApi.RowReaderOptions.VerifyPageCrc.init -> void
+Plank.Reading.PageHeader.Crc.get -> uint?
+Plank.Reading.PageHeader.Crc.init -> void

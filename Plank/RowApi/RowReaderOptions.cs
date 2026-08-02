@@ -10,6 +10,8 @@ public sealed class RowReaderOptions
 
     public int MaxReadAheadRowGroups { get; init; } = 1;
 
+    public bool VerifyPageCrc { get; init; }
+
     internal void Validate()
     {
         ArgumentNullException.ThrowIfNull(BufferPool);
