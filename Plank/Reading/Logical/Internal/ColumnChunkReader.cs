@@ -215,9 +215,9 @@ static class ColumnChunkReader
         var physicalValues = MemoryMarshal.Cast<byte, TValue>(
             scratch.Slice(physicalOffset, physicalByteLength));
 
-        if (state.HasDictionary)
+        if (encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
         {
-            if (encoding is not (EncodingKind.RleDictionary or EncodingKind.PlainDictionary))
+            if (!state.HasDictionary)
                 return false;
             DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount),
                 state.GetDictionary<TValue>(), physicalValues);
@@ -279,9 +279,9 @@ static class ColumnChunkReader
 
         var valueCount = checked((int)header.ValueCount);
         var destination = state.GetValues<T>(valueCount, bufferPool);
-        if (state.HasDictionary)
+        if (header.Encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
         {
-            if (header.Encoding is not (EncodingKind.RleDictionary or EncodingKind.PlainDictionary))
+            if (!state.HasDictionary)
                 return false;
             DecodeDictionaryIndexesIntoBuffer(dataPayload, header.ValueCount,
                 state.GetDictionary<T>(), destination);
@@ -398,9 +398,9 @@ static class ColumnChunkReader
         int valueCount, int physicalCount, Column column, EncodingKind encoding, Span<int> scratch,
         ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
-        if (state.HasDictionary)
+        if (encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
         {
-            if (encoding is not (EncodingKind.RleDictionary or EncodingKind.PlainDictionary))
+            if (!state.HasDictionary)
                 return false;
             DecodeBinaryDictionaryValues(payload, definitions, valueCount, physicalCount,
                 scratch[..physicalCount], ref state, bufferPool);
