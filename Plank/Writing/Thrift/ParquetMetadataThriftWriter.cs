@@ -105,6 +105,35 @@ static class ParquetMetadataThriftWriter
         writer.EndStruct(previous);
     }
 
+    internal static void WriteBloomFilterHeader(ref BufferWriter destination, int bitsetByteLength)
+    {
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        writer.WriteFieldI32(1, bitsetByteLength);
+
+        writer.WriteFieldHeader(2, CompactType.Struct);
+        var previousAlgorithm = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.Struct);
+        var previousSplitBlock = writer.BeginStruct();
+        writer.EndStruct(previousSplitBlock);
+        writer.EndStruct(previousAlgorithm);
+
+        writer.WriteFieldHeader(3, CompactType.Struct);
+        var previousHash = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.Struct);
+        var previousXxHash = writer.BeginStruct();
+        writer.EndStruct(previousXxHash);
+        writer.EndStruct(previousHash);
+
+        writer.WriteFieldHeader(4, CompactType.Struct);
+        var previousCompression = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.Struct);
+        var previousUncompressed = writer.BeginStruct();
+        writer.EndStruct(previousUncompressed);
+        writer.EndStruct(previousCompression);
+        writer.EndStruct(previous);
+    }
+
     internal static void WriteFileMetaData(ref BufferWriter destination, ParquetSchema schema, int rowGroupCount,
         long totalRowCount, ref BufferWriter serializedRowGroups)
     {
@@ -527,6 +556,11 @@ static class ParquetMetadataThriftWriter
         if (metadata.HasDictionaryPage)
             writer.WriteFieldI64(11, metadata.DictionaryPageOffset);
         WriteStatistics(ref writer, metadata.Statistics);
+        if (metadata.BloomFilterLength > 0)
+        {
+            writer.WriteFieldI64(14, metadata.BloomFilterOffset);
+            writer.WriteFieldI32(15, checked((int)metadata.BloomFilterLength));
+        }
         writer.EndStruct(previousMetadata);
 
         if (metadata.OffsetIndexLength > 0)
