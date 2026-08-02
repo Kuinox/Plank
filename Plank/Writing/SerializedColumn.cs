@@ -188,6 +188,20 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
         }
 
+        if (typeof(T) == typeof(decimal?))
+        {
+            ParquetDecimalConverter.RequireLogicalType(_column);
+            SerializeOptionalTyped(AsNullableSpan<decimal>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(decimal))
+        {
+            ParquetDecimalConverter.RequireLogicalType(_column);
+            SerializeTyped(AsSpan<decimal>(values));
+            return;
+        }
+
         if (typeof(T) == typeof(byte[]))
         {
             if (_column.Options.Repetition == ParquetRepetition.Optional)

@@ -1,3 +1,7 @@
 #nullable enable
+Plank.Schema.ParquetColumnAttribute.Precision.get -> int
+Plank.Schema.ParquetColumnAttribute.Precision.set -> void
+Plank.Schema.ParquetColumnAttribute.Scale.get -> int
+Plank.Schema.ParquetColumnAttribute.Scale.set -> void
 Plank.Writing.ParquetWriterOptions.CompressionLevel.get -> int?
 Plank.Writing.ParquetWriterOptions.CompressionLevel.init -> void

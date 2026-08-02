@@ -30,4 +30,8 @@ public sealed class ParquetColumnAttribute : Attribute
     public EncodingKind[]? Encodings { get; set; }
 
     public LogicalTypeKind LogicalType { get; set; }
+
+    public int Precision { get; set; }
+
+    public int Scale { get; set; }
 }

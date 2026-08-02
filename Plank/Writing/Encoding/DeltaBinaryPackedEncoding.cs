@@ -149,6 +149,15 @@ static class DeltaBinaryPackedEncoding
             return;
         }
 
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            for (var i = 0; i < decimalValues.Length; i++)
+                converted[i] = ParquetDecimalConverter.ToInt32(decimalValues[i], column);
+            WriteInt32(converted, ref writer);
+            return;
+        }
+
         throw new InvalidOperationException(
             $"Column '{column.Name}' expects '{ParquetPhysicalType.Int32}' values, but got '{typeof(T)}'.");
     }
@@ -169,6 +178,15 @@ static class DeltaBinaryPackedEncoding
             var ulongValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ulong>>(ref values);
             for (var i = 0; i < ulongValues.Length; i++)
                 converted[i] = unchecked((long)ulongValues[i]);
+            WriteInt64(converted, ref writer);
+            return;
+        }
+
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            for (var i = 0; i < decimalValues.Length; i++)
+                converted[i] = ParquetDecimalConverter.ToInt64(decimalValues[i], column);
             WriteInt64(converted, ref writer);
             return;
         }

@@ -179,6 +179,16 @@ static class PlainEncoding
             return;
         }
 
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            for (var i = 0; i < decimalValues.Length; i++)
+                BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..],
+                    ParquetDecimalConverter.ToInt32(decimalValues[i], column));
+            writer.Advance(byteCount);
+            return;
+        }
+
         throw new InvalidOperationException(
             $"Column '{column.Name}' expects '{ParquetPhysicalType.Int32}' values, but got '{typeof(T)}'.");
     }
@@ -208,6 +218,16 @@ static class PlainEncoding
             var ulongValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ulong>>(ref values);
             for (var i = 0; i < ulongValues.Length; i++)
                 BinaryPrimitives.WriteUInt64LittleEndian(destination[(i * sizeof(long))..], ulongValues[i]);
+            writer.Advance(byteCount);
+            return;
+        }
+
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            for (var i = 0; i < decimalValues.Length; i++)
+                BinaryPrimitives.WriteInt64LittleEndian(destination[(i * sizeof(long))..],
+                    ParquetDecimalConverter.ToInt64(decimalValues[i], column));
             writer.Advance(byteCount);
             return;
         }
@@ -265,6 +285,30 @@ static class PlainEncoding
     static void WriteByteArrayValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            var byteCount = 0;
+            for (var i = 0; i < decimalValues.Length; i++)
+                byteCount = checked(byteCount + sizeof(int) +
+                    ParquetDecimalConverter.GetByteCount(decimalValues[i], column));
+            if (byteCount == 0)
+                return;
+
+            var destination = writer.GetSpan(byteCount);
+            var offset = 0;
+            for (var i = 0; i < decimalValues.Length; i++)
+            {
+                var length = ParquetDecimalConverter.GetByteCount(decimalValues[i], column);
+                BinaryPrimitives.WriteInt32LittleEndian(destination[offset..], length);
+                offset += sizeof(int);
+                offset += ParquetDecimalConverter.WriteBigEndian(decimalValues[i], column,
+                    destination.Slice(offset, length));
+            }
+            writer.Advance(offset);
+            return;
+        }
+
         if (typeof(T) == typeof(byte[]))
         {
             var byteArrayValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
@@ -454,6 +498,21 @@ static class PlainEncoding
             for (var i = 0; i < guidValues.Length; i++)
                 guidValues[i].TryWriteBytes(guidDestination.Slice(i * 16, 16), bigEndian: true, out _);
             writer.Advance(checked(guidValues.Length * 16));
+            return;
+        }
+
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            var decimalByteCount = checked(decimalValues.Length * valueLength);
+            if (decimalByteCount == 0)
+                return;
+
+            var decimalDestination = writer.GetSpan(decimalByteCount);
+            for (var i = 0; i < decimalValues.Length; i++)
+                ParquetDecimalConverter.WriteFixedBigEndian(decimalValues[i], column,
+                    decimalDestination.Slice(i * valueLength, valueLength));
+            writer.Advance(decimalByteCount);
             return;
         }
 
