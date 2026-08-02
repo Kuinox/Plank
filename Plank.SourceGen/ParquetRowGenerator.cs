@@ -263,7 +263,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 .Append(", ").Append(GetColumnOptionsExpression(schemaColumn));
             if (schemaColumn.LogicalType is { } logicalType)
                 builder.Append(", ").Append(GetLogicalTypeExpression(logicalType));
-            builder.AppendLine("),");
+            if (schemaColumn.FieldId is { } fieldId)
+                builder.Append(") with { FieldId = ").Append(fieldId).Append(" },");
+            else
+                builder.Append("),");
+            builder.AppendLine();
         }
         builder.AppendLine("    ]);");
         builder.AppendLine("    const int DefaultRowBatchSize = 1024;");
@@ -1038,8 +1042,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var columnName = property.Name;
         var physicalType = inferredPhysicalType;
         var logicalType = inferredLogicalType;
+        int? fieldId = null;
         ImmutableArray<string> encodings = [];
-        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref encodings, out error))
+        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref fieldId,
+                ref encodings, out error))
             return false;
         if (columnName.Length == 0)
         {
@@ -1049,12 +1055,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
         column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType, property.Name, encodings,
-            IsGuidClr(clrTypeName) ? 16u : 0u);
+            IsGuidClr(clrTypeName) ? 16u : 0u, fieldId);
         return true;
     }
 
     static bool TryReadColumnOverrides(IPropertySymbol property, ref string columnName, ref string physicalType,
-        ref LogicalTypeSpec? logicalType, ref ImmutableArray<string> encodings, out string error)
+        ref LogicalTypeSpec? logicalType, ref int? fieldId, ref ImmutableArray<string> encodings, out string error)
     {
         error = string.Empty;
         var attributes = property.GetAttributes()
@@ -1111,6 +1117,17 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     error = $"Property '{property.Name}' declares an invalid LogicalTypeKind override.";
                     return false;
                 }
+                continue;
+            }
+
+            if (namedArgument.Key == "FieldId")
+            {
+                if (namedArgument.Value.Value is not int value)
+                {
+                    error = $"Property '{property.Name}' declares an invalid field ID.";
+                    return false;
+                }
+                fieldId = value;
             }
         }
 
@@ -1602,7 +1619,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     readonly struct SchemaColumn
     {
         public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName,
-            LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings, uint typeLength)
+            LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings, uint typeLength,
+            int? fieldId)
         {
             Name = name;
             PhysicalType = physicalType;
@@ -1612,6 +1630,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             RowPropertyName = rowPropertyName;
             Encodings = encodings;
             TypeLength = typeLength;
+            FieldId = fieldId;
         }
 
         public string Name { get; }
@@ -1629,6 +1648,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public ImmutableArray<string> Encodings { get; }
 
         public uint TypeLength { get; }
+
+        public int? FieldId { get; }
     }
 
     readonly struct LogicalTypeSpec

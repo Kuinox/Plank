@@ -9,7 +9,7 @@ public readonly struct ParquetSchemaNodeInfo
 
     internal ParquetSchemaNodeInfo(int ordinal, int parentOrdinal, NodeKind kind, ParquetRepetition repetition,
         ParquetPhysicalType? physicalType, uint typeLength, LogicalTypeInfo logicalType, int nameOffset, int nameLength,
-        int childCount)
+        int childCount, int? fieldId)
     {
         Ordinal = ordinal;
         ParentOrdinal = parentOrdinal;
@@ -21,6 +21,7 @@ public readonly struct ParquetSchemaNodeInfo
         NameOffset = nameOffset;
         NameLength = nameLength;
         ChildCount = childCount;
+        FieldId = fieldId;
     }
 
     public int Ordinal { get; }
@@ -31,4 +32,5 @@ public readonly struct ParquetSchemaNodeInfo
     public uint TypeLength { get; }
     public LogicalTypeInfo LogicalType { get; }
     public int ChildCount { get; }
+    public int? FieldId { get; }
 }

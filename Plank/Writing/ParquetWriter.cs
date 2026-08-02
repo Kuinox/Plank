@@ -21,6 +21,7 @@ public sealed class ParquetWriter
     internal readonly CompressionKind Compression;
     internal readonly int CompressionLevel;
     internal readonly bool WritePageIndexes;
+    internal readonly ParquetSortingColumn[] SortingColumns;
     internal readonly CompressionContext CompressionContext;
     internal readonly ColumnChunkMetadata[] OpenRowGroupColumnMetadata;
     readonly RowGroupWriter _rowGroupWriter;
@@ -63,6 +64,7 @@ public sealed class ParquetWriter
         Compression = _options.Compression;
         CompressionLevel = _options.GetCompressionLevel();
         WritePageIndexes = _options.WritePageIndexes;
+        SortingColumns = ValidateSortingColumns(_options.SortingColumns, ColumnCount);
         CompressionContext = new CompressionContext(BufferWriters);
         OpenRowGroupColumnMetadata = ColumnCount == 0 ? [] : new ColumnChunkMetadata[ColumnCount];
         _rowGroupWriter = new RowGroupWriter(this);
@@ -108,7 +110,7 @@ public sealed class ParquetWriter
         if (ColumnCount == 0)
         {
             ParquetMetadataThriftWriter.WriteRowGroup(ref SerializedRowGroupsMetadata, ColumnsByOrdinal,
-                ColumnPathsByOrdinal, OpenRowGroupColumnMetadata, 0);
+                ColumnPathsByOrdinal, OpenRowGroupColumnMetadata, SortingColumns, 0);
             CompleteOpenRowGroup(0);
         }
 
@@ -173,6 +175,27 @@ public sealed class ParquetWriter
         for (var i = 0; i < result.Length; i++)
             result[i] = new PageStrategyContext(columns[i].PageStrategy
                 ?? new DefaultStrategy(columns[i], targetDataPageSizeBytes));
+        return result;
+    }
+
+    static ParquetSortingColumn[] ValidateSortingColumns(
+        System.Collections.Immutable.ImmutableArray<ParquetSortingColumn> sortingColumns, int columnCount)
+    {
+        if (sortingColumns.IsDefaultOrEmpty)
+            return [];
+
+        var result = sortingColumns.ToArray();
+        for (var i = 0; i < result.Length; i++)
+        {
+            var columnOrdinal = result[i].ColumnOrdinal;
+            if ((uint)columnOrdinal >= (uint)columnCount)
+                throw new ArgumentOutOfRangeException(nameof(ParquetWriterOptions.SortingColumns), columnOrdinal,
+                    $"Sorting column ordinal must be between zero and {columnCount - 1}.");
+            for (var previous = 0; previous < i; previous++)
+                if (result[previous].ColumnOrdinal == columnOrdinal)
+                    throw new ArgumentException($"Sorting column ordinal {columnOrdinal} is declared more than once.",
+                        nameof(ParquetWriterOptions.SortingColumns));
+        }
         return result;
     }
 

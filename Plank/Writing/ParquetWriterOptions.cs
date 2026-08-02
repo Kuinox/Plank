@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Plank.Schema;
 using ZstdSharp;
 
@@ -29,6 +30,9 @@ public sealed class ParquetWriterOptions
 
     public bool WritePageIndexes { get; init; } = true;
 
+    /// <summary>Gets or initializes the lexicographic sort order declared for every row group written to the file.</summary>
+    public ImmutableArray<ParquetSortingColumn> SortingColumns { get; init; } = [];
+
     public uint RowApiMaxParallelism
     {
         get => _rowApiMaxParallelism == 0 ? checked((uint)Execution.WorkerCount) : _rowApiMaxParallelism;
@@ -58,6 +62,9 @@ public sealed class ParquetWriterOptions
         if (!Enum.IsDefined(Compression))
             throw new ArgumentOutOfRangeException(nameof(Compression), Compression,
                 "Compression must be a defined CompressionKind value.");
+        if (SortingColumns.IsDefault)
+            throw new ArgumentException("Sorting columns must not be an uninitialized ImmutableArray.",
+                nameof(SortingColumns));
         ValidateCompressionLevel();
     }
 

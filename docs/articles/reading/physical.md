@@ -43,6 +43,13 @@ for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroup
 
 [`Metadata`](xref:Plank.Reading.Physical.ParquetFileReader.Metadata) returns file-level metadata. It describes the schema, row groups, and column chunks, but it does not read column values.
 
+Schema nodes expose their optional [`FieldId`](xref:Plank.Reading.Physical.ParquetSchemaNodeInfo.FieldId). Sorting
+declarations are available without allocating an array:
+
+```csharp
+ReadOnlySpan<ParquetSortingColumn> sorting = metadata.RowGroupSortingColumns(rowGroupOrdinal);
+```
+
 ## Read page bytes
 
 ```csharp
