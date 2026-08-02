@@ -71,34 +71,6 @@ public sealed partial class SimpleSchema
 Without `AllowAllocatingValues`, the source generator reports an error for every `string` property. Use
 `byte[]` or `ReadOnlyMemory<byte>` when allocation-free access is required.
 
-## Collections and nested records
-
-Generated schemas can also use one-dimensional and jagged arrays, `List<T>`, scalar
-`Dictionary<TKey, TValue>` maps, nested records, and lists of records. These shapes allocate while rows are projected,
-so they require the same explicit opt-in. This support is exposed through the generated row reader and writer APIs:
-
-```csharp
-[ParquetSchema(AllowAllocatingValues = true)]
-public sealed partial class OrderSchema
-{
-    public int?[][]? Samples { get; init; }
-
-    public Dictionary<int, string?>? Labels { get; init; }
-
-    public Address? Destination { get; init; }
-
-    public List<OrderLine>? Lines { get; init; }
-}
-```
-
-Nullable collections preserve the distinction between `null` and an empty collection. Nullable scalar elements are
-also preserved. Map keys must be non-null scalar values. Currently, map values must be scalar, inner lists must be
-non-null, list-of-record elements and their properties must be required, and a nested record cannot itself contain a
-collection.
-
-Flat schemas keep their existing allocation-conscious generated path. Adding any collection or nested record selects
-the allocating generated path for that schema and requires `AllowAllocatingValues`.
-
 ## Runtime schemas
 
 Use [`ParquetSchema`](xref:Plank.Schema.ParquetSchema) when a schema is created at runtime:
