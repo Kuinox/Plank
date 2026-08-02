@@ -130,6 +130,26 @@ internal sealed class ReaderCorrectnessDiscoveryTests
         await Assert.That(logicalType.IsAdjustedToUtc).IsTrue();
     }
 
+    [Test]
+    public async Task LegacyTimeMicrosIsAdjustedToUtc()
+    {
+        var logicalType = ReadLegacyLogicalType(physicalType: 2, convertedType: 8);
+
+        await Assert.That(logicalType.Kind).IsEqualTo(LogicalTypeKind.Time);
+        await Assert.That(logicalType.Unit).IsEqualTo(TimeUnit.Micros);
+        await Assert.That(logicalType.IsAdjustedToUtc).IsTrue();
+    }
+
+    [Test]
+    public async Task LegacyTimestampMicrosIsAdjustedToUtc()
+    {
+        var logicalType = ReadLegacyLogicalType(physicalType: 2, convertedType: 10);
+
+        await Assert.That(logicalType.Kind).IsEqualTo(LogicalTypeKind.Timestamp);
+        await Assert.That(logicalType.Unit).IsEqualTo(TimeUnit.Micros);
+        await Assert.That(logicalType.IsAdjustedToUtc).IsTrue();
+    }
+
     static PageHeader CreatePageHeader(PageHeaderType type, uint valueCount, EncodingKind encoding,
         int payloadLength)
         => new(type, checked((uint)payloadLength), checked((uint)payloadLength), valueCount, encoding,
