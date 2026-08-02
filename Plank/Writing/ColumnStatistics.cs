@@ -952,6 +952,7 @@ internal readonly struct ColumnStatistics
                 max = value;
         }
 
+        CanonicalizeSignedZeroBounds(values, ref min, ref max);
         return true;
     }
 
@@ -987,6 +988,7 @@ internal readonly struct ColumnStatistics
                 max = value;
         }
 
+        CanonicalizeSignedZeroBounds(values, ref min, ref max);
         return true;
     }
 
@@ -1035,6 +1037,7 @@ internal readonly struct ColumnStatistics
                 max = value;
         }
 
+        CanonicalizeSignedZeroBounds(values, ref min, ref max);
         return true;
     }
 
@@ -1083,6 +1086,7 @@ internal readonly struct ColumnStatistics
                 max = value;
         }
 
+        CanonicalizeSignedZeroBounds(values, ref min, ref max);
         return true;
     }
 
@@ -1116,7 +1120,85 @@ internal readonly struct ColumnStatistics
                 max = value;
         }
 
+        if (hasValue)
+            CanonicalizeSignedZeroBounds(values, ref min, ref max);
         return hasValue;
+    }
+
+    static bool IsLessThan(float value, float other)
+        => value < other || value == 0 && other == 0 &&
+            BitConverter.SingleToInt32Bits(value) < BitConverter.SingleToInt32Bits(other);
+
+    static bool IsGreaterThan(float value, float other)
+        => value > other || value == 0 && other == 0 &&
+            BitConverter.SingleToInt32Bits(value) > BitConverter.SingleToInt32Bits(other);
+
+    static bool IsLessThan(double value, double other)
+        => value < other || value == 0 && other == 0 &&
+            BitConverter.DoubleToInt64Bits(value) < BitConverter.DoubleToInt64Bits(other);
+
+    static bool IsGreaterThan(double value, double other)
+        => value > other || value == 0 && other == 0 &&
+            BitConverter.DoubleToInt64Bits(value) > BitConverter.DoubleToInt64Bits(other);
+
+    static void CanonicalizeSignedZeroBounds(ReadOnlySpan<float> values, ref float min, ref float max)
+    {
+        var canonicalizeMin = min == 0;
+        var canonicalizeMax = max == 0;
+        if (!canonicalizeMin && !canonicalizeMax)
+            return;
+
+        var hasNegativeZero = false;
+        var hasPositiveZero = false;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (value != 0)
+                continue;
+
+            if (BitConverter.SingleToInt32Bits(value) < 0)
+                hasNegativeZero = true;
+            else
+                hasPositiveZero = true;
+
+            if ((!canonicalizeMin || hasNegativeZero) && (!canonicalizeMax || hasPositiveZero))
+                break;
+        }
+
+        if (canonicalizeMin)
+            min = hasNegativeZero ? -0.0f : +0.0f;
+        if (canonicalizeMax)
+            max = hasPositiveZero ? +0.0f : -0.0f;
+    }
+
+    static void CanonicalizeSignedZeroBounds(ReadOnlySpan<double> values, ref double min, ref double max)
+    {
+        var canonicalizeMin = min == 0;
+        var canonicalizeMax = max == 0;
+        if (!canonicalizeMin && !canonicalizeMax)
+            return;
+
+        var hasNegativeZero = false;
+        var hasPositiveZero = false;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (value != 0)
+                continue;
+
+            if (BitConverter.DoubleToInt64Bits(value) < 0)
+                hasNegativeZero = true;
+            else
+                hasPositiveZero = true;
+
+            if ((!canonicalizeMin || hasNegativeZero) && (!canonicalizeMax || hasPositiveZero))
+                break;
+        }
+
+        if (canonicalizeMin)
+            min = hasNegativeZero ? -0.0d : +0.0d;
+        if (canonicalizeMax)
+            max = hasPositiveZero ? +0.0d : -0.0d;
     }
 
     static bool TryGetDoubleMinMaxScalar(ReadOnlySpan<double> values, out double min, out double max,
@@ -1149,6 +1231,8 @@ internal readonly struct ColumnStatistics
                 max = value;
         }
 
+        if (hasValue)
+            CanonicalizeSignedZeroBounds(values, ref min, ref max);
         return hasValue;
     }
 
@@ -1560,9 +1644,9 @@ internal readonly struct ColumnStatistics
                 return;
             }
 
-            if (value < _minFloat)
+            if (IsLessThan(value, _minFloat))
                 _minFloat = value;
-            if (value > _maxFloat)
+            if (IsGreaterThan(value, _maxFloat))
                 _maxFloat = value;
         }
 
@@ -1582,9 +1666,9 @@ internal readonly struct ColumnStatistics
                 return;
             }
 
-            if (value < _minDouble)
+            if (IsLessThan(value, _minDouble))
                 _minDouble = value;
-            if (value > _maxDouble)
+            if (IsGreaterThan(value, _maxDouble))
                 _maxDouble = value;
         }
 
