@@ -12,7 +12,7 @@ namespace Plank.Tests.Writer;
 internal sealed class WriterFormatBugReproductionsTests
 {
     [Test]
-    public async Task BooleanRleValuesAreReadableByParquetNet()
+    public void BooleanRleValuesAreReadableByParquetSharp()
     {
         var expected = new[]
         {
@@ -32,13 +32,25 @@ internal sealed class WriterFormatBugReproductionsTests
             rowGroup.Write(column);
         });
 
-        using var stream = new MemoryStream(file);
-        using var reader = await Parquet.ParquetReader.CreateAsync(stream).ConfigureAwait(false);
-        using var rowGroupReader = reader.OpenRowGroupReader(0);
-        var field = reader.Schema.GetDataFields().Single();
-        var columnData = await rowGroupReader.ReadColumnAsync(field).ConfigureAwait(false);
-        if (columnData.Data is not bool[] actual || !actual.AsSpan().SequenceEqual(expected))
-            throw new InvalidOperationException("Parquet.Net did not read the Boolean RLE values written by Plank.");
+        AssertBooleanRleLengthPrefix(file);
+
+        var path = Path.Combine(Path.GetTempPath(), $"plank-boolean-rle-{Guid.NewGuid():N}.parquet");
+        try
+        {
+            File.WriteAllBytes(path, file);
+            using var reader = new ParquetFileReader(path);
+            using var rowGroupReader = reader.RowGroup(0);
+            using var valueReader = rowGroupReader.Column(0).LogicalReader<bool>();
+            var actual = valueReader.ReadAll(expected.Length);
+            if (!actual.AsSpan().SequenceEqual(expected))
+                throw new InvalidOperationException(
+                    "ParquetSharp did not read the Boolean RLE values written by Plank.");
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 
     [Test]
@@ -157,6 +169,24 @@ internal sealed class WriterFormatBugReproductionsTests
         });
         write(writer);
         writer.CloseFile();
+    }
+
+    static void AssertBooleanRleLengthPrefix(byte[] file)
+    {
+        using var stream = new MemoryStream(file, writable: false);
+        using var reader = new Plank.Reading.Physical.ParquetFileReader();
+        reader.Reset(stream);
+        using var pages = reader.OpenPages(0, 0);
+        if (!pages.MoveNext() || pages.CurrentHeader.Encoding != EncodingKind.Rle)
+            throw new InvalidOperationException("Expected a Boolean RLE data page.");
+
+        var payload = pages.CurrentPayload;
+        if (payload.Length < sizeof(int))
+            throw new InvalidOperationException("Boolean RLE values omitted their four-byte length prefix.");
+        var encodedLength = BinaryPrimitives.ReadInt32LittleEndian(payload);
+        if (encodedLength != payload.Length - sizeof(int))
+            throw new InvalidOperationException(
+                $"Boolean RLE prefix declares {encodedLength} encoded bytes, actual {payload.Length - sizeof(int)}.");
     }
 
     static long? ReadFirstColumnNanCount(byte[] file)
