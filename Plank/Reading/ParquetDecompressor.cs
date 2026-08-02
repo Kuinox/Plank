@@ -28,7 +28,7 @@ static class ParquetDecompressor
                     DecompressBrotliInto(payload, destination);
                     break;
                 case CompressionKind.Lz4:
-                    LZ4Codec.Decode(payload, destination);
+                    DecompressLz4Into(payload, destination);
                     break;
                 case CompressionKind.Zstd:
                     DecompressZstdInto(payload, destination);
@@ -50,12 +50,23 @@ static class ParquetDecompressor
     {
         try
         {
-            Plank.Snappy.SnappyCodec.Decompress(payload, destination);
+            var written = Plank.Snappy.SnappyCodec.Decompress(payload, destination);
+            if (written != destination.Length)
+                throw new CorruptParquetException(
+                    $"Snappy decompression produced {written} bytes but {destination.Length} were expected.");
         }
         catch (InvalidOperationException ex)
         {
             throw new CorruptParquetException("Snappy decompression failed due to invalid compressed data.", ex);
         }
+    }
+
+    static void DecompressLz4Into(ReadOnlySpan<byte> payload, Span<byte> destination)
+    {
+        var written = LZ4Codec.Decode(payload, destination);
+        if (written != destination.Length)
+            throw new CorruptParquetException(
+                $"Lz4 decompression produced {written} bytes but {destination.Length} were expected.");
     }
 
     static void DecompressBrotliInto(ReadOnlySpan<byte> payload, Span<byte> destination)

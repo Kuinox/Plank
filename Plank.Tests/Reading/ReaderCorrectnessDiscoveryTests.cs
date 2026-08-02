@@ -111,6 +111,36 @@ internal sealed class ReaderCorrectnessDiscoveryTests
     }
 
     [Test]
+    public void PageCursorRejectsUncompressedPageWithMismatchedSizes()
+    {
+        var file = CreateSingleValueFile(CompressionKind.None);
+        int pageOffset;
+        using (var source = new MemoryStream(file, writable: false))
+        using (var reader = new ParquetFileReader())
+        {
+            reader.Reset(source);
+            pageOffset = checked((int)reader.Metadata.ColumnChunk(0, 0).DataPageOffset);
+        }
+
+        var header = PageHeaderReader.Read(file.AsSpan(pageOffset));
+        if (header.UncompressedPageSize == 0 || header.CompressedPageSize != header.UncompressedPageSize ||
+            header.CompressedPageSize > 63)
+            throw new InvalidOperationException("The uncompressed-page test fixture has an unexpected page header.");
+
+        var compressedSizeOffset = FindThirdCompactI32ValueOffset(file.AsSpan(pageOffset));
+        file[pageOffset + compressedSizeOffset] = 0;
+
+        Assert.Throws<CorruptParquetException>(() =>
+        {
+            using var source = new MemoryStream(file, writable: false);
+            using var reader = new ParquetFileReader();
+            reader.Reset(source);
+            using var cursor = reader.OpenPages(0, 0);
+            _ = cursor.MoveNext();
+        });
+    }
+
+    [Test]
     public async Task LegacyTimeMillisIsAdjustedToUtc()
     {
         var logicalType = ReadLegacyLogicalType(physicalType: 1, convertedType: 7);
