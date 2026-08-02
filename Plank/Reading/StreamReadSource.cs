@@ -34,6 +34,11 @@ public sealed class StreamReadSource : IParquetReadSource
     {
         lock (_gate)
         {
+            var length = (ulong)_stream.Length;
+            if (offset > length || (ulong)destination.Length > length - offset)
+                throw new CorruptParquetException(
+                    $"Attempted to read {destination.Length} bytes at offset {offset} but the source is only {length} bytes long.");
+
             _stream.Position = (long)offset;
             _stream.ReadExactly(destination);
         }
