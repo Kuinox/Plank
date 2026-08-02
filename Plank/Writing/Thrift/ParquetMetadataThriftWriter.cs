@@ -512,7 +512,8 @@ static class ParquetMetadataThriftWriter
 
         var previousMetadata = writer.BeginStruct();
         writer.WriteFieldI32(1, GetPhysicalType(column.PhysicalType));
-        WriteEncodings(ref writer, metadata.DataEncoding, metadata.HasDictionaryPage);
+        var hasLevelEncoding = column.Options.Repetition is ParquetRepetition.Optional or ParquetRepetition.Repeated;
+        WriteEncodings(ref writer, metadata.DataEncoding, metadata.HasDictionaryPage, hasLevelEncoding);
         WritePath(ref writer, path);
         writer.WriteFieldI32(4, GetCompression(metadata.Compression));
         writer.WriteFieldI64(5, metadata.ValueCount);
@@ -643,23 +644,22 @@ static class ParquetMetadataThriftWriter
         }
     }
 
-    static void WriteEncodings(ref CompactWriter writer, EncodingKind dataEncoding, bool hasDictionaryPage)
+    static void WriteEncodings(ref CompactWriter writer, EncodingKind dataEncoding, bool hasDictionaryPage,
+        bool hasLevelEncoding)
     {
         var data = GetEncoding(dataEncoding);
         var dictionary = GetEncoding(EncodingKind.Plain);
-
-        if (!hasDictionaryPage || data == dictionary)
-        {
-            writer.WriteFieldHeader(2, CompactType.List);
-            writer.WriteListHeader(1, CompactType.I32);
-            writer.WriteI32(data);
-            return;
-        }
+        var levels = GetEncoding(EncodingKind.Rle);
+        var includeDictionary = hasDictionaryPage && data != dictionary;
+        var includeLevels = hasLevelEncoding && data != levels;
 
         writer.WriteFieldHeader(2, CompactType.List);
-        writer.WriteListHeader(2, CompactType.I32);
-        writer.WriteI32(dictionary);
+        writer.WriteListHeader(1 + (includeDictionary ? 1 : 0) + (includeLevels ? 1 : 0), CompactType.I32);
+        if (includeDictionary)
+            writer.WriteI32(dictionary);
         writer.WriteI32(data);
+        if (includeLevels)
+            writer.WriteI32(levels);
     }
 
     static string[] GetPathSegments(string columnName)
