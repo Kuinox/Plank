@@ -12,6 +12,8 @@ public sealed class ParquetWriter
     Stream _stream = null!;
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
+    readonly string? _createdBy;
+    readonly ParquetKeyValueMetadata[] _keyValueMetadata;
     internal readonly Column[] ColumnsByOrdinal;
     readonly PageStrategyContext[] _pageStrategyContextsByOrdinal;
     internal readonly string[][] ColumnPathsByOrdinal;
@@ -42,6 +44,8 @@ public sealed class ParquetWriter
         _schema = schema;
         _options = options;
         _options.Validate();
+        _createdBy = options.CreatedBy;
+        _keyValueMetadata = options.KeyValueMetadata.Count == 0 ? [] : options.KeyValueMetadata.ToArray();
         ColumnsByOrdinal = _schema.Columns.IsDefault ? [] : _schema.Columns.ToArray();
         ColumnPathsByOrdinal = _schema.LeafPaths.IsDefault || _schema.LeafPaths.Length == 0
             ? ColumnsByOrdinal.Select(static c => new[] { c.Name }).ToArray()
@@ -221,7 +225,7 @@ public sealed class ParquetWriter
     {
         SerializedFileMetadata.Reset();
         ParquetMetadataThriftWriter.WriteFileMetaData(ref SerializedFileMetadata, _schema, _rowGroupCount, _totalRowCount,
-            ref SerializedRowGroupsMetadata);
+            ref SerializedRowGroupsMetadata, _createdBy, _keyValueMetadata);
         var metadataLength = SerializedFileMetadata.WrittenLength;
         WriteBuffer(ref SerializedFileMetadata);
         Span<byte> suffix = stackalloc byte[sizeof(int) + 4];

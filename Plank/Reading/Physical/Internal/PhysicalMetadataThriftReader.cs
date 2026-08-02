@@ -23,11 +23,80 @@ static class PhysicalMetadataThriftReader
                 case 4:
                     ReadRowGroups(ref reader, metadata, bufferPool);
                     break;
+                case 5:
+                    ReadKeyValueMetadata(ref reader, metadata, bufferPool);
+                    break;
+                case 6:
+                {
+                    var createdBy = reader.ReadBinary();
+                    metadata.CreatedByOffset = reader.Offset - createdBy.Length;
+                    metadata.CreatedByLength = createdBy.Length;
+                    metadata.HasCreatedBy = true;
+                    break;
+                }
                 default:
                     reader.Skip(type, inlineBool);
                     break;
             }
         }
+    }
+
+    static void ReadKeyValueMetadata(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
+        IParquetBufferPool bufferPool)
+    {
+        var (count, elementType) = reader.ReadListHeader();
+        if (elementType != CompactProtocolType.Struct)
+            throw new CorruptParquetException("Expected key-value metadata to be encoded as a list of structs.");
+        if (count > reader.Remaining)
+            throw new CorruptParquetException($"Key-value metadata count {count} exceeds remaining input bytes.");
+
+        var entryCount = checked((int)count);
+        metadata.KeyValueMetadataBuffer = Rent<ParquetKeyValueMetadataInfo>(bufferPool, entryCount);
+        var entries = metadata.KeyValueMetadataStorage;
+        for (var i = 0; i < entryCount; i++)
+            entries[i] = ReadKeyValueMetadataEntry(ref reader);
+        metadata.KeyValueMetadataCount = entryCount;
+    }
+
+    static ParquetKeyValueMetadataInfo ReadKeyValueMetadataEntry(ref CompactProtocolReader reader)
+    {
+        var keyOffset = 0;
+        var keyLength = 0;
+        var valueOffset = 0;
+        var valueLength = 0;
+        var hasKey = false;
+        var hasValue = false;
+
+        reader.BeginStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
+        {
+            switch (fieldId)
+            {
+                case 1:
+                {
+                    var key = reader.ReadBinary();
+                    keyOffset = reader.Offset - key.Length;
+                    keyLength = key.Length;
+                    hasKey = true;
+                    break;
+                }
+                case 2:
+                {
+                    var value = reader.ReadBinary();
+                    valueOffset = reader.Offset - value.Length;
+                    valueLength = value.Length;
+                    hasValue = true;
+                    break;
+                }
+                default:
+                    reader.Skip(type, inlineBool);
+                    break;
+            }
+        }
+
+        if (!hasKey)
+            throw new CorruptParquetException("Key-value metadata entry is missing its required key.");
+        return new ParquetKeyValueMetadataInfo(keyOffset, keyLength, valueOffset, valueLength, hasValue);
     }
 
     static void ReadSchema(ref CompactProtocolReader reader, ParquetFileMetadata metadata,

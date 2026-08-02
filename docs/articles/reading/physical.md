@@ -43,6 +43,21 @@ for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroup
 
 [`Metadata`](xref:Plank.Reading.Physical.ParquetFileReader.Metadata) returns file-level metadata. It describes the schema, row groups, and column chunks, but it does not read column values.
 
+The same object exposes `created_by` and ordered key-value metadata without decoding strings or allocating a
+dictionary:
+
+```csharp
+ReadOnlySpan<byte> createdBy = metadata.CreatedByUtf8;
+for (var i = 0; i < metadata.KeyValueMetadataCount; i++)
+{
+    ReadOnlySpan<byte> key = metadata.KeyValueMetadataKeyUtf8(i);
+    ReadOnlySpan<byte> value = metadata.KeyValueMetadataValueUtf8(i);
+    bool hasValue = metadata.KeyValueMetadata[i].HasValue;
+}
+```
+
+Use `HasCreatedBy` and each entry's `HasValue` property to distinguish an omitted value from an empty UTF-8 value.
+
 ## Read page bytes
 
 ```csharp

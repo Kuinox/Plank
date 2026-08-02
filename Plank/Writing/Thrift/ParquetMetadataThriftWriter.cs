@@ -102,7 +102,8 @@ static class ParquetMetadataThriftWriter
     }
 
     internal static void WriteFileMetaData(ref BufferWriter destination, ParquetSchema schema, int rowGroupCount,
-        long totalRowCount, ref BufferWriter serializedRowGroups)
+        long totalRowCount, ref BufferWriter serializedRowGroups, string? createdBy,
+        ReadOnlySpan<ParquetKeyValueMetadata> keyValueMetadata)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
@@ -112,8 +113,30 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldHeader(4, CompactType.List);
         writer.WriteListHeader(rowGroupCount, CompactType.Struct);
         writer.WriteRaw(ref serializedRowGroups);
+        WriteKeyValueMetadata(ref writer, keyValueMetadata);
+        if (createdBy is not null)
+            writer.WriteFieldBinary(6, createdBy);
         WriteColumnOrders(ref writer, schema.Columns.Length);
         writer.EndStruct(previous);
+    }
+
+    static void WriteKeyValueMetadata(ref CompactWriter writer,
+        ReadOnlySpan<ParquetKeyValueMetadata> keyValueMetadata)
+    {
+        if (keyValueMetadata.IsEmpty)
+            return;
+
+        writer.WriteFieldHeader(5, CompactType.List);
+        writer.WriteListHeader(keyValueMetadata.Length, CompactType.Struct);
+        for (var i = 0; i < keyValueMetadata.Length; i++)
+        {
+            var entry = keyValueMetadata[i];
+            var previous = writer.BeginStruct();
+            writer.WriteFieldBinary(1, entry.Key);
+            if (entry.Value is not null)
+                writer.WriteFieldBinary(2, entry.Value);
+            writer.EndStruct(previous);
+        }
     }
 
     static void WriteColumnOrders(ref CompactWriter writer, int columnCount)

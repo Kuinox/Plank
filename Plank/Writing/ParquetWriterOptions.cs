@@ -27,6 +27,10 @@ public sealed class ParquetWriterOptions
 
     public int? CompressionLevel { get; init; }
 
+    public string? CreatedBy { get; init; } = "Plank";
+
+    public IReadOnlyList<ParquetKeyValueMetadata> KeyValueMetadata { get; init; } = [];
+
     public bool WritePageIndexes { get; init; } = true;
 
     public uint RowApiMaxParallelism
@@ -59,6 +63,14 @@ public sealed class ParquetWriterOptions
             throw new ArgumentOutOfRangeException(nameof(Compression), Compression,
                 "Compression must be a defined CompressionKind value.");
         ValidateCompressionLevel();
+        ArgumentNullException.ThrowIfNull(KeyValueMetadata);
+        for (var i = 0; i < KeyValueMetadata.Count; i++)
+        {
+            var entry = KeyValueMetadata[i];
+            if (string.IsNullOrEmpty(entry.Key))
+                throw new ArgumentException($"Key-value metadata entry {i} must have a non-empty key.",
+                    nameof(KeyValueMetadata));
+        }
     }
 
     internal int GetCompressionLevel()
