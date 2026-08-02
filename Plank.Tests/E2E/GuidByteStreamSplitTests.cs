@@ -18,8 +18,8 @@ internal sealed class GuidByteStreamSplitTests
         rowGroup.Write(rowGroup.Id);
         writer.CloseFile();
 
-        stream.Position = 0;
-        using var reader = GuidByteStreamSplitRowSchema.CreateRowReader(stream);
+        using var readStream = new MemoryStream(stream.ToArray(), writable: false);
+        using var reader = GuidByteStreamSplitRowSchema.CreateRowReader(readStream);
         var actual = new List<Guid>();
         while (reader.MoveNext())
             actual.Add(reader.Current.Id);

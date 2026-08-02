@@ -134,11 +134,35 @@ static class ByteStreamSplitEncoding
     static void WriteFixedLengthByteArrayValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
+        var valueLength = GetFixedLength(column);
+        if (typeof(T) == typeof(Guid))
+        {
+            if (valueLength != 16)
+                throw new InvalidOperationException(
+                    $"Column '{column.Name}' expects Guid values in fixed-length payloads of 16 bytes, but has length {valueLength}.");
+
+            var guidValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<Guid>>(ref values);
+            var guidByteCount = checked(guidValues.Length * 16);
+            if (guidByteCount == 0)
+                return;
+
+            var guidDestination = writer.GetSpan(guidByteCount);
+            Span<byte> guidBytes = stackalloc byte[16];
+            for (var i = 0; i < guidValues.Length; i++)
+            {
+                guidValues[i].TryWriteBytes(guidBytes, bigEndian: true, out _);
+                for (var lane = 0; lane < guidBytes.Length; lane++)
+                    guidDestination[(lane * guidValues.Length) + i] = guidBytes[lane];
+            }
+
+            writer.Advance(guidByteCount);
+            return;
+        }
+
         if (typeof(T) != typeof(byte[]))
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.FixedLenByteArray}' values as byte[] payloads, but got '{typeof(T)}'.");
 
-        var valueLength = GetFixedLength(column);
         var fixedLengthValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
         var byteCount = checked(fixedLengthValues.Length * valueLength);
         if (byteCount == 0)
