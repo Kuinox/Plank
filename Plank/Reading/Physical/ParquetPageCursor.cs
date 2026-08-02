@@ -173,8 +173,12 @@ public struct ParquetPageCursor : IDisposable
         var compressedLength = checked((int)header.CompressedPageSize);
         var sourceOffset = _chunk.ChunkOffset + (ulong)_offset;
         _offset += compressedLength;
-        if (!RequiresDecompression(header, compressedLength))
+        if (!RequiresDecompression(header))
         {
+            if (header.CompressedPageSize != header.UncompressedPageSize)
+                throw new CorruptParquetException(
+                    $"Uncompressed page size ({header.UncompressedPageSize}) does not match its payload size ({header.CompressedPageSize}).");
+
             EnsurePayloadBuffer(owner, compressedLength);
             if (compressedLength > 0)
                 owner.Source.ReadExactly(sourceOffset, _payloadBuffer.Span[..compressedLength]);
@@ -211,6 +215,8 @@ public struct ParquetPageCursor : IDisposable
             owner.Source.ReadExactly(sourceOffset, compressed.Span[..compressedLength]);
             ParquetDecompressor.DecompressInto(compressed.Span[..compressedLength], _chunk.Compression, destination);
         }
+        else if (!destination.IsEmpty)
+            throw new CorruptParquetException("Compressed page payload is empty but its uncompressed payload is not.");
 
         _payloadLength = uncompressedLength;
         CurrentHeader = header;
@@ -229,9 +235,10 @@ public struct ParquetPageCursor : IDisposable
         CurrentHeader = default;
     }
 
-    bool RequiresDecompression(PageHeader header, int payloadLength)
+    bool RequiresDecompression(PageHeader header)
     {
-        if (_chunk.Compression == CompressionKind.None || payloadLength == 0)
+        if (_chunk.Compression == CompressionKind.None ||
+            header.CompressedPageSize == 0 && header.UncompressedPageSize == 0)
             return false;
         return header.Type != PageHeaderType.DataPageV2 || header.IsCompressed;
     }
