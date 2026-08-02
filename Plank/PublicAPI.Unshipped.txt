@@ -10,6 +10,13 @@ Plank.Reading.Physical.ParquetKeyValueMetadataInfo.HasValue.get -> bool
 Plank.Reading.Physical.ParquetKeyValueMetadataInfo.KeyLength.get -> int
 Plank.Reading.Physical.ParquetKeyValueMetadataInfo.ParquetKeyValueMetadataInfo() -> void
 Plank.Reading.Physical.ParquetKeyValueMetadataInfo.ValueLength.get -> int
+Plank.Schema.ParquetSchema.CreateAppender(System.IO.Stream! stream, Plank.Writing.ParquetAppendOptions? options = null) -> Plank.Writing.ParquetWriter!
+Plank.Writing.ParquetAppendOptions
+Plank.Writing.ParquetAppendOptions.ParquetAppendOptions() -> void
+Plank.Writing.ParquetAppendOptions.PreserveExistingMetadata.get -> bool
+Plank.Writing.ParquetAppendOptions.PreserveExistingMetadata.init -> void
+Plank.Writing.ParquetAppendOptions.WriterOptions.get -> Plank.Writing.ParquetWriterOptions!
+Plank.Writing.ParquetAppendOptions.WriterOptions.init -> void
 Plank.Writing.ParquetKeyValueMetadata
 Plank.Writing.ParquetKeyValueMetadata.Key.get -> string!
 Plank.Writing.ParquetKeyValueMetadata.Key.init -> void
@@ -23,3 +30,4 @@ Plank.Writing.ParquetWriterOptions.CompressionLevel.get -> int?
 Plank.Writing.ParquetWriterOptions.CompressionLevel.init -> void
 Plank.Writing.ParquetWriterOptions.KeyValueMetadata.get -> System.Collections.Generic.IReadOnlyList<Plank.Writing.ParquetKeyValueMetadata>!
 Plank.Writing.ParquetWriterOptions.KeyValueMetadata.init -> void
+static readonly Plank.Writing.ParquetAppendOptions.Default -> Plank.Writing.ParquetAppendOptions!

@@ -405,13 +405,16 @@ static class PhysicalMetadataThriftReader
         metadata.ColumnChunkBuffer = Rent<ParquetColumnChunkInfo>(bufferPool, checked(rowGroupCount * metadata.ColumnCount));
         var rowGroups = metadata.RowGroupStorage;
         for (var ordinal = 0; ordinal < rowGroupCount; ordinal++)
+        {
+            var metadataStart = reader.Offset;
             rowGroups[ordinal] = ReadRowGroup(ref reader, metadata, ordinal,
-                metadata.FooterOffset + (ulong)reader.Offset);
+                metadata.FooterOffset + (ulong)metadataStart, metadataStart);
+        }
         metadata.RowGroupCount = rowGroupCount;
     }
 
     static ParquetRowGroupInfo ReadRowGroup(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
-        int ordinal, ulong metadataOffset)
+        int ordinal, ulong metadataOffset, int metadataStart)
     {
         var columnChunkOffset = 0UL;
         var rowCount = 0UL;
@@ -440,7 +443,8 @@ static class PhysicalMetadataThriftReader
         if (columnChunkOffset == 0 && columnCount != 0)
             columnChunkOffset = metadata.ColumnChunkStorage[columnStart].ChunkOffset;
 
-        return new ParquetRowGroupInfo(ordinal, metadataOffset, columnChunkOffset, rowCount, columnStart, columnCount);
+        return new ParquetRowGroupInfo(ordinal, metadataOffset, columnChunkOffset, rowCount, columnStart, columnCount,
+            reader.Offset - metadataStart);
     }
 
     static int ReadColumns(ref CompactProtocolReader reader, ParquetFileMetadata metadata, int rowGroupOrdinal)

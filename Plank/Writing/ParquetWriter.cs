@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
+using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing.PageStrategy;
 using Plank.Writing.Thrift;
+using TextEncoding = System.Text.Encoding;
 
 namespace Plank.Writing;
 
@@ -12,8 +14,8 @@ public sealed class ParquetWriter
     Stream _stream = null!;
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
-    readonly string? _createdBy;
-    readonly ParquetKeyValueMetadata[] _keyValueMetadata;
+    string? _createdBy;
+    ParquetKeyValueMetadata[] _keyValueMetadata;
     internal readonly Column[] ColumnsByOrdinal;
     readonly PageStrategyContext[] _pageStrategyContextsByOrdinal;
     internal readonly string[][] ColumnPathsByOrdinal;
@@ -36,6 +38,17 @@ public sealed class ParquetWriter
     bool _streamDisposed;
 
     internal ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options)
+        : this(stream, schema, options, appendOptions: null)
+    {
+    }
+
+    internal ParquetWriter(Stream stream, ParquetSchema schema, ParquetAppendOptions options)
+        : this(stream, schema, options.WriterOptions, options)
+    {
+    }
+
+    ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options,
+        ParquetAppendOptions? appendOptions)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(schema);
@@ -43,9 +56,12 @@ public sealed class ParquetWriter
 
         _schema = schema;
         _options = options;
-        _options.Validate();
-        _createdBy = options.CreatedBy;
-        _keyValueMetadata = options.KeyValueMetadata.Count == 0 ? [] : options.KeyValueMetadata.ToArray();
+        if (appendOptions is null)
+            _options.Validate();
+        else
+            appendOptions.Validate();
+        _createdBy = null;
+        _keyValueMetadata = [];
         ColumnsByOrdinal = _schema.Columns.IsDefault ? [] : _schema.Columns.ToArray();
         ColumnPathsByOrdinal = _schema.LeafPaths.IsDefault || _schema.LeafPaths.Length == 0
             ? ColumnsByOrdinal.Select(static c => new[] { c.Name }).ToArray()
@@ -74,7 +90,24 @@ public sealed class ParquetWriter
         SerializedRowGroupsMetadata = BufferWriters.CreateMetadataBufferWriter();
         SerializedFileMetadata = BufferWriters.CreateMetadataBufferWriter();
         FileOffset = 0;
-        OpenFile(stream);
+        if (appendOptions is null)
+        {
+            _createdBy = options.CreatedBy;
+            _keyValueMetadata = SnapshotMetadata(options.KeyValueMetadata);
+            OpenFile(stream);
+        }
+        else
+        {
+            try
+            {
+                OpenAppendFile(stream, appendOptions);
+            }
+            catch
+            {
+                ReleaseBuffers();
+                throw;
+            }
+        }
     }
 
     public uint RowApiMaxParallelism
@@ -204,6 +237,76 @@ public sealed class ParquetWriter
             SerializedFileMetadata.Reset();
         WriteFileHeader();
     }
+
+    void OpenAppendFile(Stream stream, ParquetAppendOptions appendOptions)
+    {
+        if (!stream.CanRead || !stream.CanWrite || !stream.CanSeek)
+            throw new ArgumentException("Appending requires a readable, writable, seekable stream.", nameof(stream));
+
+        using var reader = new ParquetReader(_schema, new ParquetReaderOptions
+        {
+            BufferPool = _options.BufferPool,
+            Strict = true
+        });
+        reader.Reset(stream);
+        var metadata = reader.PhysicalReader.Metadata;
+
+        SerializedRowGroupsMetadata.Reset();
+        long totalRowCount = 0;
+        for (var i = 0; i < metadata.RowGroupCount; i++)
+        {
+            var rowGroup = metadata.RowGroups[i];
+            var relativeOffset = checked((int)(rowGroup.MetadataOffset - metadata.FooterOffset));
+            SerializedRowGroupsMetadata.Write(metadata.FooterBytes.Slice(relativeOffset, rowGroup.MetadataLength));
+            totalRowCount = checked(totalRowCount + checked((long)rowGroup.RowCount));
+        }
+
+        if (appendOptions.PreserveExistingMetadata)
+        {
+            _createdBy = _options.CreatedBy ?? DecodeCreatedBy(metadata);
+            _keyValueMetadata = MergeMetadata(metadata, _options.KeyValueMetadata);
+        }
+        else
+        {
+            _createdBy = _options.CreatedBy;
+            _keyValueMetadata = SnapshotMetadata(_options.KeyValueMetadata);
+        }
+
+        _stream = stream;
+        _streamDisposed = false;
+        _rowGroupCount = metadata.RowGroupCount;
+        _totalRowCount = totalRowCount;
+        _rowGroupOpen = false;
+        FileOffset = checked((long)metadata.FooterOffset);
+        stream.Position = FileOffset;
+        stream.SetLength(FileOffset);
+        SerializedFileMetadata.Reset();
+    }
+
+    static string? DecodeCreatedBy(Reading.Physical.ParquetFileMetadata metadata)
+        => metadata.HasCreatedBy ? TextEncoding.UTF8.GetString(metadata.CreatedByUtf8) : null;
+
+    static ParquetKeyValueMetadata[] MergeMetadata(Reading.Physical.ParquetFileMetadata metadata,
+        IReadOnlyList<ParquetKeyValueMetadata> additions)
+    {
+        if (metadata.KeyValueMetadataCount == 0)
+            return SnapshotMetadata(additions);
+
+        var result = new ParquetKeyValueMetadata[checked(metadata.KeyValueMetadataCount + additions.Count)];
+        for (var i = 0; i < metadata.KeyValueMetadataCount; i++)
+        {
+            var entry = metadata.KeyValueMetadata[i];
+            var key = TextEncoding.UTF8.GetString(metadata.KeyValueMetadataKeyUtf8(i));
+            var value = entry.HasValue ? TextEncoding.UTF8.GetString(metadata.KeyValueMetadataValueUtf8(i)) : null;
+            result[i] = new ParquetKeyValueMetadata(key, value);
+        }
+        for (var i = 0; i < additions.Count; i++)
+            result[metadata.KeyValueMetadataCount + i] = additions[i];
+        return result;
+    }
+
+    static ParquetKeyValueMetadata[] SnapshotMetadata(IReadOnlyList<ParquetKeyValueMetadata> metadata)
+        => metadata.Count == 0 ? [] : metadata.ToArray();
 
     void ReleaseBuffers()
     {
