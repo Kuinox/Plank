@@ -4,7 +4,7 @@ namespace Plank.Reading;
 
 unsafe static class GzipInflater
 {
-    internal static void Decompress(ReadOnlySpan<byte> input, Span<byte> destination)
+    internal static int Decompress(ReadOnlySpan<byte> input, Span<byte> destination)
     {
         Span<byte> streamState = stackalloc byte[ZlibNative.StreamStateSize];
         streamState.Clear();
@@ -29,11 +29,9 @@ unsafe static class GzipInflater
                     throw new InvalidDataException($"zlib inflate failed with code {resultCode}.");
 
                 var written = outputBuffer.Length - checked((int)ZlibNative.GetAvailableOutput(stream));
-                if (written != destination.Length)
-                    throw new InvalidDataException(
-                        $"Gzip decompression produced {written} bytes but {destination.Length} were expected.");
                 if (ZlibNative.GetAvailableInput(stream) != 0)
                     throw new InvalidDataException("Gzip payload contains trailing compressed bytes.");
+                return written;
             }
             finally
             {
