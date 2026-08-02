@@ -30,4 +30,13 @@ public sealed class ParquetColumnAttribute : Attribute
     public EncodingKind[]? Encodings { get; set; }
 
     public LogicalTypeKind LogicalType { get; set; }
+
+    /// <summary>Gets or sets the precision when <see cref="LogicalType"/> is <see cref="LogicalTypeKind.Decimal"/>.</summary>
+    public int DecimalPrecision { get; set; }
+
+    /// <summary>Gets or sets the scale when <see cref="LogicalType"/> is <see cref="LogicalTypeKind.Decimal"/>.</summary>
+    public int DecimalScale { get; set; }
+
+    /// <summary>Gets or sets the parameterless custom converter type for this property.</summary>
+    public Type? Converter { get; set; }
 }

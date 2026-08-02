@@ -22,7 +22,7 @@ public sealed record RowSchema
         => new(columns);
 
     public static RowSchemaColumn Column<TClr>(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null,
-        LogicalType? logicalType = null, IPageStrategy? pageStrategy = null)
-        => new(name, physicalType, typeof(TClr), options, logicalType, pageStrategy);
+        LogicalType? logicalType = null, IPageStrategy? pageStrategy = null, ParquetValueConverter? converter = null)
+        => new(name, physicalType, typeof(TClr), options, logicalType, pageStrategy, converter);
 
 }

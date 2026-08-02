@@ -263,6 +263,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 .Append(", ").Append(GetColumnOptionsExpression(schemaColumn));
             if (schemaColumn.LogicalType is { } logicalType)
                 builder.Append(", ").Append(GetLogicalTypeExpression(logicalType));
+            if (schemaColumn.ConverterTypeName is { } converterTypeName)
+                builder.Append(", converter: new ").Append(converterTypeName).Append("()");
             builder.AppendLine("),");
         }
         builder.AppendLine("    ]);");
@@ -850,6 +852,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     static bool IsSupportedMapping(SchemaColumn column, string clrType)
     {
+        if (column.ConverterTypeName is not null)
+            return true;
+
         if (column.Repetition == "Optional")
             return column.PhysicalType switch
             {
@@ -1023,16 +1028,36 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         error = string.Empty;
         column = default;
 
-        if (!TryNormalizeClrType(property.Type, property.NullableAnnotation, out var clrTypeName))
-        {
-            error = $"Unsupported CLR type '{property.Type.ToDisplayString()}' for schema property '{property.Name}'.";
+        if (!TryGetConverterSpec(property, out var converter, out error))
             return false;
-        }
 
-        if (!TryInferDefaults(clrTypeName, out var inferredPhysicalType, out var inferredLogicalType))
+        string clrTypeName;
+        string inferredPhysicalType;
+        LogicalTypeSpec? inferredLogicalType;
+        if (converter is null)
         {
-            error = $"Could not infer parquet mapping for CLR type '{property.Type.ToDisplayString()}' on property '{property.Name}'.";
-            return false;
+            if (!TryNormalizeClrType(property.Type, property.NullableAnnotation, out clrTypeName))
+            {
+                error = $"Unsupported CLR type '{property.Type.ToDisplayString()}' for schema property '{property.Name}'.";
+                return false;
+            }
+
+            if (!TryInferDefaults(clrTypeName, out inferredPhysicalType, out inferredLogicalType))
+            {
+                error = $"Could not infer parquet mapping for CLR type '{property.Type.ToDisplayString()}' on property '{property.Name}'.";
+                return false;
+            }
+        }
+        else
+        {
+            clrTypeName = property.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            if (!TryInferDefaults(converter.Value.PhysicalClrTypeName, out inferredPhysicalType,
+                    out inferredLogicalType))
+            {
+                error = $"Converter '{converter.Value.TypeName}' uses unsupported physical CLR type " +
+                    $"'{converter.Value.PhysicalClrTypeName}'.";
+                return false;
+            }
         }
 
         var columnName = property.Name;
@@ -1041,6 +1066,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         ImmutableArray<string> encodings = [];
         if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref encodings, out error))
             return false;
+        if (converter is not null && physicalType != inferredPhysicalType)
+        {
+            error = $"Converter '{converter.Value.TypeName}' uses physical CLR type " +
+                $"'{converter.Value.PhysicalClrTypeName}', which maps to '{inferredPhysicalType}', not " +
+                $"declared physical type '{physicalType}'.";
+            return false;
+        }
         if (columnName.Length == 0)
         {
             error = $"Property '{property.Name}' has an empty parquet column name.";
@@ -1049,8 +1081,100 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
         column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType, property.Name, encodings,
-            IsGuidClr(clrTypeName) ? 16u : 0u);
+            IsGuidClr(converter?.PhysicalClrTypeName ?? clrTypeName) ? 16u : 0u,
+            converter?.TypeName);
         return true;
+    }
+
+    static bool TryGetConverterSpec(IPropertySymbol property, out ConverterSpec? converter, out string error)
+    {
+        converter = null;
+        error = string.Empty;
+        var attributes = property.GetAttributes()
+            .Where(static a => a.AttributeClass?.ToDisplayString() == "Plank.Schema.ParquetColumnAttribute")
+            .ToImmutableArray();
+        if (attributes.IsDefaultOrEmpty)
+            return true;
+        if (attributes.Length > 1)
+        {
+            error = $"Property '{property.Name}' has multiple [ParquetColumn] attributes.";
+            return false;
+        }
+
+        ITypeSymbol? converterTypeSymbol = null;
+        foreach (var argument in attributes[0].NamedArguments)
+            if (argument.Key == "Converter")
+                converterTypeSymbol = argument.Value.Value as ITypeSymbol;
+        if (converterTypeSymbol is null)
+            return true;
+        if (converterTypeSymbol is not INamedTypeSymbol converterType || converterType.IsAbstract ||
+            converterType.IsUnboundGenericType)
+        {
+            error = $"Property '{property.Name}' converter must be a non-abstract, closed class type.";
+            return false;
+        }
+
+        var converterBase = FindConverterBase(converterType);
+        if (converterBase is null)
+        {
+            error = $"Converter '{converterType.ToDisplayString()}' must derive from " +
+                "ParquetValueConverter<TValue, TPhysical>.";
+            return false;
+        }
+
+        var propertyValueType = property.Type is INamedTypeSymbol
+        { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable
+            ? nullable.TypeArguments[0]
+            : property.Type;
+        if (!SymbolEqualityComparer.Default.Equals(propertyValueType, converterBase.TypeArguments[0]))
+        {
+            error = $"Converter '{converterType.ToDisplayString()}' maps " +
+                $"'{converterBase.TypeArguments[0].ToDisplayString()}', not property type " +
+                $"'{propertyValueType.ToDisplayString()}'.";
+            return false;
+        }
+
+        var physicalType = converterBase.TypeArguments[1];
+        if (physicalType is INamedTypeSymbol
+            { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T })
+        {
+            error = $"Converter '{converterType.ToDisplayString()}' physical CLR type must be non-nullable.";
+            return false;
+        }
+        if (!physicalType.IsUnmanagedType ||
+            !TryNormalizeClrType(physicalType, NullableAnnotation.NotAnnotated, out var physicalClrTypeName))
+        {
+            error = $"Converter '{converterType.ToDisplayString()}' uses unsupported physical CLR type " +
+                $"'{physicalType.ToDisplayString()}'.";
+            return false;
+        }
+
+        var sameAssembly = SymbolEqualityComparer.Default.Equals(
+            converterType.ContainingAssembly, property.ContainingAssembly);
+        var hasParameterlessConstructor = converterType.InstanceConstructors.Any(static constructor =>
+            constructor.Parameters.Length == 0 && constructor.DeclaredAccessibility == Accessibility.Public) ||
+            sameAssembly && converterType.InstanceConstructors.Any(static constructor =>
+                constructor.Parameters.Length == 0 &&
+                constructor.DeclaredAccessibility is Accessibility.Internal or Accessibility.ProtectedOrInternal);
+        if (!hasParameterlessConstructor)
+        {
+            error = $"Converter '{converterType.ToDisplayString()}' must have an accessible parameterless constructor.";
+            return false;
+        }
+
+        converter = new ConverterSpec(
+            converterType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), physicalClrTypeName);
+        return true;
+    }
+
+    static INamedTypeSymbol? FindConverterBase(INamedTypeSymbol converterType)
+    {
+        for (var candidate = converterType.BaseType; candidate is not null; candidate = candidate.BaseType)
+            if (candidate.OriginalDefinition.Name == "ParquetValueConverter" &&
+                candidate.OriginalDefinition.Arity == 2 &&
+                candidate.OriginalDefinition.ContainingNamespace.ToDisplayString() == "Plank.Schema")
+                return candidate;
+        return null;
     }
 
     static bool TryReadColumnOverrides(IPropertySymbol property, ref string columnName, ref string physicalType,
@@ -1070,6 +1194,15 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
 
         var attribute = attributes[0];
+        int? decimalPrecision = null;
+        int? decimalScale = null;
+        foreach (var namedArgument in attribute.NamedArguments)
+        {
+            if (namedArgument.Key == "DecimalPrecision")
+                decimalPrecision = namedArgument.Value.Value as int?;
+            else if (namedArgument.Key == "DecimalScale")
+                decimalScale = namedArgument.Value.Value as int?;
+        }
         for (var i = 0; i < attribute.ConstructorArguments.Length; i++)
         {
             var parameter = attribute.AttributeConstructor?.Parameters[i];
@@ -1106,12 +1239,19 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
             if (namedArgument.Key == "LogicalType")
             {
-                if (!TryGetLogicalTypeSpec(namedArgument.Value, logicalType, out logicalType))
+                if (!TryGetLogicalTypeSpec(namedArgument.Value, logicalType, decimalPrecision, decimalScale,
+                        out logicalType))
                 {
                     error = $"Property '{property.Name}' declares an invalid LogicalTypeKind override.";
                     return false;
                 }
             }
+        }
+
+        if ((decimalPrecision is not null || decimalScale is not null) && logicalType?.Kind != "Decimal")
+        {
+            error = $"Property '{property.Name}' declares decimal precision or scale without logical type 'Decimal'.";
+            return false;
         }
 
         return true;
@@ -1186,7 +1326,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     }
 
     static bool TryGetLogicalTypeSpec(TypedConstant constant, LogicalTypeSpec? inferredLogicalType,
-        out LogicalTypeSpec? logicalType)
+        int? decimalPrecision, int? decimalScale, out LogicalTypeSpec? logicalType)
     {
         logicalType = null;
         if (!TryGetEnumValue(constant, out var enumValue))
@@ -1202,10 +1342,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             5 => ReuseInferredLogicalType(inferredLogicalType, "Time"),
             6 => ReuseInferredLogicalType(inferredLogicalType, "Timestamp"),
             7 => ReuseInferredLogicalType(inferredLogicalType, "Int"),
+            8 => new LogicalTypeSpec("Decimal", precision: decimalPrecision, scale: decimalScale),
             _ => null
         };
 
-        return enumValue is >= 0 and <= 7;
+        return enumValue is >= 0 and <= 8;
     }
 
     static LogicalTypeSpec ReuseInferredLogicalType(LogicalTypeSpec? inferredLogicalType, string kind)
@@ -1360,16 +1501,17 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var logicalType = column.LogicalType;
         if (logicalType is null)
         {
-            if (IsUnsignedIntClr(column.ClrTypeName, GetUnsignedBitWidth(column.ClrTypeName)))
+            if (column.ConverterTypeName is null &&
+                IsUnsignedIntClr(column.ClrTypeName, GetUnsignedBitWidth(column.ClrTypeName)))
                 diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
                     $"Column '{column.Name}' uses an unsigned CLR integer and must declare logical type 'Int' with IsSigned=false."));
-            if (IsDateOnly(column.ClrTypeName))
+            if (column.ConverterTypeName is null && IsDateOnly(column.ClrTypeName))
                 diagnostics.Add(new SchemaDiagnostic(MissingDateLogicalType,
                     $"Column '{column.Name}' uses DateOnly and must declare logical type 'Date'."));
-            if (IsTimeOnly(column.ClrTypeName))
+            if (column.ConverterTypeName is null && IsTimeOnly(column.ClrTypeName))
                 diagnostics.Add(new SchemaDiagnostic(MissingTimeLogicalType,
                     $"Column '{column.Name}' uses TimeOnly and must declare logical type 'Time'."));
-            if (IsTimestampClr(column.ClrTypeName))
+            if (column.ConverterTypeName is null && IsTimestampClr(column.ClrTypeName))
                 diagnostics.Add(new SchemaDiagnostic(MissingTimestampLogicalType,
                     $"Column '{column.Name}' uses DateTime/DateTimeOffset and must declare logical type 'Timestamp'."));
             return;
@@ -1393,7 +1535,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 else if (column.PhysicalType != "Int64")
                     diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
                         $"Column '{column.Name}' logical type 'Int(64,false)' requires physical type 'Int64'."));
-                if (!IsUnsignedIntClr(column.ClrTypeName, logicalType.Value.BitWidth))
+                if (column.ConverterTypeName is null &&
+                    !IsUnsignedIntClr(column.ClrTypeName, logicalType.Value.BitWidth))
                     diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
                         $"Column '{column.Name}' logical type 'Int({logicalType.Value.BitWidth},false)' requires matching unsigned CLR type."));
                 break;
@@ -1401,7 +1544,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (column.PhysicalType != "Int32")
                     diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
                         $"Column '{column.Name}' logical type 'Date' requires physical type 'Int32'."));
-                if (!IsDateOnly(column.ClrTypeName))
+                if (column.ConverterTypeName is null && !IsDateOnly(column.ClrTypeName))
                     diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
                         $"Column '{column.Name}' logical type 'Date' requires CLR type DateOnly/DateOnly?."));
                 break;
@@ -1418,7 +1561,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 else if (column.PhysicalType != "Int64")
                     diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
                         $"Column '{column.Name}' logical type 'Time({logicalType.Value.Unit})' requires physical type 'Int64'."));
-                if (!IsTimeOnly(column.ClrTypeName))
+                if (column.ConverterTypeName is null && !IsTimeOnly(column.ClrTypeName))
                     diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
                         $"Column '{column.Name}' logical type 'Time' requires CLR type TimeOnly/TimeOnly?."));
                 break;
@@ -1429,7 +1572,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (column.PhysicalType != "Int64")
                     diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
                         $"Column '{column.Name}' logical type 'Timestamp' requires physical type 'Int64'."));
-                if (!IsTimestampClr(column.ClrTypeName))
+                if (column.ConverterTypeName is null && !IsTimestampClr(column.ClrTypeName))
                     diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
                         $"Column '{column.Name}' logical type 'Timestamp' requires CLR type DateTime/DateTimeOffset (nullable allowed)."));
                 break;
@@ -1438,7 +1581,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (column.PhysicalType != "ByteArray")
                     diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
                         $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires physical type 'ByteArray'."));
-                if (!IsUtf8ByteArrayClr(column.ClrTypeName) && !IsStringClr(column.ClrTypeName))
+                if (column.ConverterTypeName is null &&
+                    !IsUtf8ByteArrayClr(column.ClrTypeName) && !IsStringClr(column.ClrTypeName))
                     diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
                         $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires CLR type string/string?/ReadOnlyMemory<byte>/ReadOnlyMemory<byte>?/byte[]/byte[]?."));
                 break;
@@ -1446,7 +1590,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (column.PhysicalType != "FixedLenByteArray")
                     diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
                         $"Column '{column.Name}' logical type 'Uuid' requires physical type 'FixedLenByteArray'."));
-                if (!IsUtf8ByteArrayClr(column.ClrTypeName) && !IsGuidClr(column.ClrTypeName))
+                if (column.ConverterTypeName is null &&
+                    !IsUtf8ByteArrayClr(column.ClrTypeName) && !IsGuidClr(column.ClrTypeName))
                     diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
                         $"Column '{column.Name}' logical type 'Uuid' requires CLR type Guid/Guid?/ReadOnlyMemory<byte>/ReadOnlyMemory<byte>?/byte[]/byte[]?."));
                 break;
@@ -1602,7 +1747,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     readonly struct SchemaColumn
     {
         public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName,
-            LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings, uint typeLength)
+            LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings, uint typeLength,
+            string? converterTypeName)
         {
             Name = name;
             PhysicalType = physicalType;
@@ -1612,6 +1758,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             RowPropertyName = rowPropertyName;
             Encodings = encodings;
             TypeLength = typeLength;
+            ConverterTypeName = converterTypeName;
         }
 
         public string Name { get; }
@@ -1629,6 +1776,21 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public ImmutableArray<string> Encodings { get; }
 
         public uint TypeLength { get; }
+
+        public string? ConverterTypeName { get; }
+    }
+
+    readonly struct ConverterSpec
+    {
+        public ConverterSpec(string typeName, string physicalClrTypeName)
+        {
+            TypeName = typeName;
+            PhysicalClrTypeName = physicalClrTypeName;
+        }
+
+        public string TypeName { get; }
+
+        public string PhysicalClrTypeName { get; }
     }
 
     readonly struct LogicalTypeSpec
