@@ -36,6 +36,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     object? _dictionaryState;
     ParquetBuffer _statisticsMinValueBuffer;
     ParquetBuffer _statisticsMaxValueBuffer;
+    internal RepeatedRowShape[]? MapRowShapes;
 
     internal SerializedColumn(ParquetWriter owner, LeafColumn column, uint initialPageCapacity)
     {
@@ -612,6 +613,64 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 #pragma warning disable CS8714
         SerializeCore(values, columnOrdinal, _owner.GetPageStrategyContext(columnOrdinal));
 #pragma warning restore CS8714
+        var projection = _owner.ColumnProjectionInfosByOrdinal[columnOrdinal];
+        var mapProjections = projection.MapProjections;
+        if (mapProjections.IsDefaultOrEmpty)
+            return;
+
+        var shapes = new RepeatedRowShape[mapProjections.Length];
+        for (var i = 0; i < shapes.Length; i++)
+            shapes[i] = CaptureRepeatedShape(values, mapProjections[i].RepetitionLevel);
+        MapRowShapes = shapes;
+    }
+
+    static RepeatedRowShape CaptureRepeatedShape(ReadOnlySpan<T> rows, int depth)
+    {
+        var rowOffsets = new int[rows.Length + 1];
+        var tokenCount = 0;
+        for (var i = 0; i < rows.Length; i++)
+        {
+            rowOffsets[i] = tokenCount;
+            tokenCount = checked(tokenCount + CountShapeTokens(rows[i], depth));
+        }
+        rowOffsets[rows.Length] = tokenCount;
+
+        var tokens = new int[tokenCount];
+        var tokenIndex = 0;
+        for (var i = 0; i < rows.Length; i++)
+            WriteShapeTokens(rows[i], depth, tokens, ref tokenIndex);
+        return new RepeatedRowShape(tokens, rowOffsets);
+    }
+
+    static int CountShapeTokens(object? node, int depth)
+    {
+        if (node is null)
+            return 1;
+        if (node is not Array array || depth <= 0)
+            throw new InvalidOperationException("Repeated column rows must have the expected jagged-array shape.");
+
+        var count = 1;
+        if (depth == 1)
+            return count;
+        for (var i = 0; i < array.Length; i++)
+            count = checked(count + CountShapeTokens(array.GetValue(i), depth - 1));
+        return count;
+    }
+
+    static void WriteShapeTokens(object? node, int depth, Span<int> destination, ref int index)
+    {
+        if (node is null)
+        {
+            destination[index++] = -1;
+            return;
+        }
+
+        var array = (Array)node;
+        destination[index++] = array.Length;
+        if (depth == 1)
+            return;
+        for (var i = 0; i < array.Length; i++)
+            WriteShapeTokens(array.GetValue(i), depth - 1, destination, ref index);
     }
 
     void SerializeCore<TValue>(ReadOnlySpan<TValue> values, uint columnOrdinal, PageStrategyContext strategyContext)
@@ -683,7 +742,10 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         => Consume();
 
     internal void Consume()
-        => HasPendingData = false;
+    {
+        HasPendingData = false;
+        MapRowShapes = null;
+    }
 
     void ISerializedColumn.ReleaseBuffers()
         => ReleaseBuffers();
@@ -695,6 +757,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         _statisticsMaxValueBuffer.Dispose();
         Statistics = default;
         HasPendingData = false;
+        MapRowShapes = null;
     }
 
     bool TryAssignSingleDataPageStatistics(ColumnStatistics statistics)

@@ -76,9 +76,12 @@ public sealed record ParquetSchema
         var pathsBuilder = ImmutableArray.CreateBuilder<ImmutableArray<string>>();
         var infosBuilder = ImmutableArray.CreateBuilder<LeafProjectionInfo>();
         var pathBuffer = new List<string>(8);
+        var mapProjections = new List<MapProjectionInfo>(2);
+        var nextMapId = 0;
         for (var i = 0; i < definitions.Length; i++)
             if (!TryCollectLeaves(definitions[i], columnsBuilder, pathsBuilder, pathBuffer, repeatedLevel: 0,
-                    definitionLevel: 0, infosBuilder, isListLeaf: false, listOptional: false, elementOptional: false))
+                    definitionLevel: 0, infosBuilder, isListLeaf: false, listOptional: false, elementOptional: false,
+                    mapProjections, ref nextMapId))
             {
                 columns = [];
                 leafPaths = [];
@@ -95,7 +98,7 @@ public sealed record ParquetSchema
     static bool TryCollectLeaves(ColumnDefinition node, ImmutableArray<Column>.Builder columnsBuilder,
         ImmutableArray<ImmutableArray<string>>.Builder pathsBuilder, List<string> pathBuffer, int repeatedLevel,
         int definitionLevel, ImmutableArray<LeafProjectionInfo>.Builder infosBuilder, bool isListLeaf,
-        bool listOptional, bool elementOptional)
+        bool listOptional, bool elementOptional, List<MapProjectionInfo> mapProjections, ref int nextMapId)
     {
         pathBuffer.Add(node.Name);
         var nodeRepetition = node.Repetition == ParquetRepetition.Repeated;
@@ -122,7 +125,8 @@ public sealed record ParquetSchema
                         node.PageStrategy));
                     pathsBuilder.Add(path);
                     infosBuilder.Add(new LeafProjectionInfo(isListLeaf, listOptional, elementOptional,
-                        MaxRepetitionLevel: nextRepeatedLevel, MaxDefinitionLevel: nextDefinitionLevel));
+                        MaxRepetitionLevel: nextRepeatedLevel, MaxDefinitionLevel: nextDefinitionLevel,
+                        MapProjections: mapProjections.ToImmutableArray()));
                     return true;
                 }
                 case NodeKind.Group:
@@ -131,7 +135,8 @@ public sealed record ParquetSchema
                         return false;
                     for (var i = 0; i < node.Children.Length; i++)
                         if (!TryCollectLeaves(node.Children[i], columnsBuilder, pathsBuilder, pathBuffer, nextRepeatedLevel,
-                                nextDefinitionLevel, infosBuilder, isListLeaf, listOptional, elementOptional))
+                                nextDefinitionLevel, infosBuilder, isListLeaf, listOptional, elementOptional,
+                                mapProjections, ref nextMapId))
                             return false;
                     return true;
                 }
@@ -147,7 +152,8 @@ public sealed record ParquetSchema
                         return TryCollectLeaves(element, columnsBuilder, pathsBuilder, pathBuffer,
                             repeatedLevel: nextRepeatedLevel + 1, definitionLevel: nextDefinitionLevel + 1, infosBuilder,
                             isListLeaf: true, listOptional: listOptional || node.Repetition == ParquetRepetition.Optional,
-                            elementOptional: element.Repetition == ParquetRepetition.Optional);
+                            elementOptional: element.Repetition == ParquetRepetition.Optional, mapProjections,
+                            ref nextMapId);
                     }
                     finally
                     {
@@ -160,12 +166,16 @@ public sealed record ParquetSchema
                         return false;
 
                     var keyNode = node.Children[0];
+                    var mapId = nextMapId++;
+                    var mapRepetitionLevel = nextRepeatedLevel + 1;
 
                     pathBuffer.Add("key_value");
-                    var keyOk = TryCollectLeaves(keyNode with { Name = "key" }, columnsBuilder, pathsBuilder, pathBuffer,
-                        repeatedLevel: nextRepeatedLevel + 1, definitionLevel: nextDefinitionLevel + 1, infosBuilder, isListLeaf: true,
-                        listOptional: node.Repetition == ParquetRepetition.Optional,
-                        elementOptional: false);
+                    mapProjections.Add(new MapProjectionInfo(mapId, mapRepetitionLevel, pathBuffer.Count, IsKey: true));
+                    var keyOk = TryCollectLeaves(keyNode with { Name = "key" }, columnsBuilder, pathsBuilder,
+                        pathBuffer, repeatedLevel: mapRepetitionLevel, definitionLevel: nextDefinitionLevel + 1,
+                        infosBuilder, isListLeaf: true, listOptional: node.Repetition == ParquetRepetition.Optional,
+                        elementOptional: false, mapProjections, ref nextMapId);
+                    mapProjections.RemoveAt(mapProjections.Count - 1);
                     if (!keyOk)
                     {
                         pathBuffer.RemoveAt(pathBuffer.Count - 1);
@@ -179,10 +189,13 @@ public sealed record ParquetSchema
                     }
 
                     var valueNode = node.Children[1];
-                    var valueOk = TryCollectLeaves(valueNode with { Name = "value" }, columnsBuilder, pathsBuilder, pathBuffer,
-                        repeatedLevel: nextRepeatedLevel + 1, definitionLevel: nextDefinitionLevel + 1, infosBuilder,
+                    mapProjections.Add(new MapProjectionInfo(mapId, mapRepetitionLevel, pathBuffer.Count, IsKey: false));
+                    var valueOk = TryCollectLeaves(valueNode with { Name = "value" }, columnsBuilder, pathsBuilder,
+                        pathBuffer, repeatedLevel: mapRepetitionLevel, definitionLevel: nextDefinitionLevel + 1, infosBuilder,
                         isListLeaf: true, listOptional: node.Repetition == ParquetRepetition.Optional,
-                        elementOptional: valueNode.Repetition == ParquetRepetition.Optional);
+                        elementOptional: valueNode.Repetition == ParquetRepetition.Optional, mapProjections,
+                        ref nextMapId);
+                    mapProjections.RemoveAt(mapProjections.Count - 1);
                     pathBuffer.RemoveAt(pathBuffer.Count - 1);
                     return valueOk;
                 }
