@@ -22,7 +22,7 @@ public sealed class FileReadSource : IParquetReadSource, IDisposable
 
     public void ReadExactly(ulong offset, Span<byte> destination)
     {
-        if (offset > (ulong)_length - (ulong)destination.Length)
+        if (offset > (ulong)_length || (ulong)destination.Length > (ulong)_length - offset)
             throw new CorruptParquetException($"Attempted to read {destination.Length} bytes at offset {offset} but the source is only {_length} bytes long.");
 
         var signedOffset = (long)offset;
