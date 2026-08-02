@@ -75,7 +75,14 @@ static class WyHashing
             int tail = data.Length - i;
             if (tail > 0)
             {
-                if (tail <= 8)
+                if (tail <= 3)
+                {
+                    ulong t = Unsafe.Add(ref p, i);
+                    if (tail > 1) t |= (ulong)Unsafe.Add(ref p, i + 1) << 8;
+                    if (tail > 2) t |= (ulong)Unsafe.Add(ref p, i + 2) << 16;
+                    acc ^= Mix(acc ^ P0, t ^ P1);
+                }
+                else if (tail <= 8)
                 {
                     ulong ta = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref p, i));
                     ulong tb = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref p, data.Length - 4));

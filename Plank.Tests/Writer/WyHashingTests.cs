@@ -9,9 +9,19 @@ internal sealed class WyHashingTests
     [Arguments(18)]
     [Arguments(19)]
     public void HashDoesNotReadPastSpanBoundary(int length)
+        => AssertGuardBytesDoNotAffectHash(length);
+
+    [Test]
+    public void HashDoesNotReadPastSpanBoundaryAcrossLengths()
     {
-        var first = new byte[length + sizeof(uint)];
-        var second = new byte[length + sizeof(uint)];
+        for (var length = 1; length <= 64; length++)
+            AssertGuardBytesDoNotAffectHash(length);
+    }
+
+    static void AssertGuardBytesDoNotAffectHash(int length)
+    {
+        var first = new byte[length + 16];
+        var second = new byte[length + 16];
         for (var i = 0; i < length; i++)
         {
             first[i] = (byte)(i * 17 + 3);
