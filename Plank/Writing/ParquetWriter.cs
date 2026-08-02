@@ -18,8 +18,7 @@ public sealed class ParquetWriter
     internal readonly LeafProjectionInfo[] ColumnProjectionInfosByOrdinal;
     internal readonly int ColumnCount;
     internal readonly BufferWriterFactory BufferWriters;
-    internal readonly CompressionKind Compression;
-    internal readonly int CompressionLevel;
+    internal readonly ResolvedCompression[] ColumnCompressionsByOrdinal;
     internal readonly bool WritePageIndexes;
     internal readonly CompressionContext CompressionContext;
     internal readonly ColumnChunkMetadata[] OpenRowGroupColumnMetadata;
@@ -60,8 +59,7 @@ public sealed class ParquetWriter
             _options.TargetDataPageSizeBytes);
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
             _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
-        Compression = _options.Compression;
-        CompressionLevel = _options.GetCompressionLevel();
+        ColumnCompressionsByOrdinal = ResolveColumnCompressions(ColumnsByOrdinal, _options);
         WritePageIndexes = _options.WritePageIndexes;
         CompressionContext = new CompressionContext(BufferWriters);
         OpenRowGroupColumnMetadata = ColumnCount == 0 ? [] : new ColumnChunkMetadata[ColumnCount];
@@ -173,6 +171,27 @@ public sealed class ParquetWriter
         for (var i = 0; i < result.Length; i++)
             result[i] = new PageStrategyContext(columns[i].PageStrategy
                 ?? new DefaultStrategy(columns[i], targetDataPageSizeBytes));
+        return result;
+    }
+
+    static ResolvedCompression[] ResolveColumnCompressions(Column[] columns, ParquetWriterOptions options)
+    {
+        if (columns.Length == 0)
+            return [];
+
+        var result = new ResolvedCompression[columns.Length];
+        for (var i = 0; i < result.Length; i++)
+        {
+            var columnOptions = columns[i].Options;
+            var compression = columnOptions.Compression ?? options.Compression;
+            var configuredLevel = columnOptions.CompressionLevel;
+            if (!configuredLevel.HasValue && !columnOptions.Compression.HasValue)
+                configuredLevel = options.CompressionLevel;
+            var level = CompressionConfiguration.ResolveLevel(compression, configuredLevel,
+                nameof(ColumnOptions.Compression), nameof(ColumnOptions.CompressionLevel));
+            result[i] = new ResolvedCompression(compression, level);
+        }
+
         return result;
     }
 

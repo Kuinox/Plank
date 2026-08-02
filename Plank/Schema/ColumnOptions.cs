@@ -5,11 +5,14 @@ namespace Plank.Schema;
 public sealed record ColumnOptions
 {
     public ColumnOptions(ParquetRepetition repetition = ParquetRepetition.Unspecified,
-        ImmutableArray<EncodingKind> encodings = default, uint typeLength = 0)
+        ImmutableArray<EncodingKind> encodings = default, uint typeLength = 0,
+        CompressionKind? compression = null, int? compressionLevel = null)
     {
         Repetition = repetition;
         Encodings = encodings.IsDefault ? [] : encodings;
         TypeLength = typeLength;
+        Compression = compression;
+        CompressionLevel = compressionLevel;
     }
 
     public static readonly ColumnOptions Default = new();
@@ -20,6 +23,10 @@ public sealed record ColumnOptions
 
     public uint TypeLength { get; }
 
+    public CompressionKind? Compression { get; }
+
+    public int? CompressionLevel { get; }
+
     public bool Equals(ColumnOptions? other)
     {
         if (ReferenceEquals(this, other))
@@ -29,6 +36,10 @@ public sealed record ColumnOptions
         if (Repetition != other.Repetition)
             return false;
         if (TypeLength != other.TypeLength)
+            return false;
+        if (Compression != other.Compression)
+            return false;
+        if (CompressionLevel != other.CompressionLevel)
             return false;
         if (Encodings.Length != other.Encodings.Length)
             return false;
@@ -45,10 +56,11 @@ public sealed record ColumnOptions
         var hash = new HashCode();
         hash.Add(Repetition);
         hash.Add(TypeLength);
+        hash.Add(Compression);
+        hash.Add(CompressionLevel);
         foreach (var encoding in Encodings)
             hash.Add(encoding);
 
         return hash.ToHashCode();
     }
-
 }
