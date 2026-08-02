@@ -197,6 +197,67 @@ internal sealed class WriterInteropE2ETests
     }
 
     [Test]
+    [Arguments(ParquetFileVersion.V1, ParquetDataPageVersion.V2)]
+    [Arguments(ParquetFileVersion.V2, ParquetDataPageVersion.V1)]
+    public async Task SelectedFileAndDataPageVersionsAreReadableByBothImplementations(
+        ParquetFileVersion fileVersion, ParquetDataPageVersion dataPageVersion)
+    {
+        var path = NewPath($"{fileVersion}-{dataPageVersion}");
+        var schema = CreateSchema(
+            int32Encoding: EncodingKind.DeltaBinaryPacked,
+            int64Encoding: EncodingKind.RleDictionary,
+            doubleEncoding: EncodingKind.ByteStreamSplit,
+            binaryEncoding: EncodingKind.DeltaByteArray);
+        var rowGroups = new[]
+        {
+            CreateGeneratedRowGroup(256, offset: 9000),
+            CreateGeneratedRowGroup(384, offset: 10000)
+        };
+
+        await WriteFileAsync(path, schema, CompressionKind.Gzip, rowGroups, compressionLevel: 9,
+            fileVersion: fileVersion, dataPageVersion: dataPageVersion, targetDataPageSizeBytes: 512)
+            .ConfigureAwait(false);
+        try
+        {
+            AssertWrittenFormat(path, fileVersion, dataPageVersion, rowGroups.Length, schema.LeafColumns.Length);
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    [Arguments(CompressionKind.None)]
+    [Arguments(CompressionKind.Snappy)]
+    [Arguments(CompressionKind.Gzip)]
+    [Arguments(CompressionKind.Zstd)]
+    [Arguments(CompressionKind.Lz4)]
+    [Arguments(CompressionKind.Brotli)]
+    public async Task DataPageV1SupportsEveryCompressionCodec(CompressionKind compression)
+    {
+        var path = NewPath($"v1-{compression}");
+        var rowGroups = new[]
+        {
+            CreateGeneratedRowGroup(512, offset: 11000)
+        };
+
+        await WriteFileAsync(path, compression, rowGroups, dataPageVersion: ParquetDataPageVersion.V1)
+            .ConfigureAwait(false);
+        try
+        {
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
     public async Task RequiredColumnsWithDeltaBinaryPackedEncodingAreReadableByBothImplementations()
     {
         var path = NewPath("delta-binary-packed");
@@ -354,8 +415,10 @@ internal sealed class WriterInteropE2ETests
     public async Task RequiredColumnsFuzzedAcrossSupportedEncodingsRoundTripByBothImplementations()
     {
         foreach (var fuzzCase in EnumerateFuzzCases())
-            for (var seedIndex = 0; seedIndex < FuzzSeeds.Length; seedIndex++)
-                await WriteAndAssertFuzzCaseAsync(fuzzCase, FuzzSeeds[seedIndex]).ConfigureAwait(false);
+            foreach (var dataPageVersion in Enum.GetValues<ParquetDataPageVersion>())
+                for (var seedIndex = 0; seedIndex < FuzzSeeds.Length; seedIndex++)
+                    await WriteAndAssertFuzzCaseAsync(fuzzCase, FuzzSeeds[seedIndex], dataPageVersion)
+                        .ConfigureAwait(false);
     }
 
     static IEnumerable<FuzzCase> EnumerateFuzzCases()
@@ -375,13 +438,15 @@ internal sealed class WriterInteropE2ETests
             FuzzPattern.DictionaryFriendly);
     }
 
-    static async Task WriteAndAssertFuzzCaseAsync(FuzzCase fuzzCase, int seed)
+    static async Task WriteAndAssertFuzzCaseAsync(FuzzCase fuzzCase, int seed,
+        ParquetDataPageVersion dataPageVersion)
     {
-        var path = NewPath($"fuzz-{fuzzCase.Name}-seed-{seed}");
+        var path = NewPath($"fuzz-{fuzzCase.Name}-{dataPageVersion}-seed-{seed}");
         var rowGroups = CreateFuzzRowGroups(fuzzCase, seed);
         try
         {
-            await WriteFileAsync(path, fuzzCase.Schema, CompressionKind.None, rowGroups).ConfigureAwait(false);
+            await WriteFileAsync(path, fuzzCase.Schema, CompressionKind.None, rowGroups,
+                dataPageVersion: dataPageVersion).ConfigureAwait(false);
             await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
         }
         finally
@@ -506,18 +571,27 @@ internal sealed class WriterInteropE2ETests
         => Path.Combine(Path.GetTempPath(), $"plank-writer-interop-{suffix}-{Guid.NewGuid():N}.parquet");
 
     static async Task WriteFileAsync(string path, CompressionKind compression, IReadOnlyList<ExpectedRowGroup> rowGroups,
-        int? compressionLevel = null)
-        => await WriteFileAsync(path, WriterInteropSchema.Schema, compression, rowGroups, compressionLevel)
+        int? compressionLevel = null, ParquetFileVersion fileVersion = ParquetFileVersion.V1,
+        ParquetDataPageVersion dataPageVersion = ParquetDataPageVersion.V2,
+        uint targetDataPageSizeBytes = 1024 * 1024)
+        => await WriteFileAsync(path, WriterInteropSchema.Schema, compression, rowGroups, compressionLevel,
+                fileVersion, dataPageVersion, targetDataPageSizeBytes)
             .ConfigureAwait(false);
 
     static async Task WriteFileAsync(string path, ParquetSchema schema, CompressionKind compression,
-        IReadOnlyList<ExpectedRowGroup> rowGroups, int? compressionLevel = null)
+        IReadOnlyList<ExpectedRowGroup> rowGroups, int? compressionLevel = null,
+        ParquetFileVersion fileVersion = ParquetFileVersion.V1,
+        ParquetDataPageVersion dataPageVersion = ParquetDataPageVersion.V2,
+        uint targetDataPageSizeBytes = 1024 * 1024)
     {
         using var stream = File.Create(path);
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
             Compression = compression,
-            CompressionLevel = compressionLevel
+            CompressionLevel = compressionLevel,
+            FileVersion = fileVersion,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = targetDataPageSizeBytes
         });
         var columns = schema.LeafColumns;
         var int32Column = writer.CreateSerializedColumn<int>(columns[0]);
@@ -543,6 +617,53 @@ internal sealed class WriterInteropE2ETests
         }
 
         writer.CloseFile();
+    }
+
+    static void AssertWrittenFormat(string path, ParquetFileVersion fileVersion,
+        ParquetDataPageVersion dataPageVersion, int rowGroupCount, int columnCount)
+    {
+        using var stream = File.OpenRead(path);
+        using var reader = new Plank.Reading.Physical.ParquetFileReader();
+        reader.Reset(stream);
+        if (reader.Metadata.FileVersion != (int)fileVersion)
+            throw new InvalidOperationException(
+                $"Expected file version '{fileVersion}', got '{reader.Metadata.FileVersion}'.");
+
+        var expectedPageType = dataPageVersion == ParquetDataPageVersion.V1
+            ? Plank.Reading.PageHeaderType.DataPage
+            : Plank.Reading.PageHeaderType.DataPageV2;
+        var totalDataPageCount = 0;
+        for (var rowGroupIndex = 0; rowGroupIndex < rowGroupCount; rowGroupIndex++)
+            for (var columnIndex = 0; columnIndex < columnCount; columnIndex++)
+            {
+                var chunk = reader.Metadata.ColumnChunk(rowGroupIndex, columnIndex);
+                if (chunk.ColumnIndexOffset == 0 || chunk.ColumnIndexLength == 0)
+                    throw new InvalidOperationException(
+                        $"Row group {rowGroupIndex}, column {columnIndex}: column index metadata was not written.");
+                if (chunk.OffsetIndexOffset == 0 || chunk.OffsetIndexLength == 0)
+                    throw new InvalidOperationException(
+                        $"Row group {rowGroupIndex}, column {columnIndex}: offset index metadata was not written.");
+
+                using var pages = reader.OpenPages(rowGroupIndex, columnIndex);
+                var dataPageCount = 0;
+                while (pages.MoveNext())
+                {
+                    var actualPageType = pages.CurrentHeader.Type;
+                    if (actualPageType == Plank.Reading.PageHeaderType.DictionaryPage)
+                        continue;
+                    if (actualPageType != expectedPageType)
+                        throw new InvalidOperationException(
+                            $"Row group {rowGroupIndex}, column {columnIndex}: expected '{expectedPageType}', got '{actualPageType}'.");
+                    dataPageCount++;
+                    totalDataPageCount++;
+                }
+
+                if (dataPageCount == 0)
+                    throw new InvalidOperationException(
+                        $"Row group {rowGroupIndex}, column {columnIndex}: no data pages were written.");
+            }
+        if (totalDataPageCount <= rowGroupCount * columnCount)
+            throw new InvalidOperationException("Expected the configured page size to split at least one column.");
     }
 
     static ParquetSchema CreateSchema(EncodingKind int32Encoding = EncodingKind.Plain,

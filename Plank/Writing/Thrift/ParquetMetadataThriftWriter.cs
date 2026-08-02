@@ -34,6 +34,26 @@ static class ParquetMetadataThriftWriter
         writer.EndStruct(previous);
     }
 
+    internal static void WriteDataPageHeaderV1(ref BufferWriter destination, uint valueCount, EncodingKind encoding,
+        int uncompressedPageSize, int compressedPageSize)
+    {
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        writer.WriteFieldI32(1, (int)PageType.DataPage);
+        writer.WriteFieldI32(2, uncompressedPageSize);
+        writer.WriteFieldI32(3, compressedPageSize);
+        writer.WriteFieldHeader(5, CompactType.Struct);
+
+        var previousData = writer.BeginStruct();
+        writer.WriteFieldI32(1, checked((int)valueCount));
+        writer.WriteFieldI32(2, GetEncoding(encoding));
+        writer.WriteFieldI32(3, GetEncoding(EncodingKind.Rle));
+        writer.WriteFieldI32(4, GetEncoding(EncodingKind.Rle));
+        writer.EndStruct(previousData);
+
+        writer.EndStruct(previous);
+    }
+
     internal static void WriteDictionaryPageHeader(ref BufferWriter destination, uint valueCount, int uncompressedPageSize,
         int compressedPageSize)
     {
@@ -101,12 +121,12 @@ static class ParquetMetadataThriftWriter
         writer.EndStruct(previous);
     }
 
-    internal static void WriteFileMetaData(ref BufferWriter destination, ParquetSchema schema, int rowGroupCount,
-        long totalRowCount, ref BufferWriter serializedRowGroups)
+    internal static void WriteFileMetaData(ref BufferWriter destination, ParquetSchema schema,
+        ParquetFileVersion fileVersion, int rowGroupCount, long totalRowCount, ref BufferWriter serializedRowGroups)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
-        writer.WriteFieldI32(1, 1);
+        writer.WriteFieldI32(1, (int)fileVersion);
         WriteSchema(ref writer, schema);
         writer.WriteFieldI64(3, totalRowCount);
         writer.WriteFieldHeader(4, CompactType.List);

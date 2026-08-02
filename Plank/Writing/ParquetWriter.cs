@@ -20,6 +20,8 @@ public sealed class ParquetWriter
     internal readonly BufferWriterFactory BufferWriters;
     internal readonly CompressionKind Compression;
     internal readonly int CompressionLevel;
+    internal readonly ParquetFileVersion FileVersion;
+    internal readonly ParquetDataPageVersion DataPageVersion;
     internal readonly bool WritePageIndexes;
     internal readonly CompressionContext CompressionContext;
     internal readonly ColumnChunkMetadata[] OpenRowGroupColumnMetadata;
@@ -62,6 +64,8 @@ public sealed class ParquetWriter
             _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
         Compression = _options.Compression;
         CompressionLevel = _options.GetCompressionLevel();
+        FileVersion = _options.FileVersion;
+        DataPageVersion = _options.DataPageVersion;
         WritePageIndexes = _options.WritePageIndexes;
         CompressionContext = new CompressionContext(BufferWriters);
         OpenRowGroupColumnMetadata = ColumnCount == 0 ? [] : new ColumnChunkMetadata[ColumnCount];
@@ -220,8 +224,8 @@ public sealed class ParquetWriter
     void WriteFileFooter()
     {
         SerializedFileMetadata.Reset();
-        ParquetMetadataThriftWriter.WriteFileMetaData(ref SerializedFileMetadata, _schema, _rowGroupCount, _totalRowCount,
-            ref SerializedRowGroupsMetadata);
+        ParquetMetadataThriftWriter.WriteFileMetaData(ref SerializedFileMetadata, _schema, FileVersion, _rowGroupCount,
+            _totalRowCount, ref SerializedRowGroupsMetadata);
         var metadataLength = SerializedFileMetadata.WrittenLength;
         WriteBuffer(ref SerializedFileMetadata);
         Span<byte> suffix = stackalloc byte[sizeof(int) + 4];

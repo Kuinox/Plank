@@ -6,6 +6,28 @@ namespace Plank.Tests.Writer;
 internal sealed class ParquetWriterOptionsTests
 {
     [Test]
+    public async Task FormatVersionDefaultsPreserveCurrentOutput()
+    {
+        var options = new ParquetWriterOptions();
+
+        await Assert.That(options.FileVersion).IsEqualTo(ParquetFileVersion.V1);
+        await Assert.That(options.DataPageVersion).IsEqualTo(ParquetDataPageVersion.V2);
+    }
+
+    [Test]
+    public void UndefinedFormatVersionsAreRejected()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ParquetWriterOptions
+        {
+            FileVersion = (ParquetFileVersion)int.MaxValue
+        }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ParquetWriterOptions
+        {
+            DataPageVersion = (ParquetDataPageVersion)int.MaxValue
+        }.Validate());
+    }
+
+    [Test]
     public void CompressionLevelsAreValidatedPerCodec()
     {
         (CompressionKind Compression, int Level)[] validLevels =

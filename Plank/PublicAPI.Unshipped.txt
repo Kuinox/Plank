@@ -1,3 +1,13 @@
 #nullable enable
+Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetDataPageVersion.V1 = 1 -> Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetDataPageVersion.V2 = 2 -> Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetFileVersion.V1 = 1 -> Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetFileVersion.V2 = 2 -> Plank.Writing.ParquetFileVersion
 Plank.Writing.ParquetWriterOptions.CompressionLevel.get -> int?
 Plank.Writing.ParquetWriterOptions.CompressionLevel.init -> void
+Plank.Writing.ParquetWriterOptions.DataPageVersion.get -> Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetWriterOptions.DataPageVersion.init -> void
+Plank.Writing.ParquetWriterOptions.FileVersion.get -> Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetWriterOptions.FileVersion.init -> void
