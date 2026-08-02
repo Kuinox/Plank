@@ -111,7 +111,7 @@ internal readonly struct ColumnStatistics
         if (typeof(T) == typeof(byte[]))
             return CreateByteArray(column, AsAnySpan<T, byte[]>(values), nullCount);
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
-            return CreateMemory(AsAnySpan<T, ReadOnlyMemory<byte>>(values), nullCount);
+            return CreateMemory(column, AsAnySpan<T, ReadOnlyMemory<byte>>(values), nullCount);
         return Empty(nullCount);
     }
 
@@ -123,8 +123,8 @@ internal readonly struct ColumnStatistics
             return CreateByteArray(column, AsAnySpan<T, byte[]>(values), nullCount, ref minBuffer, ref maxBuffer,
                 bufferPool);
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
-            return CreateMemory(AsAnySpan<T, ReadOnlyMemory<byte>>(values), nullCount, ref minBuffer, ref maxBuffer,
-                bufferPool);
+            return CreateMemory(column, AsAnySpan<T, ReadOnlyMemory<byte>>(values), nullCount, ref minBuffer,
+                ref maxBuffer, bufferPool);
         return Create(column, values, nullCount);
     }
 
@@ -151,7 +151,7 @@ internal readonly struct ColumnStatistics
         if (typeof(T) == typeof(double))
             return CreateNullableDouble(AsNullableSpan<T, double>(values));
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
-            return CreateNullableMemory(AsNullableSpan<T, ReadOnlyMemory<byte>>(values));
+            return CreateNullableMemory(column, AsNullableSpan<T, ReadOnlyMemory<byte>>(values));
 
         return Empty(CountNulls(values));
     }
@@ -170,7 +170,7 @@ internal readonly struct ColumnStatistics
         where T : struct
     {
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
-            return CreateNullableMemory(AsNullableSpan<T, ReadOnlyMemory<byte>>(values), ref minBuffer,
+            return CreateNullableMemory(column, AsNullableSpan<T, ReadOnlyMemory<byte>>(values), ref minBuffer,
                 ref maxBuffer, bufferPool);
         return CreateOptional(column, values);
     }
@@ -702,9 +702,9 @@ internal readonly struct ColumnStatistics
         for (var i = 1; i < values.Length; i++)
         {
             var value = values[i] ?? throw new InvalidOperationException($"Column '{column.Name}' does not support null values.");
-            if (CompareBytes(value, min) < 0)
+            if (CompareBinary(column, value, min) < 0)
                 min = value;
-            if (CompareBytes(value, max) > 0)
+            if (CompareBinary(column, value, max) > 0)
                 max = value;
         }
 
@@ -722,9 +722,9 @@ internal readonly struct ColumnStatistics
         for (var i = 1; i < values.Length; i++)
         {
             var value = values[i] ?? throw new InvalidOperationException($"Column '{column.Name}' does not support null values.");
-            if (CompareBytes(value, min) < 0)
+            if (CompareBinary(column, value, min) < 0)
                 min = value;
-            if (CompareBytes(value, max) > 0)
+            if (CompareBinary(column, value, max) > 0)
                 max = value;
         }
 
@@ -754,9 +754,9 @@ internal readonly struct ColumnStatistics
                 continue;
             }
 
-            if (CompareBytes(value, min) < 0)
+            if (CompareBinary(column, value, min) < 0)
                 min = value;
-            if (CompareBytes(value, max!) > 0)
+            if (CompareBinary(column, value, max!) > 0)
                 max = value;
         }
 
@@ -787,9 +787,9 @@ internal readonly struct ColumnStatistics
                 continue;
             }
 
-            if (CompareBytes(value, min) < 0)
+            if (CompareBinary(column, value, min) < 0)
                 min = value;
-            if (CompareBytes(value, max) > 0)
+            if (CompareBinary(column, value, max) > 0)
                 max = value;
         }
 
@@ -801,7 +801,7 @@ internal readonly struct ColumnStatistics
         return new ColumnStatistics(minBuffer, min.Length, maxBuffer, max.Length, nullCount, true);
     }
 
-    static ColumnStatistics CreateMemory(ReadOnlySpan<ReadOnlyMemory<byte>> values, long nullCount)
+    static ColumnStatistics CreateMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>> values, long nullCount)
     {
         if (values.Length == 0)
             return Empty(nullCount);
@@ -811,16 +811,16 @@ internal readonly struct ColumnStatistics
         for (var i = 1; i < values.Length; i++)
         {
             var value = values[i].Span;
-            if (CompareBytes(value, min) < 0)
+            if (CompareBinary(column, value, min) < 0)
                 min = value;
-            if (CompareBytes(value, max) > 0)
+            if (CompareBinary(column, value, max) > 0)
                 max = value;
         }
 
         return new ColumnStatistics(min.ToArray(), max.ToArray(), nullCount, true);
     }
 
-    static ColumnStatistics CreateMemory(ReadOnlySpan<ReadOnlyMemory<byte>> values, long nullCount,
+    static ColumnStatistics CreateMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>> values, long nullCount,
         ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
     {
         if (values.Length == 0)
@@ -831,9 +831,9 @@ internal readonly struct ColumnStatistics
         for (var i = 1; i < values.Length; i++)
         {
             var value = values[i].Span;
-            if (CompareBytes(value, min) < 0)
+            if (CompareBinary(column, value, min) < 0)
                 min = value;
-            if (CompareBytes(value, max) > 0)
+            if (CompareBinary(column, value, max) > 0)
                 max = value;
         }
 
@@ -842,7 +842,7 @@ internal readonly struct ColumnStatistics
         return new ColumnStatistics(minBuffer, min.Length, maxBuffer, max.Length, nullCount, true);
     }
 
-    static ColumnStatistics CreateNullableMemory(ReadOnlySpan<ReadOnlyMemory<byte>?> values)
+    static ColumnStatistics CreateNullableMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>?> values)
     {
         byte[]? min = null;
         byte[]? max = null;
@@ -863,16 +863,16 @@ internal readonly struct ColumnStatistics
                 continue;
             }
 
-            if (CompareBytes(value, min) < 0)
+            if (CompareBinary(column, value, min) < 0)
                 min = value.ToArray();
-            if (CompareBytes(value, max!) > 0)
+            if (CompareBinary(column, value, max!) > 0)
                 max = value.ToArray();
         }
 
         return min is null ? Empty(nullCount) : new ColumnStatistics(min, max, nullCount, true);
     }
 
-    static ColumnStatistics CreateNullableMemory(ReadOnlySpan<ReadOnlyMemory<byte>?> values,
+    static ColumnStatistics CreateNullableMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>?> values,
         ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
     {
         ReadOnlySpan<byte> min = default;
@@ -896,9 +896,9 @@ internal readonly struct ColumnStatistics
                 continue;
             }
 
-            if (CompareBytes(value, min) < 0)
+            if (CompareBinary(column, value, min) < 0)
                 min = value;
-            if (CompareBytes(value, max) > 0)
+            if (CompareBinary(column, value, max) > 0)
                 max = value;
         }
 
@@ -1151,6 +1151,50 @@ internal readonly struct ColumnStatistics
         }
 
         return left.Length.CompareTo(right.Length);
+    }
+
+    static int CompareBinary(Column column, ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
+        => column.LogicalType is LogicalType.Decimal
+            ? CompareDecimalBytes(left, right)
+            : CompareBytes(left, right);
+
+    static int CompareDecimalBytes(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
+    {
+        if (left.IsEmpty)
+            return right.IsEmpty ? 0 : CompareZeroToDecimal(right);
+        if (right.IsEmpty)
+            return -CompareZeroToDecimal(left);
+
+        var leftNegative = (left[0] & 0x80) != 0;
+        var rightNegative = (right[0] & 0x80) != 0;
+        if (leftNegative != rightNegative)
+            return leftNegative ? -1 : 1;
+
+        left = TrimDecimalSignExtension(left, leftNegative);
+        right = TrimDecimalSignExtension(right, rightNegative);
+        var lengthComparison = left.Length.CompareTo(right.Length);
+        if (lengthComparison != 0)
+            return leftNegative ? -lengthComparison : lengthComparison;
+
+        return CompareBytes(left, right);
+    }
+
+    static int CompareZeroToDecimal(ReadOnlySpan<byte> value)
+    {
+        if ((value[0] & 0x80) != 0)
+            return 1;
+        for (var i = 0; i < value.Length; i++)
+            if (value[i] != 0)
+                return -1;
+        return 0;
+    }
+
+    static ReadOnlySpan<byte> TrimDecimalSignExtension(ReadOnlySpan<byte> value, bool negative)
+    {
+        var extension = negative ? byte.MaxValue : (byte)0;
+        while (value.Length > 1 && value[0] == extension && ((value[1] & 0x80) != 0) == negative)
+            value = value[1..];
+        return value;
     }
 
     static void CopyToReusableBuffer(ReadOnlySpan<byte> source, ref ParquetBuffer buffer,
@@ -1515,9 +1559,9 @@ internal readonly struct ColumnStatistics
                 return;
             }
 
-            if (CompareBytes(bytes, _minBytes) < 0)
+            if (CompareBinary(_column, bytes, _minBytes) < 0)
                 _minBytes = bytes.ToArray();
-            if (CompareBytes(bytes, _maxBytes) > 0)
+            if (CompareBinary(_column, bytes, _maxBytes) > 0)
                 _maxBytes = bytes.ToArray();
         }
 
