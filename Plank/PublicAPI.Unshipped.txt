@@ -1,3 +1,4 @@
 #nullable enable
+Plank.Schema.CompressionKind.Lz4Legacy = 6 -> Plank.Schema.CompressionKind
 Plank.Writing.ParquetWriterOptions.CompressionLevel.get -> int?
 Plank.Writing.ParquetWriterOptions.CompressionLevel.init -> void

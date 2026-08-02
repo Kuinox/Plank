@@ -70,4 +70,12 @@ internal sealed class ParquetWriterOptionsTests
                 $"Expected compression level '{level}' to be rejected for '{compression}'.");
         }
     }
+
+    [Test]
+    public void LegacyLz4IsReadOnly()
+    {
+        var options = new ParquetWriterOptions { Compression = CompressionKind.Lz4Legacy };
+
+        Assert.Throws<NotSupportedException>(options.Validate);
+    }
 }

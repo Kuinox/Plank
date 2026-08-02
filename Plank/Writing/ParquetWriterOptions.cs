@@ -58,6 +58,9 @@ public sealed class ParquetWriterOptions
         if (!Enum.IsDefined(Compression))
             throw new ArgumentOutOfRangeException(nameof(Compression), Compression,
                 "Compression must be a defined CompressionKind value.");
+        if (Compression == CompressionKind.Lz4Legacy)
+            throw new NotSupportedException(
+                "Writing deprecated legacy LZ4 is not supported. Use Lz4 (LZ4_RAW) instead.");
         ValidateCompressionLevel();
     }
 
