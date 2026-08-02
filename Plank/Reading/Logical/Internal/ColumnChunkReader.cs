@@ -229,7 +229,7 @@ static class ColumnChunkReader
         }
 
         var destination = state.GetValues<T>(valueCount, bufferPool);
-        var nullableDestination = Unsafe.As<Span<T>, Span<TValue?>>(ref destination);
+        var nullableDestination = SpanReinterpretation.Cast<T, TValue?>(destination);
         var physicalIndex = 0;
         for (var i = 0; i < definitions.Length; i++)
             nullableDestination[i] = definitions[i] == 0 ? null : physicalValues[physicalIndex++];
@@ -712,7 +712,7 @@ static class ColumnChunkReader
                 return TryDecodePlainIntoNative(payload, column, valueCount, destination);
             case EncodingKind.Rle when typeof(T) == typeof(bool):
             {
-                var typed = Unsafe.As<Span<T>, Span<bool>>(ref destination);
+                var typed = SpanReinterpretation.Cast<T, bool>(destination);
                 DecodeBooleanRle(payload, typed);
                 return true;
             }
@@ -733,7 +733,7 @@ static class ColumnChunkReader
             if ((uint)payload.Length < (valueCount + 7u) / 8u)
                 throw new CorruptParquetException(
                     $"Payload ({payload.Length} bytes) is too short to decode {valueCount} plain boolean values.");
-            var typed = Unsafe.As<Span<T>, Span<bool>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, bool>(destination);
             for (var i = 0; i < typed.Length; i++)
                 typed[i] = ((payload[i >> 3] >> (i & 7)) & 1) != 0;
             return true;
@@ -742,13 +742,13 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(int) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(int));
-            CopyLittleEndianInt32(payload, Unsafe.As<Span<T>, Span<int>>(ref destination));
+            CopyLittleEndianInt32(payload, SpanReinterpretation.Cast<T, int>(destination));
             return true;
         }
         if (typeof(T) == typeof(byte) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(int));
-            var typed = Unsafe.As<Span<T>, Span<byte>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, byte>(destination);
             for (var i = 0; i < typed.Length; i++)
                 typed[i] = unchecked((byte)BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4)));
             return true;
@@ -756,7 +756,7 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(ushort) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(int));
-            var typed = Unsafe.As<Span<T>, Span<ushort>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, ushort>(destination);
             for (var i = 0; i < typed.Length; i++)
                 typed[i] = unchecked((ushort)BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4)));
             return true;
@@ -764,37 +764,37 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(uint) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(uint));
-            CopyLittleEndianUInt32(payload, Unsafe.As<Span<T>, Span<uint>>(ref destination));
+            CopyLittleEndianUInt32(payload, SpanReinterpretation.Cast<T, uint>(destination));
             return true;
         }
         if (typeof(T) == typeof(long) && column.PhysicalType == ParquetPhysicalType.Int64)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(long));
-            CopyLittleEndianInt64(payload, Unsafe.As<Span<T>, Span<long>>(ref destination));
+            CopyLittleEndianInt64(payload, SpanReinterpretation.Cast<T, long>(destination));
             return true;
         }
         if (typeof(T) == typeof(ulong) && column.PhysicalType == ParquetPhysicalType.Int64)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(ulong));
-            CopyLittleEndianUInt64(payload, Unsafe.As<Span<T>, Span<ulong>>(ref destination));
+            CopyLittleEndianUInt64(payload, SpanReinterpretation.Cast<T, ulong>(destination));
             return true;
         }
         if (typeof(T) == typeof(float) && column.PhysicalType == ParquetPhysicalType.Float)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(float));
-            CopyLittleEndianFloat(payload, Unsafe.As<Span<T>, Span<float>>(ref destination));
+            CopyLittleEndianFloat(payload, SpanReinterpretation.Cast<T, float>(destination));
             return true;
         }
         if (typeof(T) == typeof(double) && column.PhysicalType == ParquetPhysicalType.Double)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(double));
-            CopyLittleEndianDouble(payload, Unsafe.As<Span<T>, Span<double>>(ref destination));
+            CopyLittleEndianDouble(payload, SpanReinterpretation.Cast<T, double>(destination));
             return true;
         }
         if (typeof(T) == typeof(DateOnly) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(int));
-            var typed = Unsafe.As<Span<T>, Span<DateOnly>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, DateOnly>(destination);
             for (var i = 0; i < typed.Length; i++)
                 typed[i] = DecodeDate(BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4)));
             return true;
@@ -802,7 +802,7 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(TimeOnly) && column.PhysicalType == ParquetPhysicalType.Int32)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(int));
-            var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, TimeOnly>(destination);
             for (var i = 0; i < typed.Length; i++)
                 typed[i] = DecodeTime(BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4)),
                     column.LogicalType);
@@ -811,7 +811,7 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(TimeOnly) && column.PhysicalType == ParquetPhysicalType.Int64)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(long));
-            var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, TimeOnly>(destination);
             for (var i = 0; i < typed.Length; i++)
                 typed[i] = DecodeTime(BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8)),
                     column.LogicalType);
@@ -820,7 +820,7 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(DateTimeOffset) && column.PhysicalType == ParquetPhysicalType.Int64)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(long));
-            var typed = Unsafe.As<Span<T>, Span<DateTimeOffset>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, DateTimeOffset>(destination);
             for (var i = 0; i < typed.Length; i++)
             {
                 var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
@@ -831,7 +831,7 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(DateTime) && column.PhysicalType == ParquetPhysicalType.Int64)
         {
             ValidatePlainPayload(payload, valueCount, sizeof(long));
-            var typed = Unsafe.As<Span<T>, Span<DateTime>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, DateTime>(destination);
             for (var i = 0; i < typed.Length; i++)
             {
                 var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
@@ -849,35 +849,35 @@ static class ColumnChunkReader
         switch (column.PhysicalType)
         {
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(int):
-                DecodeByteStreamSplitInt32(payload, Unsafe.As<Span<T>, Span<int>>(ref destination));
+                DecodeByteStreamSplitInt32(payload, SpanReinterpretation.Cast<T, int>(destination));
                 return true;
             case ParquetPhysicalType.Int64 when typeof(T) == typeof(long):
-                DecodeByteStreamSplitInt64(payload, Unsafe.As<Span<T>, Span<long>>(ref destination));
+                DecodeByteStreamSplitInt64(payload, SpanReinterpretation.Cast<T, long>(destination));
                 return true;
             case ParquetPhysicalType.Int64 when typeof(T) == typeof(ulong):
-                DecodeByteStreamSplitUInt64(payload, Unsafe.As<Span<T>, Span<ulong>>(ref destination));
+                DecodeByteStreamSplitUInt64(payload, SpanReinterpretation.Cast<T, ulong>(destination));
                 return true;
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(DateOnly):
             {
-                var raw = Unsafe.As<Span<T>, Span<int>>(ref destination);
+                var raw = SpanReinterpretation.Cast<T, int>(destination);
                 DecodeByteStreamSplitInt32(payload, raw);
-                var typed = Unsafe.As<Span<T>, Span<DateOnly>>(ref destination);
+                var typed = SpanReinterpretation.Cast<T, DateOnly>(destination);
                 for (var i = 0; i < typed.Length; i++)
                     typed[i] = DecodeDate(raw[i]);
                 return true;
             }
             case ParquetPhysicalType.Int64 when typeof(T) == typeof(TimeOnly):
             {
-                var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
+                var raw = SpanReinterpretation.Cast<T, long>(destination);
                 DecodeByteStreamSplitInt64(payload, raw);
-                var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+                var typed = SpanReinterpretation.Cast<T, TimeOnly>(destination);
                 for (var i = 0; i < typed.Length; i++)
                     typed[i] = DecodeTime(raw[i], column.LogicalType);
                 return true;
             }
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(TimeOnly):
             {
-                var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+                var typed = SpanReinterpretation.Cast<T, TimeOnly>(destination);
                 var raw = MemoryMarshal.Cast<TimeOnly, int>(typed)[..typed.Length];
                 DecodeByteStreamSplitInt32(payload, raw);
                 for (var i = typed.Length - 1; i >= 0; i--)
@@ -886,9 +886,9 @@ static class ColumnChunkReader
             }
             case ParquetPhysicalType.Int64 when typeof(T) == typeof(DateTime):
             {
-                var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
+                var raw = SpanReinterpretation.Cast<T, long>(destination);
                 DecodeByteStreamSplitInt64(payload, raw);
-                var typed = Unsafe.As<Span<T>, Span<DateTime>>(ref destination);
+                var typed = SpanReinterpretation.Cast<T, DateTime>(destination);
                 for (var i = 0; i < typed.Length; i++)
                     typed[i] = DecodeDateTime(raw[i], column.LogicalType);
                 return true;
@@ -897,20 +897,20 @@ static class ColumnChunkReader
             {
                 var raw = new long[destination.Length];
                 DecodeByteStreamSplitInt64(payload, raw);
-                var typed = Unsafe.As<Span<T>, Span<DateTimeOffset>>(ref destination);
+                var typed = SpanReinterpretation.Cast<T, DateTimeOffset>(destination);
                 for (var i = 0; i < typed.Length; i++)
                     typed[i] = DecodeTimestamp(raw[i], column.LogicalType);
                 return true;
             }
             case ParquetPhysicalType.Float when typeof(T) == typeof(float):
-                DecodeByteStreamSplitFloat(payload, Unsafe.As<Span<T>, Span<float>>(ref destination));
+                DecodeByteStreamSplitFloat(payload, SpanReinterpretation.Cast<T, float>(destination));
                 return true;
             case ParquetPhysicalType.Double when typeof(T) == typeof(double):
-                DecodeByteStreamSplitDouble(payload, Unsafe.As<Span<T>, Span<double>>(ref destination));
+                DecodeByteStreamSplitDouble(payload, SpanReinterpretation.Cast<T, double>(destination));
                 return true;
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(byte):
             {
-                var typed = Unsafe.As<Span<T>, Span<byte>>(ref destination);
+                var typed = SpanReinterpretation.Cast<T, byte>(destination);
                 for (var i = 0; i < typed.Length; i++)
                     typed[i] = (byte)(payload[i] | (payload[(int)valueCount + i] << 8) |
                         (payload[((int)valueCount * 2) + i] << 16) |
@@ -919,7 +919,7 @@ static class ColumnChunkReader
             }
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(ushort):
             {
-                var typed = Unsafe.As<Span<T>, Span<ushort>>(ref destination);
+                var typed = SpanReinterpretation.Cast<T, ushort>(destination);
                 for (var i = 0; i < typed.Length; i++)
                     typed[i] = unchecked((ushort)(payload[i] | (payload[(int)valueCount + i] << 8) |
                         (payload[((int)valueCount * 2) + i] << 16) |
@@ -928,7 +928,7 @@ static class ColumnChunkReader
             }
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(uint):
             {
-                var typed = Unsafe.As<Span<T>, Span<uint>>(ref destination);
+                var typed = SpanReinterpretation.Cast<T, uint>(destination);
                 for (var i = 0; i < typed.Length; i++)
                     typed[i] = unchecked((uint)(payload[i] | (payload[(int)valueCount + i] << 8) |
                         (payload[((int)valueCount * 2) + i] << 16) |
@@ -945,50 +945,50 @@ static class ColumnChunkReader
     {
         if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int))
         {
-            DeltaBinaryPackedDecoder.ReadInt32(payload, Unsafe.As<Span<T>, Span<int>>(ref destination));
+            DeltaBinaryPackedDecoder.ReadInt32(payload, SpanReinterpretation.Cast<T, int>(destination));
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(byte))
         {
             DeltaBinaryPackedDecoder.ReadNarrowInt32(payload,
-                Unsafe.As<Span<T>, Span<byte>>(ref destination));
+                SpanReinterpretation.Cast<T, byte>(destination));
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(ushort))
         {
             DeltaBinaryPackedDecoder.ReadNarrowInt32(payload,
-                Unsafe.As<Span<T>, Span<ushort>>(ref destination));
+                SpanReinterpretation.Cast<T, ushort>(destination));
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(uint))
         {
             DeltaBinaryPackedDecoder.ReadInt32(payload,
-                Unsafe.As<Span<T>, Span<int>>(ref destination));
+                SpanReinterpretation.Cast<T, int>(destination));
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(long))
         {
-            DeltaBinaryPackedDecoder.ReadInt64(payload, Unsafe.As<Span<T>, Span<long>>(ref destination));
+            DeltaBinaryPackedDecoder.ReadInt64(payload, SpanReinterpretation.Cast<T, long>(destination));
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(ulong))
         {
             DeltaBinaryPackedDecoder.ReadInt64(payload,
-                Unsafe.As<Span<T>, Span<long>>(ref destination));
+                SpanReinterpretation.Cast<T, long>(destination));
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(DateOnly))
         {
-            var raw = Unsafe.As<Span<T>, Span<int>>(ref destination);
+            var raw = SpanReinterpretation.Cast<T, int>(destination);
             DeltaBinaryPackedDecoder.ReadInt32(payload, raw);
-            var typed = Unsafe.As<Span<T>, Span<DateOnly>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, DateOnly>(destination);
             for (var i = 0; i < typed.Length; i++)
                 typed[i] = DecodeDate(raw[i]);
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(TimeOnly))
         {
-            var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, TimeOnly>(destination);
             var raw = MemoryMarshal.Cast<TimeOnly, int>(typed)[..typed.Length];
             DeltaBinaryPackedDecoder.ReadInt32(payload, raw);
             for (var i = typed.Length - 1; i >= 0; i--)
@@ -997,18 +997,18 @@ static class ColumnChunkReader
         }
         if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(TimeOnly))
         {
-            var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
+            var raw = SpanReinterpretation.Cast<T, long>(destination);
             DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
-            var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, TimeOnly>(destination);
             for (var i = 0; i < typed.Length; i++)
                 typed[i] = DecodeTime(raw[i], column.LogicalType);
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTime))
         {
-            var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
+            var raw = SpanReinterpretation.Cast<T, long>(destination);
             DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
-            var typed = Unsafe.As<Span<T>, Span<DateTime>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, DateTime>(destination);
             for (var i = 0; i < typed.Length; i++)
                 typed[i] = DecodeDateTime(raw[i], column.LogicalType);
             return true;
@@ -1017,7 +1017,7 @@ static class ColumnChunkReader
         {
             var raw = new long[destination.Length];
             DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
-            var typed = Unsafe.As<Span<T>, Span<DateTimeOffset>>(ref destination);
+            var typed = SpanReinterpretation.Cast<T, DateTimeOffset>(destination);
             for (var i = 0; i < typed.Length; i++)
                 typed[i] = DecodeTimestamp(raw[i], column.LogicalType);
             return true;
@@ -1956,7 +1956,7 @@ static class ColumnChunkReader
         var result = EnsureManagedBuffer(ref valuesBuffer, valueCount);
         if (dictionary is T[] typedDictionary)
         {
-            DecodeDictionaryIndexesIntoBuffer(payload, valueCount, typedDictionary, result);
+            DecodeDictionaryIndexesIntoBuffer<T>(payload, valueCount, typedDictionary, result);
         }
         else
         {

@@ -51,7 +51,7 @@ static class PlainEncoding
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.Boolean}' values, but got '{typeof(T)}'.");
 
-        var booleanValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool>>(ref values);
+        var booleanValues = SpanReinterpretation.Cast<T, bool>(values);
         var byteCount = (booleanValues.Length + 7) >> 3;
         if (byteCount == 0)
             return;
@@ -142,7 +142,7 @@ static class PlainEncoding
         var destination = writer.GetSpan(byteCount);
         if (typeof(T) == typeof(int))
         {
-            var intValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values);
+            var intValues = SpanReinterpretation.Cast<T, int>(values);
             if (BitConverter.IsLittleEndian)
                 MemoryMarshal.AsBytes(intValues).CopyTo(destination);
             else
@@ -154,7 +154,7 @@ static class PlainEncoding
 
         if (typeof(T) == typeof(byte))
         {
-            var byteValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte>>(ref values);
+            var byteValues = SpanReinterpretation.Cast<T, byte>(values);
             for (var i = 0; i < byteValues.Length; i++)
                 BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..], byteValues[i]);
             writer.Advance(byteCount);
@@ -163,7 +163,7 @@ static class PlainEncoding
 
         if (typeof(T) == typeof(ushort))
         {
-            var ushortValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ushort>>(ref values);
+            var ushortValues = SpanReinterpretation.Cast<T, ushort>(values);
             for (var i = 0; i < ushortValues.Length; i++)
                 BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..], ushortValues[i]);
             writer.Advance(byteCount);
@@ -172,7 +172,7 @@ static class PlainEncoding
 
         if (typeof(T) == typeof(uint))
         {
-            var uintValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<uint>>(ref values);
+            var uintValues = SpanReinterpretation.Cast<T, uint>(values);
             for (var i = 0; i < uintValues.Length; i++)
                 BinaryPrimitives.WriteUInt32LittleEndian(destination[(i * sizeof(int))..], uintValues[i]);
             writer.Advance(byteCount);
@@ -193,7 +193,7 @@ static class PlainEncoding
         var destination = writer.GetSpan(byteCount);
         if (typeof(T) == typeof(long))
         {
-            var longValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values);
+            var longValues = SpanReinterpretation.Cast<T, long>(values);
             if (BitConverter.IsLittleEndian)
                 MemoryMarshal.AsBytes(longValues).CopyTo(destination);
             else
@@ -205,7 +205,7 @@ static class PlainEncoding
 
         if (typeof(T) == typeof(ulong))
         {
-            var ulongValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ulong>>(ref values);
+            var ulongValues = SpanReinterpretation.Cast<T, ulong>(values);
             for (var i = 0; i < ulongValues.Length; i++)
                 BinaryPrimitives.WriteUInt64LittleEndian(destination[(i * sizeof(long))..], ulongValues[i]);
             writer.Advance(byteCount);
@@ -223,7 +223,7 @@ static class PlainEncoding
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.Float}' values, but got '{typeof(T)}'.");
 
-        var floatValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float>>(ref values);
+        var floatValues = SpanReinterpretation.Cast<T, float>(values);
         var byteCount = checked(floatValues.Length * sizeof(float));
         if (byteCount == 0)
             return;
@@ -246,7 +246,7 @@ static class PlainEncoding
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.Double}' values, but got '{typeof(T)}'.");
 
-        var doubleValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values);
+        var doubleValues = SpanReinterpretation.Cast<T, double>(values);
         var byteCount = checked(doubleValues.Length * sizeof(double));
         if (byteCount == 0)
             return;
@@ -267,7 +267,7 @@ static class PlainEncoding
     {
         if (typeof(T) == typeof(byte[]))
         {
-            var byteArrayValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
+            var byteArrayValues = SpanReinterpretation.Cast<T, byte[]>(values);
             var byteCount = 0;
             for (var i = 0; i < byteArrayValues.Length; i++)
             {
@@ -297,7 +297,7 @@ static class PlainEncoding
 
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
         {
-            var memoryValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>>>(ref values);
+            var memoryValues = SpanReinterpretation.Cast<T, ReadOnlyMemory<byte>>(values);
             var byteCount = 0;
             for (var i = 0; i < memoryValues.Length; i++)
                 byteCount = checked(byteCount + sizeof(int) + memoryValues[i].Length);
@@ -416,7 +416,7 @@ static class PlainEncoding
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.Int96}' values as 12-byte payloads, but got '{typeof(T)}'.");
 
-        var int96Values = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
+        var int96Values = SpanReinterpretation.Cast<T, byte[]>(values);
         const int int96Size = 12;
         var byteCount = checked(int96Values.Length * int96Size);
         if (byteCount == 0)
@@ -449,7 +449,7 @@ static class PlainEncoding
                 throw new InvalidOperationException(
                     $"Column '{column.Name}' expects Guid values in fixed-length payloads of 16 bytes, but has length {valueLength}.");
 
-            var guidValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<Guid>>(ref values);
+            var guidValues = SpanReinterpretation.Cast<T, Guid>(values);
             var guidDestination = writer.GetSpan(checked(guidValues.Length * 16));
             for (var i = 0; i < guidValues.Length; i++)
                 guidValues[i].TryWriteBytes(guidDestination.Slice(i * 16, 16), bigEndian: true, out _);
@@ -461,7 +461,7 @@ static class PlainEncoding
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.FixedLenByteArray}' values as byte[] payloads, but got '{typeof(T)}'.");
 
-        var fixedLengthValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
+        var fixedLengthValues = SpanReinterpretation.Cast<T, byte[]>(values);
         var byteCount = checked(fixedLengthValues.Length * valueLength);
         if (byteCount == 0)
             return;

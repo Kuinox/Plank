@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Plank.Schema;
 
@@ -65,7 +64,7 @@ static class ByteStreamSplitEncoding
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.Float}' values, but got '{typeof(T)}'.");
 
-        var floatValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float>>(ref values);
+        var floatValues = SpanReinterpretation.Cast<T, float>(values);
         var byteCount = checked(floatValues.Length * sizeof(float));
         if (byteCount == 0)
             return;
@@ -96,7 +95,7 @@ static class ByteStreamSplitEncoding
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.Double}' values, but got '{typeof(T)}'.");
 
-        var doubleValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values);
+        var doubleValues = SpanReinterpretation.Cast<T, double>(values);
         var byteCount = checked(doubleValues.Length * sizeof(double));
         if (byteCount == 0)
             return;
@@ -141,7 +140,7 @@ static class ByteStreamSplitEncoding
                 throw new InvalidOperationException(
                     $"Column '{column.Name}' expects Guid values in fixed-length payloads of 16 bytes, but has length {valueLength}.");
 
-            var guidValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<Guid>>(ref values);
+            var guidValues = SpanReinterpretation.Cast<T, Guid>(values);
             var guidByteCount = checked(guidValues.Length * 16);
             if (guidByteCount == 0)
                 return;
@@ -163,7 +162,7 @@ static class ByteStreamSplitEncoding
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.FixedLenByteArray}' values as byte[] payloads, but got '{typeof(T)}'.");
 
-        var fixedLengthValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
+        var fixedLengthValues = SpanReinterpretation.Cast<T, byte[]>(values);
         var byteCount = checked(fixedLengthValues.Length * valueLength);
         if (byteCount == 0)
             return;
@@ -211,7 +210,7 @@ static class ByteStreamSplitEncoding
 
         if (typeof(T) == typeof(int))
         {
-            var intValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values);
+            var intValues = SpanReinterpretation.Cast<T, int>(values);
             for (var i = 0; i < intValues.Length; i++)
             {
                 var value = intValues[i];
@@ -225,7 +224,7 @@ static class ByteStreamSplitEncoding
 
         if (typeof(T) == typeof(byte))
         {
-            var byteValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte>>(ref values);
+            var byteValues = SpanReinterpretation.Cast<T, byte>(values);
             for (var i = 0; i < byteValues.Length; i++)
             {
                 var value = byteValues[i];
@@ -239,7 +238,7 @@ static class ByteStreamSplitEncoding
 
         if (typeof(T) == typeof(ushort))
         {
-            var ushortValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ushort>>(ref values);
+            var ushortValues = SpanReinterpretation.Cast<T, ushort>(values);
             for (var i = 0; i < ushortValues.Length; i++)
             {
                 var value = ushortValues[i];
@@ -253,7 +252,7 @@ static class ByteStreamSplitEncoding
 
         if (typeof(T) == typeof(uint))
         {
-            var uintValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<uint>>(ref values);
+            var uintValues = SpanReinterpretation.Cast<T, uint>(values);
             for (var i = 0; i < uintValues.Length; i++)
             {
                 var value = uintValues[i];
@@ -283,7 +282,7 @@ static class ByteStreamSplitEncoding
 
         if (typeof(T) == typeof(long))
         {
-            var longValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values);
+            var longValues = SpanReinterpretation.Cast<T, long>(values);
             for (var i = 0; i < longValues.Length; i++)
             {
                 var value = longValues[i];
@@ -301,7 +300,7 @@ static class ByteStreamSplitEncoding
 
         if (typeof(T) == typeof(ulong))
         {
-            var ulongValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ulong>>(ref values);
+            var ulongValues = SpanReinterpretation.Cast<T, ulong>(values);
             for (var i = 0; i < ulongValues.Length; i++)
             {
                 var value = ulongValues[i];

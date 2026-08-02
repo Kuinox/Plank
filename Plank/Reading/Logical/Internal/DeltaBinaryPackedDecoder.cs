@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-
 namespace Plank.Reading.Logical.Internal;
 
 static class DeltaBinaryPackedDecoder
@@ -323,11 +321,11 @@ static class DeltaBinaryPackedDecoder
     {
         if (typeof(T) == typeof(byte))
         {
-            Unsafe.As<Span<T>, Span<byte>>(ref destination)[index] = unchecked((byte)value);
+            SpanReinterpretation.Cast<T, byte>(destination)[index] = unchecked((byte)value);
             return;
         }
 
-        Unsafe.As<Span<T>, Span<ushort>>(ref destination)[index] = unchecked((ushort)value);
+        SpanReinterpretation.Cast<T, ushort>(destination)[index] = unchecked((ushort)value);
     }
 
     static uint ReadHeaderVarUInt32(ref DeltaBinaryPackedReader reader, string fieldName)

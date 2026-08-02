@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Runtime.CompilerServices;
 using Plank.Schema;
 
 namespace Plank.Writing.Encoding;
@@ -16,7 +15,7 @@ static class RleEncoding
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.Boolean}' values, but got '{typeof(T)}'.");
 
-        var booleanValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool>>(ref values);
+        var booleanValues = SpanReinterpretation.Cast<T, bool>(values);
         var lengthPrefix = writer.GetSpan(sizeof(int));
         writer.Advance(sizeof(int));
         var encodedStart = writer.WrittenLength;

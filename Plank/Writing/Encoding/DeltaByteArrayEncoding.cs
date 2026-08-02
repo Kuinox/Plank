@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Plank.Schema;
 
@@ -15,13 +14,13 @@ static class DeltaByteArrayEncoding
                 $"Encoding '{EncodingKind.DeltaByteArray}' does not support physical type '{column.PhysicalType}' for column '{column.Name}'.");
         if (typeof(T) == typeof(byte[]))
         {
-            var byteArrayValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
+            var byteArrayValues = SpanReinterpretation.Cast<T, byte[]>(values);
             WriteByteArrayValues(column, byteArrayValues, bufferWriters, ref writer);
             return;
         }
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
         {
-            var memoryValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>>>(ref values);
+            var memoryValues = SpanReinterpretation.Cast<T, ReadOnlyMemory<byte>>(values);
             WriteMemoryValues(column, memoryValues, bufferWriters, ref writer);
             return;
         }

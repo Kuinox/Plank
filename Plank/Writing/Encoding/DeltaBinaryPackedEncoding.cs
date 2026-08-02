@@ -116,7 +116,7 @@ static class DeltaBinaryPackedEncoding
     {
         if (typeof(T) == typeof(int))
         {
-            var intValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values);
+            var intValues = SpanReinterpretation.Cast<T, int>(values);
             WriteInt32(intValues, ref writer);
             return;
         }
@@ -124,7 +124,7 @@ static class DeltaBinaryPackedEncoding
         Span<int> converted = values.Length <= 256 ? stackalloc int[values.Length] : new int[values.Length];
         if (typeof(T) == typeof(byte))
         {
-            var byteValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte>>(ref values);
+            var byteValues = SpanReinterpretation.Cast<T, byte>(values);
             for (var i = 0; i < byteValues.Length; i++)
                 converted[i] = byteValues[i];
             WriteInt32(converted, ref writer);
@@ -133,7 +133,7 @@ static class DeltaBinaryPackedEncoding
 
         if (typeof(T) == typeof(ushort))
         {
-            var ushortValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ushort>>(ref values);
+            var ushortValues = SpanReinterpretation.Cast<T, ushort>(values);
             for (var i = 0; i < ushortValues.Length; i++)
                 converted[i] = ushortValues[i];
             WriteInt32(converted, ref writer);
@@ -142,7 +142,7 @@ static class DeltaBinaryPackedEncoding
 
         if (typeof(T) == typeof(uint))
         {
-            var uintValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<uint>>(ref values);
+            var uintValues = SpanReinterpretation.Cast<T, uint>(values);
             for (var i = 0; i < uintValues.Length; i++)
                 converted[i] = unchecked((int)uintValues[i]);
             WriteInt32(converted, ref writer);
@@ -158,7 +158,7 @@ static class DeltaBinaryPackedEncoding
     {
         if (typeof(T) == typeof(long))
         {
-            var longValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values);
+            var longValues = SpanReinterpretation.Cast<T, long>(values);
             WriteInt64(longValues, ref writer);
             return;
         }
@@ -166,7 +166,7 @@ static class DeltaBinaryPackedEncoding
         Span<long> converted = values.Length <= 256 ? stackalloc long[values.Length] : new long[values.Length];
         if (typeof(T) == typeof(ulong))
         {
-            var ulongValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ulong>>(ref values);
+            var ulongValues = SpanReinterpretation.Cast<T, ulong>(values);
             for (var i = 0; i < ulongValues.Length; i++)
                 converted[i] = unchecked((long)ulongValues[i]);
             WriteInt64(converted, ref writer);

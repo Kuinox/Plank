@@ -289,9 +289,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 encoded[i] = System.Text.Encoding.UTF8.GetBytes(value);
 
         if (_column.Options.Repetition == ParquetRepetition.Optional)
-            SerializeOptionalReference(encoded);
+            SerializeOptionalReference<byte[]>(encoded);
         else
-            SerializeTyped(encoded);
+            SerializeTyped<byte[]>(encoded);
     }
 
     void SerializeGuids(ReadOnlySpan<Guid> values)
@@ -315,7 +315,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<int>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i].DayNumber - UnixEpochDate.DayNumber;
-            SerializeTyped(converted);
+            SerializeTyped<int>(converted);
         }
         finally
         {
@@ -332,7 +332,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<int?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? value.DayNumber - UnixEpochDate.DayNumber : null;
-            SerializeOptionalTyped(converted);
+            SerializeOptionalTyped<int>(converted);
         }
         finally
         {
@@ -348,7 +348,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<int>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i];
-            SerializeTyped(converted);
+            SerializeTyped<int>(converted);
             Statistics = ColumnStatistics.CreateByte(values, 0);
             AssignBytePageStatistics(values);
         }
@@ -366,7 +366,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<int?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i];
-            SerializeOptionalTyped(converted);
+            SerializeOptionalTyped<int>(converted);
             Statistics = ColumnStatistics.CreateNullableByte(values);
             AssignNullableBytePageStatistics(values);
         }
@@ -384,7 +384,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<int>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i];
-            SerializeTyped(converted);
+            SerializeTyped<int>(converted);
             Statistics = ColumnStatistics.CreateUInt16(values, 0);
             AssignUInt16PageStatistics(values);
         }
@@ -402,7 +402,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<int?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i];
-            SerializeOptionalTyped(converted);
+            SerializeOptionalTyped<int>(converted);
             Statistics = ColumnStatistics.CreateNullableUInt16(values);
             AssignNullableUInt16PageStatistics(values);
         }
@@ -420,7 +420,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<int>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = unchecked((int)values[i]);
-            SerializeTyped(converted);
+            SerializeTyped<int>(converted);
             Statistics = ColumnStatistics.CreateUInt32(values, 0);
             AssignUInt32PageStatistics(values);
         }
@@ -438,7 +438,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<int?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? unchecked((int)value) : null;
-            SerializeOptionalTyped(converted);
+            SerializeOptionalTyped<int>(converted);
             Statistics = ColumnStatistics.CreateNullableUInt32(values);
             AssignNullableUInt32PageStatistics(values);
         }
@@ -457,7 +457,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = ToUnixTime(values[i], timestamp);
-            SerializeTyped(converted);
+            SerializeTyped<long>(converted);
         }
         finally
         {
@@ -474,7 +474,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? ToUnixTime(value, timestamp) : null;
-            SerializeOptionalTyped(converted);
+            SerializeOptionalTyped<long>(converted);
         }
         finally
         {
@@ -490,7 +490,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = unchecked((long)values[i]);
-            SerializeTyped(converted);
+            SerializeTyped<long>(converted);
             Statistics = ColumnStatistics.CreateUInt64(values, 0);
             AssignUInt64PageStatistics(values);
         }
@@ -508,7 +508,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? unchecked((long)value) : null;
-            SerializeOptionalTyped(converted);
+            SerializeOptionalTyped<long>(converted);
             Statistics = ColumnStatistics.CreateNullableUInt64(values);
             AssignNullableUInt64PageStatistics(values);
         }
@@ -527,7 +527,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = ToUnixTime(values[i], timestamp.Unit);
-            SerializeTyped(converted);
+            SerializeTyped<long>(converted);
         }
         finally
         {
@@ -544,7 +544,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? ToUnixTime(value, timestamp.Unit) : null;
-            SerializeOptionalTyped(converted);
+            SerializeOptionalTyped<long>(converted);
         }
         finally
         {
@@ -563,7 +563,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 var convertedMillis = ParquetBuffer.AsSpan<int>(rentedMillis, values.Length);
                 for (var i = 0; i < values.Length; i++)
                     convertedMillis[i] = checked((int)ToTimeValue(values[i], time.Unit));
-                SerializeTyped(convertedMillis);
+                SerializeTyped<int>(convertedMillis);
             }
             finally
             {
@@ -578,7 +578,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = ToTimeValue(values[i], time.Unit);
-            SerializeTyped(converted);
+            SerializeTyped<long>(converted);
         }
         finally
         {
@@ -599,7 +599,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                     convertedMillis[i] = values[i] is { } value
                         ? checked((int)ToTimeValue(value, time.Unit))
                         : null;
-                SerializeOptionalTyped(convertedMillis);
+                SerializeOptionalTyped<int>(convertedMillis);
             }
             finally
             {
@@ -614,7 +614,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
             for (var i = 0; i < values.Length; i++)
                 converted[i] = values[i] is { } value ? ToTimeValue(value, time.Unit) : null;
-            SerializeOptionalTyped(converted);
+            SerializeOptionalTyped<long>(converted);
         }
         finally
         {
@@ -828,7 +828,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         if (typeof(TValue) != typeof(int))
             return false;
 
-        var intValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<int>>(ref values);
+        var intValues = SpanReinterpretation.Cast<TValue, int>(values);
         var rowOffset = 0;
         var hasColumnValue = false;
         var columnMin = 0;
