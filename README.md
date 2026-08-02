@@ -2,6 +2,9 @@
 
 Minimal Parquet writer under construction.
 
+Microsoft.Data.Analysis integration is available from the separate `Plank.DataFrame` package; see
+[`docs/articles/dataframe.md`](docs/articles/dataframe.md) for supported flat scalar mappings and examples.
+
 ## Notes
 
 - Columns can be pre-serialized ahead of row-group writing with `ParquetWriter.SerializeColumn(...)`, then written later via `RowGroupWriter.WriteAsync(serializedColumn)`.
