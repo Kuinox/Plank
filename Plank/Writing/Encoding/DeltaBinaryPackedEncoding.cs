@@ -11,6 +11,8 @@ static class DeltaBinaryPackedEncoding
     const int BlockSize = 128;
     const int MiniBlockCount = 4;
     const int MiniBlockSize = BlockSize / MiniBlockCount;
+    const int MaxInt32HeaderByteCount = 13;
+    const int MaxInt64HeaderByteCount = 18;
 
     internal static void WriteValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
@@ -31,22 +33,28 @@ static class DeltaBinaryPackedEncoding
 
     internal static void WriteInt32(ReadOnlySpan<int> values, ref BufferWriter writer)
     {
-        WriteUnsignedVarInt(BlockSize, ref writer);
-        WriteUnsignedVarInt(MiniBlockCount, ref writer);
-        WriteUnsignedVarInt((ulong)values.Length, ref writer);
+        var header = writer.GetSpan(MaxInt32HeaderByteCount);
+        ref var headerStart = ref MemoryMarshal.GetReference(header);
+        var headerLength = WriteUnsignedVarInt(BlockSize, ref headerStart);
+        headerLength += WriteUnsignedVarInt(MiniBlockCount, ref Unsafe.Add(ref headerStart, headerLength));
+        headerLength += WriteUnsignedVarInt((ulong)values.Length, ref Unsafe.Add(ref headerStart, headerLength));
 
         if (values.Length == 0)
         {
-            WriteUnsignedVarInt(0, ref writer);
+            headerLength += WriteUnsignedVarInt(0, ref Unsafe.Add(ref headerStart, headerLength));
+            writer.Advance(headerLength);
             return;
         }
 
-        WriteUnsignedVarInt(ZigZag32(values[0]), ref writer);
+        ref var input = ref MemoryMarshal.GetReference(values);
+        headerLength += WriteUnsignedVarInt(ZigZag32(input), ref Unsafe.Add(ref headerStart, headerLength));
+        writer.Advance(headerLength);
         if (values.Length == 1)
             return;
 
         Span<long> deltas = stackalloc long[BlockSize];
-        var previous = values[0];
+        ref var deltaBuffer = ref MemoryMarshal.GetReference(deltas);
+        var previous = input;
         var index = 1;
         while (index < values.Length)
         {
@@ -54,40 +62,46 @@ static class DeltaBinaryPackedEncoding
             var minDelta = long.MaxValue;
             for (var i = 0; i < count; i++)
             {
-                var current = values[index + i];
+                var current = Unsafe.Add(ref input, index + i);
                 var delta = (long)current - previous;
                 previous = current;
-                deltas[i] = delta;
+                Unsafe.Add(ref deltaBuffer, i) = delta;
                 if (delta < minDelta)
                     minDelta = delta;
             }
 
             for (var i = count; i < BlockSize; i++)
-                deltas[i] = minDelta;
+                Unsafe.Add(ref deltaBuffer, i) = minDelta;
 
-            WriteDeltaBlock(deltas, minDelta, ref writer);
+            WriteDeltaBlock(ref deltaBuffer, minDelta, ref writer);
             index += count;
         }
     }
 
     internal static void WriteInt64(ReadOnlySpan<long> values, ref BufferWriter writer)
     {
-        WriteUnsignedVarInt(BlockSize, ref writer);
-        WriteUnsignedVarInt(MiniBlockCount, ref writer);
-        WriteUnsignedVarInt((ulong)values.Length, ref writer);
+        var header = writer.GetSpan(MaxInt64HeaderByteCount);
+        ref var headerStart = ref MemoryMarshal.GetReference(header);
+        var headerLength = WriteUnsignedVarInt(BlockSize, ref headerStart);
+        headerLength += WriteUnsignedVarInt(MiniBlockCount, ref Unsafe.Add(ref headerStart, headerLength));
+        headerLength += WriteUnsignedVarInt((ulong)values.Length, ref Unsafe.Add(ref headerStart, headerLength));
 
         if (values.Length == 0)
         {
-            WriteUnsignedVarInt(0, ref writer);
+            headerLength += WriteUnsignedVarInt(0, ref Unsafe.Add(ref headerStart, headerLength));
+            writer.Advance(headerLength);
             return;
         }
 
-        WriteUnsignedVarInt(ZigZag64(values[0]), ref writer);
+        ref var input = ref MemoryMarshal.GetReference(values);
+        headerLength += WriteUnsignedVarInt(ZigZag64(input), ref Unsafe.Add(ref headerStart, headerLength));
+        writer.Advance(headerLength);
         if (values.Length == 1)
             return;
 
         Span<long> deltas = stackalloc long[BlockSize];
-        var previous = values[0];
+        ref var deltaBuffer = ref MemoryMarshal.GetReference(deltas);
+        var previous = input;
         var index = 1;
         while (index < values.Length)
         {
@@ -95,18 +109,18 @@ static class DeltaBinaryPackedEncoding
             var minDelta = long.MaxValue;
             for (var i = 0; i < count; i++)
             {
-                var current = values[index + i];
+                var current = Unsafe.Add(ref input, index + i);
                 var delta = current - previous;
                 previous = current;
-                deltas[i] = delta;
+                Unsafe.Add(ref deltaBuffer, i) = delta;
                 if (delta < minDelta)
                     minDelta = delta;
             }
 
             for (var i = count; i < BlockSize; i++)
-                deltas[i] = minDelta;
+                Unsafe.Add(ref deltaBuffer, i) = minDelta;
 
-            WriteDeltaBlock(deltas, minDelta, ref writer);
+            WriteDeltaBlock(ref deltaBuffer, minDelta, ref writer);
             index += count;
         }
     }
@@ -177,37 +191,52 @@ static class DeltaBinaryPackedEncoding
             $"Column '{column.Name}' expects '{ParquetPhysicalType.Int64}' values, but got '{typeof(T)}'.");
     }
 
-    static void WriteDeltaBlock(Span<long> deltas, long minDelta, ref BufferWriter writer)
+    static void WriteDeltaBlock(ref long deltas, long minDelta, ref BufferWriter writer)
     {
-        WriteUnsignedVarInt(ZigZag64(minDelta), ref writer);
-
-        Span<byte> bitWidths = stackalloc byte[MiniBlockCount];
+        uint bitWidths = 0;
+        var packedByteCount = 0;
         for (var block = 0; block < MiniBlockCount; block++)
         {
             var start = block * MiniBlockSize;
             ulong max = 0;
             for (var i = 0; i < MiniBlockSize; i++)
             {
-                var normalized = (ulong)(deltas[start + i] - minDelta);
+                ref var delta = ref Unsafe.Add(ref deltas, start + i);
+                var normalized = (ulong)(delta - minDelta);
                 if (normalized > max)
                     max = normalized;
-                deltas[start + i] = (long)normalized;
+                delta = (long)normalized;
             }
 
-            bitWidths[block] = GetBitWidth(max);
+            var width = GetBitWidth(max);
+            bitWidths |= (uint)width << (block * 8);
+            packedByteCount += width * 4;
         }
 
-        var bitWidthBytes = writer.GetSpan(MiniBlockCount);
-        bitWidths.CopyTo(bitWidthBytes);
-        writer.Advance(MiniBlockCount);
+        var encodedMinDelta = ZigZag64(minDelta);
+        var outputLength = GetUnsignedVarIntByteCount(encodedMinDelta) + MiniBlockCount + packedByteCount;
+        var destination = writer.GetSpan(outputLength);
+        ref var output = ref MemoryMarshal.GetReference(destination);
+        var outputOffset = WriteUnsignedVarInt(encodedMinDelta, ref output);
+        var bitWidthBytes = BitConverter.IsLittleEndian ? bitWidths : BinaryPrimitives.ReverseEndianness(bitWidths);
+        Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, outputOffset), bitWidthBytes);
+        outputOffset += MiniBlockCount;
 
         for (var block = 0; block < MiniBlockCount; block++)
         {
-            var width = bitWidths[block];
-            if (width != 0)
-                WritePackedUnsignedValues(
-                    deltas[(block * MiniBlockSize)..((block + 1) * MiniBlockSize)], width, ref writer);
+            var width = (int)(byte)(bitWidths >> (block * 8));
+            if (width == 0)
+                continue;
+
+            var byteCount = width * 4;
+            PackUnsignedValues(
+                ref Unsafe.Add(ref deltas, block * MiniBlockSize),
+                width,
+                ref Unsafe.Add(ref output, outputOffset));
+            outputOffset += byteCount;
         }
+
+        writer.Advance(outputLength);
     }
 
     internal static void WritePackedUnsignedValues(ReadOnlySpan<long> values, int bitWidth, ref BufferWriter writer)
@@ -220,13 +249,20 @@ static class DeltaBinaryPackedEncoding
 
         var byteCount = checked((values.Length * bitWidth + 7) >> 3);
         var destination = writer.GetSpan(byteCount);
+        PackUnsignedValues(
+            ref MemoryMarshal.GetReference(values),
+            bitWidth,
+            ref MemoryMarshal.GetReference(destination));
+        writer.Advance(byteCount);
+    }
+
+    static void PackUnsignedValues(ref long input, int bitWidth, ref byte output)
+    {
         var mask = bitWidth == 64 ? ulong.MaxValue : (1UL << bitWidth) - 1UL;
         ulong low = 0;
         ulong high = 0;
         var bufferedBits = 0;
         var outputOffset = 0;
-        ref var input = ref MemoryMarshal.GetReference(values);
-        ref var output = ref MemoryMarshal.GetReference(destination);
         for (var i = 0; i < MiniBlockSize; i++)
         {
             var value = (ulong)Unsafe.Add(ref input, i) & mask;
@@ -261,23 +297,24 @@ static class DeltaBinaryPackedEncoding
                 tail = BinaryPrimitives.ReverseEndianness(tail);
             Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, outputOffset), tail);
         }
-
-        writer.Advance(byteCount);
     }
 
-    static void WriteUnsignedVarInt(ulong value, ref BufferWriter writer)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static int WriteUnsignedVarInt(ulong value, ref byte destination)
     {
-        var destination = writer.GetSpan(10);
         var offset = 0;
         while (value >= 0x80)
         {
-            destination[offset++] = (byte)(value | 0x80);
+            Unsafe.Add(ref destination, offset++) = (byte)(value | 0x80);
             value >>= 7;
         }
 
-        destination[offset++] = (byte)value;
-        writer.Advance(offset);
+        Unsafe.Add(ref destination, offset++) = (byte)value;
+        return offset;
     }
+
+    static int GetUnsignedVarIntByteCount(ulong value)
+        => Math.Max(1, (GetBitWidth(value) + 6) / 7);
 
     static byte GetBitWidth(ulong value)
         => (byte)(64 - BitOperations.LeadingZeroCount(value));

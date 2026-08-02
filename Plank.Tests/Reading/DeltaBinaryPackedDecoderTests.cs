@@ -64,8 +64,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
     [Test]
     public void PackedMiniBlocksMatchReferenceAcrossBitWidths()
     {
-        int[] widths = [0, 1, 7, 8, 9, 31, 32, 33, 63, 64];
-        foreach (var width in widths)
+        for (var width = 0; width <= 64; width++)
         {
             var values = CreatePackedValues(width);
             var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 1024, 1024);
@@ -85,6 +84,51 @@ internal sealed class DeltaBinaryPackedDecoderTests
                 writer.Dispose();
             }
         }
+    }
+
+    [Test]
+    public void WriteInt32MatchesReferenceAcrossBlockBoundaries()
+    {
+        int[] counts = [0, 1, 127, 128, 129];
+        foreach (var count in counts)
+        {
+            var values = new int[count];
+            for (var i = 0; i < values.Length; i++)
+                values[i] = (i % 4) switch
+                {
+                    0 => int.MinValue,
+                    1 => int.MaxValue,
+                    2 => i * 17,
+                    _ => -i * 31
+                };
+
+            AssertEncodedBytes(values, EncodeInt32Reference(values), chunkSize: 7,
+                requireMultipleSegments: count == 129);
+        }
+    }
+
+    [Test]
+    public void WriteInt64MatchesReferenceForExtremeFirstValues()
+    {
+        long[][] cases =
+        [
+            [],
+            [long.MinValue],
+            [long.MaxValue],
+            [long.MinValue, long.MaxValue],
+            [long.MaxValue, long.MinValue]
+        ];
+        foreach (var values in cases)
+            AssertEncodedBytes(values, EncodeInt64Reference(values), chunkSize: 1);
+    }
+
+    [Test]
+    public void WriteInt32PreservesKnownPayload()
+    {
+        int[] values = [4, 11, 3, 18, 2];
+        var expected = Convert.FromHexString(
+            "80010405081F05000000177D000000000000000000000000000000000000");
+        AssertEncodedBytes(values, expected, chunkSize: 7, requireMultipleSegments: true);
     }
 
     [Test]
@@ -138,6 +182,163 @@ internal sealed class DeltaBinaryPackedDecoderTests
         }
 
         return values;
+    }
+
+    static void AssertEncodedBytes(ReadOnlySpan<int> values, byte[] expected, uint chunkSize,
+        bool requireMultipleSegments = false)
+    {
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, chunkSize, chunkSize);
+        try
+        {
+            DeltaBinaryPackedEncoding.WriteInt32(values, ref writer);
+            AssertEncodedBytes(ref writer, expected, requireMultipleSegments);
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+    }
+
+    static void AssertEncodedBytes(ReadOnlySpan<long> values, byte[] expected, uint chunkSize)
+    {
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, chunkSize, chunkSize);
+        try
+        {
+            DeltaBinaryPackedEncoding.WriteInt64(values, ref writer);
+            AssertEncodedBytes(ref writer, expected, requireMultipleSegments: false);
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+    }
+
+    static void AssertEncodedBytes(ref BufferWriter writer, byte[] expected, bool requireMultipleSegments)
+    {
+        var actual = new byte[writer.WrittenLength];
+        writer.CopyTo(actual);
+        if (!actual.SequenceEqual(expected))
+            throw new InvalidOperationException(
+                $"Expected {Convert.ToHexString(expected)}, got {Convert.ToHexString(actual)}.");
+        if (requireMultipleSegments && writer.TryGetSingleWrittenSpan(out _))
+            throw new InvalidOperationException("Expected the encoded payload to span multiple writer segments.");
+    }
+
+    static byte[] EncodeInt32Reference(ReadOnlySpan<int> values)
+    {
+        var output = new List<byte>();
+        WriteUnsignedVarIntReference(128, output);
+        WriteUnsignedVarIntReference(4, output);
+        WriteUnsignedVarIntReference((ulong)values.Length, output);
+
+        if (values.Length == 0)
+        {
+            WriteUnsignedVarIntReference(0, output);
+            return output.ToArray();
+        }
+
+        WriteUnsignedVarIntReference((uint)((values[0] << 1) ^ (values[0] >> 31)), output);
+        if (values.Length == 1)
+            return output.ToArray();
+
+        var deltas = new long[128];
+        var previous = values[0];
+        var index = 1;
+        while (index < values.Length)
+        {
+            var count = Math.Min(deltas.Length, values.Length - index);
+            var minDelta = long.MaxValue;
+            for (var i = 0; i < count; i++)
+            {
+                var current = values[index + i];
+                var delta = (long)current - previous;
+                previous = current;
+                deltas[i] = delta;
+                minDelta = Math.Min(minDelta, delta);
+            }
+
+            Array.Fill(deltas, minDelta, count, deltas.Length - count);
+            WriteDeltaBlockReference(deltas, minDelta, output);
+            index += count;
+        }
+
+        return output.ToArray();
+    }
+
+    static byte[] EncodeInt64Reference(ReadOnlySpan<long> values)
+    {
+        var output = new List<byte>();
+        WriteUnsignedVarIntReference(128, output);
+        WriteUnsignedVarIntReference(4, output);
+        WriteUnsignedVarIntReference((ulong)values.Length, output);
+
+        if (values.Length == 0)
+        {
+            WriteUnsignedVarIntReference(0, output);
+            return output.ToArray();
+        }
+
+        WriteUnsignedVarIntReference((ulong)((values[0] << 1) ^ (values[0] >> 63)), output);
+        if (values.Length == 1)
+            return output.ToArray();
+
+        var deltas = new long[128];
+        var previous = values[0];
+        var index = 1;
+        while (index < values.Length)
+        {
+            var count = Math.Min(deltas.Length, values.Length - index);
+            var minDelta = long.MaxValue;
+            for (var i = 0; i < count; i++)
+            {
+                var current = values[index + i];
+                var delta = current - previous;
+                previous = current;
+                deltas[i] = delta;
+                minDelta = Math.Min(minDelta, delta);
+            }
+
+            Array.Fill(deltas, minDelta, count, deltas.Length - count);
+            WriteDeltaBlockReference(deltas, minDelta, output);
+            index += count;
+        }
+
+        return output.ToArray();
+    }
+
+    static void WriteDeltaBlockReference(long[] deltas, long minDelta, List<byte> output)
+    {
+        WriteUnsignedVarIntReference((ulong)((minDelta << 1) ^ (minDelta >> 63)), output);
+
+        var bitWidths = new byte[4];
+        for (var block = 0; block < bitWidths.Length; block++)
+        {
+            var start = block * 32;
+            ulong max = 0;
+            for (var i = 0; i < 32; i++)
+            {
+                var normalized = (ulong)(deltas[start + i] - minDelta);
+                deltas[start + i] = (long)normalized;
+                max = Math.Max(max, normalized);
+            }
+
+            bitWidths[block] = (byte)(64 - System.Numerics.BitOperations.LeadingZeroCount(max));
+            output.Add(bitWidths[block]);
+        }
+
+        for (var block = 0; block < bitWidths.Length; block++)
+            output.AddRange(PackReference(deltas.AsSpan(block * 32, 32), bitWidths[block]));
+    }
+
+    static void WriteUnsignedVarIntReference(ulong value, List<byte> output)
+    {
+        while (value >= 0x80)
+        {
+            output.Add((byte)(value | 0x80));
+            value >>= 7;
+        }
+
+        output.Add((byte)value);
     }
 
     static byte[] PackReference(ReadOnlySpan<long> values, int bitWidth)
