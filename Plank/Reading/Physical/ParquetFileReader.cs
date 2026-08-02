@@ -139,6 +139,9 @@ public sealed class ParquetFileReader : IDisposable
     internal IParquetBufferPool BufferPool
         => _options.BufferPool;
 
+    internal bool VerifyPageCrc
+        => _options.VerifyPageCrc;
+
     internal IParquetReadSource Source
     {
         get

@@ -12,13 +12,15 @@ static class ParquetMetadataThriftWriter
 
     internal static void WriteDataPageHeaderV2(ref BufferWriter destination, uint rowCount, uint valueCount, uint nullCount,
         uint repetitionLevelsByteLength, uint definitionLevelsByteLength, EncodingKind encoding, int uncompressedPageSize,
-        int compressedPageSize, bool isCompressed)
+        int compressedPageSize, bool isCompressed, uint? crc)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
         writer.WriteFieldI32(1, (int)PageType.DataPageV2);
         writer.WriteFieldI32(2, uncompressedPageSize);
         writer.WriteFieldI32(3, compressedPageSize);
+        if (crc.HasValue)
+            writer.WriteFieldI32(4, unchecked((int)crc.Value));
         writer.WriteFieldHeader(8, CompactType.Struct);
 
         var previousData = writer.BeginStruct();
@@ -35,13 +37,15 @@ static class ParquetMetadataThriftWriter
     }
 
     internal static void WriteDictionaryPageHeader(ref BufferWriter destination, uint valueCount, int uncompressedPageSize,
-        int compressedPageSize)
+        int compressedPageSize, uint? crc)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
         writer.WriteFieldI32(1, (int)PageType.DictionaryPage);
         writer.WriteFieldI32(2, uncompressedPageSize);
         writer.WriteFieldI32(3, compressedPageSize);
+        if (crc.HasValue)
+            writer.WriteFieldI32(4, unchecked((int)crc.Value));
         writer.WriteFieldHeader(7, CompactType.Struct);
 
         var previousDictionary = writer.BeginStruct();

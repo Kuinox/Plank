@@ -129,9 +129,10 @@ public sealed class RowGroupWriter
                     }
 
                     var dictionaryValueCount = page.DictionaryValueCount;
+                    var crc = GetPageCrc(writeCompressedContent, ref page);
                     page.Header.Reset();
                     ParquetMetadataThriftWriter.WriteDictionaryPageHeader(ref page.Header, dictionaryValueCount,
-                        pageContentSize, compressedContentSize);
+                        pageContentSize, compressedContentSize, crc);
                     break;
                 }
                 case PageKind.DataV1:
@@ -190,10 +191,11 @@ public sealed class RowGroupWriter
                         dataEncoding = pageEncoding;
                     }
 
+                    var crc = GetPageCrc(writeCompressedContent, ref page);
                     page.Header.Reset();
                     ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, dataPageRowCount,
                         dataPageValueCount, dataPageNullCount, repetitionLevelsByteLength, definitionLevelsByteLength,
-                        pageEncoding, uncompressedPageHeaderSize, compressedContentSize, writeCompressedContent);
+                        pageEncoding, uncompressedPageHeaderSize, compressedContentSize, writeCompressedContent, crc);
                     break;
                 }
                 default:
@@ -259,6 +261,11 @@ public sealed class RowGroupWriter
         _writer.CompleteOpenRowGroup(_rowCount.GetValueOrDefault());
         _mapKeyShapes?.Clear();
     }
+
+    uint? GetPageCrc(bool writeCompressedContent, ref Page page)
+        => !_writer.WritePageCrc
+            ? null
+            : writeCompressedContent ? _compressedContent.ComputeCrc32() : page.Content.ComputeCrc32();
 
     void ValidateMapRowShapes(RepeatedRowShape[]? shapes, int columnOrdinal)
     {
