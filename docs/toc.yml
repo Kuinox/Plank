@@ -6,7 +6,5 @@
   href: articles/reading/index.md
 - name: Writing
   href: articles/writing.md
-- name: Untyped rows
-  href: articles/untyped.md
 - name: API reference
   href: api/
