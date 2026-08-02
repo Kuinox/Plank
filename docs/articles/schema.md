@@ -47,7 +47,6 @@ Plank validates that the selected options are compatible with the property type.
 | `long`, `ulong` | `Int64` |
 | `float` | `Float` |
 | `double` | `Double` |
-| `decimal` | `FixedLenByteArray` with `Decimal` |
 | `string` | `ByteArray` with `String` |
 | `byte[]`, `ReadOnlyMemory<byte>` | `ByteArray` |
 | `Guid` | 16-byte `FixedLenByteArray` with `Uuid` |
@@ -56,18 +55,6 @@ Plank validates that the selected options are compatible with the property type.
 | `DateTime`, `DateTimeOffset` | `Int64` with `Timestamp` |
 
 Nullable forms use the same type and create an optional column.
-
-Decimal columns require an explicit precision and may set a scale (which defaults to zero):
-
-```csharp
-[ParquetColumn(Precision = 18, Scale = 4)]
-public decimal Amount { get; init; }
-```
-
-The generated schema chooses the smallest fixed-length byte width that can hold the declared precision. You can
-override the physical type with the `ParquetColumn` constructor when interoperability requires `Int32`, `Int64`, or
-`ByteArray`. `System.Decimal` supports precision up to 29 and scale up to 28. Serialization is exact: a value that
-has too many fractional digits or exceeds the declared precision is rejected instead of rounded.
 
 CLR strings require an explicit opt-in because UTF-8 encoding and decoding allocates:
 
@@ -95,18 +82,6 @@ var schema = new ParquetSchema([
         "name",
         ParquetPhysicalType.ByteArray,
         logicalType: new LogicalType.String())
-]);
-```
-
-For a runtime decimal schema, supply the physical width and decimal annotation explicitly:
-
-```csharp
-var schema = new ParquetSchema([
-    ColumnDefinition.RequiredLeaf(
-        "amount",
-        ParquetPhysicalType.FixedLenByteArray,
-        new ColumnOptions(typeLength: 8),
-        new LogicalType.Decimal(18, 4))
 ]);
 ```
 
