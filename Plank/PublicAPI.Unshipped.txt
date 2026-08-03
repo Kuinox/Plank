@@ -39,6 +39,10 @@ Plank.Schema.LogicalTypeKind.Unknown = 16 -> Plank.Schema.LogicalTypeKind
 Plank.Schema.LogicalTypeKind.Variant = 15 -> Plank.Schema.LogicalTypeKind
 static Plank.Schema.ColumnDefinition.OptionalGroup(string! name, Plank.Schema.LogicalType! logicalType, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
 static Plank.Schema.ColumnDefinition.RequiredGroup(string! name, Plank.Schema.LogicalType! logicalType, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
+Plank.Schema.ParquetColumnAttribute.Precision.get -> int
+Plank.Schema.ParquetColumnAttribute.Precision.set -> void
+Plank.Schema.ParquetColumnAttribute.Scale.get -> int
+Plank.Schema.ParquetColumnAttribute.Scale.set -> void
 *REMOVED*Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0) -> void
 Plank.Reading.Logical.ParquetColumnChunkMetadata.HasBloomFilter.get -> bool
 Plank.Reading.Logical.ParquetColumnChunkMetadata.OpenBloomFilter() -> Plank.Reading.Physical.ParquetBloomFilter!

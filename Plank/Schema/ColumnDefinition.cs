@@ -146,6 +146,37 @@ public sealed record ColumnDefinition
             throw new ArgumentException(
                 $"Logical type '{nameof(LogicalType.Unknown)}' requires an optional column because all values must be null for column '{name}'.",
                 nameof(logicalType));
+
+        if (logicalType is not LogicalType.Decimal decimalType)
+            return;
+        if (decimalType.Precision <= 0)
+            throw new ArgumentException(
+                $"Decimal precision must be positive for column '{name}'.", nameof(logicalType));
+        if (decimalType.Scale < 0 || decimalType.Scale > decimalType.Precision)
+            throw new ArgumentException(
+                $"Decimal scale must be non-negative and no greater than precision for column '{name}'.",
+                nameof(logicalType));
+        if (physicalType is not (ParquetPhysicalType.Int32 or ParquetPhysicalType.Int64 or
+            ParquetPhysicalType.ByteArray or ParquetPhysicalType.FixedLenByteArray))
+            throw new ArgumentException(
+                $"Logical type '{nameof(LogicalType.Decimal)}' is not compatible with physical type '{physicalType}' for column '{name}'.",
+                nameof(physicalType));
+        if (physicalType == ParquetPhysicalType.Int32 && decimalType.Precision > 9)
+            throw new ArgumentException(
+                $"Decimal precision {decimalType.Precision} exceeds the maximum precision 9 for INT32 column '{name}'.",
+                nameof(logicalType));
+        if (physicalType == ParquetPhysicalType.Int64 && decimalType.Precision > 18)
+            throw new ArgumentException(
+                $"Decimal precision {decimalType.Precision} exceeds the maximum precision 18 for INT64 column '{name}'.",
+                nameof(logicalType));
+        if (physicalType == ParquetPhysicalType.FixedLenByteArray)
+        {
+            var maximumPrecision = GetMaximumDecimalPrecision(options.TypeLength);
+            if (decimalType.Precision > maximumPrecision)
+                throw new ArgumentException(
+                    $"Decimal precision {decimalType.Precision} exceeds the maximum precision {maximumPrecision} for {options.TypeLength}-byte column '{name}'.",
+                    nameof(logicalType));
+        }
     }
 
     internal static void ValidateGroupLogicalType(string name, LogicalType? logicalType,
@@ -184,5 +215,15 @@ public sealed record ColumnDefinition
             throw new ArgumentException(
                 $"Variant group '{name}' requires a BYTE_ARRAY field named 'value'.",
                 nameof(children));
+    }
+
+    static int GetMaximumDecimalPrecision(uint typeLength)
+    {
+        if (typeLength == 0)
+            return 0;
+
+        var bits = (double)typeLength * 8 - 1;
+        var precision = Math.Floor(bits * Math.Log10(2));
+        return precision >= int.MaxValue ? int.MaxValue : checked((int)precision);
     }
 }

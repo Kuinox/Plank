@@ -49,5 +49,23 @@ public abstract record LogicalType
     public sealed record Geography(string? Crs = null,
         EdgeInterpolationAlgorithm? Algorithm = null) : LogicalType;
 
-    public sealed record Decimal(int Precision, int Scale) : LogicalType;
+    public sealed record Decimal : LogicalType
+    {
+        public Decimal(int Precision, int Scale)
+        {
+            if (Precision <= 0)
+                throw new ArgumentOutOfRangeException(nameof(Precision), Precision,
+                    "Decimal precision must be positive.");
+            if (Scale < 0 || Scale > Precision)
+                throw new ArgumentOutOfRangeException(nameof(Scale), Scale,
+                    "Decimal scale must be non-negative and no greater than precision.");
+
+            this.Precision = Precision;
+            this.Scale = Scale;
+        }
+
+        public int Precision { get; init; }
+
+        public int Scale { get; init; }
+    }
 }
