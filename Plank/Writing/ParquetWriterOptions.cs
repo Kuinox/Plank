@@ -28,6 +28,8 @@ public sealed class ParquetWriterOptions
 
     public bool WritePageIndexes { get; init; } = true;
 
+    public bool WritePageCrc { get; init; }
+
     public uint RowApiMaxParallelism
     {
         get => _rowApiMaxParallelism == 0 ? checked((uint)Execution.WorkerCount) : _rowApiMaxParallelism;

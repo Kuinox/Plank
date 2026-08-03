@@ -10,7 +10,8 @@ readonly struct InternalColumnChunkMetadata
         ulong totalUncompressedSize, ulong valueCount, CompressionKind compression, EncodingKind[] encodings, string path,
         ParquetPhysicalType physicalType,
         ulong columnIndexOffset = 0, uint columnIndexLength = 0, ulong offsetIndexOffset = 0,
-        uint offsetIndexLength = 0, int physicalColumnOrdinal = -1,
+        uint offsetIndexLength = 0, ulong bloomFilterOffset = 0, uint bloomFilterLength = 0,
+        int physicalColumnOrdinal = -1,
         EncodedStatistics statistics = default)
     {
         Path = path;
@@ -27,6 +28,8 @@ readonly struct InternalColumnChunkMetadata
         ColumnIndexLength = columnIndexLength;
         OffsetIndexOffset = offsetIndexOffset;
         OffsetIndexLength = offsetIndexLength;
+        BloomFilterOffset = bloomFilterOffset;
+        BloomFilterLength = bloomFilterLength;
         Statistics = statistics;
     }
 
@@ -34,7 +37,7 @@ readonly struct InternalColumnChunkMetadata
         : this(chunk.DataPageOffset, chunk.DictionaryPageOffset, chunk.TotalCompressedSize,
             chunk.TotalUncompressedSize, chunk.ValueCount, chunk.Compression, encodings, path, chunk.PhysicalType,
             chunk.ColumnIndexOffset, chunk.ColumnIndexLength, chunk.OffsetIndexOffset, chunk.OffsetIndexLength,
-            chunk.ColumnOrdinal, chunk.Statistics)
+            chunk.BloomFilterOffset, chunk.BloomFilterLength, chunk.ColumnOrdinal, chunk.Statistics)
     {
     }
 
@@ -65,6 +68,10 @@ readonly struct InternalColumnChunkMetadata
     internal ulong OffsetIndexOffset { get; }
 
     internal uint OffsetIndexLength { get; }
+
+    internal ulong BloomFilterOffset { get; }
+
+    internal uint BloomFilterLength { get; }
 
     internal EncodedStatistics Statistics { get; }
 
