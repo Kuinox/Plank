@@ -31,6 +31,10 @@ public sealed class ParquetColumnAttribute : Attribute
 
     public LogicalTypeKind LogicalType { get; set; }
 
+    public int Precision { get; set; }
+
+    public int Scale { get; set; }
+
     /// <summary>Gets or sets whether generated row writers emit a Bloom filter for this column.</summary>
     public bool BloomFilter { get; set; }
 
