@@ -9,6 +9,32 @@ Plank.Writing.ParquetWriterOptions.DataPageVersion.get -> Plank.Writing.ParquetD
 Plank.Writing.ParquetWriterOptions.DataPageVersion.init -> void
 Plank.Writing.ParquetWriterOptions.FileVersion.get -> Plank.Writing.ParquetFileVersion
 Plank.Writing.ParquetWriterOptions.FileVersion.init -> void
+Plank.Reading.Logical.NestedColumnBuffer<T>
+Plank.Reading.Logical.NestedColumnBuffer<T>.Count.get -> int
+Plank.Reading.Logical.NestedColumnBuffer<T>.DefinitionLevels.get -> System.ReadOnlySpan<int>
+Plank.Reading.Logical.NestedColumnBuffer<T>.MaxDefinitionLevel.get -> int
+Plank.Reading.Logical.NestedColumnBuffer<T>.MaxRepetitionLevel.get -> int
+Plank.Reading.Logical.NestedColumnBuffer<T>.NestedColumnBuffer() -> void
+Plank.Reading.Logical.NestedColumnBuffer<T>.RepetitionLevels.get -> System.ReadOnlySpan<int>
+Plank.Reading.Logical.NestedColumnBuffer<T>.RetainLevels() -> Plank.ParquetBuffer
+Plank.Reading.Logical.NestedColumnBuffer<T>.RowCount.get -> int
+Plank.Reading.Logical.NestedColumnBuffer<T>.StartsWithContinuation.get -> bool
+Plank.Reading.Logical.NestedColumnBuffer<T>.Values.get -> Plank.Reading.Logical.ColumnBuffer<T>
+Plank.Reading.Logical.NestedRowGroupColumn<T>
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Definition.get -> Plank.Schema.LeafColumn!
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Enumerator
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Enumerator.Current.get -> Plank.Reading.Logical.NestedColumnBuffer<T>
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Enumerator.Dispose() -> void
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Enumerator.Enumerator() -> void
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Enumerator.MoveNext() -> bool
+Plank.Reading.Logical.NestedRowGroupColumn<T>.GetEnumerator() -> Plank.Reading.Logical.NestedRowGroupColumn<T>.Enumerator
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Metadata.get -> Plank.Reading.Logical.ParquetColumnChunkMetadata
+Plank.Reading.Logical.NestedRowGroupColumn<T>.NestedRowGroupColumn() -> void
+Plank.Reading.Logical.RowGroup.NestedColumn<T>(int columnOrdinal) -> Plank.Reading.Logical.NestedRowGroupColumn<T>
+Plank.Reading.Logical.RowGroup.NestedColumn<T>(Plank.Schema.LeafColumn! column) -> Plank.Reading.Logical.NestedRowGroupColumn<T>
+Plank.Schema.LeafColumn.MaxDefinitionLevel.get -> int
+Plank.Schema.LeafColumn.MaxRepetitionLevel.get -> int
+Plank.Schema.CompressionKind.Lz4Legacy = 6 -> Plank.Schema.CompressionKind
 Plank.Reading.Physical.ParquetFileMetadata.CreatedByUtf8.get -> System.ReadOnlySpan<byte>
 Plank.Reading.Physical.ParquetFileMetadata.HasCreatedBy.get -> bool
 Plank.Reading.Physical.ParquetFileMetadata.KeyValueMetadata.get -> System.ReadOnlySpan<Plank.Reading.Physical.ParquetKeyValueMetadataInfo>
@@ -20,6 +46,16 @@ Plank.Reading.Physical.ParquetKeyValueMetadataInfo.HasValue.get -> bool
 Plank.Reading.Physical.ParquetKeyValueMetadataInfo.KeyLength.get -> int
 Plank.Reading.Physical.ParquetKeyValueMetadataInfo.ParquetKeyValueMetadataInfo() -> void
 Plank.Reading.Physical.ParquetKeyValueMetadataInfo.ValueLength.get -> int
+Plank.Schema.ParquetSchema.CreateAppender(System.IO.Stream! stream, Plank.Writing.ParquetAppendOptions? options = null) -> Plank.Writing.ParquetWriter!
+Plank.Schema.ParquetSchema.CreateMerger(System.IO.Stream! destination, Plank.Writing.ParquetMergeOptions? options = null) -> Plank.Writing.ParquetFileMerger!
+Plank.Writing.ParquetAppendOptions
+Plank.Writing.ParquetAppendOptions.ParquetAppendOptions() -> void
+Plank.Writing.ParquetAppendOptions.AppendToLatestRowGroup.get -> bool
+Plank.Writing.ParquetAppendOptions.AppendToLatestRowGroup.init -> void
+Plank.Writing.ParquetAppendOptions.PreserveExistingMetadata.get -> bool
+Plank.Writing.ParquetAppendOptions.PreserveExistingMetadata.init -> void
+Plank.Writing.ParquetAppendOptions.WriterOptions.get -> Plank.Writing.ParquetWriterOptions!
+Plank.Writing.ParquetAppendOptions.WriterOptions.init -> void
 Plank.Writing.ParquetKeyValueMetadata
 Plank.Writing.ParquetKeyValueMetadata.Key.get -> string!
 Plank.Writing.ParquetKeyValueMetadata.Key.init -> void
@@ -27,15 +63,32 @@ Plank.Writing.ParquetKeyValueMetadata.ParquetKeyValueMetadata() -> void
 Plank.Writing.ParquetKeyValueMetadata.ParquetKeyValueMetadata(string! Key, string? Value) -> void
 Plank.Writing.ParquetKeyValueMetadata.Value.get -> string?
 Plank.Writing.ParquetKeyValueMetadata.Value.init -> void
+Plank.Writing.ParquetFileMerger
+Plank.Writing.ParquetFileMerger.AppendFile(System.IO.Stream! source) -> void
+Plank.Writing.ParquetFileMerger.CloseFile() -> void
+Plank.Writing.ParquetFileMerger.RowCount.get -> long
+Plank.Writing.ParquetFileMerger.RowGroupCount.get -> int
+Plank.Writing.ParquetFileMerger.SourceFileCount.get -> int
+Plank.Writing.ParquetMergeOptions
+Plank.Writing.ParquetMergeOptions.ParquetMergeOptions() -> void
+Plank.Writing.ParquetMergeOptions.PreserveFirstFileMetadata.get -> bool
+Plank.Writing.ParquetMergeOptions.PreserveFirstFileMetadata.init -> void
+Plank.Writing.ParquetMergeOptions.WriterOptions.get -> Plank.Writing.ParquetWriterOptions!
+Plank.Writing.ParquetMergeOptions.WriterOptions.init -> void
 Plank.Writing.ParquetWriterOptions.CreatedBy.get -> string?
 Plank.Writing.ParquetWriterOptions.CreatedBy.init -> void
 Plank.Writing.ParquetWriterOptions.KeyValueMetadata.get -> System.Collections.Generic.IReadOnlyList<Plank.Writing.ParquetKeyValueMetadata>!
 Plank.Writing.ParquetWriterOptions.KeyValueMetadata.init -> void
+static readonly Plank.Writing.ParquetAppendOptions.Default -> Plank.Writing.ParquetAppendOptions!
+static readonly Plank.Writing.ParquetMergeOptions.Default -> Plank.Writing.ParquetMergeOptions!
 Plank.Schema.ParquetColumnAttribute.Precision.get -> int
 Plank.Schema.ParquetColumnAttribute.Precision.set -> void
 Plank.Schema.ParquetColumnAttribute.Scale.get -> int
 Plank.Schema.ParquetColumnAttribute.Scale.set -> void
 *REMOVED*Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0) -> void
+Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0, Plank.Schema.CompressionKind? compression = null, int? compressionLevel = null, Plank.Schema.ParquetBloomFilterOptions? bloomFilter = null) -> void
+Plank.Schema.ColumnOptions.Compression.get -> Plank.Schema.CompressionKind?
+Plank.Schema.ColumnOptions.CompressionLevel.get -> int?
 Plank.Reading.Logical.ParquetColumnChunkMetadata.HasBloomFilter.get -> bool
 Plank.Reading.Logical.ParquetColumnChunkMetadata.OpenBloomFilter() -> Plank.Reading.Physical.ParquetBloomFilter!
 Plank.Reading.Physical.ParquetBloomFilter
@@ -60,7 +113,6 @@ Plank.Reading.Physical.ParquetColumnChunkInfo.BloomFilterOffset.init -> void
 Plank.Reading.Physical.ParquetColumnChunkInfo.HasBloomFilter.get -> bool
 Plank.Reading.Physical.ParquetFileReader.OpenBloomFilter(int rowGroupOrdinal, int columnOrdinal) -> Plank.Reading.Physical.ParquetBloomFilter!
 Plank.Schema.ColumnOptions.BloomFilter.get -> Plank.Schema.ParquetBloomFilterOptions?
-Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0, Plank.Schema.ParquetBloomFilterOptions? bloomFilter = null) -> void
 Plank.Schema.ParquetBloomFilterOptions
 Plank.Schema.ParquetBloomFilterOptions.ExpectedDistinctValueCount.get -> uint?
 Plank.Schema.ParquetBloomFilterOptions.ExpectedDistinctValueCount.init -> void

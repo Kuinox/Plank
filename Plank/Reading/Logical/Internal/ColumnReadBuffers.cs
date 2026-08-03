@@ -7,6 +7,7 @@ struct ColumnReadBuffers<T>
     internal ParquetBuffer Values;
     internal ParquetBuffer Dictionary;
     internal ParquetBuffer Scratch;
+    internal ParquetBuffer Levels;
     internal int DictionaryCount;
     internal bool HasDictionary;
 
@@ -68,11 +69,23 @@ struct ColumnReadBuffers<T>
         return byteLength == 0 ? [] : Scratch.Span[..byteLength];
     }
 
+    internal void GetLevels(int levelCount, IParquetBufferPool bufferPool,
+        out Span<int> repetitionLevels, out Span<int> definitionLevels)
+    {
+        Levels.Dispose();
+        var byteLength = checked(levelCount * 2 * sizeof(int));
+        Levels = byteLength == 0 ? default : bufferPool.Rent(checked((uint)byteLength));
+        var levels = levelCount == 0 ? [] : ParquetBuffer.AsSpan<int>(Levels, checked(levelCount * 2));
+        repetitionLevels = levels[..levelCount];
+        definitionLevels = levels[levelCount..];
+    }
+
     internal void Dispose()
     {
         Values.Dispose();
         Dictionary.Dispose();
         Scratch.Dispose();
+        Levels.Dispose();
         this = default;
     }
 

@@ -92,4 +92,79 @@ internal sealed class ParquetWriterOptionsTests
                 $"Expected compression level '{level}' to be rejected for '{compression}'.");
         }
     }
+
+    [Test]
+    public void InvalidPerColumnCompressionLevelsAreRejected()
+    {
+        (CompressionKind Compression, int Level)[] invalidLevels =
+        [
+            (CompressionKind.None, 0),
+            (CompressionKind.Snappy, 0),
+            (CompressionKind.Gzip, -1),
+            (CompressionKind.Gzip, 10),
+            (CompressionKind.Lz4, 1),
+            (CompressionKind.Lz4, 2),
+            (CompressionKind.Lz4, 13),
+            (CompressionKind.Brotli, -1),
+            (CompressionKind.Brotli, 12)
+        ];
+
+        for (var i = 0; i < invalidLevels.Length; i++)
+        {
+            var (compression, level) = invalidLevels[i];
+            var schema = CreateSchema(new ColumnOptions(compression: compression, compressionLevel: level));
+            using var stream = new MemoryStream();
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                schema.CreateWriter(stream, new ParquetWriterOptions()));
+        }
+    }
+
+    [Test]
+    public void UndefinedPerColumnCompressionIsRejected()
+    {
+        var schema = CreateSchema(new ColumnOptions(compression: (CompressionKind)int.MaxValue));
+        using var stream = new MemoryStream();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            schema.CreateWriter(stream, new ParquetWriterOptions()));
+    }
+
+    [Test]
+    public void PerColumnLevelIsValidatedAgainstInheritedCompression()
+    {
+        var schema = CreateSchema(new ColumnOptions(compressionLevel: 10));
+        using var stream = new MemoryStream();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            schema.CreateWriter(stream, new ParquetWriterOptions
+            {
+                Compression = CompressionKind.Gzip
+            }));
+    }
+
+    [Test]
+    public void ExplicitPerColumnCompressionUsesItsDefaultLevel()
+    {
+        var schema = CreateSchema(new ColumnOptions(compression: CompressionKind.Gzip));
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.Brotli,
+            CompressionLevel = 11
+        });
+
+        writer.CloseFile();
+    }
+
+    static ParquetSchema CreateSchema(ColumnOptions options)
+        => new([ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int32, options)]);
+
+    [Test]
+    public void LegacyLz4IsReadOnly()
+    {
+        var options = new ParquetWriterOptions { Compression = CompressionKind.Lz4Legacy };
+
+        Assert.Throws<NotSupportedException>(options.Validate);
+    }
 }

@@ -181,6 +181,43 @@ internal sealed class WriterAllocationTests
                 $"Expected zero allocations for steady-state data page version writes. Failures: {string.Join(' ', failures)}");
     }
 
+    [Test]
+    public void PerColumnCompressionOverridesDoNotAllocateAfterWarmup()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("inherited", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.Plain])),
+            ColumnDefinition.RequiredLeaf("overridden", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.Plain], compression: CompressionKind.Zstd,
+                    compressionLevel: 3))
+        ]);
+        using var stream = new MemoryStream(capacity: 1024 * 1024);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.Gzip,
+            CompressionLevel = 1
+        });
+        var inherited = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        var overridden = writer.CreateSerializedColumn<int>(schema.LeafColumns[1]);
+        var values = CreateValues(4096);
+
+        for (var i = 0; i < 8; i++)
+            WriteOneRowGroup(writer, stream, inherited, overridden, values);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        WriteOneRowGroup(writer, stream, inherited, overridden, values);
+        var after = GC.GetAllocatedBytesForCurrentThread();
+        var allocated = after - before;
+
+        if (allocated != 0)
+            throw new InvalidOperationException(
+                $"Expected zero allocations for steady-state per-column compression overrides but saw {allocated} bytes.");
+    }
+
     static void WriteOneRowGroup(ParquetWriter writer, MemoryStream stream, SerializedColumn<int> serialized, int[] values)
     {
         writer.Reset(stream);
@@ -202,6 +239,17 @@ internal sealed class WriterAllocationTests
         writer.Reset(stream);
         serialized.Serialize(values);
         writer.StartRowGroup().Write(serialized);
+    }
+
+    static void WriteOneRowGroup(ParquetWriter writer, MemoryStream stream, SerializedColumn<int> first,
+        SerializedColumn<int> second, int[] values)
+    {
+        writer.Reset(stream);
+        first.Serialize(values);
+        second.Serialize(values);
+        var rowGroup = writer.StartRowGroup();
+        rowGroup.Write(first);
+        rowGroup.Write(second);
     }
 
     static void WriteOneRowGroup(ParquetWriter writer, MemoryStream stream, SerializedColumn<decimal> serialized,

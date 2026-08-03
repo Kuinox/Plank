@@ -82,12 +82,12 @@ public sealed class RowGroupWriter
         var column = _writer.ColumnsByOrdinal[columnOrdinal];
         var projectionInfo = _writer.ColumnProjectionInfosByOrdinal[columnOrdinal];
         var pages = state.Pages;
-        var compression = _writer.Compression;
-        if (compression != CompressionKind.None && !_compressedContent.IsInitialized)
+        var compression = _writer.ColumnCompressionsByOrdinal[columnOrdinal];
+        if (compression.Kind != CompressionKind.None && !_compressedContent.IsInitialized)
             _compressedContent = _writer.BufferWriters.CreatePageBufferWriter();
-        if (compression != CompressionKind.None && !_compressionInput.IsInitialized)
+        if (compression.Kind != CompressionKind.None && !_compressionInput.IsInitialized)
             _compressionInput = _writer.BufferWriters.CreatePageBufferWriter();
-        if (compression != CompressionKind.None && !_compressedValues.IsInitialized)
+        if (compression.Kind != CompressionKind.None && !_compressedValues.IsInitialized)
             _compressedValues = _writer.BufferWriters.CreatePageBufferWriter();
         long totalUncompressedSize = 0;
         long totalCompressedSize = 0;
@@ -121,9 +121,9 @@ public sealed class RowGroupWriter
             {
                 case PageKind.Dictionary:
                 {
-                    if (compression != CompressionKind.None && pageContentSize > 0)
+                    if (compression.Kind != CompressionKind.None && pageContentSize > 0)
                     {
-                        Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionLevel,
+                        Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
                             _writer.CompressionContext, ref page.Content, ref _compressedContent);
                         compressedContentSize = _compressedContent.WrittenLength;
                         storedContentSize = compressedContentSize;
@@ -181,13 +181,13 @@ public sealed class RowGroupWriter
                         compressedContentSize = uncompressedPageHeaderSize;
                         storedContentSize = uncompressedPageHeaderSize;
 
-                        if (compression != CompressionKind.None && uncompressedPageHeaderSize > 0)
+                        if (compression.Kind != CompressionKind.None && uncompressedPageHeaderSize > 0)
                         {
                             if (!hasLevels)
-                                Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionLevel,
+                                Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
                                     _writer.CompressionContext, ref page.Content, ref _compressedContent);
                             else
-                                Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionLevel,
+                                Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
                                     _writer.CompressionContext, ref _compressionInput, ref _compressedContent);
                             compressedContentSize = _compressedContent.WrittenLength;
                             storedContentSize = compressedContentSize;
@@ -206,11 +206,11 @@ public sealed class RowGroupWriter
                     }
                     else
                     {
-                        if (compression != CompressionKind.None && valueBytes > 0)
+                        if (compression.Kind != CompressionKind.None && valueBytes > 0)
                         {
                             if (levelBytes == 0)
                             {
-                                Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionLevel,
+                                Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
                                     _writer.CompressionContext, ref page.Content, ref _compressedContent);
                                 compressedContentSize = _compressedContent.WrittenLength;
                             }
@@ -224,7 +224,7 @@ public sealed class RowGroupWriter
                                 var levels = source[..levelBytesInt32];
                                 var values = source[levelBytesInt32..];
                                 _compressionInput.Write(values);
-                                Plank.Writing.Compression.Compression.Compress(compression, _writer.CompressionLevel,
+                                Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
                                     _writer.CompressionContext, ref _compressionInput, ref _compressedValues);
                                 _compressedContent.Write(levels);
                                 _compressedContent.CopyFrom(ref _compressedValues);
@@ -293,7 +293,7 @@ public sealed class RowGroupWriter
         columnMetadata.TotalUncompressedSize = totalUncompressedSize;
         columnMetadata.TotalCompressedSize = totalCompressedSize;
         columnMetadata.DataEncoding = dataEncoding;
-        columnMetadata.Compression = compression;
+        columnMetadata.Compression = compression.Kind;
         columnMetadata.Statistics = state.Statistics.HasStatistics
             ? state.Statistics.WithNullCount(nullCount)
             : ColumnStatistics.Empty(nullCount);

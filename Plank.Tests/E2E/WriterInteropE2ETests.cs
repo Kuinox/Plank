@@ -258,6 +258,59 @@ internal sealed class WriterInteropE2ETests
     }
 
     [Test]
+    public async Task PerColumnCompressionIsRecordedAndReadableByBothImplementations()
+    {
+        var path = NewPath("per-column-compression");
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf(WriterInteropSchema.Int32ColumnName, ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.Plain])),
+            ColumnDefinition.RequiredLeaf(WriterInteropSchema.Int64ColumnName, ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.Plain], compression: CompressionKind.Snappy)),
+            ColumnDefinition.RequiredLeaf(WriterInteropSchema.DoubleColumnName, ParquetPhysicalType.Double,
+                new ColumnOptions(encodings: [EncodingKind.Plain], compression: CompressionKind.None)),
+            ColumnDefinition.RequiredLeaf(WriterInteropSchema.BinaryColumnName, ParquetPhysicalType.ByteArray,
+                new ColumnOptions(encodings: [EncodingKind.Plain], compression: CompressionKind.Zstd,
+                    compressionLevel: 19))
+        ]);
+        var rowGroups = new[]
+        {
+            CreateGeneratedRowGroup(256, offset: 9000),
+            CreateGeneratedRowGroup(384, offset: 10000)
+        };
+
+        await WriteFileAsync(path, schema, CompressionKind.Gzip, rowGroups, compressionLevel: 9)
+            .ConfigureAwait(false);
+        try
+        {
+            ParquetSharp.Compression[] expectedCompression =
+            [
+                ParquetSharp.Compression.Gzip,
+                ParquetSharp.Compression.Snappy,
+                ParquetSharp.Compression.Uncompressed,
+                ParquetSharp.Compression.Zstd
+            ];
+            using var fileReader = new ParquetSharp.ParquetFileReader(path);
+            for (var rowGroupIndex = 0; rowGroupIndex < rowGroups.Length; rowGroupIndex++)
+            {
+                using var rowGroup = fileReader.RowGroup(rowGroupIndex);
+                for (var columnIndex = 0; columnIndex < expectedCompression.Length; columnIndex++)
+                {
+                    using var column = rowGroup.MetaData.GetColumnChunkMetaData(columnIndex);
+                    if (column.Compression != expectedCompression[columnIndex])
+                        throw new InvalidOperationException(
+                            $"Row group {rowGroupIndex}, column {columnIndex}: expected compression '{expectedCompression[columnIndex]}', got '{column.Compression}'.");
+                }
+            }
+            await AssertReadableByAllReadersAsync(path, rowGroups).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
     public async Task RequiredColumnsWithDeltaBinaryPackedEncodingAreReadableByBothImplementations()
     {
         var path = NewPath("delta-binary-packed");
