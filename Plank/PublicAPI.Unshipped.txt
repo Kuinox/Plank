@@ -1,4 +1,31 @@
 #nullable enable
+Plank.Reading.Physical.ParquetFileMetadata.RowGroupSortingColumns(int rowGroupOrdinal) -> System.ReadOnlySpan<Plank.Schema.ParquetSortingColumn>
+Plank.Reading.Physical.ParquetFileMetadata.SortingColumns.get -> System.ReadOnlySpan<Plank.Schema.ParquetSortingColumn>
+Plank.Reading.Physical.ParquetRowGroupInfo.SortingColumnCount.get -> int
+Plank.Reading.Physical.ParquetSchemaNodeInfo.FieldId.get -> int?
+Plank.Schema.ColumnDefinition.FieldId.get -> int?
+Plank.Schema.ColumnDefinition.FieldId.init -> void
+Plank.Schema.LeafColumn.FieldId.get -> int?
+Plank.Schema.ParquetColumnAttribute.FieldId.get -> int
+Plank.Schema.ParquetColumnAttribute.FieldId.set -> void
+Plank.Schema.ParquetSortingColumn
+Plank.Schema.ParquetSortingColumn.ColumnOrdinal.get -> int
+Plank.Schema.ParquetSortingColumn.Descending.get -> bool
+Plank.Schema.ParquetSortingColumn.NullsFirst.get -> bool
+Plank.Schema.ParquetSortingColumn.ParquetSortingColumn() -> void
+Plank.Schema.ParquetSortingColumn.ParquetSortingColumn(int columnOrdinal, bool descending = false, bool nullsFirst = false) -> void
+Plank.Schema.RowSchemaColumn.FieldId.get -> int?
+Plank.Schema.RowSchemaColumn.RowSchemaColumn(string! name, Plank.Schema.ParquetPhysicalType physicalType, System.Type! clrType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> void
+Plank.Writing.ParquetWriterOptions.SortingColumns.get -> System.Collections.Immutable.ImmutableArray<Plank.Schema.ParquetSortingColumn>
+Plank.Writing.ParquetWriterOptions.SortingColumns.init -> void
+static Plank.Schema.ColumnDefinition.Leaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.ColumnDefinition.List(string! name, Plank.Schema.ColumnDefinition! element, int fieldId, Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Required) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.ColumnDefinition.Map(string! name, Plank.Schema.ColumnDefinition! key, Plank.Schema.ColumnDefinition! value, int fieldId, Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Required) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.ColumnDefinition.OptionalGroup(string! name, int fieldId, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.ColumnDefinition.OptionalLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.ColumnDefinition.RequiredGroup(string! name, int fieldId, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.ColumnDefinition.RequiredLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.RowSchema.Column<TClr>(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.RowSchemaColumn!
 Plank.Reading.Physical.LogicalTypeInfo.Algorithm.get -> Plank.Schema.EdgeInterpolationAlgorithm?
 Plank.Reading.Physical.LogicalTypeInfo.HasCrs.get -> bool
 Plank.Reading.Physical.LogicalTypeInfo.SpecificationVersion.get -> sbyte?

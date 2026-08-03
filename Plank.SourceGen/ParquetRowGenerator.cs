@@ -263,7 +263,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 .Append(", ").Append(GetColumnOptionsExpression(schemaColumn));
             if (schemaColumn.LogicalType is { } logicalType)
                 builder.Append(", ").Append(GetLogicalTypeExpression(logicalType));
-            builder.AppendLine("),");
+            if (schemaColumn.FieldId is { } fieldId)
+                builder.Append(") with { FieldId = ").Append(fieldId).Append(" },");
+            else
+                builder.Append("),");
+            builder.AppendLine();
         }
         builder.AppendLine("    ]);");
         builder.AppendLine("    const int DefaultRowBatchSize = 1024;");
@@ -1048,12 +1052,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var columnName = property.Name;
         var physicalType = inferredPhysicalType;
         var logicalType = inferredLogicalType;
+        int? fieldId = null;
         ImmutableArray<string> encodings = [];
         var bloomFilter = false;
         var bloomFilterFalsePositiveProbability = 0.01;
         var bloomFilterExpectedDistinctValueCount = 0U;
         var bloomFilterMaximumBytes = 128U * 1024 * 1024;
-        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref encodings,
+        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref fieldId, ref encodings,
                 ref bloomFilter, ref bloomFilterFalsePositiveProbability, ref bloomFilterExpectedDistinctValueCount,
                 ref bloomFilterMaximumBytes, out error))
             return false;
@@ -1065,7 +1070,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
         column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType, property.Name, encodings,
-            GetTypeLength(physicalType, clrTypeName, logicalType), bloomFilter, bloomFilterFalsePositiveProbability,
+            GetTypeLength(physicalType, clrTypeName, logicalType), fieldId, bloomFilter,
+            bloomFilterFalsePositiveProbability,
             bloomFilterExpectedDistinctValueCount, bloomFilterMaximumBytes);
         return true;
     }
@@ -1086,7 +1092,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     }
 
     static bool TryReadColumnOverrides(IPropertySymbol property, ref string columnName, ref string physicalType,
-        ref LogicalTypeSpec? logicalType, ref ImmutableArray<string> encodings, ref bool bloomFilter,
+        ref LogicalTypeSpec? logicalType, ref int? fieldId, ref ImmutableArray<string> encodings, ref bool bloomFilter,
         ref double bloomFilterFalsePositiveProbability, ref uint bloomFilterExpectedDistinctValueCount,
         ref uint bloomFilterMaximumBytes, out string error)
     {
@@ -1170,6 +1176,16 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     return false;
                 }
                 continue;
+            }
+
+            if (namedArgument.Key == "FieldId")
+            {
+                if (namedArgument.Value.Value is not int value)
+                {
+                    error = $"Property '{property.Name}' declares an invalid field ID.";
+                    return false;
+                }
+                fieldId = value;
             }
 
             if (namedArgument.Key == "BloomFilter" && namedArgument.Value.Value is bool enabled)
@@ -1776,6 +1792,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     {
         public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName,
             LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings, uint typeLength,
+            int? fieldId,
             bool bloomFilter, double bloomFilterFalsePositiveProbability, uint bloomFilterExpectedDistinctValueCount,
             uint bloomFilterMaximumBytes)
         {
@@ -1787,6 +1804,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             RowPropertyName = rowPropertyName;
             Encodings = encodings;
             TypeLength = typeLength;
+            FieldId = fieldId;
             BloomFilter = bloomFilter;
             BloomFilterFalsePositiveProbability = bloomFilterFalsePositiveProbability;
             BloomFilterExpectedDistinctValueCount = bloomFilterExpectedDistinctValueCount;
@@ -1808,6 +1826,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public ImmutableArray<string> Encodings { get; }
 
         public uint TypeLength { get; }
+
+        public int? FieldId { get; }
 
         public bool BloomFilter { get; }
 

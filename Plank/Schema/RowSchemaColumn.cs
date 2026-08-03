@@ -6,6 +6,18 @@ public sealed record RowSchemaColumn
 {
     public RowSchemaColumn(string name, ParquetPhysicalType physicalType, Type clrType, ColumnOptions? options = null,
         LogicalType? logicalType = null, IPageStrategy? pageStrategy = null)
+        : this(name, physicalType, clrType, fieldId: null, options, logicalType, pageStrategy)
+    {
+    }
+
+    public RowSchemaColumn(string name, ParquetPhysicalType physicalType, Type clrType, int fieldId,
+        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null)
+        : this(name, physicalType, clrType, (int?)fieldId, options, logicalType, pageStrategy)
+    {
+    }
+
+    RowSchemaColumn(string name, ParquetPhysicalType physicalType, Type clrType, int? fieldId, ColumnOptions? options,
+        LogicalType? logicalType, IPageStrategy? pageStrategy)
     {
         Name = name;
         PhysicalType = physicalType;
@@ -13,6 +25,7 @@ public sealed record RowSchemaColumn
         Options = options ?? ColumnOptions.Default;
         LogicalType = logicalType;
         PageStrategy = pageStrategy;
+        FieldId = fieldId;
         EncodingCompatibility.Validate(Name, PhysicalType, Options);
     }
 
@@ -28,7 +41,9 @@ public sealed record RowSchemaColumn
 
     public IPageStrategy? PageStrategy { get; }
 
+    public int? FieldId { get; }
+
     internal ColumnDefinition ToDefinition()
-        => ColumnDefinition.Leaf(Name, PhysicalType, Options, LogicalType, PageStrategy);
+        => ColumnDefinition.Leaf(Name, PhysicalType, Options, LogicalType, PageStrategy) with { FieldId = FieldId };
 
 }

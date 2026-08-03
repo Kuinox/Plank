@@ -164,6 +164,7 @@ static class PhysicalMetadataThriftReader
         var logicalType = default(LogicalTypeInfo);
         var hasLogicalType = false;
         var annotation = NodeKind.Group;
+        int? schemaFieldId = null;
 
         reader.BeginStruct();
 
@@ -200,6 +201,9 @@ static class PhysicalMetadataThriftReader
                     logicalType = new LogicalTypeInfo(LogicalTypeKind.Decimal, Precision: reader.ReadI32(),
                         Scale: logicalType.Scale);
                     break;
+                case 9:
+                    schemaFieldId = reader.ReadI32();
+                    break;
                 case 10:
                     (logicalType, annotation) = ReadLogicalType(ref reader);
                     hasLogicalType = true;
@@ -220,7 +224,7 @@ static class PhysicalMetadataThriftReader
             : annotation is NodeKind.List or NodeKind.Map ? annotation : NodeKind.Group;
 
         return new ParquetSchemaNodeInfo(ordinal, parentOrdinal, kind, repetition, physicalType, typeLength, logicalType,
-            nameOffset, nameLength, childCount);
+            nameOffset, nameLength, childCount, schemaFieldId);
     }
 
     static (LogicalTypeInfo LogicalType, NodeKind Annotation) ReadLogicalType(ref CompactProtocolReader reader)
@@ -485,6 +489,8 @@ static class PhysicalMetadataThriftReader
         var rowGroupCount = checked((int)count);
         metadata.RowGroupBuffer = Rent<ParquetRowGroupInfo>(bufferPool, rowGroupCount);
         metadata.ColumnChunkBuffer = Rent<ParquetColumnChunkInfo>(bufferPool, checked(rowGroupCount * metadata.ColumnCount));
+        metadata.SortingColumnBuffer = Rent<ParquetSortingColumn>(bufferPool,
+            checked(rowGroupCount * metadata.ColumnCount));
         var rowGroups = metadata.RowGroupStorage;
         for (var ordinal = 0; ordinal < rowGroupCount; ordinal++)
         {
@@ -502,6 +508,9 @@ static class PhysicalMetadataThriftReader
         var rowCount = 0UL;
         var columnStart = metadata.ColumnChunkCount;
         var columnCount = 0;
+        var sortingColumnStart = metadata.SortingColumnCount;
+        var sortingColumnCount = 0;
+        var hasSortingColumns = false;
         reader.BeginStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
@@ -512,6 +521,12 @@ static class PhysicalMetadataThriftReader
                     break;
                 case 3:
                     rowCount = reader.ReadI64AsU64();
+                    break;
+                case 4:
+                    if (hasSortingColumns)
+                        throw new CorruptParquetException("Row group contains more than one sorting_columns field.");
+                    hasSortingColumns = true;
+                    sortingColumnCount = ReadSortingColumns(ref reader, metadata);
                     break;
                 case 5:
                     columnChunkOffset = reader.ReadI64AsU64();
@@ -524,9 +539,75 @@ static class PhysicalMetadataThriftReader
 
         if (columnChunkOffset == 0 && columnCount != 0)
             columnChunkOffset = metadata.ColumnChunkStorage[columnStart].ChunkOffset;
+        var sortingColumns = metadata.SortingColumnStorage.Slice(sortingColumnStart, sortingColumnCount);
+        for (var i = 0; i < sortingColumns.Length; i++)
+            if ((uint)sortingColumns[i].ColumnOrdinal >= (uint)columnCount)
+                throw new CorruptParquetException(
+                    $"Sorting column ordinal {sortingColumns[i].ColumnOrdinal} exceeds row group column count {columnCount}.");
 
         return new ParquetRowGroupInfo(ordinal, metadataOffset, columnChunkOffset, rowCount, columnStart, columnCount,
-            reader.Offset - metadataStart);
+            sortingColumnStart, sortingColumnCount, reader.Offset - metadataStart);
+    }
+
+    static int ReadSortingColumns(ref CompactProtocolReader reader, ParquetFileMetadata metadata)
+    {
+        var (count, elementType) = reader.ReadListHeader();
+        if (elementType != CompactProtocolType.Struct)
+            throw new CorruptParquetException("Expected sorting columns to be encoded as a list of structs.");
+        if (count > (uint)metadata.ColumnCount)
+            throw new CorruptParquetException(
+                $"Sorting column count {count} exceeds file schema column count {metadata.ColumnCount}.");
+
+        var sortingColumnCount = checked((int)count);
+        var destination = metadata.SortingColumnStorage;
+        if (sortingColumnCount > destination.Length - metadata.SortingColumnCount)
+            throw new CorruptParquetException("Sorting column metadata exceeds allocated row group capacity.");
+
+        var start = metadata.SortingColumnCount;
+        for (var i = 0; i < sortingColumnCount; i++)
+        {
+            var sortingColumn = ReadSortingColumn(ref reader, metadata.ColumnCount);
+            for (var previous = start; previous < metadata.SortingColumnCount; previous++)
+                if (destination[previous].ColumnOrdinal == sortingColumn.ColumnOrdinal)
+                    throw new CorruptParquetException(
+                        $"Sorting column ordinal {sortingColumn.ColumnOrdinal} is declared more than once in a row group.");
+            destination[metadata.SortingColumnCount++] = sortingColumn;
+        }
+        return sortingColumnCount;
+    }
+
+    static ParquetSortingColumn ReadSortingColumn(ref CompactProtocolReader reader, int columnCount)
+    {
+        int? columnOrdinal = null;
+        bool? descending = null;
+        bool? nullsFirst = null;
+        reader.BeginStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
+        {
+            switch (fieldId)
+            {
+                case 1:
+                    columnOrdinal = checked((int)reader.ReadI32AsU32(checked((uint)(columnCount - 1))));
+                    break;
+                case 2:
+                    descending = reader.ReadBool(inlineBool);
+                    break;
+                case 3:
+                    nullsFirst = reader.ReadBool(inlineBool);
+                    break;
+                default:
+                    reader.Skip(type, inlineBool);
+                    break;
+            }
+        }
+
+        if (!columnOrdinal.HasValue)
+            throw new CorruptParquetException("Sorting column is missing column_idx.");
+        if (!descending.HasValue)
+            throw new CorruptParquetException("Sorting column is missing descending.");
+        if (!nullsFirst.HasValue)
+            throw new CorruptParquetException("Sorting column is missing nulls_first.");
+        return new ParquetSortingColumn(columnOrdinal.Value, descending.Value, nullsFirst.Value);
     }
 
     static int ReadColumns(ref CompactProtocolReader reader, ParquetFileMetadata metadata, int rowGroupOrdinal)
