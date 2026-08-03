@@ -11,6 +11,9 @@ static class CompressionConfiguration
         if (!Enum.IsDefined(compression))
             throw new ArgumentOutOfRangeException(compressionParameterName, compression,
                 "Compression must be a defined CompressionKind value.");
+        if (compression == CompressionKind.Lz4Legacy)
+            throw new NotSupportedException(
+                "Writing deprecated legacy LZ4 is not supported. Use Lz4 (LZ4_RAW) instead.");
 
         if (compressionLevel is { } level && !IsValidLevel(compression, level))
             throw new ArgumentOutOfRangeException(compressionLevelParameterName, level,

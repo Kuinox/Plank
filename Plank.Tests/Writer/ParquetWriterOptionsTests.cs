@@ -137,4 +137,12 @@ internal sealed class ParquetWriterOptionsTests
 
     static ParquetSchema CreateSchema(ColumnOptions options)
         => new([ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int32, options)]);
+
+    [Test]
+    public void LegacyLz4IsReadOnly()
+    {
+        var options = new ParquetWriterOptions { Compression = CompressionKind.Lz4Legacy };
+
+        Assert.Throws<NotSupportedException>(options.Validate);
+    }
 }
