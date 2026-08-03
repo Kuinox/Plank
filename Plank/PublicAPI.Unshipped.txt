@@ -39,6 +39,16 @@ Plank.Schema.LogicalTypeKind.Unknown = 16 -> Plank.Schema.LogicalTypeKind
 Plank.Schema.LogicalTypeKind.Variant = 15 -> Plank.Schema.LogicalTypeKind
 static Plank.Schema.ColumnDefinition.OptionalGroup(string! name, Plank.Schema.LogicalType! logicalType, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
 static Plank.Schema.ColumnDefinition.RequiredGroup(string! name, Plank.Schema.LogicalType! logicalType, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
+Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetDataPageVersion.V1 = 1 -> Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetDataPageVersion.V2 = 2 -> Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetFileVersion.V1 = 1 -> Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetFileVersion.V2 = 2 -> Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetWriterOptions.DataPageVersion.get -> Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetWriterOptions.DataPageVersion.init -> void
+Plank.Writing.ParquetWriterOptions.FileVersion.get -> Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetWriterOptions.FileVersion.init -> void
 Plank.Reading.Logical.NestedColumnBuffer<T>
 Plank.Reading.Logical.NestedColumnBuffer<T>.Count.get -> int
 Plank.Reading.Logical.NestedColumnBuffer<T>.DefinitionLevels.get -> System.ReadOnlySpan<int>
