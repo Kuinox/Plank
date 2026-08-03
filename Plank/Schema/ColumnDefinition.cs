@@ -83,7 +83,7 @@ public sealed record ColumnDefinition
             normalizedOptions = new ColumnOptions(repetition, normalizedOptions.Encodings, normalizedOptions.TypeLength,
                 normalizedOptions.Compression, normalizedOptions.CompressionLevel, normalizedOptions.BloomFilter);
         EncodingCompatibility.Validate(name, physicalType, normalizedOptions);
-        ValidateLogicalType(name, physicalType, logicalType);
+        ValidateLogicalType(name, physicalType, normalizedOptions, logicalType);
 
         return new()
         {
@@ -98,11 +98,53 @@ public sealed record ColumnDefinition
         };
     }
 
-    internal static void ValidateLogicalType(string name, ParquetPhysicalType physicalType, LogicalType? logicalType)
+    internal static void ValidateLogicalType(string name, ParquetPhysicalType physicalType, ColumnOptions options,
+        LogicalType? logicalType)
     {
         if (logicalType is LogicalType.Date && physicalType != ParquetPhysicalType.Int32)
             throw new ArgumentException(
                 $"Logical type '{nameof(LogicalType.Date)}' requires physical type '{ParquetPhysicalType.Int32}' for column '{name}'.",
                 nameof(physicalType));
+
+        if (logicalType is not LogicalType.Decimal decimalType)
+            return;
+        if (decimalType.Precision <= 0)
+            throw new ArgumentException(
+                $"Decimal precision must be positive for column '{name}'.", nameof(logicalType));
+        if (decimalType.Scale < 0 || decimalType.Scale > decimalType.Precision)
+            throw new ArgumentException(
+                $"Decimal scale must be non-negative and no greater than precision for column '{name}'.",
+                nameof(logicalType));
+        if (physicalType is not (ParquetPhysicalType.Int32 or ParquetPhysicalType.Int64 or
+            ParquetPhysicalType.ByteArray or ParquetPhysicalType.FixedLenByteArray))
+            throw new ArgumentException(
+                $"Logical type '{nameof(LogicalType.Decimal)}' is not compatible with physical type '{physicalType}' for column '{name}'.",
+                nameof(physicalType));
+        if (physicalType == ParquetPhysicalType.Int32 && decimalType.Precision > 9)
+            throw new ArgumentException(
+                $"Decimal precision {decimalType.Precision} exceeds the maximum precision 9 for INT32 column '{name}'.",
+                nameof(logicalType));
+        if (physicalType == ParquetPhysicalType.Int64 && decimalType.Precision > 18)
+            throw new ArgumentException(
+                $"Decimal precision {decimalType.Precision} exceeds the maximum precision 18 for INT64 column '{name}'.",
+                nameof(logicalType));
+        if (physicalType == ParquetPhysicalType.FixedLenByteArray)
+        {
+            var maximumPrecision = GetMaximumDecimalPrecision(options.TypeLength);
+            if (decimalType.Precision > maximumPrecision)
+                throw new ArgumentException(
+                    $"Decimal precision {decimalType.Precision} exceeds the maximum precision {maximumPrecision} for {options.TypeLength}-byte column '{name}'.",
+                    nameof(logicalType));
+        }
+    }
+
+    static int GetMaximumDecimalPrecision(uint typeLength)
+    {
+        if (typeLength == 0)
+            return 0;
+
+        var bits = (double)typeLength * 8 - 1;
+        var precision = Math.Floor(bits * Math.Log10(2));
+        return precision >= int.MaxValue ? int.MaxValue : checked((int)precision);
     }
 }

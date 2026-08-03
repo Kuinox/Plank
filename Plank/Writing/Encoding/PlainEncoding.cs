@@ -155,8 +155,11 @@ static class PlainEncoding
         if (typeof(T) == typeof(byte))
         {
             var byteValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte>>(ref values);
-            for (var i = 0; i < byteValues.Length; i++)
-                BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..], byteValues[i]);
+            if (BitConverter.IsLittleEndian)
+                WriteByteValuesAsUInt32(byteValues, destination);
+            else
+                for (var i = 0; i < byteValues.Length; i++)
+                    BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..], byteValues[i]);
             writer.Advance(byteCount);
             return;
         }
@@ -164,8 +167,11 @@ static class PlainEncoding
         if (typeof(T) == typeof(ushort))
         {
             var ushortValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ushort>>(ref values);
-            for (var i = 0; i < ushortValues.Length; i++)
-                BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..], ushortValues[i]);
+            if (BitConverter.IsLittleEndian)
+                WriteUInt16ValuesAsUInt32(ushortValues, destination);
+            else
+                for (var i = 0; i < ushortValues.Length; i++)
+                    BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..], ushortValues[i]);
             writer.Advance(byteCount);
             return;
         }
@@ -173,14 +179,117 @@ static class PlainEncoding
         if (typeof(T) == typeof(uint))
         {
             var uintValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<uint>>(ref values);
-            for (var i = 0; i < uintValues.Length; i++)
-                BinaryPrimitives.WriteUInt32LittleEndian(destination[(i * sizeof(int))..], uintValues[i]);
+            if (BitConverter.IsLittleEndian)
+                MemoryMarshal.AsBytes(uintValues).CopyTo(destination);
+            else
+                for (var i = 0; i < uintValues.Length; i++)
+                    BinaryPrimitives.WriteUInt32LittleEndian(destination[(i * sizeof(int))..], uintValues[i]);
+            writer.Advance(byteCount);
+            return;
+        }
+
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            for (var i = 0; i < decimalValues.Length; i++)
+                BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..],
+                    ParquetDecimalConverter.ToInt32(decimalValues[i], column));
             writer.Advance(byteCount);
             return;
         }
 
         throw new InvalidOperationException(
             $"Column '{column.Name}' expects '{ParquetPhysicalType.Int32}' values, but got '{typeof(T)}'.");
+    }
+
+    static void WriteByteValuesAsUInt32(ReadOnlySpan<byte> values, Span<byte> destination)
+    {
+        ref var source = ref MemoryMarshal.GetReference(values);
+        ref var destinationValues = ref Unsafe.As<byte, uint>(ref MemoryMarshal.GetReference(destination));
+        var length = (nuint)values.Length;
+        nuint valueIndex = 0;
+
+        if (Avx512F.IsSupported)
+        {
+            var vectorCount = (nuint)Vector128<byte>.Count;
+            var blockCount = vectorCount * 4;
+            for (; length - valueIndex >= blockCount; valueIndex += blockCount)
+            {
+                Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref source, valueIndex))
+                    .AsUInt32().StoreUnsafe(ref destinationValues, valueIndex);
+                Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref source, valueIndex + vectorCount))
+                    .AsUInt32().StoreUnsafe(ref destinationValues, valueIndex + vectorCount);
+                Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref source, valueIndex + vectorCount * 2))
+                    .AsUInt32().StoreUnsafe(ref destinationValues, valueIndex + vectorCount * 2);
+                Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref source, valueIndex + vectorCount * 3))
+                    .AsUInt32().StoreUnsafe(ref destinationValues, valueIndex + vectorCount * 3);
+            }
+
+            for (; length - valueIndex >= vectorCount; valueIndex += vectorCount)
+                Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref source, valueIndex))
+                    .AsUInt32().StoreUnsafe(ref destinationValues, valueIndex);
+        }
+        else if (Vector256.IsHardwareAccelerated)
+        {
+            var vectorCount = (nuint)Vector256<byte>.Count;
+            var widenedVectorCount = (nuint)Vector256<uint>.Count;
+            for (; length - valueIndex >= vectorCount; valueIndex += vectorCount)
+            {
+                var sourceVector = Vector256.LoadUnsafe(ref source, valueIndex);
+                var halves = Vector256.Widen(sourceVector);
+                var lowerQuarters = Vector256.Widen(halves.Lower);
+                var upperQuarters = Vector256.Widen(halves.Upper);
+                lowerQuarters.Lower.StoreUnsafe(ref destinationValues, valueIndex);
+                lowerQuarters.Upper.StoreUnsafe(ref destinationValues, valueIndex + widenedVectorCount);
+                upperQuarters.Lower.StoreUnsafe(ref destinationValues, valueIndex + widenedVectorCount * 2);
+                upperQuarters.Upper.StoreUnsafe(ref destinationValues, valueIndex + widenedVectorCount * 3);
+            }
+        }
+
+        for (; valueIndex < length; valueIndex++)
+            Unsafe.Add(ref destinationValues, valueIndex) = Unsafe.Add(ref source, valueIndex);
+    }
+
+    static void WriteUInt16ValuesAsUInt32(ReadOnlySpan<ushort> values, Span<byte> destination)
+    {
+        ref var source = ref MemoryMarshal.GetReference(values);
+        ref var destinationValues = ref Unsafe.As<byte, uint>(ref MemoryMarshal.GetReference(destination));
+        var length = (nuint)values.Length;
+        nuint valueIndex = 0;
+
+        if (Avx512F.IsSupported)
+        {
+            var vectorCount = (nuint)Vector256<ushort>.Count;
+            var blockCount = vectorCount * 4;
+            for (; length - valueIndex >= blockCount; valueIndex += blockCount)
+            {
+                Avx512F.ConvertToVector512Int32(Vector256.LoadUnsafe(ref source, valueIndex))
+                    .AsUInt32().StoreUnsafe(ref destinationValues, valueIndex);
+                Avx512F.ConvertToVector512Int32(Vector256.LoadUnsafe(ref source, valueIndex + vectorCount))
+                    .AsUInt32().StoreUnsafe(ref destinationValues, valueIndex + vectorCount);
+                Avx512F.ConvertToVector512Int32(Vector256.LoadUnsafe(ref source, valueIndex + vectorCount * 2))
+                    .AsUInt32().StoreUnsafe(ref destinationValues, valueIndex + vectorCount * 2);
+                Avx512F.ConvertToVector512Int32(Vector256.LoadUnsafe(ref source, valueIndex + vectorCount * 3))
+                    .AsUInt32().StoreUnsafe(ref destinationValues, valueIndex + vectorCount * 3);
+            }
+
+            for (; length - valueIndex >= vectorCount; valueIndex += vectorCount)
+                Avx512F.ConvertToVector512Int32(Vector256.LoadUnsafe(ref source, valueIndex))
+                    .AsUInt32().StoreUnsafe(ref destinationValues, valueIndex);
+        }
+        else if (Vector256.IsHardwareAccelerated)
+        {
+            var vectorCount = (nuint)Vector256<ushort>.Count;
+            for (; length - valueIndex >= vectorCount; valueIndex += vectorCount)
+            {
+                var halves = Vector256.Widen(Vector256.LoadUnsafe(ref source, valueIndex));
+                halves.Lower.StoreUnsafe(ref destinationValues, valueIndex);
+                halves.Upper.StoreUnsafe(ref destinationValues, valueIndex + (nuint)Vector256<uint>.Count);
+            }
+        }
+
+        for (; valueIndex < length; valueIndex++)
+            Unsafe.Add(ref destinationValues, valueIndex) = Unsafe.Add(ref source, valueIndex);
     }
 
     static void WriteInt64Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
@@ -206,8 +315,21 @@ static class PlainEncoding
         if (typeof(T) == typeof(ulong))
         {
             var ulongValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ulong>>(ref values);
-            for (var i = 0; i < ulongValues.Length; i++)
-                BinaryPrimitives.WriteUInt64LittleEndian(destination[(i * sizeof(long))..], ulongValues[i]);
+            if (BitConverter.IsLittleEndian)
+                MemoryMarshal.AsBytes(ulongValues).CopyTo(destination);
+            else
+                for (var i = 0; i < ulongValues.Length; i++)
+                    BinaryPrimitives.WriteUInt64LittleEndian(destination[(i * sizeof(long))..], ulongValues[i]);
+            writer.Advance(byteCount);
+            return;
+        }
+
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            for (var i = 0; i < decimalValues.Length; i++)
+                BinaryPrimitives.WriteInt64LittleEndian(destination[(i * sizeof(long))..],
+                    ParquetDecimalConverter.ToInt64(decimalValues[i], column));
             writer.Advance(byteCount);
             return;
         }
@@ -265,6 +387,30 @@ static class PlainEncoding
     static void WriteByteArrayValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            var byteCount = 0;
+            for (var i = 0; i < decimalValues.Length; i++)
+                byteCount = checked(byteCount + sizeof(int) +
+                    ParquetDecimalConverter.GetByteCount(decimalValues[i], column));
+            if (byteCount == 0)
+                return;
+
+            var destination = writer.GetSpan(byteCount);
+            var offset = 0;
+            for (var i = 0; i < decimalValues.Length; i++)
+            {
+                var length = ParquetDecimalConverter.GetByteCount(decimalValues[i], column);
+                BinaryPrimitives.WriteInt32LittleEndian(destination[offset..], length);
+                offset += sizeof(int);
+                offset += ParquetDecimalConverter.WriteBigEndian(decimalValues[i], column,
+                    destination.Slice(offset, length));
+            }
+            writer.Advance(offset);
+            return;
+        }
+
         if (typeof(T) == typeof(byte[]))
         {
             var byteArrayValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
@@ -454,6 +600,21 @@ static class PlainEncoding
             for (var i = 0; i < guidValues.Length; i++)
                 guidValues[i].TryWriteBytes(guidDestination.Slice(i * 16, 16), bigEndian: true, out _);
             writer.Advance(checked(guidValues.Length * 16));
+            return;
+        }
+
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            var decimalByteCount = checked(decimalValues.Length * valueLength);
+            if (decimalByteCount == 0)
+                return;
+
+            var decimalDestination = writer.GetSpan(decimalByteCount);
+            for (var i = 0; i < decimalValues.Length; i++)
+                ParquetDecimalConverter.WriteFixedBigEndian(decimalValues[i], column,
+                    decimalDestination.Slice(i * valueLength, valueLength));
+            writer.Advance(decimalByteCount);
             return;
         }
 
