@@ -246,6 +246,7 @@ static class PhysicalMetadataThriftReader
                     break;
                 case 4:
                     reader.Skip(type, inlineBool);
+                    logicalType = new LogicalTypeInfo(LogicalTypeKind.Enum);
                     break;
                 case 5:
                     logicalType = ReadDecimalLogicalType(ref reader);
@@ -263,13 +264,34 @@ static class PhysicalMetadataThriftReader
                 case 10:
                     logicalType = ReadIntegerLogicalType(ref reader);
                     break;
+                case 11:
+                    reader.Skip(type, inlineBool);
+                    logicalType = new LogicalTypeInfo(LogicalTypeKind.Unknown);
+                    break;
                 case 12:
                     reader.Skip(type, inlineBool);
                     logicalType = new LogicalTypeInfo(LogicalTypeKind.Json);
                     break;
+                case 13:
+                    reader.Skip(type, inlineBool);
+                    logicalType = new LogicalTypeInfo(LogicalTypeKind.Bson);
+                    break;
                 case 14:
                     reader.Skip(type, inlineBool);
                     logicalType = new LogicalTypeInfo(LogicalTypeKind.Uuid);
+                    break;
+                case 15:
+                    reader.Skip(type, inlineBool);
+                    logicalType = new LogicalTypeInfo(LogicalTypeKind.Float16);
+                    break;
+                case 16:
+                    logicalType = ReadVariantLogicalType(ref reader);
+                    break;
+                case 17:
+                    logicalType = ReadGeospatialLogicalType(ref reader, LogicalTypeKind.Geometry);
+                    break;
+                case 18:
+                    logicalType = ReadGeospatialLogicalType(ref reader, LogicalTypeKind.Geography);
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -342,6 +364,63 @@ static class PhysicalMetadataThriftReader
         return new LogicalTypeInfo(kind, Unit: unit.Value, IsAdjustedToUtc: isAdjustedToUtc.Value);
     }
 
+    static LogicalTypeInfo ReadVariantLogicalType(ref CompactProtocolReader reader)
+    {
+        sbyte? specificationVersion = null;
+        reader.BeginStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
+            if (fieldId == 1)
+            {
+                if (specificationVersion.HasValue)
+                    throw new CorruptParquetException(
+                        "Variant logical type contains more than one specification version.");
+                specificationVersion = unchecked((sbyte)reader.ReadByte());
+            }
+            else
+                reader.Skip(type, inlineBool);
+
+        return new LogicalTypeInfo(LogicalTypeKind.Variant)
+        {
+            SpecificationVersion = specificationVersion
+        };
+    }
+
+    static LogicalTypeInfo ReadGeospatialLogicalType(ref CompactProtocolReader reader, LogicalTypeKind kind)
+    {
+        var hasCrs = false;
+        var crsOffset = 0;
+        var crsLength = 0;
+        EdgeInterpolationAlgorithm? algorithm = null;
+        reader.BeginStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
+            if (fieldId == 1)
+            {
+                if (hasCrs)
+                    throw new CorruptParquetException($"{kind} logical type contains more than one CRS.");
+                var crs = reader.ReadBinary();
+                hasCrs = true;
+                crsOffset = reader.Offset - crs.Length;
+                crsLength = crs.Length;
+            }
+            else if (fieldId == 2 && kind == LogicalTypeKind.Geography)
+            {
+                if (algorithm.HasValue)
+                    throw new CorruptParquetException(
+                        "Geography logical type contains more than one edge interpolation algorithm.");
+                algorithm = (EdgeInterpolationAlgorithm)reader.ReadI32();
+            }
+            else
+                reader.Skip(type, inlineBool);
+
+        return new LogicalTypeInfo(kind)
+        {
+            Algorithm = algorithm,
+            HasCrs = hasCrs,
+            CrsOffset = crsOffset,
+            CrsLength = crsLength
+        };
+    }
+
     static TimeUnit ReadTimeUnit(ref CompactProtocolReader reader)
     {
         TimeUnit? unit = null;
@@ -373,6 +452,7 @@ static class PhysicalMetadataThriftReader
             0 => (new LogicalTypeInfo(LogicalTypeKind.String), NodeKind.Group),
             1 or 2 => (default, NodeKind.Map),
             3 => (default, NodeKind.List),
+            4 => (new LogicalTypeInfo(LogicalTypeKind.Enum), NodeKind.Group),
             5 => (new LogicalTypeInfo(LogicalTypeKind.Decimal, decimalType.Precision, decimalType.Scale), NodeKind.Group),
             6 => (new LogicalTypeInfo(LogicalTypeKind.Date), NodeKind.Group),
             7 => (new LogicalTypeInfo(LogicalTypeKind.Time, Unit: TimeUnit.Millis, IsAdjustedToUtc: true), NodeKind.Group),
@@ -388,6 +468,8 @@ static class PhysicalMetadataThriftReader
             17 => (new LogicalTypeInfo(LogicalTypeKind.Integer, BitWidth: 32, IsSigned: true), NodeKind.Group),
             18 => (new LogicalTypeInfo(LogicalTypeKind.Integer, BitWidth: 64, IsSigned: true), NodeKind.Group),
             19 => (new LogicalTypeInfo(LogicalTypeKind.Json), NodeKind.Group),
+            20 => (new LogicalTypeInfo(LogicalTypeKind.Bson), NodeKind.Group),
+            21 => (new LogicalTypeInfo(LogicalTypeKind.Interval), NodeKind.Group),
             _ => (decimalType, NodeKind.Group)
         };
 

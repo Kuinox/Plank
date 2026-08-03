@@ -1,4 +1,44 @@
 #nullable enable
+Plank.Reading.Physical.LogicalTypeInfo.Algorithm.get -> Plank.Schema.EdgeInterpolationAlgorithm?
+Plank.Reading.Physical.LogicalTypeInfo.HasCrs.get -> bool
+Plank.Reading.Physical.LogicalTypeInfo.SpecificationVersion.get -> sbyte?
+Plank.Reading.Physical.ParquetFileMetadata.ColumnLogicalTypeCrsUtf8(int columnOrdinal) -> System.ReadOnlySpan<byte>
+Plank.Reading.Physical.ParquetFileMetadata.SchemaNodeLogicalTypeCrsUtf8(int nodeOrdinal) -> System.ReadOnlySpan<byte>
+Plank.Schema.EdgeInterpolationAlgorithm
+Plank.Schema.EdgeInterpolationAlgorithm.Andoyer = 3 -> Plank.Schema.EdgeInterpolationAlgorithm
+Plank.Schema.EdgeInterpolationAlgorithm.Karney = 4 -> Plank.Schema.EdgeInterpolationAlgorithm
+Plank.Schema.EdgeInterpolationAlgorithm.Spherical = 0 -> Plank.Schema.EdgeInterpolationAlgorithm
+Plank.Schema.EdgeInterpolationAlgorithm.Thomas = 2 -> Plank.Schema.EdgeInterpolationAlgorithm
+Plank.Schema.EdgeInterpolationAlgorithm.Vincenty = 1 -> Plank.Schema.EdgeInterpolationAlgorithm
+Plank.Schema.LogicalType.Bson
+Plank.Schema.LogicalType.Enum
+Plank.Schema.LogicalType.Float16
+Plank.Schema.LogicalType.Geography
+Plank.Schema.LogicalType.Geography.Algorithm.get -> Plank.Schema.EdgeInterpolationAlgorithm?
+Plank.Schema.LogicalType.Geography.Algorithm.init -> void
+Plank.Schema.LogicalType.Geography.Crs.get -> string?
+Plank.Schema.LogicalType.Geography.Crs.init -> void
+Plank.Schema.LogicalType.Geography.Geography(string? Crs = null, Plank.Schema.EdgeInterpolationAlgorithm? Algorithm = null) -> void
+Plank.Schema.LogicalType.Geometry
+Plank.Schema.LogicalType.Geometry.Crs.get -> string?
+Plank.Schema.LogicalType.Geometry.Crs.init -> void
+Plank.Schema.LogicalType.Geometry.Geometry(string? Crs = null) -> void
+Plank.Schema.LogicalType.Interval
+Plank.Schema.LogicalType.Unknown
+Plank.Schema.LogicalType.Variant
+Plank.Schema.LogicalType.Variant.SpecificationVersion.get -> sbyte?
+Plank.Schema.LogicalType.Variant.SpecificationVersion.init -> void
+Plank.Schema.LogicalType.Variant.Variant(sbyte? SpecificationVersion = null) -> void
+Plank.Schema.LogicalTypeKind.Bson = 10 -> Plank.Schema.LogicalTypeKind
+Plank.Schema.LogicalTypeKind.Enum = 9 -> Plank.Schema.LogicalTypeKind
+Plank.Schema.LogicalTypeKind.Float16 = 11 -> Plank.Schema.LogicalTypeKind
+Plank.Schema.LogicalTypeKind.Geography = 13 -> Plank.Schema.LogicalTypeKind
+Plank.Schema.LogicalTypeKind.Geometry = 14 -> Plank.Schema.LogicalTypeKind
+Plank.Schema.LogicalTypeKind.Interval = 12 -> Plank.Schema.LogicalTypeKind
+Plank.Schema.LogicalTypeKind.Unknown = 16 -> Plank.Schema.LogicalTypeKind
+Plank.Schema.LogicalTypeKind.Variant = 15 -> Plank.Schema.LogicalTypeKind
+static Plank.Schema.ColumnDefinition.OptionalGroup(string! name, Plank.Schema.LogicalType! logicalType, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.ColumnDefinition.RequiredGroup(string! name, Plank.Schema.LogicalType! logicalType, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
 Plank.Writing.ParquetDataPageVersion
 Plank.Writing.ParquetDataPageVersion.V1 = 1 -> Plank.Writing.ParquetDataPageVersion
 Plank.Writing.ParquetDataPageVersion.V2 = 2 -> Plank.Writing.ParquetDataPageVersion

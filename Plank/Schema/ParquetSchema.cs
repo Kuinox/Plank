@@ -141,6 +141,7 @@ public sealed record ParquetSchema
                 {
                     if (node.Children.IsDefaultOrEmpty)
                         return false;
+                    ColumnDefinition.ValidateGroupLogicalType(node.Name, node.LogicalType, node.Children.AsSpan());
                     for (var i = 0; i < node.Children.Length; i++)
                         if (!TryCollectLeaves(node.Children[i], columnsBuilder, pathsBuilder, pathBuffer, nextRepeatedLevel,
                                 nextDefinitionLevel, infosBuilder, isListLeaf, listOptional, elementOptional,
