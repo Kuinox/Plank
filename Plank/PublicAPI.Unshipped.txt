@@ -26,6 +26,28 @@ static Plank.Schema.ColumnDefinition.OptionalLeaf(string! name, Plank.Schema.Par
 static Plank.Schema.ColumnDefinition.RequiredGroup(string! name, int fieldId, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
 static Plank.Schema.ColumnDefinition.RequiredLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.ColumnDefinition!
 static Plank.Schema.RowSchema.Column<TClr>(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.RowSchemaColumn!
+Plank.Reading.Physical.ParquetFileMetadata.CreatedByUtf8.get -> System.ReadOnlySpan<byte>
+Plank.Reading.Physical.ParquetFileMetadata.HasCreatedBy.get -> bool
+Plank.Reading.Physical.ParquetFileMetadata.KeyValueMetadata.get -> System.ReadOnlySpan<Plank.Reading.Physical.ParquetKeyValueMetadataInfo>
+Plank.Reading.Physical.ParquetFileMetadata.KeyValueMetadataCount.get -> int
+Plank.Reading.Physical.ParquetFileMetadata.KeyValueMetadataKeyUtf8(int metadataOrdinal) -> System.ReadOnlySpan<byte>
+Plank.Reading.Physical.ParquetFileMetadata.KeyValueMetadataValueUtf8(int metadataOrdinal) -> System.ReadOnlySpan<byte>
+Plank.Reading.Physical.ParquetKeyValueMetadataInfo
+Plank.Reading.Physical.ParquetKeyValueMetadataInfo.HasValue.get -> bool
+Plank.Reading.Physical.ParquetKeyValueMetadataInfo.KeyLength.get -> int
+Plank.Reading.Physical.ParquetKeyValueMetadataInfo.ParquetKeyValueMetadataInfo() -> void
+Plank.Reading.Physical.ParquetKeyValueMetadataInfo.ValueLength.get -> int
+Plank.Writing.ParquetKeyValueMetadata
+Plank.Writing.ParquetKeyValueMetadata.Key.get -> string!
+Plank.Writing.ParquetKeyValueMetadata.Key.init -> void
+Plank.Writing.ParquetKeyValueMetadata.ParquetKeyValueMetadata() -> void
+Plank.Writing.ParquetKeyValueMetadata.ParquetKeyValueMetadata(string! Key, string? Value) -> void
+Plank.Writing.ParquetKeyValueMetadata.Value.get -> string?
+Plank.Writing.ParquetKeyValueMetadata.Value.init -> void
+Plank.Writing.ParquetWriterOptions.CreatedBy.get -> string?
+Plank.Writing.ParquetWriterOptions.CreatedBy.init -> void
+Plank.Writing.ParquetWriterOptions.KeyValueMetadata.get -> System.Collections.Generic.IReadOnlyList<Plank.Writing.ParquetKeyValueMetadata>!
+Plank.Writing.ParquetWriterOptions.KeyValueMetadata.init -> void
 Plank.Schema.ParquetColumnAttribute.Precision.get -> int
 Plank.Schema.ParquetColumnAttribute.Precision.set -> void
 Plank.Schema.ParquetColumnAttribute.Scale.get -> int

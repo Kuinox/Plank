@@ -28,6 +28,10 @@ public sealed class ParquetWriterOptions
 
     public int? CompressionLevel { get; init; }
 
+    public string? CreatedBy { get; init; }
+
+    public IReadOnlyList<ParquetKeyValueMetadata> KeyValueMetadata { get; init; } = [];
+
     public bool WritePageIndexes { get; init; } = true;
 
     /// <summary>Gets or initializes the lexicographic sort order declared for every row group written to the file.</summary>
@@ -68,6 +72,14 @@ public sealed class ParquetWriterOptions
             throw new ArgumentException("Sorting columns must not be an uninitialized ImmutableArray.",
                 nameof(SortingColumns));
         ValidateCompressionLevel();
+        ArgumentNullException.ThrowIfNull(KeyValueMetadata);
+        for (var i = 0; i < KeyValueMetadata.Count; i++)
+        {
+            var entry = KeyValueMetadata[i];
+            if (string.IsNullOrEmpty(entry.Key))
+                throw new ArgumentException($"Key-value metadata entry {i} must have a non-empty key.",
+                    nameof(KeyValueMetadata));
+        }
     }
 
     internal int GetCompressionLevel()
