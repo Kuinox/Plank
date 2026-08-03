@@ -181,7 +181,8 @@ public sealed class RowReaderCore : IDisposable
         => new()
         {
             BufferPool = options.BufferPool,
-            Strict = false
+            Strict = false,
+            VerifyPageCrc = options.VerifyPageCrc
         };
 
     void ApplyProjection(RowApiColumnDescriptor[]? projection)
