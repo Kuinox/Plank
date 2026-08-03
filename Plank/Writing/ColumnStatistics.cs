@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Numerics;
@@ -118,6 +119,8 @@ internal readonly struct ColumnStatistics
             return CreateFloat(AsSpan<T, float>(values), nullCount);
         if (typeof(T) == typeof(double))
             return CreateDouble(AsSpan<T, double>(values), nullCount);
+        if (typeof(T) == typeof(decimal))
+            return CreateDecimal(column, AsSpan<T, decimal>(values), nullCount);
         if (typeof(T) == typeof(byte[]))
             return CreateByteArray(column, AsAnySpan<T, byte[]>(values), nullCount);
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
@@ -135,6 +138,9 @@ internal readonly struct ColumnStatistics
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
             return CreateMemory(column, AsAnySpan<T, ReadOnlyMemory<byte>>(values), nullCount, ref minBuffer,
                 ref maxBuffer, bufferPool);
+        if (typeof(T) == typeof(decimal))
+            return CreateDecimal(column, AsSpan<T, decimal>(values), nullCount, ref minBuffer, ref maxBuffer,
+                bufferPool);
         return Create(column, values, nullCount);
     }
 
@@ -160,6 +166,8 @@ internal readonly struct ColumnStatistics
             return CreateNullableFloat(AsNullableSpan<T, float>(values));
         if (typeof(T) == typeof(double))
             return CreateNullableDouble(AsNullableSpan<T, double>(values));
+        if (typeof(T) == typeof(decimal))
+            return CreateNullableDecimal(column, AsNullableSpan<T, decimal>(values));
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
             return CreateNullableMemory(column, AsNullableSpan<T, ReadOnlyMemory<byte>>(values));
 
@@ -182,6 +190,9 @@ internal readonly struct ColumnStatistics
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
             return CreateNullableMemory(column, AsNullableSpan<T, ReadOnlyMemory<byte>>(values), ref minBuffer,
                 ref maxBuffer, bufferPool);
+        if (typeof(T) == typeof(decimal))
+            return CreateNullableDecimal(column, AsNullableSpan<T, decimal>(values), ref minBuffer, ref maxBuffer,
+                bufferPool);
         return CreateOptional(column, values);
     }
 
@@ -700,6 +711,143 @@ internal readonly struct ColumnStatistics
         return TryGetDoubleMinMax(denseValues[..count], out var min, out var max, out var nanCount)
             ? FromDouble(min, max, nullCount, nanCount)
             : EmptyFloating(nullCount, nanCount);
+    }
+
+    static ColumnStatistics CreateDecimal(Column column, ReadOnlySpan<decimal> values, long nullCount)
+    {
+        if (!TryGetDecimalMinMax(values, out var min, out var max))
+            return Empty(nullCount);
+
+        var minValue = new byte[GetDecimalEncodedLength(column, min)];
+        var maxValue = new byte[GetDecimalEncodedLength(column, max)];
+        EncodeDecimal(column, min, minValue);
+        EncodeDecimal(column, max, maxValue);
+        return new ColumnStatistics(minValue, maxValue, nullCount, true);
+    }
+
+    static ColumnStatistics CreateDecimal(Column column, ReadOnlySpan<decimal> values, long nullCount,
+        ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
+    {
+        if (!TryGetDecimalMinMax(values, out var min, out var max))
+            return Empty(nullCount);
+
+        var minLength = GetDecimalEncodedLength(column, min);
+        var maxLength = GetDecimalEncodedLength(column, max);
+        EnsureReusableBuffer(minLength, ref minBuffer, bufferPool);
+        EnsureReusableBuffer(maxLength, ref maxBuffer, bufferPool);
+        EncodeDecimal(column, min, minBuffer.Span[..minLength]);
+        EncodeDecimal(column, max, maxBuffer.Span[..maxLength]);
+        return new ColumnStatistics(minBuffer, minLength, maxBuffer, maxLength, nullCount, true);
+    }
+
+    static ColumnStatistics CreateNullableDecimal(Column column, ReadOnlySpan<decimal?> values)
+    {
+        if (!TryGetNullableDecimalMinMax(values, out var min, out var max, out var nullCount))
+            return Empty(nullCount);
+
+        var minValue = new byte[GetDecimalEncodedLength(column, min)];
+        var maxValue = new byte[GetDecimalEncodedLength(column, max)];
+        EncodeDecimal(column, min, minValue);
+        EncodeDecimal(column, max, maxValue);
+        return new ColumnStatistics(minValue, maxValue, nullCount, true);
+    }
+
+    static ColumnStatistics CreateNullableDecimal(Column column, ReadOnlySpan<decimal?> values,
+        ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
+    {
+        if (!TryGetNullableDecimalMinMax(values, out var min, out var max, out var nullCount))
+            return Empty(nullCount);
+
+        var minLength = GetDecimalEncodedLength(column, min);
+        var maxLength = GetDecimalEncodedLength(column, max);
+        EnsureReusableBuffer(minLength, ref minBuffer, bufferPool);
+        EnsureReusableBuffer(maxLength, ref maxBuffer, bufferPool);
+        EncodeDecimal(column, min, minBuffer.Span[..minLength]);
+        EncodeDecimal(column, max, maxBuffer.Span[..maxLength]);
+        return new ColumnStatistics(minBuffer, minLength, maxBuffer, maxLength, nullCount, true);
+    }
+
+    static bool TryGetDecimalMinMax(ReadOnlySpan<decimal> values, out decimal min, out decimal max)
+    {
+        min = 0;
+        max = 0;
+        if (values.IsEmpty)
+            return false;
+
+        min = values[0];
+        max = values[0];
+        for (var i = 1; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (value < min)
+                min = value;
+            if (value > max)
+                max = value;
+        }
+        return true;
+    }
+
+    static bool TryGetNullableDecimalMinMax(ReadOnlySpan<decimal?> values, out decimal min, out decimal max,
+        out long nullCount)
+    {
+        min = 0;
+        max = 0;
+        nullCount = 0;
+        var hasValue = false;
+        for (var i = 0; i < values.Length; i++)
+        {
+            if (values[i] is not { } value)
+            {
+                nullCount++;
+                continue;
+            }
+
+            if (!hasValue)
+            {
+                min = value;
+                max = value;
+                hasValue = true;
+                continue;
+            }
+            if (value < min)
+                min = value;
+            if (value > max)
+                max = value;
+        }
+        return hasValue;
+    }
+
+    static int GetDecimalEncodedLength(Column column, decimal value)
+        => column.PhysicalType switch
+        {
+            ParquetPhysicalType.Int32 => sizeof(int),
+            ParquetPhysicalType.Int64 => sizeof(long),
+            ParquetPhysicalType.FixedLenByteArray => checked((int)column.Options.TypeLength),
+            ParquetPhysicalType.ByteArray => ParquetDecimalConverter.GetByteCount(value, column),
+            _ => throw new InvalidOperationException(
+                $"Column '{column.Name}' has unsupported decimal physical type '{column.PhysicalType}'.")
+        };
+
+    static void EncodeDecimal(Column column, decimal value, Span<byte> destination)
+    {
+        switch (column.PhysicalType)
+        {
+            case ParquetPhysicalType.Int32:
+                BinaryPrimitives.WriteInt32LittleEndian(destination, ParquetDecimalConverter.ToInt32(value, column));
+                return;
+            case ParquetPhysicalType.Int64:
+                BinaryPrimitives.WriteInt64LittleEndian(destination, ParquetDecimalConverter.ToInt64(value, column));
+                return;
+            case ParquetPhysicalType.FixedLenByteArray:
+                ParquetDecimalConverter.WriteFixedBigEndian(value, column, destination);
+                return;
+            case ParquetPhysicalType.ByteArray:
+                _ = ParquetDecimalConverter.WriteBigEndian(value, column, destination);
+                return;
+            default:
+                throw new InvalidOperationException(
+                    $"Column '{column.Name}' has unsupported decimal physical type '{column.PhysicalType}'.");
+        }
     }
 
     static ColumnStatistics CreateByteArray(Column column, ReadOnlySpan<byte[]> values, long nullCount)
@@ -1316,14 +1464,19 @@ internal readonly struct ColumnStatistics
     static void CopyToReusableBuffer(ReadOnlySpan<byte> source, ref ParquetBuffer buffer,
         IParquetBufferPool bufferPool)
     {
-        if (buffer.Length < source.Length)
-        {
-            buffer.Dispose();
-            buffer = source.IsEmpty ? default : bufferPool.Rent(checked((uint)source.Length));
-        }
+        EnsureReusableBuffer(source.Length, ref buffer, bufferPool);
 
         if (!source.IsEmpty)
             source.CopyTo(buffer.Span);
+    }
+
+    static void EnsureReusableBuffer(int length, ref ParquetBuffer buffer, IParquetBufferPool bufferPool)
+    {
+        if (buffer.Length >= length)
+            return;
+
+        buffer.Dispose();
+        buffer = length == 0 ? default : bufferPool.Rent(checked((uint)length));
     }
 
     bool HasNativeBinaryValues

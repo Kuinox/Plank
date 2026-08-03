@@ -6,9 +6,9 @@ using BenchmarkDotNet.Jobs;
 
 namespace Plank.Benchmarks;
 
-public sealed class DeltaBinaryPackedEncodingBenchmarkConfig : ManualConfig
+public sealed class OptimizationBenchmarkConfig : ManualConfig
 {
-    public DeltaBinaryPackedEncodingBenchmarkConfig()
+    public OptimizationBenchmarkConfig()
     {
         AddJob(Job.ShortRun.DontEnforcePowerPlan());
         AddDiagnoser(MemoryDiagnoser.Default);

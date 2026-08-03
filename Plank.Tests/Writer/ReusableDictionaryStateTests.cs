@@ -36,6 +36,83 @@ internal sealed class ReusableDictionaryStateTests
         }
     }
 
+    [Test]
+    public void ManyResetCyclesDoNotExposeStaleEntries()
+    {
+        var state = new ReusableDictionaryState<int>();
+        for (var reset = 0; reset < 300; reset++)
+        {
+            state.Reset(4, useMap: true, EqualityComparer<int>.Default);
+            for (var i = 0; i < 4; i++)
+            {
+                var value = reset * 4 + i;
+                if (state.GetOrAddIndex(value) != i || state.GetOrAddIndex(value) != i)
+                    throw new InvalidOperationException($"Reset {reset} returned the wrong index for {value}.");
+            }
+
+            if (state.Count != 4)
+                throw new InvalidOperationException($"Reset {reset} retained stale entries.");
+        }
+    }
+
+    [Test]
+    public void ExactThresholdGrowthPreservesIndexes()
+    {
+        var state = new ReusableDictionaryState<int>();
+        state.Reset(0, useMap: true, EqualityComparer<int>.Default);
+
+        for (var i = 0; i < 4; i++)
+            if (state.GetOrAddIndex(i) != i)
+                throw new InvalidOperationException($"Initial index {i} was not preserved.");
+        for (var i = 0; i < 4; i++)
+            if (state.GetOrAddIndex(i) != i)
+                throw new InvalidOperationException($"Threshold lookup {i} caused an incorrect resize.");
+
+        if (state.GetOrAddIndex(4) != 4)
+            throw new InvalidOperationException("The first index after growth was not preserved.");
+        for (var i = 0; i < 5; i++)
+            if (state.GetOrAddIndex(i) != i)
+                throw new InvalidOperationException($"Index {i} was not preserved after growth.");
+    }
+
+    [Test]
+    public void ZeroCapacityCanGrowAcrossMultipleTableSizes()
+    {
+        var state = new ReusableDictionaryState<int>();
+        state.Reset(0, useMap: true, EqualityComparer<int>.Default);
+
+        for (var i = 0; i < 1_024; i++)
+            if (state.GetOrAddIndex(i) != i)
+                throw new InvalidOperationException($"Growing zero-capacity state returned the wrong index for {i}.");
+        for (var i = 0; i < 1_024; i++)
+            if (state.GetOrAddIndex(i) != i)
+                throw new InvalidOperationException($"Grown zero-capacity state lost index {i}.");
+    }
+
+    [Test]
+    public void EnableMapAfterSortedPopulationPreservesIndexes()
+    {
+        var state = new ReusableDictionaryState<int>();
+        state.Reset(2, useMap: false, EqualityComparer<int>.Default);
+        state.AddFirst(10);
+        for (var i = 1; i < 128; i++)
+            state.AddSortedUnique(10 + i);
+
+        state.EnableMap();
+
+        for (var i = 0; i < 128; i++)
+            if (state.GetOrAddIndex(10 + i) != i)
+                throw new InvalidOperationException($"Map enablement lost sorted index {i}.");
+    }
+
+    [Test]
+    public void CollisionHeavyKeysRemainDistinctAcrossComparerChanges()
+    {
+        var state = new ReusableDictionaryState<CollidingKey>();
+        PopulateCollisions(state, EqualityComparer<CollidingKey>.Default);
+        PopulateCollisions(state, new PassthroughComparer());
+    }
+
     static WeakReference[] Populate(ReusableDictionaryState<object> state, int count)
     {
         state.Reset(count, useMap: true, EqualityComparer<object>.Default);
@@ -48,5 +125,34 @@ internal sealed class ReusableDictionaryStateTests
         }
 
         return result;
+    }
+
+    static void PopulateCollisions(ReusableDictionaryState<CollidingKey> state,
+        IEqualityComparer<CollidingKey> comparer)
+    {
+        state.Reset(256, useMap: true, comparer);
+        for (var i = 0; i < 256; i++)
+            if (state.GetOrAddIndex(new CollidingKey(i)) != i)
+                throw new InvalidOperationException($"Colliding key {i} received the wrong insertion index.");
+        for (var i = 255; i >= 0; i--)
+            if (state.GetOrAddIndex(new CollidingKey(i)) != i)
+                throw new InvalidOperationException($"Colliding key {i} was not found on its probe chain.");
+        if (state.Count != 256)
+            throw new InvalidOperationException("Collision-heavy lookup inserted duplicates.");
+    }
+
+    sealed class CollidingKey(int value) : IEquatable<CollidingKey>
+    {
+        public int Value { get; } = value;
+
+        public bool Equals(CollidingKey? other) => other is not null && other.Value == Value;
+        public override bool Equals(object? obj) => obj is CollidingKey other && Equals(other);
+        public override int GetHashCode() => 1;
+    }
+
+    sealed class PassthroughComparer : IEqualityComparer<CollidingKey>
+    {
+        public bool Equals(CollidingKey? x, CollidingKey? y) => EqualityComparer<CollidingKey>.Default.Equals(x, y);
+        public int GetHashCode(CollidingKey obj) => obj.GetHashCode();
     }
 }

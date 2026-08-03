@@ -124,6 +124,25 @@ static class ByteStreamSplitEncoding
             return;
         }
 
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            var decimalByteCount = checked(decimalValues.Length * valueLength);
+            if (decimalByteCount == 0)
+                return;
+
+            var decimalDestination = writer.GetSpan(decimalByteCount);
+            Span<byte> encoded = valueLength <= 256 ? stackalloc byte[valueLength] : new byte[valueLength];
+            for (var i = 0; i < decimalValues.Length; i++)
+            {
+                ParquetDecimalConverter.WriteFixedBigEndian(decimalValues[i], column, encoded);
+                for (var lane = 0; lane < valueLength; lane++)
+                    decimalDestination[(lane * decimalValues.Length) + i] = encoded[lane];
+            }
+            writer.Advance(decimalByteCount);
+            return;
+        }
+
         if (typeof(T) != typeof(byte[]))
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.FixedLenByteArray}' values as byte[] payloads, but got '{typeof(T)}'.");
@@ -226,6 +245,24 @@ static class ByteStreamSplitEncoding
             return;
         }
 
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            var lane0 = destination[..values.Length];
+            var lane1 = destination.Slice(values.Length, values.Length);
+            var lane2 = destination.Slice(values.Length * 2, values.Length);
+            var lane3 = destination.Slice(values.Length * 3, values.Length);
+            for (var i = 0; i < decimalValues.Length; i++)
+            {
+                var value = ParquetDecimalConverter.ToInt32(decimalValues[i], column);
+                lane0[i] = (byte)value;
+                lane1[i] = (byte)(value >> 8);
+                lane2[i] = (byte)(value >> 16);
+                lane3[i] = (byte)(value >> 24);
+            }
+            return;
+        }
+
         throw new InvalidOperationException(
             $"Column '{column.Name}' expects '{ParquetPhysicalType.Int32}' values, but got '{typeof(T)}'.");
     }
@@ -244,6 +281,32 @@ static class ByteStreamSplitEncoding
         {
             var ulongValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ulong>>(ref values);
             WriteUInt64Lanes(ulongValues, destination);
+            return;
+        }
+
+        if (typeof(T) == typeof(decimal))
+        {
+            var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            var lane0 = destination[..values.Length];
+            var lane1 = destination.Slice(values.Length, values.Length);
+            var lane2 = destination.Slice(values.Length * 2, values.Length);
+            var lane3 = destination.Slice(values.Length * 3, values.Length);
+            var lane4 = destination.Slice(values.Length * 4, values.Length);
+            var lane5 = destination.Slice(values.Length * 5, values.Length);
+            var lane6 = destination.Slice(values.Length * 6, values.Length);
+            var lane7 = destination.Slice(values.Length * 7, values.Length);
+            for (var i = 0; i < decimalValues.Length; i++)
+            {
+                var value = ParquetDecimalConverter.ToInt64(decimalValues[i], column);
+                lane0[i] = (byte)value;
+                lane1[i] = (byte)(value >> 8);
+                lane2[i] = (byte)(value >> 16);
+                lane3[i] = (byte)(value >> 24);
+                lane4[i] = (byte)(value >> 32);
+                lane5[i] = (byte)(value >> 40);
+                lane6[i] = (byte)(value >> 48);
+                lane7[i] = (byte)(value >> 56);
+            }
             return;
         }
 
