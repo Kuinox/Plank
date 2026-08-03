@@ -1,11 +1,10 @@
 using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Configs;
 using Plank.Writing;
 using Plank.Writing.Encoding;
 
 namespace Plank.Benchmarks;
 
-[Config(typeof(DeltaBinaryPackedEncodingBenchmarkConfig))]
+[Config(typeof(OptimizationBenchmarkConfig))]
 public class DeltaBinaryPackedEncodingBenchmark
 {
     int[] _values = [];
