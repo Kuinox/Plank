@@ -147,6 +147,11 @@ public readonly struct RowGroup
             column.PhysicalType == ParquetPhysicalType.Int32 &&
             column.LogicalType is LogicalType.Time { Unit: TimeUnit.Millis })
             return;
+        if ((Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T)) == typeof(decimal))
+        {
+            _ = ParquetDecimalConverter.RequireLogicalType(column);
+            return;
+        }
         var resolution = ParquetTypeMap.ResolvePhysicalType<T>();
         if (!resolution.IsSuccess)
             throw new NotSupportedException(resolution.ErrorMessage);
