@@ -459,8 +459,10 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI32(3, GetRepetition(node.Repetition));
         writer.WriteFieldBinary(4, name);
         writer.WriteFieldI32(5, node.Children.Length);
-        if (node.FieldId is { } fieldId)
-            writer.WriteFieldI32(9, fieldId);
+        if (node.LogicalType is not null)
+            WriteLogicalType(ref writer, node.LogicalType, node.FieldId);
+        else
+            WriteSchemaFieldId(ref writer, node.FieldId);
         writer.EndStruct(previous);
 
         for (var i = 0; i < node.Children.Length; i++)
@@ -601,10 +603,51 @@ static class ParquetMetadataThriftWriter
                 writer.WriteFieldHeader(10, CompactType.Struct);
                 WriteJsonLogicalType(ref writer);
                 return;
+            case LogicalType.Bson:
+                writer.WriteFieldI32(6, (int)ConvertedType.Bson);
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteEmptyLogicalType(ref writer, 13);
+                return;
+            case LogicalType.Enum:
+                writer.WriteFieldI32(6, (int)ConvertedType.Enum);
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteEmptyLogicalType(ref writer, 4);
+                return;
             case LogicalType.Uuid:
                 WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
                 WriteUuidLogicalType(ref writer);
+                return;
+            case LogicalType.Float16:
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteEmptyLogicalType(ref writer, 15);
+                return;
+            case LogicalType.Interval:
+                writer.WriteFieldI32(6, (int)ConvertedType.Interval);
+                WriteSchemaFieldId(ref writer, fieldId);
+                return;
+            case LogicalType.Unknown:
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteEmptyLogicalType(ref writer, 11);
+                return;
+            case LogicalType.Variant variant:
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteVariantLogicalType(ref writer, variant.SpecificationVersion);
+                return;
+            case LogicalType.Geometry geometry:
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteGeometryLogicalType(ref writer, geometry.Crs);
+                return;
+            case LogicalType.Geography geography:
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteGeographyLogicalType(ref writer, geography.Crs, geography.Algorithm);
                 return;
             case LogicalType.Decimal decimalType:
                 writer.WriteFieldI32(6, (int)ConvertedType.Decimal);
@@ -682,6 +725,51 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldHeader(14, CompactType.Struct);
         var previousUuid = writer.BeginStruct();
         writer.EndStruct(previousUuid);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteEmptyLogicalType(ref CompactWriter writer, int fieldId)
+    {
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(fieldId, CompactType.Struct);
+        var previousValue = writer.BeginStruct();
+        writer.EndStruct(previousValue);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteVariantLogicalType(ref CompactWriter writer, sbyte? specificationVersion)
+    {
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(16, CompactType.Struct);
+        var previousVariant = writer.BeginStruct();
+        if (specificationVersion.HasValue)
+            writer.WriteFieldByte(1, unchecked((byte)specificationVersion.Value));
+        writer.EndStruct(previousVariant);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteGeometryLogicalType(ref CompactWriter writer, string? crs)
+    {
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(17, CompactType.Struct);
+        var previousGeometry = writer.BeginStruct();
+        if (crs is not null)
+            writer.WriteFieldBinary(1, crs);
+        writer.EndStruct(previousGeometry);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteGeographyLogicalType(ref CompactWriter writer, string? crs,
+        EdgeInterpolationAlgorithm? algorithm)
+    {
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(18, CompactType.Struct);
+        var previousGeography = writer.BeginStruct();
+        if (crs is not null)
+            writer.WriteFieldBinary(1, crs);
+        if (algorithm.HasValue)
+            writer.WriteFieldI32(2, (int)algorithm.Value);
+        writer.EndStruct(previousGeography);
         writer.EndStruct(previous);
     }
 
@@ -1102,6 +1190,7 @@ static class ParquetMetadataThriftWriter
         Utf8 = 0,
         Map = 1,
         List = 3,
+        Enum = 4,
         Decimal = 5,
         Date = 6,
         TimeMillis = 7,
@@ -1116,7 +1205,9 @@ static class ParquetMetadataThriftWriter
         Int16 = 16,
         Int32 = 17,
         Int64 = 18,
-        Json = 19
+        Json = 19,
+        Bson = 20,
+        Interval = 21
     }
 
     enum CompactType : byte

@@ -879,8 +879,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     or "string" or "string?"
                     or "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?"
                     or "decimal" or "decimal?",
-                "FixedLenByteArray" => clrType is
-                    "global::System.Guid" or "global::System.Guid?" or "decimal" or "decimal?",
+                "FixedLenByteArray" => (clrType is "global::System.Guid" or "global::System.Guid?" or "decimal" or "decimal?") ||
+                    IsAdditionalFixedBinaryMapping(column, clrType),
                 _ => false
             };
 
@@ -895,7 +895,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "Float" => clrType == "float",
             "Double" => clrType == "double",
             "ByteArray" => clrType is "byte[]" or "string" or "global::System.ReadOnlyMemory<byte>" or "decimal",
-            "FixedLenByteArray" => clrType is "global::System.Guid" or "decimal",
+            "FixedLenByteArray" => (clrType is "global::System.Guid" or "decimal") ||
+                IsAdditionalFixedBinaryMapping(column, clrType),
             _ => false
         };
     }
@@ -920,6 +921,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "global::System.DateTimeOffset" or "global::System.DateTimeOffset?" or
             "global::System.TimeOnly" or "global::System.TimeOnly?" or
             "global::System.Guid" or "global::System.Guid?";
+
+    static bool IsAdditionalFixedBinaryMapping(SchemaColumn column, string clrType)
+        => column.LogicalType?.Kind is "Float16" or "Interval" && IsUtf8ByteArrayClr(clrType);
 
     static string Escape(string value)
         => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: false);
@@ -1065,13 +1069,26 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
 
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
-        var typeLength = IsGuidClr(clrTypeName) ? 16u : 0u;
-        if (physicalType == "FixedLenByteArray" && logicalType is { Kind: "Decimal", Precision: > 0 } decimalType)
-            typeLength = GetDecimalTypeLength(decimalType.Precision.Value);
         column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType, property.Name, encodings,
-            typeLength, fieldId, bloomFilter, bloomFilterFalsePositiveProbability,
+            GetTypeLength(physicalType, clrTypeName, logicalType), fieldId, bloomFilter,
+            bloomFilterFalsePositiveProbability,
             bloomFilterExpectedDistinctValueCount, bloomFilterMaximumBytes);
         return true;
+    }
+
+    static uint GetTypeLength(string physicalType, string clrTypeName, LogicalTypeSpec? logicalType)
+    {
+        if (physicalType != "FixedLenByteArray")
+            return 0;
+        if (IsGuidClr(clrTypeName))
+            return 16;
+        return logicalType?.Kind switch
+        {
+            "Decimal" when logicalType.Value.Precision > 0 => GetDecimalTypeLength(logicalType.Value.Precision.Value),
+            "Float16" => 2,
+            "Interval" => 12,
+            _ => 0
+        };
     }
 
     static bool TryReadColumnOverrides(IPropertySymbol property, ref string columnName, ref string physicalType,
@@ -1275,10 +1292,18 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             6 => ReuseInferredLogicalType(inferredLogicalType, "Timestamp"),
             7 => ReuseInferredLogicalType(inferredLogicalType, "Int"),
             8 => ReuseInferredLogicalType(inferredLogicalType, "Decimal"),
+            9 => new LogicalTypeSpec("Enum"),
+            10 => new LogicalTypeSpec("Bson"),
+            11 => new LogicalTypeSpec("Float16"),
+            12 => new LogicalTypeSpec("Interval"),
+            13 => new LogicalTypeSpec("Geography"),
+            14 => new LogicalTypeSpec("Geometry"),
+            15 => new LogicalTypeSpec("Variant"),
+            16 => new LogicalTypeSpec("Unknown"),
             _ => null
         };
 
-        return enumValue is >= 0 and <= 8;
+        return enumValue is >= 0 and <= 16;
     }
 
     static LogicalTypeSpec ReuseInferredLogicalType(LogicalTypeSpec? inferredLogicalType, string kind)
@@ -1368,7 +1393,15 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "Timestamp" => $"new global::Plank.Schema.LogicalType.Timestamp(global::Plank.Schema.TimeUnit.{logicalType.Unit}, {ToBoolLiteral(logicalType.IsAdjustedToUtc)})",
             "String" => "new global::Plank.Schema.LogicalType.String()",
             "Json" => "new global::Plank.Schema.LogicalType.Json()",
+            "Bson" => "new global::Plank.Schema.LogicalType.Bson()",
+            "Enum" => "new global::Plank.Schema.LogicalType.Enum()",
             "Uuid" => "new global::Plank.Schema.LogicalType.Uuid()",
+            "Float16" => "new global::Plank.Schema.LogicalType.Float16()",
+            "Interval" => "new global::Plank.Schema.LogicalType.Interval()",
+            "Unknown" => "new global::Plank.Schema.LogicalType.Unknown()",
+            "Variant" => "new global::Plank.Schema.LogicalType.Variant()",
+            "Geometry" => "new global::Plank.Schema.LogicalType.Geometry()",
+            "Geography" => "new global::Plank.Schema.LogicalType.Geography()",
             "Decimal" => $"new global::Plank.Schema.LogicalType.Decimal({logicalType.Precision.GetValueOrDefault()}, {logicalType.Scale.GetValueOrDefault()})",
             _ => "null!"
         };
@@ -1513,12 +1546,34 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 break;
             case "String":
             case "Json":
+            case "Bson":
+            case "Enum":
+            case "Geometry":
+            case "Geography":
                 if (column.PhysicalType != "ByteArray")
                     diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
                         $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires physical type 'ByteArray'."));
                 if (!IsUtf8ByteArrayClr(column.ClrTypeName) && !IsStringClr(column.ClrTypeName))
                     diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
                         $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires CLR type string/string?/ReadOnlyMemory<byte>/ReadOnlyMemory<byte>?/byte[]/byte[]?."));
+                break;
+            case "Float16":
+            case "Interval":
+                if (column.PhysicalType != "FixedLenByteArray")
+                    diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
+                        $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires physical type 'FixedLenByteArray'."));
+                if (!IsUtf8ByteArrayClr(column.ClrTypeName))
+                    diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
+                        $"Column '{column.Name}' logical type '{logicalType.Value.Kind}' requires CLR type ReadOnlyMemory<byte>/ReadOnlyMemory<byte>?/byte[]/byte[]?."));
+                break;
+            case "Unknown":
+                if (column.Repetition != "Optional")
+                    diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
+                        $"Column '{column.Name}' logical type 'Unknown' requires a nullable CLR type."));
+                break;
+            case "Variant":
+                diagnostics.Add(new SchemaDiagnostic(LogicalPhysicalMismatch,
+                    $"Column '{column.Name}' logical type 'Variant' requires a runtime group schema."));
                 break;
             case "Uuid":
                 if (column.PhysicalType != "FixedLenByteArray")
