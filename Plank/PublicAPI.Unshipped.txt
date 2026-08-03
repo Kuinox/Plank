@@ -1,4 +1,5 @@
 #nullable enable
+Plank.Schema.CompressionKind.Lz4Legacy = 6 -> Plank.Schema.CompressionKind
 Plank.Reading.Physical.ParquetFileMetadata.CreatedByUtf8.get -> System.ReadOnlySpan<byte>
 Plank.Reading.Physical.ParquetFileMetadata.HasCreatedBy.get -> bool
 Plank.Reading.Physical.ParquetFileMetadata.KeyValueMetadata.get -> System.ReadOnlySpan<Plank.Reading.Physical.ParquetKeyValueMetadataInfo>
