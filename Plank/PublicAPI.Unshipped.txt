@@ -26,6 +26,10 @@ static Plank.Schema.ColumnDefinition.OptionalLeaf(string! name, Plank.Schema.Par
 static Plank.Schema.ColumnDefinition.RequiredGroup(string! name, int fieldId, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
 static Plank.Schema.ColumnDefinition.RequiredLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.ColumnDefinition!
 static Plank.Schema.RowSchema.Column<TClr>(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.RowSchemaColumn!
+Plank.Schema.ParquetColumnAttribute.Precision.get -> int
+Plank.Schema.ParquetColumnAttribute.Precision.set -> void
+Plank.Schema.ParquetColumnAttribute.Scale.get -> int
+Plank.Schema.ParquetColumnAttribute.Scale.set -> void
 *REMOVED*Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0) -> void
 Plank.Reading.Logical.ParquetColumnChunkMetadata.HasBloomFilter.get -> bool
 Plank.Reading.Logical.ParquetColumnChunkMetadata.OpenBloomFilter() -> Plank.Reading.Physical.ParquetBloomFilter!

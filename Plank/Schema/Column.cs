@@ -14,7 +14,7 @@ internal sealed record Column
         FieldId = fieldId;
         PageStrategy = pageStrategy;
         EncodingCompatibility.Validate(this);
-        ColumnDefinition.ValidateLogicalType(name, physicalType, logicalType);
+        ColumnDefinition.ValidateLogicalType(name, physicalType, Options, logicalType);
         if (Options.BloomFilter is not null && physicalType == ParquetPhysicalType.Boolean)
             throw new NotSupportedException(
                 $"Column '{name}' cannot use a Bloom filter because Parquet does not define standalone boolean hashing.");
