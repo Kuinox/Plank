@@ -864,34 +864,39 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     or "ushort" or "ushort?"
                     or "int" or "int?"
                     or "uint" or "uint?"
-                    or "global::System.DateOnly" or "global::System.DateOnly?",
+                    or "global::System.DateOnly" or "global::System.DateOnly?"
+                    or "decimal" or "decimal?",
                 "Int64" => clrType is
                     "long" or "long?"
                     or "ulong" or "ulong?"
                     or "global::System.DateTime" or "global::System.DateTime?"
                     or "global::System.DateTimeOffset" or "global::System.DateTimeOffset?"
-                    or "global::System.TimeOnly" or "global::System.TimeOnly?",
+                    or "global::System.TimeOnly" or "global::System.TimeOnly?"
+                    or "decimal" or "decimal?",
                 "Float" => clrType is "float" or "float?",
                 "Double" => clrType is "double" or "double?",
                 "ByteArray" => clrType is
                     "byte[]" or "byte[]?"
                     or "string" or "string?"
-                    or "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?",
-                "FixedLenByteArray" => clrType is "global::System.Guid" or "global::System.Guid?",
+                    or "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?"
+                    or "decimal" or "decimal?",
+                "FixedLenByteArray" => clrType is
+                    "global::System.Guid" or "global::System.Guid?" or "decimal" or "decimal?",
                 _ => false
             };
 
         return column.PhysicalType switch
         {
             "Boolean" => clrType == "bool",
-            "Int32" => clrType is "byte" or "ushort" or "int" or "uint" or "global::System.DateOnly",
+            "Int32" => clrType is "byte" or "ushort" or "int" or "uint" or "global::System.DateOnly" or "decimal",
             "Int64" => clrType is
                 "long" or "ulong"
-                or "global::System.DateTime" or "global::System.DateTimeOffset" or "global::System.TimeOnly",
+                or "global::System.DateTime" or "global::System.DateTimeOffset" or "global::System.TimeOnly"
+                or "decimal",
             "Float" => clrType == "float",
             "Double" => clrType == "double",
-            "ByteArray" => clrType is "byte[]" or "string" or "global::System.ReadOnlyMemory<byte>",
-            "FixedLenByteArray" => clrType == "global::System.Guid",
+            "ByteArray" => clrType is "byte[]" or "string" or "global::System.ReadOnlyMemory<byte>" or "decimal",
+            "FixedLenByteArray" => clrType is "global::System.Guid" or "decimal",
             _ => false
         };
     }
@@ -907,6 +912,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "ulong" or "ulong?" or
             "float" or "float?" or
             "double" or "double?" or
+            "decimal" or "decimal?" or
             "string" or "string?" or
             "byte[]" or "byte[]?" or
             "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?" or
@@ -1086,9 +1092,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
 
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
+        var typeLength = IsGuidClr(converter?.PhysicalClrTypeName ?? clrTypeName) ? 16u : 0u;
+        if (physicalType == "FixedLenByteArray" && logicalType is { Kind: "Decimal", Precision: > 0 } decimalType)
+            typeLength = GetDecimalTypeLength(decimalType.Precision.Value);
         column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType, property.Name, encodings,
-            IsGuidClr(converter?.PhysicalClrTypeName ?? clrTypeName) ? 16u : 0u,
-            converter?.TypeName, bloomFilter, bloomFilterFalsePositiveProbability,
+            typeLength, converter?.TypeName, bloomFilter, bloomFilterFalsePositiveProbability,
             bloomFilterExpectedDistinctValueCount, bloomFilterMaximumBytes);
         return true;
     }
@@ -1203,15 +1211,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
 
         var attribute = attributes[0];
-        int? decimalPrecision = null;
-        int? decimalScale = null;
-        foreach (var namedArgument in attribute.NamedArguments)
-        {
-            if (namedArgument.Key == "DecimalPrecision")
-                decimalPrecision = namedArgument.Value.Value as int?;
-            else if (namedArgument.Key == "DecimalScale")
-                decimalScale = namedArgument.Value.Value as int?;
-        }
         for (var i = 0; i < attribute.ConstructorArguments.Length; i++)
         {
             var parameter = attribute.AttributeConstructor?.Parameters[i];
@@ -1234,6 +1233,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             }
         }
 
+        int? precision = logicalType?.Precision;
+        int? scale = logicalType?.Scale;
         foreach (var namedArgument in attribute.NamedArguments)
         {
             if (namedArgument.Key == "Encodings")
@@ -1246,10 +1247,31 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 continue;
             }
 
+            if (namedArgument.Key == "Precision")
+            {
+                if (namedArgument.Value.Value is not int value)
+                {
+                    error = $"Property '{property.Name}' declares an invalid decimal precision.";
+                    return false;
+                }
+                precision = value;
+                continue;
+            }
+
+            if (namedArgument.Key == "Scale")
+            {
+                if (namedArgument.Value.Value is not int value)
+                {
+                    error = $"Property '{property.Name}' declares an invalid decimal scale.";
+                    return false;
+                }
+                scale = value;
+                continue;
+            }
+
             if (namedArgument.Key == "LogicalType")
             {
-                if (!TryGetLogicalTypeSpec(namedArgument.Value, logicalType, decimalPrecision, decimalScale,
-                        out logicalType))
+                if (!TryGetLogicalTypeSpec(namedArgument.Value, logicalType, out logicalType))
                 {
                     error = $"Property '{property.Name}' declares an invalid LogicalTypeKind override.";
                     return false;
@@ -1269,11 +1291,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 bloomFilterMaximumBytes = maximumBytes;
         }
 
-        if ((decimalPrecision is not null || decimalScale is not null) && logicalType?.Kind != "Decimal")
-        {
-            error = $"Property '{property.Name}' declares decimal precision or scale without logical type 'Decimal'.";
-            return false;
-        }
+        if (logicalType is { Kind: "Decimal" })
+            logicalType = new LogicalTypeSpec("Decimal", precision: precision, scale: scale ?? 0);
 
         return true;
     }
@@ -1347,7 +1366,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     }
 
     static bool TryGetLogicalTypeSpec(TypedConstant constant, LogicalTypeSpec? inferredLogicalType,
-        int? decimalPrecision, int? decimalScale, out LogicalTypeSpec? logicalType)
+        out LogicalTypeSpec? logicalType)
     {
         logicalType = null;
         if (!TryGetEnumValue(constant, out var enumValue))
@@ -1363,7 +1382,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             5 => ReuseInferredLogicalType(inferredLogicalType, "Time"),
             6 => ReuseInferredLogicalType(inferredLogicalType, "Timestamp"),
             7 => ReuseInferredLogicalType(inferredLogicalType, "Int"),
-            8 => new LogicalTypeSpec("Decimal", precision: decimalPrecision, scale: decimalScale),
+            8 => ReuseInferredLogicalType(inferredLogicalType, "Decimal"),
             _ => null
         };
 
@@ -1415,6 +1434,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "ulong" => "Int64",
             "float" => "Float",
             "double" => "Double",
+            "decimal" => "FixedLenByteArray",
             "string" => "ByteArray",
             "byte[]" => "ByteArray",
             "global::System.ReadOnlyMemory<byte>" => "ByteArray",
@@ -1441,6 +1461,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "global::System.DateTimeOffset" => new LogicalTypeSpec("Timestamp", unit: "Micros", isAdjustedToUtc: true),
             "string" => new LogicalTypeSpec("String"),
             "global::System.Guid" => new LogicalTypeSpec("Uuid"),
+            "decimal" => new LogicalTypeSpec("Decimal", scale: 0),
             _ => null
         };
         return true;
@@ -1535,6 +1556,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             if (column.ConverterTypeName is null && IsTimestampClr(column.ClrTypeName))
                 diagnostics.Add(new SchemaDiagnostic(MissingTimestampLogicalType,
                     $"Column '{column.Name}' uses DateTime/DateTimeOffset and must declare logical type 'Timestamp'."));
+            if (IsDecimalClr(column.ClrTypeName))
+                diagnostics.Add(new SchemaDiagnostic(InvalidDecimalDefinition,
+                    $"Column '{column.Name}' uses decimal and must declare a decimal precision."));
             return;
         }
 
@@ -1629,6 +1653,28 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (column.PhysicalType is not ("Int32" or "Int64" or "FixedLenByteArray" or "ByteArray"))
                     diagnostics.Add(new SchemaDiagnostic(DecimalPhysicalMismatch,
                         $"Column '{column.Name}' logical type 'Decimal' is incompatible with physical type '{column.PhysicalType}'."));
+                if (logicalType.Value.Precision is int decimalPrecision)
+                {
+                    if (column.PhysicalType == "Int32" && decimalPrecision > 9)
+                        diagnostics.Add(new SchemaDiagnostic(DecimalPhysicalMismatch,
+                            $"Column '{column.Name}' decimal precision {decimalPrecision} exceeds the maximum 9 for physical type 'Int32'."));
+                    if (column.PhysicalType == "Int64" && decimalPrecision > 18)
+                        diagnostics.Add(new SchemaDiagnostic(DecimalPhysicalMismatch,
+                            $"Column '{column.Name}' decimal precision {decimalPrecision} exceeds the maximum 18 for physical type 'Int64'."));
+                    if (column.PhysicalType == "FixedLenByteArray" && column.TypeLength > 0 &&
+                        decimalPrecision > GetMaximumDecimalPrecision(column.TypeLength))
+                        diagnostics.Add(new SchemaDiagnostic(DecimalPhysicalMismatch,
+                            $"Column '{column.Name}' decimal precision {decimalPrecision} exceeds the capacity of its {column.TypeLength}-byte physical type."));
+                    if (IsDecimalClr(column.ClrTypeName) && decimalPrecision > 29)
+                        diagnostics.Add(new SchemaDiagnostic(InvalidDecimalDefinition,
+                            $"Column '{column.Name}' decimal precision {decimalPrecision} exceeds the System.Decimal maximum of 29."));
+                }
+                if (IsDecimalClr(column.ClrTypeName) && logicalType.Value.Scale is int decimalScale && decimalScale > 28)
+                    diagnostics.Add(new SchemaDiagnostic(InvalidDecimalDefinition,
+                        $"Column '{column.Name}' decimal scale {decimalScale} exceeds the System.Decimal maximum of 28."));
+                if (!IsDecimalClr(column.ClrTypeName) && !IsUtf8ByteArrayClr(column.ClrTypeName))
+                    diagnostics.Add(new SchemaDiagnostic(LogicalClrMismatch,
+                        $"Column '{column.Name}' logical type 'Decimal' requires CLR type decimal/decimal? or a binary CLR carrier."));
                 break;
         }
     }
@@ -1675,6 +1721,21 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static bool IsGuidClr(string clrType)
         => clrType is "global::System.Guid" or "global::System.Guid?";
 
+    static bool IsDecimalClr(string clrType)
+        => clrType is "decimal" or "decimal?";
+
+    static uint GetDecimalTypeLength(int precision)
+    {
+        var bytes = Math.Ceiling(((precision / Math.Log10(2)) + 1) / 8);
+        return checked((uint)bytes);
+    }
+
+    static int GetMaximumDecimalPrecision(uint typeLength)
+    {
+        var precision = Math.Floor(((double)typeLength * 8 - 1) * Math.Log10(2));
+        return precision >= int.MaxValue ? int.MaxValue : checked((int)precision);
+    }
+
     static bool IsTimeUnit(string unit)
         => unit is "Millis" or "Micros" or "Nanos";
 
@@ -1698,6 +1759,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             SpecialType.System_UInt64 => isNullable ? "ulong?" : "ulong",
             SpecialType.System_Single => isNullable ? "float?" : "float",
             SpecialType.System_Double => isNullable ? "double?" : "double",
+            SpecialType.System_Decimal => isNullable ? "decimal?" : "decimal",
             SpecialType.System_String => nullableAnnotation == NullableAnnotation.Annotated ? "string?" : "string",
             _ => string.Empty
         };

@@ -14,7 +14,7 @@ internal sealed record Column
         PageStrategy = pageStrategy;
         Converter = converter;
         EncodingCompatibility.Validate(this);
-        ColumnDefinition.ValidateLogicalType(name, physicalType, logicalType);
+        ColumnDefinition.ValidateLogicalType(name, physicalType, Options, logicalType);
         ColumnDefinition.ValidateConverter(name, physicalType, Options, converter);
         if (Options.BloomFilter is not null && physicalType == ParquetPhysicalType.Boolean)
             throw new NotSupportedException(

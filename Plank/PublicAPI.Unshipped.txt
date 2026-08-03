@@ -15,16 +15,16 @@ Plank.Schema.ColumnDefinition.Converter.init -> void
 Plank.Schema.LeafColumn.Converter.get -> Plank.Schema.ParquetValueConverter?
 Plank.Schema.ParquetColumnAttribute.Converter.get -> System.Type?
 Plank.Schema.ParquetColumnAttribute.Converter.set -> void
-Plank.Schema.ParquetColumnAttribute.DecimalPrecision.get -> int
-Plank.Schema.ParquetColumnAttribute.DecimalPrecision.set -> void
-Plank.Schema.ParquetColumnAttribute.DecimalScale.get -> int
-Plank.Schema.ParquetColumnAttribute.DecimalScale.set -> void
 Plank.Schema.ParquetValueConverter
 Plank.Schema.ParquetValueConverter.ParquetValueConverter() -> void
 Plank.Schema.ParquetValueConverter<TValue, TPhysical>
 Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ParquetValueConverter() -> void
 Plank.Schema.RowSchemaColumn.Converter.get -> Plank.Schema.ParquetValueConverter?
 Plank.Schema.RowSchemaColumn.RowSchemaColumn(string! name, Plank.Schema.ParquetPhysicalType physicalType, System.Type! clrType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> void
+Plank.Schema.ParquetColumnAttribute.Precision.get -> int
+Plank.Schema.ParquetColumnAttribute.Precision.set -> void
+Plank.Schema.ParquetColumnAttribute.Scale.get -> int
+Plank.Schema.ParquetColumnAttribute.Scale.set -> void
 *REMOVED*Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0) -> void
 Plank.Reading.Logical.ParquetColumnChunkMetadata.HasBloomFilter.get -> bool
 Plank.Reading.Logical.ParquetColumnChunkMetadata.OpenBloomFilter() -> Plank.Reading.Physical.ParquetBloomFilter!

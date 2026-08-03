@@ -134,7 +134,7 @@ internal sealed class CustomValueConverterTests
             partial class PriceSchema
             {
                 [ParquetColumn(Converter = typeof(ScaledDecimalConverter),
-                    LogicalType = LogicalTypeKind.Decimal, DecimalPrecision = 18, DecimalScale = 2)]
+                    LogicalType = LogicalTypeKind.Decimal, Precision = 18, Scale = 2)]
                 public decimal Price { get; set; }
             }
             """;
