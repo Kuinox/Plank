@@ -37,6 +37,9 @@ Plank.Schema.ParquetColumnAttribute.Precision.set -> void
 Plank.Schema.ParquetColumnAttribute.Scale.get -> int
 Plank.Schema.ParquetColumnAttribute.Scale.set -> void
 *REMOVED*Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0) -> void
+Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0, Plank.Schema.CompressionKind? compression = null, int? compressionLevel = null, Plank.Schema.ParquetBloomFilterOptions? bloomFilter = null) -> void
+Plank.Schema.ColumnOptions.Compression.get -> Plank.Schema.CompressionKind?
+Plank.Schema.ColumnOptions.CompressionLevel.get -> int?
 Plank.Reading.Logical.ParquetColumnChunkMetadata.HasBloomFilter.get -> bool
 Plank.Reading.Logical.ParquetColumnChunkMetadata.OpenBloomFilter() -> Plank.Reading.Physical.ParquetBloomFilter!
 Plank.Reading.Physical.ParquetBloomFilter
@@ -61,7 +64,6 @@ Plank.Reading.Physical.ParquetColumnChunkInfo.BloomFilterOffset.init -> void
 Plank.Reading.Physical.ParquetColumnChunkInfo.HasBloomFilter.get -> bool
 Plank.Reading.Physical.ParquetFileReader.OpenBloomFilter(int rowGroupOrdinal, int columnOrdinal) -> Plank.Reading.Physical.ParquetBloomFilter!
 Plank.Schema.ColumnOptions.BloomFilter.get -> Plank.Schema.ParquetBloomFilterOptions?
-Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0, Plank.Schema.ParquetBloomFilterOptions? bloomFilter = null) -> void
 Plank.Schema.ParquetBloomFilterOptions
 Plank.Schema.ParquetBloomFilterOptions.ExpectedDistinctValueCount.get -> uint?
 Plank.Schema.ParquetBloomFilterOptions.ExpectedDistinctValueCount.init -> void

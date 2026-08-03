@@ -1,5 +1,4 @@
 using Plank.Schema;
-using ZstdSharp;
 
 namespace Plank.Writing;
 
@@ -61,13 +60,8 @@ public sealed class ParquetWriterOptions
         if (TargetDataPageSizeBytes > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(TargetDataPageSizeBytes), TargetDataPageSizeBytes,
                 $"Target data page size must be <= {int.MaxValue}.");
-        if (!Enum.IsDefined(Compression))
-            throw new ArgumentOutOfRangeException(nameof(Compression), Compression,
-                "Compression must be a defined CompressionKind value.");
-        if (Compression == CompressionKind.Lz4Legacy)
-            throw new NotSupportedException(
-                "Writing deprecated legacy LZ4 is not supported. Use Lz4 (LZ4_RAW) instead.");
-        ValidateCompressionLevel();
+        _ = CompressionConfiguration.ResolveLevel(Compression, CompressionLevel,
+            nameof(Compression), nameof(CompressionLevel));
         ArgumentNullException.ThrowIfNull(KeyValueMetadata);
         for (var i = 0; i < KeyValueMetadata.Count; i++)
         {
@@ -76,33 +70,5 @@ public sealed class ParquetWriterOptions
                 throw new ArgumentException($"Key-value metadata entry {i} must have a non-empty key.",
                     nameof(KeyValueMetadata));
         }
-    }
-
-    internal int GetCompressionLevel()
-        => CompressionLevel ?? Compression switch
-        {
-            CompressionKind.Gzip => 1,
-            CompressionKind.Zstd => 1,
-            CompressionKind.Lz4 => 0,
-            CompressionKind.Brotli => 4,
-            _ => 0
-        };
-
-    void ValidateCompressionLevel()
-    {
-        if (CompressionLevel is not { } level)
-            return;
-
-        var valid = Compression switch
-        {
-            CompressionKind.Gzip => level is >= 0 and <= 9,
-            CompressionKind.Zstd => level >= Compressor.MinCompressionLevel && level <= Compressor.MaxCompressionLevel,
-            CompressionKind.Lz4 => level is 0 or >= 3 and <= 12,
-            CompressionKind.Brotli => level is >= 0 and <= 11,
-            _ => false
-        };
-        if (!valid)
-            throw new ArgumentOutOfRangeException(nameof(CompressionLevel), level,
-                $"Compression level '{level}' is not supported for '{Compression}'.");
     }
 }
