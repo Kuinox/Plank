@@ -12,13 +12,15 @@ static class ParquetMetadataThriftWriter
 
     internal static void WriteDataPageHeaderV2(ref BufferWriter destination, uint rowCount, uint valueCount, uint nullCount,
         uint repetitionLevelsByteLength, uint definitionLevelsByteLength, EncodingKind encoding, int uncompressedPageSize,
-        int compressedPageSize, bool isCompressed)
+        int compressedPageSize, bool isCompressed, uint? crc)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
         writer.WriteFieldI32(1, (int)PageType.DataPageV2);
         writer.WriteFieldI32(2, uncompressedPageSize);
         writer.WriteFieldI32(3, compressedPageSize);
+        if (crc.HasValue)
+            writer.WriteFieldI32(4, unchecked((int)crc.Value));
         writer.WriteFieldHeader(8, CompactType.Struct);
 
         var previousData = writer.BeginStruct();
@@ -35,13 +37,15 @@ static class ParquetMetadataThriftWriter
     }
 
     internal static void WriteDataPageHeaderV1(ref BufferWriter destination, uint valueCount, EncodingKind encoding,
-        int uncompressedPageSize, int compressedPageSize)
+        int uncompressedPageSize, int compressedPageSize, uint? crc)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
         writer.WriteFieldI32(1, (int)PageType.DataPage);
         writer.WriteFieldI32(2, uncompressedPageSize);
         writer.WriteFieldI32(3, compressedPageSize);
+        if (crc.HasValue)
+            writer.WriteFieldI32(4, unchecked((int)crc.Value));
         writer.WriteFieldHeader(5, CompactType.Struct);
 
         var previousData = writer.BeginStruct();
@@ -55,13 +59,15 @@ static class ParquetMetadataThriftWriter
     }
 
     internal static void WriteDictionaryPageHeader(ref BufferWriter destination, uint valueCount, int uncompressedPageSize,
-        int compressedPageSize)
+        int compressedPageSize, uint? crc)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
         writer.WriteFieldI32(1, (int)PageType.DictionaryPage);
         writer.WriteFieldI32(2, uncompressedPageSize);
         writer.WriteFieldI32(3, compressedPageSize);
+        if (crc.HasValue)
+            writer.WriteFieldI32(4, unchecked((int)crc.Value));
         writer.WriteFieldHeader(7, CompactType.Struct);
 
         var previousDictionary = writer.BeginStruct();
@@ -118,6 +124,35 @@ static class ParquetMetadataThriftWriter
             writer.WriteFieldI64(3, locations[i].FirstRowIndex);
             writer.EndStruct(previousLocation);
         }
+        writer.EndStruct(previous);
+    }
+
+    internal static void WriteBloomFilterHeader(ref BufferWriter destination, int bitsetByteLength)
+    {
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        writer.WriteFieldI32(1, bitsetByteLength);
+
+        writer.WriteFieldHeader(2, CompactType.Struct);
+        var previousAlgorithm = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.Struct);
+        var previousSplitBlock = writer.BeginStruct();
+        writer.EndStruct(previousSplitBlock);
+        writer.EndStruct(previousAlgorithm);
+
+        writer.WriteFieldHeader(3, CompactType.Struct);
+        var previousHash = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.Struct);
+        var previousXxHash = writer.BeginStruct();
+        writer.EndStruct(previousXxHash);
+        writer.EndStruct(previousHash);
+
+        writer.WriteFieldHeader(4, CompactType.Struct);
+        var previousCompression = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.Struct);
+        var previousUncompressed = writer.BeginStruct();
+        writer.EndStruct(previousUncompressed);
+        writer.EndStruct(previousCompression);
         writer.EndStruct(previous);
     }
 
@@ -543,6 +578,11 @@ static class ParquetMetadataThriftWriter
         if (metadata.HasDictionaryPage)
             writer.WriteFieldI64(11, metadata.DictionaryPageOffset);
         WriteStatistics(ref writer, metadata.Statistics);
+        if (metadata.BloomFilterLength > 0)
+        {
+            writer.WriteFieldI64(14, metadata.BloomFilterOffset);
+            writer.WriteFieldI32(15, checked((int)metadata.BloomFilterLength));
+        }
         writer.EndStruct(previousMetadata);
 
         if (metadata.OffsetIndexLength > 0)

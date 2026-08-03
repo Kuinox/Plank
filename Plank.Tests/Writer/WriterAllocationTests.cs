@@ -179,7 +179,8 @@ internal sealed class WriterAllocationTests
         using var stream = new MemoryStream(capacity: 1024 * 1024);
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
-            Compression = compression
+            Compression = compression,
+            WritePageCrc = true
         });
         var serialized = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         var values = CreateValues(4096);

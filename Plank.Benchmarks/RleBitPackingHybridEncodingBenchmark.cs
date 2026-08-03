@@ -4,7 +4,7 @@ using Plank.Writing.Encoding;
 
 namespace Plank.Benchmarks;
 
-[Config(typeof(RleBitPackingHybridEncodingBenchmarkConfig))]
+[Config(typeof(OptimizationBenchmarkConfig))]
 public class RleBitPackingHybridEncodingBenchmark
 {
     int[][] _inputs = [];
