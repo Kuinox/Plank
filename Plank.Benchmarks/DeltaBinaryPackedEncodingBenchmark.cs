@@ -9,6 +9,7 @@ namespace Plank.Benchmarks;
 public class DeltaBinaryPackedEncodingBenchmark
 {
     int[] _values = [];
+    long[] _longValues = [];
     BufferWriter _writer;
 
     [Params(4_096, 65_536)]
@@ -21,6 +22,7 @@ public class DeltaBinaryPackedEncodingBenchmark
     public void GlobalSetup()
     {
         _values = CreateValues(Rows, Distribution);
+        _longValues = CreateLongValues(Rows, Distribution);
         _writer = new BufferWriter(
             DefaultParquetBufferPool.Shared,
             chunkSizeBytes: checked((uint)(Rows * sizeof(long) + 1024)),
@@ -39,6 +41,14 @@ public class DeltaBinaryPackedEncodingBenchmark
         return _writer.WrittenLength;
     }
 
+    [Benchmark]
+    public int WriteInt64()
+    {
+        _writer.Reset();
+        DeltaBinaryPackedEncoding.WriteInt64(_longValues, ref _writer);
+        return _writer.WrittenLength;
+    }
+
     static int[] CreateValues(int count, string distribution)
     {
         var values = new int[count];
@@ -53,6 +63,36 @@ public class DeltaBinaryPackedEncodingBenchmark
             case "small-random-delta":
             {
                 var current = 0;
+                for (var i = 0; i < values.Length; i++)
+                {
+                    current = unchecked(current + random.Next(-16, 17));
+                    values[i] = current;
+                }
+
+                return values;
+            }
+            case "random":
+                random.NextBytes(System.Runtime.InteropServices.MemoryMarshal.AsBytes(values.AsSpan()));
+                return values;
+            default:
+                throw new InvalidOperationException($"Unknown distribution '{distribution}'.");
+        }
+    }
+
+    static long[] CreateLongValues(int count, string distribution)
+    {
+        var values = new long[count];
+        var random = new Random(42);
+
+        switch (distribution)
+        {
+            case "constant-delta":
+                for (var i = 0; i < values.Length; i++)
+                    values[i] = i * 7L;
+                return values;
+            case "small-random-delta":
+            {
+                long current = 0;
                 for (var i = 0; i < values.Length; i++)
                 {
                     current = unchecked(current + random.Next(-16, 17));
