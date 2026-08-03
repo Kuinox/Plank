@@ -18,6 +18,7 @@ static class PageHeaderReader
         var nullCount = 0U;
         var rowCount = 0U;
         var isCompressed = false;
+        uint? crc = null;
         var repetitionLevelEncoding = EncodingKind.Rle;
         var definitionLevelEncoding = EncodingKind.Rle;
         var statistics = default(EncodedStatistics);
@@ -36,6 +37,9 @@ static class PageHeaderReader
                     break;
                 case 3:
                     compressedPageSize = reader.ReadI32AsU32();
+                    break;
+                case 4:
+                    crc = unchecked((uint)reader.ReadI32());
                     break;
                 case 5:
                     (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding, statistics)
@@ -57,7 +61,7 @@ static class PageHeaderReader
 
         return new PageHeader(type, uncompressedPageSize, compressedPageSize, valueCount, encoding, reader.Offset,
             repetitionLevelsByteLength, definitionLevelsByteLength, nullCount, isCompressed, repetitionLevelEncoding,
-            definitionLevelEncoding, rowCount, statistics);
+            definitionLevelEncoding, rowCount, statistics, crc);
     }
 
     static (uint ValueCount, EncodingKind Encoding, EncodingKind RepetitionLevelEncoding,

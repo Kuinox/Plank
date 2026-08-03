@@ -13,9 +13,11 @@ public sealed class RowGroupWriter
     BufferWriter _compressedValues;
     BufferWriter _columnIndexBuffer;
     BufferWriter _offsetIndexBuffer;
+    BufferWriter _bloomFilterHeaderBuffer;
     ColumnStatistics[][] _pageStatisticsByColumn;
     bool[][] _nullPagesByColumn;
     PageLocation[][] _pageLocationsByColumn;
+    readonly ISerializedColumn?[] _serializedColumnsByOrdinal;
     uint _nextColumnOrdinal;
     uint? _rowCount;
     Dictionary<int, RepeatedRowShape>? _mapKeyShapes;
@@ -29,6 +31,9 @@ public sealed class RowGroupWriter
         _pageStatisticsByColumn = writer.ColumnCount == 0 ? [] : new ColumnStatistics[writer.ColumnCount][];
         _nullPagesByColumn = writer.ColumnCount == 0 ? [] : new bool[writer.ColumnCount][];
         _pageLocationsByColumn = writer.ColumnCount == 0 ? [] : new PageLocation[writer.ColumnCount][];
+        _serializedColumnsByOrdinal = HasBloomFilters(writer.ColumnsByOrdinal)
+            ? new ISerializedColumn?[writer.ColumnCount]
+            : [];
         ResetForNewRowGroup();
     }
 
@@ -129,9 +134,10 @@ public sealed class RowGroupWriter
                     }
 
                     var dictionaryValueCount = page.DictionaryValueCount;
+                    var crc = GetPageCrc(writeCompressedContent, ref page);
                     page.Header.Reset();
                     ParquetMetadataThriftWriter.WriteDictionaryPageHeader(ref page.Header, dictionaryValueCount,
-                        pageContentSize, compressedContentSize);
+                        pageContentSize, compressedContentSize, crc);
                     break;
                 }
                 case PageKind.DataV1:
@@ -190,10 +196,11 @@ public sealed class RowGroupWriter
                         dataEncoding = pageEncoding;
                     }
 
+                    var crc = GetPageCrc(writeCompressedContent, ref page);
                     page.Header.Reset();
                     ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, dataPageRowCount,
                         dataPageValueCount, dataPageNullCount, repetitionLevelsByteLength, definitionLevelsByteLength,
-                        pageEncoding, uncompressedPageHeaderSize, compressedContentSize, writeCompressedContent);
+                        pageEncoding, uncompressedPageHeaderSize, compressedContentSize, writeCompressedContent, crc);
                     break;
                 }
                 default:
@@ -243,22 +250,33 @@ public sealed class RowGroupWriter
         columnMetadata.ColumnIndexLength = 0;
         columnMetadata.OffsetIndexOffset = 0;
         columnMetadata.OffsetIndexLength = 0;
+        columnMetadata.BloomFilterOffset = 0;
+        columnMetadata.BloomFilterLength = 0;
         columnMetadata.PageIndex = writePageIndexes
             ? new PageIndex(pageStatistics, nullPages, pageLocations, dataPageCount)
             : default;
 
+        if (!state.BloomFilterBitset.IsEmpty)
+            _serializedColumnsByOrdinal[columnOrdinal] = state;
         state.Consume();
         _nextColumnOrdinal++;
         if (_nextColumnOrdinal != (uint)_writer.ColumnCount)
             return;
 
+        WriteBloomFilters(_writer.OpenRowGroupColumnMetadata);
         if (writePageIndexes)
             WritePageIndexes(_writer.OpenRowGroupColumnMetadata);
         ParquetMetadataThriftWriter.WriteRowGroup(ref _writer.SerializedRowGroupsMetadata, _writer.ColumnsByOrdinal,
             _writer.ColumnPathsByOrdinal, _writer.OpenRowGroupColumnMetadata, _rowCount.GetValueOrDefault());
         _writer.CompleteOpenRowGroup(_rowCount.GetValueOrDefault());
+        Array.Clear(_serializedColumnsByOrdinal);
         _mapKeyShapes?.Clear();
     }
+
+    uint? GetPageCrc(bool writeCompressedContent, ref Page page)
+        => !_writer.WritePageCrc
+            ? null
+            : writeCompressedContent ? _compressedContent.ComputeCrc32() : page.Content.ComputeCrc32();
 
     void ValidateMapRowShapes(RepeatedRowShape[]? shapes, int columnOrdinal)
     {
@@ -380,6 +398,42 @@ public sealed class RowGroupWriter
         return true;
     }
 
+    void WriteBloomFilters(Span<ColumnChunkMetadata> metadata)
+    {
+        if (_serializedColumnsByOrdinal.Length == 0)
+            return;
+
+        for (var i = 0; i < metadata.Length; i++)
+        {
+            if (_writer.ColumnsByOrdinal[i].Options.BloomFilter is null)
+                continue;
+            var serialized = _serializedColumnsByOrdinal[i]
+                ?? throw new InvalidOperationException($"Column {i} did not retain its Bloom-filter state.");
+            var bitset = serialized.BloomFilterBitset;
+
+            if (!_bloomFilterHeaderBuffer.IsInitialized)
+                _bloomFilterHeaderBuffer = _writer.BufferWriters.CreateMetadataBufferWriter();
+            _bloomFilterHeaderBuffer.Reset();
+            ParquetMetadataThriftWriter.WriteBloomFilterHeader(ref _bloomFilterHeaderBuffer, bitset.Length);
+
+            ref var chunk = ref metadata[i];
+            chunk.BloomFilterOffset = _writer.FileOffset;
+            chunk.BloomFilterLength = checked((uint)(_bloomFilterHeaderBuffer.WrittenLength + bitset.Length));
+            _writer.WriteBuffer(ref _bloomFilterHeaderBuffer);
+            _writer.WriteBytes(bitset);
+            serialized.CompleteBloomFilterWrite();
+            _serializedColumnsByOrdinal[i] = null;
+        }
+    }
+
+    static bool HasBloomFilters(Column[] columns)
+    {
+        for (var i = 0; i < columns.Length; i++)
+            if (columns[i].Options.BloomFilter is not null)
+                return true;
+        return false;
+    }
+
     internal void ReleaseBuffers()
     {
         _compressedContent.Dispose();
@@ -387,5 +441,6 @@ public sealed class RowGroupWriter
         _compressedValues.Dispose();
         _columnIndexBuffer.Dispose();
         _offsetIndexBuffer.Dispose();
+        _bloomFilterHeaderBuffer.Dispose();
     }
 }
