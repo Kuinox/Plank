@@ -4,6 +4,7 @@ using ParquetSharp;
 using Plank.Schema;
 using Plank.Writing;
 using PlankSchema = Plank.Schema.ParquetSchema;
+using PlankDataPageVersion = Plank.Writing.ParquetDataPageVersion;
 
 namespace Plank.Tests.E2E;
 
@@ -177,9 +178,13 @@ internal sealed class ListInteropE2ETests
     }
 
     [Test]
-    public async Task OptionalListOfOptionalInt32WithSnappyIsReadableByBothImplementations()
+    [Arguments(PlankDataPageVersion.V1)]
+    [Arguments(PlankDataPageVersion.V2)]
+    public async Task OptionalListOfOptionalInt32WithSnappyIsReadableByBothImplementations(
+        PlankDataPageVersion dataPageVersion)
     {
-        var path = Path.Combine(Path.GetTempPath(), $"plank-list-optional-elements-snappy-{Guid.NewGuid():N}.parquet");
+        var path = Path.Combine(Path.GetTempPath(),
+            $"plank-list-optional-elements-snappy-{dataPageVersion}-{Guid.NewGuid():N}.parquet");
         int?[][] rows =
         [
             new int?[] { 1, null, 2 },
@@ -199,7 +204,8 @@ internal sealed class ListInteropE2ETests
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
-                    Compression = CompressionKind.Snappy
+                    Compression = CompressionKind.Snappy,
+                    DataPageVersion = dataPageVersion
                 });
                 var rowGroup = writer.StartRowGroup();
                 var serialized = rowGroup.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);

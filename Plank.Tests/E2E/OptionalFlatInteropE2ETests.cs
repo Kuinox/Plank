@@ -4,6 +4,7 @@ using ParquetSharp;
 using Plank.Schema;
 using Plank.Writing;
 using PlankLogicalType = Plank.Schema.LogicalType;
+using PlankDataPageVersion = Plank.Writing.ParquetDataPageVersion;
 using PlankParquetSchema = Plank.Schema.ParquetSchema;
 
 namespace Plank.Tests.E2E;
@@ -19,7 +20,7 @@ internal sealed class OptionalFlatInteropE2ETests
 
         try
         {
-            WriteOptionalFlatFile(path, expectedIds, expectedNames);
+            WriteOptionalFlatFile(path, expectedIds, expectedNames, new ParquetWriterOptions());
             AssertParquetSharp(path, expectedIds, expectedNames);
             await AssertParquetNetAsync(path, expectedIds, expectedNames).ConfigureAwait(false);
         }
@@ -30,16 +31,43 @@ internal sealed class OptionalFlatInteropE2ETests
         }
     }
 
-    static void WriteOptionalFlatFile(string path, int?[] ids, string[] names)
+    [Test]
+    [Arguments(PlankDataPageVersion.V1, CompressionKind.None)]
+    [Arguments(PlankDataPageVersion.V1, CompressionKind.Gzip)]
+    [Arguments(PlankDataPageVersion.V2, CompressionKind.Gzip)]
+    public async Task OptionalFlatNullsRoundTripWithSelectedDataPageVersion(
+        PlankDataPageVersion dataPageVersion, CompressionKind compression)
     {
-        var schema = new PlankParquetSchema([
-            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional)),
-            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray, new ColumnOptions(ParquetRepetition.Optional),
-                new PlankLogicalType.String())
-        ]);
+        var path = Path.Combine(Path.GetTempPath(),
+            $"plank-optional-flat-{dataPageVersion}-{compression}-{Guid.NewGuid():N}.parquet");
+        int?[] expectedIds = [10, null, 30, null, 50];
+        string[] expectedNames = ["alpha", "beta", "gamma", "delta", "epsilon"];
+        var schema = CreateSchema();
+
+        try
+        {
+            WriteOptionalFlatFile(path, expectedIds, expectedNames, new ParquetWriterOptions
+            {
+                Compression = compression,
+                DataPageVersion = dataPageVersion
+            });
+            AssertPlank(path, schema, expectedIds);
+            AssertParquetSharp(path, expectedIds, expectedNames);
+            await AssertParquetNetAsync(path, expectedIds, expectedNames).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    static void WriteOptionalFlatFile(string path, int?[] ids, string[] names, ParquetWriterOptions options)
+    {
+        var schema = CreateSchema();
 
         using var stream = File.Create(path);
-        var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
+        var writer = schema.CreateWriter(stream, options);
         var idColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
         var nameColumn = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[1]);
         var rowGroup = writer.StartRowGroup();
@@ -48,6 +76,24 @@ internal sealed class OptionalFlatInteropE2ETests
         rowGroup.Write(idColumn);
         rowGroup.Write(nameColumn);
         writer.CloseFile();
+    }
+
+    static PlankParquetSchema CreateSchema()
+        => new([
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional)),
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray, new ColumnOptions(ParquetRepetition.Optional),
+                new PlankLogicalType.String())
+        ]);
+
+    static void AssertPlank(string path, PlankParquetSchema schema, IReadOnlyList<int?> expectedIds)
+    {
+        using var stream = File.OpenRead(path);
+        using var reader = schema.CreateReader(stream);
+        var actualIds = new List<int?>();
+        foreach (var buffer in reader.RowGroups[0].Column<int?>(schema.LeafColumns[0]))
+            actualIds.AddRange(buffer.Values);
+
+        AssertNullableValues(actualIds, expectedIds, "Plank id");
     }
 
     static void AssertParquetSharp(string path, IReadOnlyList<int?> expectedIds, IReadOnlyList<string> expectedNames)
