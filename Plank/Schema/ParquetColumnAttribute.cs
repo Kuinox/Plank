@@ -37,6 +37,9 @@ public sealed class ParquetColumnAttribute : Attribute
 
     public int Scale { get; set; }
 
+    /// <summary>Gets or sets the parameterless custom converter type for this property.</summary>
+    public Type? Converter { get; set; }
+
     /// <summary>Gets or sets whether generated row writers emit a Bloom filter for this column.</summary>
     public bool BloomFilter { get; set; }
 

@@ -11,6 +11,7 @@ abstract class RowApiColumnReadState : IDisposable
 
         Descriptor = descriptor;
         PropertyName = descriptor.PropertyName;
+        Definition = descriptor.Column;
         Column = descriptor.Column.Column;
         Ordinal = -1;
         Projected = false;
@@ -21,6 +22,8 @@ abstract class RowApiColumnReadState : IDisposable
     internal readonly RowApiColumnDescriptor Descriptor;
 
     internal readonly string PropertyName;
+
+    internal readonly LeafColumn Definition;
 
     internal readonly Column Column;
 

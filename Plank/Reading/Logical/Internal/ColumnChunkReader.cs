@@ -20,7 +20,7 @@ static class ColumnChunkReader
         if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
             return false;
 
-        var physicalType = GetPhysicalDecodeType<T>();
+        var physicalType = GetPhysicalDecodeType<T>(column);
         var decoded = TryDecodeDictionaryByPhysicalType(header, payload, column, physicalType,
             ref state, bufferPool);
         if (decoded)
@@ -63,6 +63,8 @@ static class ColumnChunkReader
             return TryDecodeDictionaryIntoNative<T, DateTimeOffset>(header, payload, column, ref state, bufferPool);
         if (physicalType == typeof(TimeOnly))
             return TryDecodeDictionaryIntoNative<T, TimeOnly>(header, payload, column, ref state, bufferPool);
+        if (physicalType == typeof(Guid))
+            return TryDecodeDictionaryIntoNative<T, Guid>(header, payload, column, ref state, bufferPool);
         return false;
     }
 
@@ -267,9 +269,10 @@ static class ColumnChunkReader
             return TryDecodeBinaryDataPage(header, payload, column, rowCount, ref state, bufferPool,
                 optional: true, out buffer);
 
-        var physicalType = GetPhysicalDecodeType<T>();
+        var physicalType = GetPhysicalDecodeType<T>(column);
+        var converter = column.Converter;
         if (header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2) ||
-            physicalType == typeof(T) ||
+            (converter is null ? physicalType == typeof(T) : !converter.IsNullableValueType(typeof(T))) ||
             RuntimeHelpers.IsReferenceOrContainsReferences<T>())
             return false;
         if (header.ValueCount > rowCount)
@@ -378,6 +381,9 @@ static class ColumnChunkReader
         if (physicalType == typeof(TimeOnly))
             return TryDecodeNullableValues<T, TimeOnly>(payload, definitionPayload, valueCount, physicalCount,
                 column, encoding, definitionLevelEncoding, ref state, bufferPool);
+        if (physicalType == typeof(Guid))
+            return TryDecodeNullableValues<T, Guid>(payload, definitionPayload, valueCount, physicalCount,
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
         return false;
     }
 
@@ -387,7 +393,10 @@ static class ColumnChunkReader
         IParquetBufferPool bufferPool)
         where TValue : struct
     {
-        if (typeof(T) != typeof(TValue?))
+        var converter = column.Converter;
+        var converted = converter is not null && converter.PhysicalType == typeof(TValue) &&
+            converter.IsNullableValueType(typeof(T));
+        if (!converted && typeof(T) != typeof(TValue?))
             return false;
 
         var definitionByteLength = checked(valueCount * sizeof(int));
@@ -417,6 +426,13 @@ static class ColumnChunkReader
         }
 
         var destination = state.GetValues<T>(valueCount, bufferPool);
+        if (converted)
+        {
+            converter!.ConvertNullableFromPhysical(MemoryMarshal.AsBytes(physicalValues), definitions,
+                AsBytes(destination), physicalCount);
+            return true;
+        }
+
         var nullableDestination = Unsafe.As<Span<T>, Span<TValue?>>(ref destination);
         var physicalIndex = 0;
         for (var i = 0; i < definitions.Length; i++)
@@ -437,9 +453,13 @@ static class ColumnChunkReader
             return TryDecodeBinaryDataPage(header, payload, column, rowCount, ref state, bufferPool,
                 optional: false, out buffer);
 
+        var converter = column.Converter;
         if (header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2) ||
             column.Options.Repetition == ParquetRepetition.Repeated ||
-            RuntimeHelpers.IsReferenceOrContainsReferences<T>() || GetPhysicalDecodeType<T>() != typeof(T))
+            RuntimeHelpers.IsReferenceOrContainsReferences<T>() ||
+            (converter is null
+                ? GetPhysicalDecodeType<T>() != typeof(T)
+                : !converter.SupportsValueType(typeof(T)) || converter.IsNullableValueType(typeof(T))))
             return false;
 
         if (header.ValueCount > rowCount)
@@ -466,6 +486,10 @@ static class ColumnChunkReader
         }
 
         var valueCount = checked((int)header.ValueCount);
+        if (converter is not null)
+            return TryDecodeConvertedRequiredByPhysicalType(dataPayload, valueCount, column, header.Encoding,
+                converter.PhysicalType, converter, ref state, bufferPool, out buffer);
+
         var destination = state.GetValues<T>(valueCount, bufferPool);
         if (header.Encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
         {
@@ -479,6 +503,86 @@ static class ColumnChunkReader
             return false;
         }
 
+        buffer = state.CreateNativeBuffer(valueCount);
+        return true;
+    }
+
+    static bool TryDecodeConvertedRequiredByPhysicalType<T>(ReadOnlySpan<byte> payload, int valueCount,
+        Column column, EncodingKind encoding, Type physicalType, ParquetValueConverter converter,
+        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool, out ColumnBuffer<T> buffer)
+    {
+        if (physicalType == typeof(int))
+            return TryDecodeConvertedRequired<T, int>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(long))
+            return TryDecodeConvertedRequired<T, long>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(bool))
+            return TryDecodeConvertedRequired<T, bool>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(float))
+            return TryDecodeConvertedRequired<T, float>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(double))
+            return TryDecodeConvertedRequired<T, double>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(byte))
+            return TryDecodeConvertedRequired<T, byte>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(ushort))
+            return TryDecodeConvertedRequired<T, ushort>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(uint))
+            return TryDecodeConvertedRequired<T, uint>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(ulong))
+            return TryDecodeConvertedRequired<T, ulong>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(DateOnly))
+            return TryDecodeConvertedRequired<T, DateOnly>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(DateTime))
+            return TryDecodeConvertedRequired<T, DateTime>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(DateTimeOffset))
+            return TryDecodeConvertedRequired<T, DateTimeOffset>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(TimeOnly))
+            return TryDecodeConvertedRequired<T, TimeOnly>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+        if (physicalType == typeof(Guid))
+            return TryDecodeConvertedRequired<T, Guid>(payload, valueCount, column, encoding, converter,
+                ref state, bufferPool, out buffer);
+
+        buffer = default;
+        return false;
+    }
+
+    static bool TryDecodeConvertedRequired<T, TPhysical>(ReadOnlySpan<byte> payload, int valueCount,
+        Column column, EncodingKind encoding, ParquetValueConverter converter, ref ColumnReadBuffers<T> state,
+        IParquetBufferPool bufferPool, out ColumnBuffer<T> buffer)
+        where TPhysical : struct
+    {
+        var physicalValues = MemoryMarshal.Cast<byte, TPhysical>(
+            state.GetScratch(checked(valueCount * Unsafe.SizeOf<TPhysical>()), bufferPool));
+        if (encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
+        {
+            if (!state.HasDictionary)
+            {
+                buffer = default;
+                return false;
+            }
+            DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)valueCount),
+                state.GetDictionary<TPhysical>(), physicalValues);
+        }
+        else if (!TryDecodeValuesIntoNative(payload, column, checked((uint)valueCount), encoding, physicalValues))
+        {
+            buffer = default;
+            return false;
+        }
+
+        var destination = state.GetValues<T>(valueCount, bufferPool);
+        converter.ConvertFromPhysical(MemoryMarshal.AsBytes(physicalValues), AsBytes(destination), valueCount);
         buffer = state.CreateNativeBuffer(valueCount);
         return true;
     }
@@ -1027,6 +1131,17 @@ static class ColumnChunkReader
             }
             return true;
         }
+        if (typeof(T) == typeof(Guid) && column.PhysicalType == ParquetPhysicalType.FixedLenByteArray)
+        {
+            var valueLength = GetFixedBinaryLength(column);
+            if (valueLength != 16)
+                return false;
+            GetFixedBinaryPayloadLength(payload, checked((int)valueCount), valueLength);
+            var typed = Unsafe.As<Span<T>, Span<Guid>>(ref destination);
+            for (var i = 0; i < typed.Length; i++)
+                typed[i] = new Guid(payload.Slice(i * valueLength, valueLength), bigEndian: true);
+            return true;
+        }
         if (typeof(T) == typeof(decimal))
         {
             var typed = Unsafe.As<Span<T>, Span<decimal>>(ref destination);
@@ -1136,6 +1251,22 @@ static class ColumnChunkReader
                 DecodeByteStreamSplitInt64(payload, raw);
                 for (var i = typed.Length - 1; i >= 0; i--)
                     typed[i] = DecodeTimestamp(raw[i], column.LogicalType);
+                return true;
+            }
+            case ParquetPhysicalType.FixedLenByteArray when typeof(T) == typeof(Guid):
+            {
+                var valueLength = GetFixedBinaryLength(column);
+                if (valueLength != 16)
+                    return false;
+                GetFixedBinaryPayloadLength(payload, checked((int)valueCount), valueLength);
+                var typed = Unsafe.As<Span<T>, Span<Guid>>(ref destination);
+                Span<byte> guidBytes = stackalloc byte[16];
+                for (var i = 0; i < typed.Length; i++)
+                {
+                    for (var lane = 0; lane < guidBytes.Length; lane++)
+                        guidBytes[lane] = payload[(lane * typed.Length) + i];
+                    typed[i] = new Guid(guidBytes, bigEndian: true);
+                }
                 return true;
             }
             case ParquetPhysicalType.Float when typeof(T) == typeof(float):
@@ -2996,6 +3127,22 @@ static class ColumnChunkReader
             offset += values[i].Length;
         }
         return buffer;
+    }
+
+    static Span<byte> AsBytes<T>(Span<T> values)
+    {
+        if (values.IsEmpty)
+            return [];
+        ref var first = ref Unsafe.As<T, byte>(ref MemoryMarshal.GetReference(values));
+        return MemoryMarshal.CreateSpan(ref first, checked(values.Length * Unsafe.SizeOf<T>()));
+    }
+
+    static Type GetPhysicalDecodeType<T>(Column column)
+    {
+        var converter = column.Converter;
+        if (converter is not null && converter.SupportsValueType(typeof(T)))
+            return converter.PhysicalType;
+        return GetPhysicalDecodeType<T>();
     }
 
     static Type GetPhysicalDecodeType<T>()

@@ -1,4 +1,26 @@
 #nullable enable
+*REMOVED*Plank.Schema.RowSchemaColumn.RowSchemaColumn(string! name, Plank.Schema.ParquetPhysicalType physicalType, System.Type! clrType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> void
+*REMOVED*static Plank.Schema.ColumnDefinition.Leaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.ColumnDefinition!
+*REMOVED*static Plank.Schema.ColumnDefinition.OptionalLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.ColumnDefinition!
+*REMOVED*static Plank.Schema.ColumnDefinition.RequiredLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.ColumnDefinition!
+*REMOVED*static Plank.Schema.RowSchema.Column<TClr>(string! name, Plank.Schema.ParquetPhysicalType physicalType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.RowSchemaColumn!
+abstract Plank.Schema.ParquetValueConverter.PhysicalType.get -> System.Type!
+abstract Plank.Schema.ParquetValueConverter.ValueType.get -> System.Type!
+abstract Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ConvertFromPhysical(TPhysical value) -> TValue
+abstract Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ConvertToPhysical(TValue value) -> TPhysical
+override sealed Plank.Schema.ParquetValueConverter<TValue, TPhysical>.PhysicalType.get -> System.Type!
+override sealed Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ValueType.get -> System.Type!
+Plank.Schema.ColumnDefinition.Converter.get -> Plank.Schema.ParquetValueConverter?
+Plank.Schema.ColumnDefinition.Converter.init -> void
+Plank.Schema.LeafColumn.Converter.get -> Plank.Schema.ParquetValueConverter?
+Plank.Schema.ParquetColumnAttribute.Converter.get -> System.Type?
+Plank.Schema.ParquetColumnAttribute.Converter.set -> void
+Plank.Schema.ParquetValueConverter
+Plank.Schema.ParquetValueConverter.ParquetValueConverter() -> void
+Plank.Schema.ParquetValueConverter<TValue, TPhysical>
+Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ParquetValueConverter() -> void
+Plank.Schema.RowSchemaColumn.Converter.get -> Plank.Schema.ParquetValueConverter?
+Plank.Schema.RowSchemaColumn.RowSchemaColumn(string! name, Plank.Schema.ParquetPhysicalType physicalType, System.Type! clrType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> void
 Plank.Reading.Physical.ParquetFileMetadata.RowGroupSortingColumns(int rowGroupOrdinal) -> System.ReadOnlySpan<Plank.Schema.ParquetSortingColumn>
 Plank.Reading.Physical.ParquetFileMetadata.SortingColumns.get -> System.ReadOnlySpan<Plank.Schema.ParquetSortingColumn>
 Plank.Reading.Physical.ParquetRowGroupInfo.SortingColumnCount.get -> int
@@ -15,17 +37,17 @@ Plank.Schema.ParquetSortingColumn.NullsFirst.get -> bool
 Plank.Schema.ParquetSortingColumn.ParquetSortingColumn() -> void
 Plank.Schema.ParquetSortingColumn.ParquetSortingColumn(int columnOrdinal, bool descending = false, bool nullsFirst = false) -> void
 Plank.Schema.RowSchemaColumn.FieldId.get -> int?
-Plank.Schema.RowSchemaColumn.RowSchemaColumn(string! name, Plank.Schema.ParquetPhysicalType physicalType, System.Type! clrType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> void
+Plank.Schema.RowSchemaColumn.RowSchemaColumn(string! name, Plank.Schema.ParquetPhysicalType physicalType, System.Type! clrType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> void
 Plank.Writing.ParquetWriterOptions.SortingColumns.get -> System.Collections.Immutable.ImmutableArray<Plank.Schema.ParquetSortingColumn>
 Plank.Writing.ParquetWriterOptions.SortingColumns.init -> void
-static Plank.Schema.ColumnDefinition.Leaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.ColumnDefinition.Leaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> Plank.Schema.ColumnDefinition!
 static Plank.Schema.ColumnDefinition.List(string! name, Plank.Schema.ColumnDefinition! element, int fieldId, Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Required) -> Plank.Schema.ColumnDefinition!
 static Plank.Schema.ColumnDefinition.Map(string! name, Plank.Schema.ColumnDefinition! key, Plank.Schema.ColumnDefinition! value, int fieldId, Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Required) -> Plank.Schema.ColumnDefinition!
 static Plank.Schema.ColumnDefinition.OptionalGroup(string! name, int fieldId, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
-static Plank.Schema.ColumnDefinition.OptionalLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.ColumnDefinition.OptionalLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> Plank.Schema.ColumnDefinition!
 static Plank.Schema.ColumnDefinition.RequiredGroup(string! name, int fieldId, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
-static Plank.Schema.ColumnDefinition.RequiredLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.ColumnDefinition!
-static Plank.Schema.RowSchema.Column<TClr>(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.RowSchemaColumn!
+static Plank.Schema.ColumnDefinition.RequiredLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.RowSchema.Column<TClr>(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> Plank.Schema.RowSchemaColumn!
 Plank.Reading.Physical.LogicalTypeInfo.Algorithm.get -> Plank.Schema.EdgeInterpolationAlgorithm?
 Plank.Reading.Physical.LogicalTypeInfo.HasCrs.get -> bool
 Plank.Reading.Physical.LogicalTypeInfo.SpecificationVersion.get -> sbyte?
@@ -208,3 +230,9 @@ Plank.RowApi.RowReaderOptions.VerifyPageCrc.get -> bool
 Plank.RowApi.RowReaderOptions.VerifyPageCrc.init -> void
 Plank.Reading.PageHeader.Crc.get -> uint?
 Plank.Reading.PageHeader.Crc.init -> void
+static Plank.Schema.ColumnDefinition.Leaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.ColumnDefinition.OptionalLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.ColumnDefinition.RequiredLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> Plank.Schema.ColumnDefinition!
+static Plank.Schema.RowSchema.Column<TClr>(string! name, Plank.Schema.ParquetPhysicalType physicalType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> Plank.Schema.RowSchemaColumn!
+virtual Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ConvertFromPhysical(System.ReadOnlySpan<TPhysical> source, System.Span<TValue> destination) -> void
+virtual Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ConvertToPhysical(System.ReadOnlySpan<TValue> source, System.Span<TPhysical> destination) -> void

@@ -26,36 +26,47 @@ public sealed record ColumnDefinition
         => Group(name, ParquetRepetition.Optional, logicalType, children, fieldId: null);
 
     public static ColumnDefinition RequiredLeaf(string name, ParquetPhysicalType physicalType,
-        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null)
-        => CreateLeaf(name, ParquetRepetition.Required, physicalType, options, logicalType, pageStrategy, fieldId: null);
+        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null,
+        ParquetValueConverter? converter = null)
+        => CreateLeaf(name, ParquetRepetition.Required, physicalType, options, logicalType, pageStrategy,
+            fieldId: null, converter);
 
     public static ColumnDefinition RequiredLeaf(string name, ParquetPhysicalType physicalType, int fieldId,
-        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null)
-        => CreateLeaf(name, ParquetRepetition.Required, physicalType, options, logicalType, pageStrategy, fieldId);
+        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null,
+        ParquetValueConverter? converter = null)
+        => CreateLeaf(name, ParquetRepetition.Required, physicalType, options, logicalType, pageStrategy, fieldId,
+            converter);
 
     public static ColumnDefinition OptionalLeaf(string name, ParquetPhysicalType physicalType,
-        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null)
-        => CreateLeaf(name, ParquetRepetition.Optional, physicalType, options, logicalType, pageStrategy, fieldId: null);
+        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null,
+        ParquetValueConverter? converter = null)
+        => CreateLeaf(name, ParquetRepetition.Optional, physicalType, options, logicalType, pageStrategy,
+            fieldId: null, converter);
 
     public static ColumnDefinition OptionalLeaf(string name, ParquetPhysicalType physicalType, int fieldId,
-        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null)
-        => CreateLeaf(name, ParquetRepetition.Optional, physicalType, options, logicalType, pageStrategy, fieldId);
+        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null,
+        ParquetValueConverter? converter = null)
+        => CreateLeaf(name, ParquetRepetition.Optional, physicalType, options, logicalType, pageStrategy, fieldId,
+            converter);
 
     public static ColumnDefinition Leaf(string name, ParquetPhysicalType physicalType,
-        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null)
-        => LeafCore(name, physicalType, options, logicalType, pageStrategy, fieldId: null);
+        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null,
+        ParquetValueConverter? converter = null)
+        => LeafCore(name, physicalType, options, logicalType, pageStrategy, fieldId: null, converter);
 
     public static ColumnDefinition Leaf(string name, ParquetPhysicalType physicalType, int fieldId,
-        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null)
-        => LeafCore(name, physicalType, options, logicalType, pageStrategy, fieldId);
+        ColumnOptions? options = null, LogicalType? logicalType = null, IPageStrategy? pageStrategy = null,
+        ParquetValueConverter? converter = null)
+        => LeafCore(name, physicalType, options, logicalType, pageStrategy, fieldId, converter);
 
     static ColumnDefinition LeafCore(string name, ParquetPhysicalType physicalType,
-        ColumnOptions? options, LogicalType? logicalType, IPageStrategy? pageStrategy, int? fieldId)
+        ColumnOptions? options, LogicalType? logicalType, IPageStrategy? pageStrategy, int? fieldId,
+        ParquetValueConverter? converter)
     {
         var repetition = options?.Repetition is { } configured and not ParquetRepetition.Unspecified
             ? configured
             : ParquetRepetition.Required;
-        return CreateLeaf(name, repetition, physicalType, options, logicalType, pageStrategy, fieldId);
+        return CreateLeaf(name, repetition, physicalType, options, logicalType, pageStrategy, fieldId, converter);
     }
 
     public static ColumnDefinition List(string name, ColumnDefinition element,
@@ -112,6 +123,9 @@ public sealed record ColumnDefinition
 
     public IPageStrategy? PageStrategy { get; init; }
 
+    /// <summary>Gets the custom CLR value converter for this leaf, if one is declared.</summary>
+    public ParquetValueConverter? Converter { get; init; }
+
     public ImmutableArray<ColumnDefinition> Children { get; init; } = [];
 
     static ColumnDefinition Group(string name, ParquetRepetition repetition, LogicalType? logicalType,
@@ -132,7 +146,8 @@ public sealed record ColumnDefinition
     }
 
     static ColumnDefinition CreateLeaf(string name, ParquetRepetition repetition, ParquetPhysicalType physicalType,
-        ColumnOptions? options, LogicalType? logicalType, IPageStrategy? pageStrategy, int? fieldId)
+        ColumnOptions? options, LogicalType? logicalType, IPageStrategy? pageStrategy,
+        int? fieldId, ParquetValueConverter? converter)
     {
         var normalizedOptions = options ?? ColumnOptions.Default;
         if (normalizedOptions.Repetition != repetition)
@@ -140,6 +155,7 @@ public sealed record ColumnDefinition
                 normalizedOptions.Compression, normalizedOptions.CompressionLevel, normalizedOptions.BloomFilter);
         EncodingCompatibility.Validate(name, physicalType, normalizedOptions);
         ValidateLogicalType(name, physicalType, normalizedOptions, logicalType);
+        ValidateConverter(name, physicalType, normalizedOptions, converter);
 
         return new()
         {
@@ -151,8 +167,38 @@ public sealed record ColumnDefinition
             FieldId = fieldId,
             Options = normalizedOptions,
             PageStrategy = pageStrategy,
+            Converter = converter,
             Children = []
         };
+    }
+
+    internal static void ValidateConverter(string name, ParquetPhysicalType physicalType, ColumnOptions options,
+        ParquetValueConverter? converter)
+    {
+        if (converter is null)
+            return;
+        if (options.Repetition == ParquetRepetition.Repeated)
+            throw new ArgumentException(
+                $"Custom converters do not support repeated column '{name}'.", nameof(converter));
+        if (Nullable.GetUnderlyingType(converter.PhysicalType) is not null)
+            throw new ArgumentException(
+                $"Converter physical type '{converter.PhysicalType}' must be non-nullable for column '{name}'.",
+                nameof(converter));
+
+        var resolution = ParquetTypeMap.ResolvePhysicalType(converter.PhysicalType);
+        if (!resolution.IsSuccess)
+            throw new ArgumentException(
+                $"Converter for column '{name}' uses unsupported physical CLR type '{converter.PhysicalType}'.",
+                nameof(converter));
+        if (resolution.PhysicalType != physicalType)
+            throw new ArgumentException(
+                $"Converter physical CLR type '{converter.PhysicalType}' maps to '{resolution.PhysicalType}', " +
+                $"not column physical type '{physicalType}' for column '{name}'.", nameof(converter));
+        if (physicalType == ParquetPhysicalType.FixedLenByteArray &&
+            converter.PhysicalType == typeof(Guid) && options.TypeLength != 16)
+            throw new ArgumentException(
+                $"Converter physical CLR type '{typeof(Guid)}' requires a 16-byte fixed-length column '{name}'.",
+                nameof(converter));
     }
 
     internal static void ValidateLogicalType(string name, ParquetPhysicalType physicalType, ColumnOptions options,

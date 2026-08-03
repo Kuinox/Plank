@@ -46,6 +46,10 @@ public sealed class LeafColumn
     public LogicalType? LogicalType
         => Column.LogicalType;
 
+    /// <summary>Gets the custom CLR value converter, if one is declared.</summary>
+    public ParquetValueConverter? Converter
+        => Column.Converter;
+
     /// <summary>Gets the schema field ID, if one is declared.</summary>
     public int? FieldId
         => Column.FieldId;
