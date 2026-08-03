@@ -22,8 +22,6 @@ Plank.Reading.Logical.NestedRowGroupColumn<T>.Metadata.get -> Plank.Reading.Logi
 Plank.Reading.Logical.NestedRowGroupColumn<T>.NestedRowGroupColumn() -> void
 Plank.Reading.Logical.RowGroup.NestedColumn<T>(int columnOrdinal) -> Plank.Reading.Logical.NestedRowGroupColumn<T>
 Plank.Reading.Logical.RowGroup.NestedColumn<T>(Plank.Schema.LeafColumn! column) -> Plank.Reading.Logical.NestedRowGroupColumn<T>
-Plank.Writing.ParquetWriterOptions.CompressionLevel.get -> int?
-Plank.Writing.ParquetWriterOptions.CompressionLevel.init -> void
 Plank.Schema.LeafColumn.MaxDefinitionLevel.get -> int
 Plank.Schema.LeafColumn.MaxRepetitionLevel.get -> int
 Plank.RowApi.RowApiCollectionLevel
@@ -35,3 +33,83 @@ Plank.RowApi.RowApiCollectionLevel.RowApiCollectionLevel(int repetitionLevel, in
 Plank.RowApi.RowApiNestedColumnDescriptor<TShape, TElement>
 Plank.RowApi.RowApiNestedColumnDescriptor<TShape, TElement>.RowApiNestedColumnDescriptor(string! propertyName, Plank.Schema.LeafColumn! column, params Plank.RowApi.RowApiCollectionLevel[]! collectionLevels) -> void
 Plank.RowApi.RowReaderCore.GetCurrentNested<TShape, TElement>(Plank.RowApi.RowApiNestedColumnDescriptor<TShape, TElement>! column) -> TShape
+Plank.Reading.Physical.ParquetFileMetadata.CreatedByUtf8.get -> System.ReadOnlySpan<byte>
+Plank.Reading.Physical.ParquetFileMetadata.HasCreatedBy.get -> bool
+Plank.Reading.Physical.ParquetFileMetadata.KeyValueMetadata.get -> System.ReadOnlySpan<Plank.Reading.Physical.ParquetKeyValueMetadataInfo>
+Plank.Reading.Physical.ParquetFileMetadata.KeyValueMetadataCount.get -> int
+Plank.Reading.Physical.ParquetFileMetadata.KeyValueMetadataKeyUtf8(int metadataOrdinal) -> System.ReadOnlySpan<byte>
+Plank.Reading.Physical.ParquetFileMetadata.KeyValueMetadataValueUtf8(int metadataOrdinal) -> System.ReadOnlySpan<byte>
+Plank.Reading.Physical.ParquetKeyValueMetadataInfo
+Plank.Reading.Physical.ParquetKeyValueMetadataInfo.HasValue.get -> bool
+Plank.Reading.Physical.ParquetKeyValueMetadataInfo.KeyLength.get -> int
+Plank.Reading.Physical.ParquetKeyValueMetadataInfo.ParquetKeyValueMetadataInfo() -> void
+Plank.Reading.Physical.ParquetKeyValueMetadataInfo.ValueLength.get -> int
+Plank.Writing.ParquetKeyValueMetadata
+Plank.Writing.ParquetKeyValueMetadata.Key.get -> string!
+Plank.Writing.ParquetKeyValueMetadata.Key.init -> void
+Plank.Writing.ParquetKeyValueMetadata.ParquetKeyValueMetadata() -> void
+Plank.Writing.ParquetKeyValueMetadata.ParquetKeyValueMetadata(string! Key, string? Value) -> void
+Plank.Writing.ParquetKeyValueMetadata.Value.get -> string?
+Plank.Writing.ParquetKeyValueMetadata.Value.init -> void
+Plank.Writing.ParquetWriterOptions.CreatedBy.get -> string?
+Plank.Writing.ParquetWriterOptions.CreatedBy.init -> void
+Plank.Writing.ParquetWriterOptions.KeyValueMetadata.get -> System.Collections.Generic.IReadOnlyList<Plank.Writing.ParquetKeyValueMetadata>!
+Plank.Writing.ParquetWriterOptions.KeyValueMetadata.init -> void
+Plank.Schema.ParquetColumnAttribute.Precision.get -> int
+Plank.Schema.ParquetColumnAttribute.Precision.set -> void
+Plank.Schema.ParquetColumnAttribute.Scale.get -> int
+Plank.Schema.ParquetColumnAttribute.Scale.set -> void
+*REMOVED*Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0) -> void
+Plank.Reading.Logical.ParquetColumnChunkMetadata.HasBloomFilter.get -> bool
+Plank.Reading.Logical.ParquetColumnChunkMetadata.OpenBloomFilter() -> Plank.Reading.Physical.ParquetBloomFilter!
+Plank.Reading.Physical.ParquetBloomFilter
+Plank.Reading.Physical.ParquetBloomFilter.Bitset.get -> System.ReadOnlySpan<byte>
+Plank.Reading.Physical.ParquetBloomFilter.BitsetSizeBytes.get -> int
+Plank.Reading.Physical.ParquetBloomFilter.Dispose() -> void
+Plank.Reading.Physical.ParquetBloomFilter.MightContain(byte value) -> bool
+Plank.Reading.Physical.ParquetBloomFilter.MightContain(double value) -> bool
+Plank.Reading.Physical.ParquetBloomFilter.MightContain(float value) -> bool
+Plank.Reading.Physical.ParquetBloomFilter.MightContain(System.Guid value) -> bool
+Plank.Reading.Physical.ParquetBloomFilter.MightContain(System.ReadOnlySpan<byte> value) -> bool
+Plank.Reading.Physical.ParquetBloomFilter.MightContain(int value) -> bool
+Plank.Reading.Physical.ParquetBloomFilter.MightContain(long value) -> bool
+Plank.Reading.Physical.ParquetBloomFilter.MightContain(uint value) -> bool
+Plank.Reading.Physical.ParquetBloomFilter.MightContain(ulong value) -> bool
+Plank.Reading.Physical.ParquetBloomFilter.MightContain(ushort value) -> bool
+Plank.Reading.Physical.ParquetBloomFilter.MightContainHash(ulong hash) -> bool
+Plank.Reading.Physical.ParquetColumnChunkInfo.BloomFilterLength.get -> uint
+Plank.Reading.Physical.ParquetColumnChunkInfo.BloomFilterLength.init -> void
+Plank.Reading.Physical.ParquetColumnChunkInfo.BloomFilterOffset.get -> ulong
+Plank.Reading.Physical.ParquetColumnChunkInfo.BloomFilterOffset.init -> void
+Plank.Reading.Physical.ParquetColumnChunkInfo.HasBloomFilter.get -> bool
+Plank.Reading.Physical.ParquetFileReader.OpenBloomFilter(int rowGroupOrdinal, int columnOrdinal) -> Plank.Reading.Physical.ParquetBloomFilter!
+Plank.Schema.ColumnOptions.BloomFilter.get -> Plank.Schema.ParquetBloomFilterOptions?
+Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0, Plank.Schema.ParquetBloomFilterOptions? bloomFilter = null) -> void
+Plank.Schema.ParquetBloomFilterOptions
+Plank.Schema.ParquetBloomFilterOptions.ExpectedDistinctValueCount.get -> uint?
+Plank.Schema.ParquetBloomFilterOptions.ExpectedDistinctValueCount.init -> void
+Plank.Schema.ParquetBloomFilterOptions.FalsePositiveProbability.get -> double
+Plank.Schema.ParquetBloomFilterOptions.FalsePositiveProbability.init -> void
+Plank.Schema.ParquetBloomFilterOptions.MaximumBytes.get -> uint
+Plank.Schema.ParquetBloomFilterOptions.MaximumBytes.init -> void
+Plank.Schema.ParquetColumnAttribute.BloomFilter.get -> bool
+Plank.Schema.ParquetColumnAttribute.BloomFilter.set -> void
+Plank.Schema.ParquetColumnAttribute.BloomFilterExpectedDistinctValueCount.get -> uint
+Plank.Schema.ParquetColumnAttribute.BloomFilterExpectedDistinctValueCount.set -> void
+Plank.Schema.ParquetColumnAttribute.BloomFilterFalsePositiveProbability.get -> double
+Plank.Schema.ParquetColumnAttribute.BloomFilterFalsePositiveProbability.set -> void
+Plank.Schema.ParquetColumnAttribute.BloomFilterMaximumBytes.get -> uint
+Plank.Schema.ParquetColumnAttribute.BloomFilterMaximumBytes.set -> void
+static readonly Plank.Schema.ParquetBloomFilterOptions.Default -> Plank.Schema.ParquetBloomFilterOptions!
+Plank.Writing.ParquetWriterOptions.CompressionLevel.get -> int?
+Plank.Writing.ParquetWriterOptions.CompressionLevel.init -> void
+Plank.Writing.ParquetWriterOptions.WritePageCrc.get -> bool
+Plank.Writing.ParquetWriterOptions.WritePageCrc.init -> void
+Plank.Reading.Physical.ParquetFileReaderOptions.VerifyPageCrc.get -> bool
+Plank.Reading.Physical.ParquetFileReaderOptions.VerifyPageCrc.init -> void
+Plank.Reading.Logical.ParquetReaderOptions.VerifyPageCrc.get -> bool
+Plank.Reading.Logical.ParquetReaderOptions.VerifyPageCrc.init -> void
+Plank.RowApi.RowReaderOptions.VerifyPageCrc.get -> bool
+Plank.RowApi.RowReaderOptions.VerifyPageCrc.init -> void
+Plank.Reading.PageHeader.Crc.get -> uint?
+Plank.Reading.PageHeader.Crc.init -> void

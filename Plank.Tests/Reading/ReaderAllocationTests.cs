@@ -106,11 +106,11 @@ internal sealed class ReaderAllocationTests
             ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32,
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
         ]);
-        var path = CreateFile(schema, CreateValues(4096));
+        var path = CreateFile(schema, CreateValues(4096), CompressionKind.None, writePageCrc: true);
         try
         {
             using var stream = File.OpenRead(path);
-            using var reader = new ParquetFileReader();
+            using var reader = new ParquetFileReader(new ParquetFileReaderOptions { VerifyPageCrc = true });
             for (var i = 0; i < 8; i++)
             {
                 reader.Reset(stream);
@@ -166,6 +166,44 @@ internal sealed class ReaderAllocationTests
             if (allocated != 0)
                 throw new InvalidOperationException(
                     $"Expected zero allocations for steady-state column buffer enumeration but saw {allocated} bytes.");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public void DecimalColumnBufferEnumerationDoesNotAllocateAfterWarmup()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.Leaf("Value", ParquetPhysicalType.FixedLenByteArray,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.ByteStreamSplit), typeLength: 8),
+                new LogicalType.Decimal(18, 2))
+        ]);
+        var values = new decimal[4096];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = (i - 2048) / 100m;
+        var path = CreateFile(schema, values);
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = schema.CreateReader(stream);
+            var rowGroup = reader.RowGroups[0];
+            for (var i = 0; i < 8; i++)
+                _ = SumDecimalValues(rowGroup, schema.LeafColumns[0]);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            _ = SumDecimalValues(rowGroup, schema.LeafColumns[0]);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            if (allocated != 0)
+                throw new InvalidOperationException(
+                    $"Expected zero allocations for steady-state decimal enumeration but saw {allocated} bytes.");
         }
         finally
         {
@@ -530,13 +568,15 @@ internal sealed class ReaderAllocationTests
     static string CreateFile(ParquetSchema schema, int[] values)
         => CreateFile(schema, values, CompressionKind.None);
 
-    static string CreateFile(ParquetSchema schema, int[] values, CompressionKind compression)
+    static string CreateFile(ParquetSchema schema, int[] values, CompressionKind compression,
+        bool writePageCrc = false)
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-reader-alloc-{Guid.NewGuid():N}.parquet");
         using var stream = File.Create(path);
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
-            Compression = compression
+            Compression = compression,
+            WritePageCrc = writePageCrc
         });
         var serialized = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         serialized.Serialize(values);
@@ -554,6 +594,21 @@ internal sealed class ReaderAllocationTests
             Compression = CompressionKind.None
         });
         var serialized = writer.CreateSerializedColumn<bool>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return path;
+    }
+
+    static string CreateFile(ParquetSchema schema, decimal[] values)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-reader-decimal-alloc-{Guid.NewGuid():N}.parquet");
+        using var stream = File.Create(path);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None
+        });
+        var serialized = writer.CreateSerializedColumn<decimal>(schema.LeafColumns[0]);
         serialized.Serialize(values);
         writer.StartRowGroup().Write(serialized);
         writer.CloseFile();
@@ -592,6 +647,15 @@ internal sealed class ReaderAllocationTests
                 if (value)
                     count++;
         return count;
+    }
+
+    static decimal SumDecimalValues(RowGroup rowGroup, LeafColumn column)
+    {
+        var sum = 0m;
+        foreach (var buffer in rowGroup.Column<decimal>(column))
+            foreach (var value in buffer.Values)
+                sum += value;
+        return sum;
     }
 
     static int SumByteLengths(RowGroup rowGroup, LeafColumn column)

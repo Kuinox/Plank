@@ -76,6 +76,9 @@ static class ParquetTypeMap
             case var t when t == typeof(double):
                 physicalType = ParquetPhysicalType.Double;
                 return true;
+            case var decimalType when decimalType == typeof(decimal):
+                physicalType = ParquetPhysicalType.FixedLenByteArray;
+                return true;
             case var t when t == typeof(byte[]):
             case var stringType when stringType == typeof(string):
                 physicalType = ParquetPhysicalType.ByteArray;
