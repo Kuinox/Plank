@@ -123,6 +123,15 @@ Plank.Reading.Logical.RowGroup.NestedColumn<T>(int columnOrdinal) -> Plank.Readi
 Plank.Reading.Logical.RowGroup.NestedColumn<T>(Plank.Schema.LeafColumn! column) -> Plank.Reading.Logical.NestedRowGroupColumn<T>
 Plank.Schema.LeafColumn.MaxDefinitionLevel.get -> int
 Plank.Schema.LeafColumn.MaxRepetitionLevel.get -> int
+Plank.RowApi.RowApiCollectionLevel
+Plank.RowApi.RowApiCollectionLevel.DefinedDefinitionLevel.get -> int
+Plank.RowApi.RowApiCollectionLevel.ElementDefinitionLevel.get -> int
+Plank.RowApi.RowApiCollectionLevel.RepetitionLevel.get -> int
+Plank.RowApi.RowApiCollectionLevel.RowApiCollectionLevel() -> void
+Plank.RowApi.RowApiCollectionLevel.RowApiCollectionLevel(int repetitionLevel, int definedDefinitionLevel, int elementDefinitionLevel) -> void
+Plank.RowApi.RowApiNestedColumnDescriptor<TShape, TElement>
+Plank.RowApi.RowApiNestedColumnDescriptor<TShape, TElement>.RowApiNestedColumnDescriptor(string! propertyName, Plank.Schema.LeafColumn! column, params Plank.RowApi.RowApiCollectionLevel[]! collectionLevels) -> void
+Plank.RowApi.RowReaderCore.GetCurrentNested<TShape, TElement>(Plank.RowApi.RowApiNestedColumnDescriptor<TShape, TElement>! column) -> TShape
 Plank.Schema.CompressionKind.Lz4Legacy = 6 -> Plank.Schema.CompressionKind
 Plank.Reading.Physical.ParquetFileMetadata.CreatedByUtf8.get -> System.ReadOnlySpan<byte>
 Plank.Reading.Physical.ParquetFileMetadata.HasCreatedBy.get -> bool

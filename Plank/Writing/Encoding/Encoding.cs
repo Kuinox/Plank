@@ -1419,10 +1419,6 @@ static class Encoding
         where TElement : notnull
         where TRow : notnull
     {
-        if (leafProjectionInfo.ElementOptional)
-            throw new NotSupportedException(
-                $"Column '{column.Name}' nested repeated optional elements are not implemented yet.");
-
         var allowsNullRow = leafProjectionInfo.ListOptional;
         var rowDefinedLevel = allowsNullRow ? 1 : 0;
         var repLevels = new List<int>(rows.Length * 2);
@@ -1432,8 +1428,8 @@ static class Encoding
         {
             object? row = rows[rowIndex];
             TraverseNestedRepeatedRow(row, depth: 1, repForFirst: 0, currentDefinitionLevel: rowDefinedLevel,
-                allowsNullRow, leafProjectionInfo.MaxRepetitionLevel, leafProjectionInfo.MaxDefinitionLevel, repLevels, defLevels,
-                values, column.Name);
+                allowsNullRow, leafProjectionInfo.ElementOptional, leafProjectionInfo.MaxRepetitionLevel,
+                leafProjectionInfo.MaxDefinitionLevel, repLevels, defLevels, values, column.Name);
         }
 
         var repBitWidth = GetBitWidth(leafProjectionInfo.MaxRepetitionLevel);
@@ -1446,8 +1442,8 @@ static class Encoding
             dataEncoding);
 
         static void TraverseNestedRepeatedRow(object? node, int depth, int repForFirst, int currentDefinitionLevel,
-            bool allowNullNode, int maxRepetitionLevel, int maxDefinitionLevel, List<int> repLevels, List<int> defLevels,
-            List<TElement> values, string columnName)
+            bool allowNullNode, bool elementOptional, int maxRepetitionLevel, int maxDefinitionLevel,
+            List<int> repLevels, List<int> defLevels, List<TElement> values, string columnName)
         {
             if (node is null)
             {
@@ -1477,8 +1473,14 @@ static class Encoding
                 if (depth == maxRepetitionLevel)
                 {
                     if (element is not TElement value)
-                        throw new InvalidOperationException(
-                            $"Column '{columnName}' has incompatible leaf value type '{element?.GetType()}'.");
+                    {
+                        if (!elementOptional || element is not null)
+                            throw new InvalidOperationException(
+                                $"Column '{columnName}' has incompatible leaf value type '{element?.GetType()}'.");
+                        repLevels.Add(rep);
+                        defLevels.Add(maxDefinitionLevel - 1);
+                        continue;
+                    }
                     repLevels.Add(rep);
                     defLevels.Add(maxDefinitionLevel);
                     values.Add(value);
@@ -1486,7 +1488,7 @@ static class Encoding
                 }
 
                 TraverseNestedRepeatedRow(element, depth + 1, rep, currentDefinitionLevel + 1, allowNullNode: false,
-                    maxRepetitionLevel, maxDefinitionLevel, repLevels, defLevels, values, columnName);
+                    elementOptional, maxRepetitionLevel, maxDefinitionLevel, repLevels, defLevels, values, columnName);
             }
         }
     }
