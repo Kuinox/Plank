@@ -24,6 +24,7 @@ static class ParquetDecompressor
                 CompressionKind.Gzip => GzipInflater.Decompress(payload, destination),
                 CompressionKind.Brotli => DecompressBrotliInto(payload, destination),
                 CompressionKind.Lz4 => DecompressLz4Into(payload, destination),
+                CompressionKind.Lz4Legacy => Lz4LegacyDecompressor.Decompress(payload, destination),
                 CompressionKind.Zstd => DecompressZstdInto(payload, destination),
                 CompressionKind.Snappy => DecompressSnappyInto(payload, destination),
                 _ => throw new NotSupportedException($"Compression '{compression}' is not supported.")

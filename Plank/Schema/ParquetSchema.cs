@@ -44,6 +44,9 @@ public sealed record ParquetSchema
     public ParquetWriter CreateWriter(Stream stream, ParquetWriterOptions? options = null)
         => new(stream, this, options ?? ParquetWriterOptions.Default);
 
+    public ParquetWriter CreateAppender(Stream stream, ParquetAppendOptions? options = null)
+        => new(stream, this, options ?? ParquetAppendOptions.Default);
+
     internal ImmutableArray<ImmutableArray<string>> LeafPaths { get; }
 
     internal ImmutableArray<LeafProjectionInfo> LeafProjectionInfos { get; }
@@ -120,7 +123,7 @@ public sealed record ParquetSchema
                     var options = node.Options ?? ColumnOptions.Default;
                     if (options.Repetition != repetition)
                         options = new ColumnOptions(repetition, options.Encodings, options.TypeLength,
-                            options.BloomFilter);
+                            options.Compression, options.CompressionLevel, options.BloomFilter);
                     var path = pathBuffer.ToArray().ToImmutableArray();
                     var columnName = string.Join(".", path);
                     columnsBuilder.Add(new Column(columnName, node.PhysicalType.Value, options, node.LogicalType,

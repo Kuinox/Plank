@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
+using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing.PageStrategy;
 using Plank.Writing.Thrift;
+using TextEncoding = System.Text.Encoding;
 
 namespace Plank.Writing;
 
@@ -12,16 +14,15 @@ public sealed class ParquetWriter
     Stream _stream = null!;
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
-    readonly string? _createdBy;
-    readonly ParquetKeyValueMetadata[] _keyValueMetadata;
+    string? _createdBy;
+    ParquetKeyValueMetadata[] _keyValueMetadata;
     internal readonly Column[] ColumnsByOrdinal;
     readonly PageStrategyContext[] _pageStrategyContextsByOrdinal;
     internal readonly string[][] ColumnPathsByOrdinal;
     internal readonly LeafProjectionInfo[] ColumnProjectionInfosByOrdinal;
     internal readonly int ColumnCount;
     internal readonly BufferWriterFactory BufferWriters;
-    internal readonly CompressionKind Compression;
-    internal readonly int CompressionLevel;
+    internal readonly ResolvedCompression[] ColumnCompressionsByOrdinal;
     internal readonly bool WritePageIndexes;
     internal readonly bool WritePageCrc;
     internal readonly CompressionContext CompressionContext;
@@ -33,10 +34,27 @@ public sealed class ParquetWriter
     internal long FileOffset;
     int _rowGroupCount;
     long _totalRowCount;
+    LatestRowGroupValues? _latestRowGroupValues;
+    byte[]? _latestRowGroupMetadata;
+    long _latestRowGroupOffset;
+    long _originalFooterOffset;
+    uint _latestRowCount;
+    bool _replacingLatestRowGroup;
     bool _rowGroupOpen;
     bool _streamDisposed;
 
     internal ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options)
+        : this(stream, schema, options, appendOptions: null)
+    {
+    }
+
+    internal ParquetWriter(Stream stream, ParquetSchema schema, ParquetAppendOptions options)
+        : this(stream, schema, options.WriterOptions, options)
+    {
+    }
+
+    ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options,
+        ParquetAppendOptions? appendOptions)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(schema);
@@ -44,9 +62,12 @@ public sealed class ParquetWriter
 
         _schema = schema;
         _options = options;
-        _options.Validate();
-        _createdBy = options.CreatedBy;
-        _keyValueMetadata = options.KeyValueMetadata.Count == 0 ? [] : options.KeyValueMetadata.ToArray();
+        if (appendOptions is null)
+            _options.Validate();
+        else
+            appendOptions.Validate();
+        _createdBy = null;
+        _keyValueMetadata = [];
         ColumnsByOrdinal = _schema.Columns.IsDefault ? [] : _schema.Columns.ToArray();
         ColumnPathsByOrdinal = _schema.LeafPaths.IsDefault || _schema.LeafPaths.Length == 0
             ? ColumnsByOrdinal.Select(static c => new[] { c.Name }).ToArray()
@@ -65,8 +86,7 @@ public sealed class ParquetWriter
             _options.TargetDataPageSizeBytes);
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
             _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
-        Compression = _options.Compression;
-        CompressionLevel = _options.GetCompressionLevel();
+        ColumnCompressionsByOrdinal = ResolveColumnCompressions(ColumnsByOrdinal, _options);
         WritePageIndexes = _options.WritePageIndexes;
         WritePageCrc = _options.WritePageCrc;
         CompressionContext = new CompressionContext(BufferWriters);
@@ -76,7 +96,24 @@ public sealed class ParquetWriter
         SerializedRowGroupsMetadata = BufferWriters.CreateMetadataBufferWriter();
         SerializedFileMetadata = BufferWriters.CreateMetadataBufferWriter();
         FileOffset = 0;
-        OpenFile(stream);
+        if (appendOptions is null)
+        {
+            _createdBy = options.CreatedBy;
+            _keyValueMetadata = SnapshotMetadata(options.KeyValueMetadata);
+            OpenFile(stream);
+        }
+        else
+        {
+            try
+            {
+                OpenAppendFile(stream, appendOptions);
+            }
+            catch
+            {
+                ReleaseBuffers();
+                throw;
+            }
+        }
     }
 
     public uint RowApiMaxParallelism
@@ -84,7 +121,9 @@ public sealed class ParquetWriter
 
     public SerializedColumn<T> CreateSerializedColumn<T>(LeafColumn column)
     {
-        var serialized = new SerializedColumn<T>(this, column, _options.InitialPageCapacity);
+        var ordinal = GetColumnOrdinal(column);
+        var retainedValues = _latestRowGroupValues?.GetValues<T>(checked((int)ordinal));
+        var serialized = new SerializedColumn<T>(this, column, _options.InitialPageCapacity, retainedValues);
         _serializedColumns.Add(serialized);
         return serialized;
     }
@@ -110,6 +149,8 @@ public sealed class ParquetWriter
         if (_rowGroupCount == int.MaxValue)
             throw new InvalidOperationException($"Cannot write more than {int.MaxValue} row groups to one file.");
 
+        PrepareLatestRowGroupReplacement();
+
         _rowGroupOpen = true;
         if (ColumnCount == 0)
         {
@@ -128,6 +169,7 @@ public sealed class ParquetWriter
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot close the file while a row group is still open.");
 
+        RestoreUnchangedLatestRowGroup();
         WriteFileFooter();
         DisposeCurrentStream();
         ReleaseBuffers();
@@ -182,6 +224,27 @@ public sealed class ParquetWriter
         return result;
     }
 
+    static ResolvedCompression[] ResolveColumnCompressions(Column[] columns, ParquetWriterOptions options)
+    {
+        if (columns.Length == 0)
+            return [];
+
+        var result = new ResolvedCompression[columns.Length];
+        for (var i = 0; i < result.Length; i++)
+        {
+            var columnOptions = columns[i].Options;
+            var compression = columnOptions.Compression ?? options.Compression;
+            var configuredLevel = columnOptions.CompressionLevel;
+            if (!configuredLevel.HasValue && !columnOptions.Compression.HasValue)
+                configuredLevel = options.CompressionLevel;
+            var level = CompressionConfiguration.ResolveLevel(compression, configuredLevel,
+                nameof(ColumnOptions.Compression), nameof(ColumnOptions.CompressionLevel));
+            result[i] = new ResolvedCompression(compression, level);
+        }
+
+        return result;
+    }
+
     internal void WriteBuffer(ref BufferWriter buffer)
     {
         buffer.WriteTo(_stream);
@@ -201,6 +264,9 @@ public sealed class ParquetWriter
         _rowGroupCount = 0;
         _totalRowCount = 0;
         _rowGroupOpen = false;
+        _latestRowGroupValues = null;
+        _latestRowGroupMetadata = null;
+        _replacingLatestRowGroup = false;
         FileOffset = 0;
         if (!SerializedRowGroupsMetadata.IsInitialized)
             SerializedRowGroupsMetadata = BufferWriters.CreateMetadataBufferWriter();
@@ -212,6 +278,118 @@ public sealed class ParquetWriter
             SerializedFileMetadata.Reset();
         WriteFileHeader();
     }
+
+    void OpenAppendFile(Stream stream, ParquetAppendOptions appendOptions)
+    {
+        if (!stream.CanRead || !stream.CanWrite || !stream.CanSeek)
+            throw new ArgumentException("Appending requires a readable, writable, seekable stream.", nameof(stream));
+
+        using var reader = new ParquetReader(_schema, new ParquetReaderOptions
+        {
+            BufferPool = _options.BufferPool,
+            Strict = true
+        });
+        reader.Reset(stream);
+        var metadata = reader.PhysicalReader.Metadata;
+
+        var appendLatest = appendOptions.AppendToLatestRowGroup && metadata.RowGroupCount > 0;
+        var retainedRowGroupCount = metadata.RowGroupCount - (appendLatest ? 1 : 0);
+        if (appendLatest)
+        {
+            var latestOrdinal = metadata.RowGroupCount - 1;
+            var latestPhysical = metadata.RowGroups[latestOrdinal];
+            _latestRowGroupValues = LatestRowGroupValues.Read(reader.RowGroups[latestOrdinal], ColumnsByOrdinal);
+            var latestRelativeOffset = checked((int)(latestPhysical.MetadataOffset - metadata.FooterOffset));
+            _latestRowGroupMetadata = metadata.FooterBytes
+                .Slice(latestRelativeOffset, latestPhysical.MetadataLength).ToArray();
+            _latestRowGroupOffset = checked((long)latestPhysical.ColumnChunkOffset);
+            _originalFooterOffset = checked((long)metadata.FooterOffset);
+            _latestRowCount = checked((uint)latestPhysical.RowCount);
+        }
+
+        SerializedRowGroupsMetadata.Reset();
+        long totalRowCount = 0;
+        for (var i = 0; i < retainedRowGroupCount; i++)
+        {
+            var rowGroup = metadata.RowGroups[i];
+            var relativeOffset = checked((int)(rowGroup.MetadataOffset - metadata.FooterOffset));
+            SerializedRowGroupsMetadata.Write(metadata.FooterBytes.Slice(relativeOffset, rowGroup.MetadataLength));
+            totalRowCount = checked(totalRowCount + checked((long)rowGroup.RowCount));
+        }
+
+        if (appendOptions.PreserveExistingMetadata)
+        {
+            _createdBy = _options.CreatedBy ?? DecodeCreatedBy(metadata);
+            _keyValueMetadata = MergeMetadata(metadata, _options.KeyValueMetadata);
+        }
+        else
+        {
+            _createdBy = _options.CreatedBy;
+            _keyValueMetadata = SnapshotMetadata(_options.KeyValueMetadata);
+        }
+
+        _stream = stream;
+        _streamDisposed = false;
+        _rowGroupCount = retainedRowGroupCount;
+        _totalRowCount = totalRowCount;
+        _rowGroupOpen = false;
+        FileOffset = checked((long)metadata.FooterOffset);
+        stream.Position = FileOffset;
+        stream.SetLength(FileOffset);
+        SerializedFileMetadata.Reset();
+    }
+
+    void PrepareLatestRowGroupReplacement()
+    {
+        if (_latestRowGroupMetadata is null)
+            return;
+
+        _stream.Position = _latestRowGroupOffset;
+        _stream.SetLength(_latestRowGroupOffset);
+        FileOffset = _latestRowGroupOffset;
+        _latestRowGroupMetadata = null;
+        _replacingLatestRowGroup = true;
+    }
+
+    void RestoreUnchangedLatestRowGroup()
+    {
+        if (_latestRowGroupMetadata is not { } metadata)
+            return;
+
+        SerializedRowGroupsMetadata.Write(metadata);
+        _rowGroupCount++;
+        _totalRowCount = checked(_totalRowCount + _latestRowCount);
+        _stream.Position = _originalFooterOffset;
+        _stream.SetLength(_originalFooterOffset);
+        FileOffset = _originalFooterOffset;
+        _latestRowGroupMetadata = null;
+        _latestRowGroupValues = null;
+    }
+
+    static string? DecodeCreatedBy(Reading.Physical.ParquetFileMetadata metadata)
+        => metadata.HasCreatedBy ? TextEncoding.UTF8.GetString(metadata.CreatedByUtf8) : null;
+
+    static ParquetKeyValueMetadata[] MergeMetadata(Reading.Physical.ParquetFileMetadata metadata,
+        IReadOnlyList<ParquetKeyValueMetadata> additions)
+    {
+        if (metadata.KeyValueMetadataCount == 0)
+            return SnapshotMetadata(additions);
+
+        var result = new ParquetKeyValueMetadata[checked(metadata.KeyValueMetadataCount + additions.Count)];
+        for (var i = 0; i < metadata.KeyValueMetadataCount; i++)
+        {
+            var entry = metadata.KeyValueMetadata[i];
+            var key = TextEncoding.UTF8.GetString(metadata.KeyValueMetadataKeyUtf8(i));
+            var value = entry.HasValue ? TextEncoding.UTF8.GetString(metadata.KeyValueMetadataValueUtf8(i)) : null;
+            result[i] = new ParquetKeyValueMetadata(key, value);
+        }
+        for (var i = 0; i < additions.Count; i++)
+            result[metadata.KeyValueMetadataCount + i] = additions[i];
+        return result;
+    }
+
+    static ParquetKeyValueMetadata[] SnapshotMetadata(IReadOnlyList<ParquetKeyValueMetadata> metadata)
+        => metadata.Count == 0 ? [] : metadata.ToArray();
 
     void ReleaseBuffers()
     {
@@ -248,5 +426,10 @@ public sealed class ParquetWriter
         _rowGroupCount++;
         _totalRowCount = checked(_totalRowCount + rowCount);
         _rowGroupOpen = false;
+        if (_replacingLatestRowGroup)
+        {
+            _latestRowGroupValues = null;
+            _replacingLatestRowGroup = false;
+        }
     }
 }
