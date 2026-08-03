@@ -174,6 +174,20 @@ struct BufferWriter : IDisposable
         }
     }
 
+    internal uint ComputeCrc32()
+    {
+        var state = ParquetCrc32.InitialState;
+        if (_segments is not null)
+            for (var i = 0; i < _segmentCount; i++)
+            {
+                var written = _segments[i].Written;
+                if (written != 0)
+                    state = ParquetCrc32.Append(state, _segments[i].Buffer.Span[..written]);
+            }
+
+        return ParquetCrc32.Complete(state);
+    }
+
     internal void Write(ReadOnlySpan<byte> source)
     {
         var remaining = source;

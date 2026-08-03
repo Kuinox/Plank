@@ -17,5 +17,7 @@ internal struct ColumnChunkMetadata
     internal uint ColumnIndexLength;
     internal long OffsetIndexOffset;
     internal uint OffsetIndexLength;
+    internal long BloomFilterOffset;
+    internal uint BloomFilterLength;
     internal PageIndex PageIndex;
 }
