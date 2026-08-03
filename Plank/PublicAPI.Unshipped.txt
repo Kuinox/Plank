@@ -21,6 +21,16 @@ Plank.Schema.ParquetValueConverter<TValue, TPhysical>
 Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ParquetValueConverter() -> void
 Plank.Schema.RowSchemaColumn.Converter.get -> Plank.Schema.ParquetValueConverter?
 Plank.Schema.RowSchemaColumn.RowSchemaColumn(string! name, Plank.Schema.ParquetPhysicalType physicalType, System.Type! clrType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> void
+Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetDataPageVersion.V1 = 1 -> Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetDataPageVersion.V2 = 2 -> Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetFileVersion.V1 = 1 -> Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetFileVersion.V2 = 2 -> Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetWriterOptions.DataPageVersion.get -> Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetWriterOptions.DataPageVersion.init -> void
+Plank.Writing.ParquetWriterOptions.FileVersion.get -> Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetWriterOptions.FileVersion.init -> void
 Plank.Reading.Logical.NestedColumnBuffer<T>
 Plank.Reading.Logical.NestedColumnBuffer<T>.Count.get -> int
 Plank.Reading.Logical.NestedColumnBuffer<T>.DefinitionLevels.get -> System.ReadOnlySpan<int>
