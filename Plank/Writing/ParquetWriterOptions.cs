@@ -27,6 +27,10 @@ public sealed class ParquetWriterOptions
 
     public int? CompressionLevel { get; init; }
 
+    public string? CreatedBy { get; init; }
+
+    public IReadOnlyList<ParquetKeyValueMetadata> KeyValueMetadata { get; init; } = [];
+
     public bool WritePageIndexes { get; init; } = true;
 
     public bool WritePageCrc { get; init; }
@@ -64,6 +68,14 @@ public sealed class ParquetWriterOptions
             throw new NotSupportedException(
                 "Writing deprecated legacy LZ4 is not supported. Use Lz4 (LZ4_RAW) instead.");
         ValidateCompressionLevel();
+        ArgumentNullException.ThrowIfNull(KeyValueMetadata);
+        for (var i = 0; i < KeyValueMetadata.Count; i++)
+        {
+            var entry = KeyValueMetadata[i];
+            if (string.IsNullOrEmpty(entry.Key))
+                throw new ArgumentException($"Key-value metadata entry {i} must have a non-empty key.",
+                    nameof(KeyValueMetadata));
+        }
     }
 
     internal int GetCompressionLevel()
