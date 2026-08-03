@@ -11,6 +11,7 @@ static class ParquetThriftConversions
             1 => CompressionKind.Snappy,
             2 => CompressionKind.Gzip,
             4 => CompressionKind.Brotli,
+            5 => CompressionKind.Lz4Legacy,
             6 => CompressionKind.Zstd,
             7 => CompressionKind.Lz4,
             _ => throw new NotSupportedException($"Compression codec '{compression}' is not supported.")
