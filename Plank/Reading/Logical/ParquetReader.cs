@@ -32,7 +32,8 @@ public sealed class ParquetReader : IDisposable
         _requestedSchema = requestedSchema;
         PhysicalReader = new ParquetFileReader(new ParquetFileReaderOptions
         {
-            BufferPool = readerOptions.BufferPool
+            BufferPool = readerOptions.BufferPool,
+            VerifyPageCrc = readerOptions.VerifyPageCrc
         });
         Schema = new ParquetSchema(System.Collections.Immutable.ImmutableArray<ColumnDefinition>.Empty);
         _footer = InternalParquetFooter.Empty;

@@ -8,6 +8,8 @@ public sealed class ParquetReaderOptions
 
     public bool Strict { get; init; } = true;
 
+    public bool VerifyPageCrc { get; init; }
+
     internal void Validate()
     {
         ArgumentNullException.ThrowIfNull(BufferPool);
