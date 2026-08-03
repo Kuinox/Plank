@@ -88,7 +88,7 @@ public sealed record ColumnDefinition
         var normalizedOptions = options ?? ColumnOptions.Default;
         if (normalizedOptions.Repetition != repetition)
             normalizedOptions = new ColumnOptions(repetition, normalizedOptions.Encodings, normalizedOptions.TypeLength,
-                normalizedOptions.BloomFilter);
+                normalizedOptions.Compression, normalizedOptions.CompressionLevel, normalizedOptions.BloomFilter);
         EncodingCompatibility.Validate(name, physicalType, normalizedOptions);
         ValidateLogicalType(name, physicalType, normalizedOptions, logicalType);
         ValidateConverter(name, physicalType, normalizedOptions, converter);

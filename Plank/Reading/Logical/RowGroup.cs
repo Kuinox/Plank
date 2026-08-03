@@ -41,8 +41,22 @@ public readonly struct RowGroup
         var reader = GetReader();
         reader.ValidateRowGroup(this);
         var columnOrdinal = reader.GetColumnOrdinal(column);
+        ValidateFlatProjection(column);
         ValidatePhysicalType<T>(column.Column);
         return new RowGroupColumn<T>(this, column, columnOrdinal);
+    }
+
+    /// <summary>
+    /// Selects a leaf as a dense value stream accompanied by its repetition and definition levels.
+    /// </summary>
+    public NestedRowGroupColumn<T> NestedColumn<T>(LeafColumn column)
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        var reader = GetReader();
+        reader.ValidateRowGroup(this);
+        var columnOrdinal = reader.GetColumnOrdinal(column);
+        ValidateNestedPhysicalType<T>(column.Column);
+        return new NestedRowGroupColumn<T>(this, column, columnOrdinal);
     }
 
     public RowGroupColumn<T> Column<T>(int columnOrdinal)
@@ -54,8 +68,25 @@ public readonly struct RowGroup
             throw new ArgumentOutOfRangeException(nameof(columnOrdinal), columnOrdinal,
                 "Column ordinal is outside the reader schema.");
         var column = columns[columnOrdinal];
+        ValidateFlatProjection(column);
         ValidatePhysicalType<T>(column.Column);
         return new RowGroupColumn<T>(this, column, columnOrdinal);
+    }
+
+    /// <summary>
+    /// Selects a leaf as a dense value stream accompanied by its repetition and definition levels.
+    /// </summary>
+    public NestedRowGroupColumn<T> NestedColumn<T>(int columnOrdinal)
+    {
+        var reader = GetReader();
+        reader.ValidateRowGroup(this);
+        var columns = reader.Schema.LeafColumns;
+        if ((uint)columnOrdinal >= (uint)columns.Length)
+            throw new ArgumentOutOfRangeException(nameof(columnOrdinal), columnOrdinal,
+                "Column ordinal is outside the reader schema.");
+        var column = columns[columnOrdinal];
+        ValidateNestedPhysicalType<T>(column.Column);
+        return new NestedRowGroupColumn<T>(this, column, columnOrdinal);
     }
 
     public ParquetColumnChunkMetadata GetColumnMetadata(LeafColumn column)
@@ -97,6 +128,28 @@ public readonly struct RowGroup
     internal VariableLengthColumnBufferEnumerable<T> EnumerateVariableLengthBuffers<T>(LeafColumn definition,
         int columnOrdinal)
         => new(EnumerateBuffers<BinaryValueDescriptor>(definition, columnOrdinal));
+
+    internal NestedColumnBufferEnumerable<T> EnumerateNestedBuffers<T>(Column column, int columnOrdinal)
+    {
+        var reader = GetReader();
+        reader.ValidateRowGroup(this);
+        if ((uint)columnOrdinal >= (uint)Metadata.Columns.Length)
+            throw new CorruptParquetException(
+                $"Column '{column.Name}' (ordinal {columnOrdinal}) is not present in this row group ({Metadata.Columns.Length} columns)."
+            );
+
+        var columnChunk = Metadata.Columns[columnOrdinal];
+        var physicalColumnOrdinal = columnChunk.PhysicalColumnOrdinal >= 0
+            ? columnChunk.PhysicalColumnOrdinal
+            : columnOrdinal;
+        return new NestedColumnBufferEnumerable<T>(reader.PhysicalReader, Metadata.RowGroupOrdinal,
+            physicalColumnOrdinal, reader.Schema.LeafColumns[columnOrdinal], reader.Options.BufferPool,
+            Metadata.RowCount, reader.PagePruner);
+    }
+
+    internal VariableLengthNestedColumnBufferEnumerable<T> EnumerateVariableLengthNestedBuffers<T>(Column column,
+        int columnOrdinal)
+        => new(EnumerateNestedBuffers<BinaryValueDescriptor>(column, columnOrdinal));
 
     internal ParquetReader GetReader()
         => Reader ?? throw new InvalidOperationException("The row group is not initialized.");
@@ -176,5 +229,21 @@ public readonly struct RowGroup
             return;
         throw new InvalidOperationException(
             $"Column '{column.Name}' has physical type {column.PhysicalType} and cannot be read as '{typeof(T)}'.");
+    }
+
+    static void ValidateNestedPhysicalType<T>(Column column)
+    {
+        if (Nullable.GetUnderlyingType(typeof(T)) is not null)
+            throw new NotSupportedException(
+                $"Nested column '{column.Name}' exposes nullability through definition levels and must be read as a non-nullable value type.");
+        ValidatePhysicalType<T>(column);
+    }
+
+    static void ValidateFlatProjection(LeafColumn column)
+    {
+        if (column.MaxRepetitionLevel == 0)
+            return;
+        throw new NotSupportedException(
+            $"Column '{column.Path}' contains repeated values; use NestedColumn<T> to read its dense values and levels.");
     }
 }
