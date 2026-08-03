@@ -17,9 +17,13 @@ internal interface ISerializedColumn
 
     ColumnStatistics Statistics { get; }
 
+    ReadOnlySpan<byte> BloomFilterBitset { get; }
+
     bool HasPendingData { get; }
 
     void Consume();
+
+    void CompleteBloomFilterWrite();
 
     void ReleaseBuffers();
 }
@@ -36,6 +40,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     object? _dictionaryState;
     ParquetBuffer _statisticsMinValueBuffer;
     ParquetBuffer _statisticsMaxValueBuffer;
+    ParquetBuffer _bloomFilterBuffer;
+    int _bloomFilterByteLength;
+    bool _bloomFilterRetained;
     internal RepeatedRowShape[]? MapRowShapes;
 
     internal SerializedColumn(ParquetWriter owner, LeafColumn column, uint initialPageCapacity)
@@ -70,10 +77,17 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     ColumnStatistics ISerializedColumn.Statistics => Statistics;
 
+    ReadOnlySpan<byte> ISerializedColumn.BloomFilterBitset
+        => _bloomFilterBuffer.Span[.._bloomFilterByteLength];
+
     bool ISerializedColumn.HasPendingData => HasPendingData;
 
     public void Serialize(ReadOnlySpan<T> values)
     {
+        if (_bloomFilterRetained)
+            throw new InvalidOperationException(
+                "SerializedColumn's Bloom filter is retained by an incomplete row group.");
+
         if (_column.Options.Repetition == ParquetRepetition.Repeated)
         {
             SerializeRepeated(values);
@@ -862,6 +876,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategyContext, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+        _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, values,
+            ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && TryAssignInt32ColumnAndPageStatistics(values))
             return;
 
@@ -888,6 +904,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategyContext, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+        _bloomFilterByteLength = BloomFilterBuilder.BuildOptional(_owner.BufferWriters, _column, values,
+            ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
             AssignOptionalPageStatistics(values);
     }
@@ -909,6 +927,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategyContext, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+        _bloomFilterByteLength = BloomFilterBuilder.BuildOptionalReferences(_owner.BufferWriters, _column, values,
+            ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
             AssignOptionalPageStatistics(values);
     }
@@ -916,9 +936,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void ISerializedColumn.Consume()
         => Consume();
 
+    void ISerializedColumn.CompleteBloomFilterWrite()
+        => _bloomFilterRetained = false;
+
     internal void Consume()
     {
         HasPendingData = false;
+        _bloomFilterRetained = _bloomFilterByteLength != 0;
         MapRowShapes = null;
     }
 
@@ -930,6 +954,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Pages.ReleaseBuffers();
         _statisticsMinValueBuffer.Dispose();
         _statisticsMaxValueBuffer.Dispose();
+        _bloomFilterBuffer.Dispose();
+        _bloomFilterByteLength = 0;
+        _bloomFilterRetained = false;
         Statistics = default;
         HasPendingData = false;
         MapRowShapes = null;

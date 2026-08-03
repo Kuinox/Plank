@@ -16,6 +16,9 @@ internal sealed record Column
         EncodingCompatibility.Validate(this);
         ColumnDefinition.ValidateLogicalType(name, physicalType, logicalType);
         ColumnDefinition.ValidateConverter(name, physicalType, Options, converter);
+        if (Options.BloomFilter is not null && physicalType == ParquetPhysicalType.Boolean)
+            throw new NotSupportedException(
+                $"Column '{name}' cannot use a Bloom filter because Parquet does not define standalone boolean hashing.");
     }
 
     public string Name { get; }

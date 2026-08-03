@@ -62,9 +62,6 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
 
     internal override void Advance()
     {
-        if (!Projected)
-            return;
-
         CurrentIndex++;
         while ((uint)CurrentIndex >= (uint)_buffer.ValueCount)
         {

@@ -184,6 +184,12 @@ public sealed class ParquetWriter
         FileOffset = checked(FileOffset + buffer.WrittenLength);
     }
 
+    internal void WriteBytes(ReadOnlySpan<byte> bytes)
+    {
+        _stream.Write(bytes);
+        FileOffset = checked(FileOffset + bytes.Length);
+    }
+
     void OpenFile(Stream stream)
     {
         _stream = stream;
