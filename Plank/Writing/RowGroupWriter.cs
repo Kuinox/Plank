@@ -319,7 +319,8 @@ public sealed class RowGroupWriter
         if (writePageIndexes)
             WritePageIndexes(_writer.OpenRowGroupColumnMetadata);
         ParquetMetadataThriftWriter.WriteRowGroup(ref _writer.SerializedRowGroupsMetadata, _writer.ColumnsByOrdinal,
-            _writer.ColumnPathsByOrdinal, _writer.OpenRowGroupColumnMetadata, _rowCount.GetValueOrDefault());
+            _writer.ColumnPathsByOrdinal, _writer.OpenRowGroupColumnMetadata, _writer.SortingColumns,
+            _rowCount.GetValueOrDefault());
         _writer.CompleteOpenRowGroup(_rowCount.GetValueOrDefault());
         Array.Clear(_serializedColumnsByOrdinal);
         _mapKeyShapes?.Clear();

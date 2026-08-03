@@ -50,6 +50,10 @@ public sealed class LeafColumn
     public ParquetValueConverter? Converter
         => Column.Converter;
 
+    /// <summary>Gets the schema field ID, if one is declared.</summary>
+    public int? FieldId
+        => Column.FieldId;
+
     /// <summary>Gets the writer page strategy declared for this leaf, if any.</summary>
     public IPageStrategy? PageStrategy
         => Column.PageStrategy;

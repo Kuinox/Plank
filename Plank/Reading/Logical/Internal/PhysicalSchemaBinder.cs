@@ -103,6 +103,7 @@ static class PhysicalSchemaBinder
                 Repetition = node.Repetition,
                 PhysicalType = physicalType,
                 LogicalType = ConvertLogicalType(metadata, node),
+                FieldId = node.FieldId,
                 Options = new ColumnOptions(node.Repetition, typeLength: node.TypeLength),
                 Children = []
             };
@@ -126,6 +127,7 @@ static class PhysicalSchemaBinder
             Name = name,
             Kind = NodeKind.Group,
             Repetition = node.Repetition,
+            FieldId = node.FieldId,
             LogicalType = ConvertLogicalType(metadata, node),
             Children = children.MoveToImmutable()
         };
@@ -161,6 +163,7 @@ static class PhysicalSchemaBinder
                 Repetition = ParquetRepetition.Required,
                 PhysicalType = physicalType,
                 LogicalType = ConvertLogicalType(metadata, repeated),
+                FieldId = repeated.FieldId,
                 Options = new ColumnOptions(ParquetRepetition.Required, typeLength: repeated.TypeLength),
                 Children = []
             };
@@ -186,6 +189,7 @@ static class PhysicalSchemaBinder
             Name = name,
             Kind = NodeKind.List,
             Repetition = node.Repetition,
+            FieldId = node.FieldId,
             Children = [element]
         };
     }
@@ -249,6 +253,7 @@ static class PhysicalSchemaBinder
             Name = name,
             Kind = NodeKind.Map,
             Repetition = node.Repetition,
+            FieldId = node.FieldId,
             Children = children
         };
     }

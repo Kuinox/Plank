@@ -31,6 +31,8 @@ public sealed class ParquetColumnAttribute : Attribute
 
     public LogicalTypeKind LogicalType { get; set; }
 
+    public int FieldId { get; set; }
+
     public int Precision { get; set; }
 
     public int Scale { get; set; }

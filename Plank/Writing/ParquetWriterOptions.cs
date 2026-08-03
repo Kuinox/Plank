@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Plank.Schema;
 
 namespace Plank.Writing;
@@ -36,6 +37,9 @@ public sealed class ParquetWriterOptions
 
     public bool WritePageIndexes { get; init; } = true;
 
+    /// <summary>Gets or initializes the lexicographic sort order declared for every row group written to the file.</summary>
+    public ImmutableArray<ParquetSortingColumn> SortingColumns { get; init; } = [];
+
     public bool WritePageCrc { get; init; }
 
     public uint RowApiMaxParallelism
@@ -64,6 +68,9 @@ public sealed class ParquetWriterOptions
         if (TargetDataPageSizeBytes > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(TargetDataPageSizeBytes), TargetDataPageSizeBytes,
                 $"Target data page size must be <= {int.MaxValue}.");
+        if (SortingColumns.IsDefault)
+            throw new ArgumentException("Sorting columns must not be an uninitialized ImmutableArray.",
+                nameof(SortingColumns));
         if (!Enum.IsDefined(FileVersion))
             throw new ArgumentOutOfRangeException(nameof(FileVersion), FileVersion,
                 "File version must be a defined ParquetFileVersion value.");

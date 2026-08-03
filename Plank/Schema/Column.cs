@@ -5,12 +5,14 @@ namespace Plank.Schema;
 internal sealed record Column
 {
     internal Column(string name, ParquetPhysicalType physicalType, ColumnOptions? options = null,
-        LogicalType? logicalType = null, IPageStrategy? pageStrategy = null, ParquetValueConverter? converter = null)
+        LogicalType? logicalType = null, IPageStrategy? pageStrategy = null, ParquetValueConverter? converter = null,
+        int? fieldId = null)
     {
         Name = name;
         PhysicalType = physicalType;
         Options = options ?? ColumnOptions.Default;
         LogicalType = logicalType;
+        FieldId = fieldId;
         PageStrategy = pageStrategy;
         Converter = converter;
         EncodingCompatibility.Validate(this);
@@ -30,6 +32,8 @@ internal sealed record Column
     public LogicalType? LogicalType { get; }
 
     public ParquetValueConverter? Converter { get; }
+
+    public int? FieldId { get; }
 
     internal IPageStrategy? PageStrategy { get; }
 

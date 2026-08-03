@@ -1,3 +1,5 @@
+using Plank.Schema;
+
 namespace Plank.Reading.Physical;
 
 public sealed class ParquetFileMetadata
@@ -7,9 +9,11 @@ public sealed class ParquetFileMetadata
     internal ParquetBuffer ColumnBuffer;
     internal ParquetBuffer RowGroupBuffer;
     internal ParquetBuffer ColumnChunkBuffer;
-    internal ParquetBuffer KeyValueMetadataBuffer;
+    internal ParquetBuffer SortingColumnBuffer;
     internal int FooterByteCount;
     internal int ColumnChunkCount;
+    internal int SortingColumnCount;
+    internal ParquetBuffer KeyValueMetadataBuffer;
     internal int CreatedByOffset;
     internal int CreatedByLength;
 
@@ -34,6 +38,9 @@ public sealed class ParquetFileMetadata
     public ReadOnlySpan<ParquetColumnChunkInfo> ColumnChunks
         => ParquetBuffer.AsReadOnlySpan<ParquetColumnChunkInfo>(ColumnChunkBuffer, ColumnChunkCount);
 
+    public ReadOnlySpan<ParquetSortingColumn> SortingColumns
+        => ParquetBuffer.AsReadOnlySpan<ParquetSortingColumn>(SortingColumnBuffer, SortingColumnCount);
+
     public ReadOnlySpan<ParquetKeyValueMetadataInfo> KeyValueMetadata
         => ParquetBuffer.AsReadOnlySpan<ParquetKeyValueMetadataInfo>(KeyValueMetadataBuffer,
             KeyValueMetadataCount);
@@ -56,6 +63,10 @@ public sealed class ParquetFileMetadata
     internal Span<ParquetColumnChunkInfo> ColumnChunkStorage
         => ParquetBuffer.AsSpan<ParquetColumnChunkInfo>(ColumnChunkBuffer,
             ColumnChunkBuffer.Length / System.Runtime.CompilerServices.Unsafe.SizeOf<ParquetColumnChunkInfo>());
+
+    internal Span<ParquetSortingColumn> SortingColumnStorage
+        => ParquetBuffer.AsSpan<ParquetSortingColumn>(SortingColumnBuffer,
+            SortingColumnBuffer.Length / System.Runtime.CompilerServices.Unsafe.SizeOf<ParquetSortingColumn>());
 
     internal Span<ParquetKeyValueMetadataInfo> KeyValueMetadataStorage
         => ParquetBuffer.AsSpan<ParquetKeyValueMetadataInfo>(KeyValueMetadataBuffer,
@@ -106,6 +117,12 @@ public sealed class ParquetFileMetadata
         return ColumnChunks[rowGroup.ColumnStart + columnOrdinal];
     }
 
+    public ReadOnlySpan<ParquetSortingColumn> RowGroupSortingColumns(int rowGroupOrdinal)
+    {
+        var rowGroup = RowGroup(rowGroupOrdinal);
+        return SortingColumns.Slice(rowGroup.SortingColumnStart, rowGroup.SortingColumnCount);
+    }
+
     public ReadOnlySpan<byte> KeyValueMetadataKeyUtf8(int metadataOrdinal)
     {
         ValidateOrdinal(metadataOrdinal, KeyValueMetadataCount, nameof(metadataOrdinal));
@@ -130,6 +147,7 @@ public sealed class ParquetFileMetadata
         ColumnBuffer.Dispose();
         RowGroupBuffer.Dispose();
         ColumnChunkBuffer.Dispose();
+        SortingColumnBuffer.Dispose();
         KeyValueMetadataBuffer.Dispose();
         Clear();
     }
@@ -167,6 +185,7 @@ public sealed class ParquetFileMetadata
         CreatedByLength = 0;
         FooterByteCount = 0;
         ColumnChunkCount = 0;
+        SortingColumnCount = 0;
     }
 
     static void ValidateOrdinal(int ordinal, int count, string parameterName)
