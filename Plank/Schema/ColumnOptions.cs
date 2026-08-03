@@ -5,11 +5,14 @@ namespace Plank.Schema;
 public sealed record ColumnOptions
 {
     public ColumnOptions(ParquetRepetition repetition = ParquetRepetition.Unspecified,
-        ImmutableArray<EncodingKind> encodings = default, uint typeLength = 0)
+        ImmutableArray<EncodingKind> encodings = default, uint typeLength = 0,
+        ParquetBloomFilterOptions? bloomFilter = null)
     {
         Repetition = repetition;
         Encodings = encodings.IsDefault ? [] : encodings;
         TypeLength = typeLength;
+        BloomFilter = bloomFilter;
+        BloomFilter?.Validate();
     }
 
     public static readonly ColumnOptions Default = new();
@@ -20,6 +23,9 @@ public sealed record ColumnOptions
 
     public uint TypeLength { get; }
 
+    /// <summary>Gets the split-block Bloom-filter configuration for this leaf, if enabled.</summary>
+    public ParquetBloomFilterOptions? BloomFilter { get; }
+
     public bool Equals(ColumnOptions? other)
     {
         if (ReferenceEquals(this, other))
@@ -29,6 +35,8 @@ public sealed record ColumnOptions
         if (Repetition != other.Repetition)
             return false;
         if (TypeLength != other.TypeLength)
+            return false;
+        if (BloomFilter != other.BloomFilter)
             return false;
         if (Encodings.Length != other.Encodings.Length)
             return false;
@@ -45,6 +53,7 @@ public sealed record ColumnOptions
         var hash = new HashCode();
         hash.Add(Repetition);
         hash.Add(TypeLength);
+        hash.Add(BloomFilter);
         foreach (var encoding in Encodings)
             hash.Add(encoding);
 

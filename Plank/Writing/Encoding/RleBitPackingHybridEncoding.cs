@@ -388,6 +388,13 @@ static class RleBitPackingHybridEncoding
 
         var byteCount = checked(groupCount * bitWidth);
         var destination = writer.GetSpan(byteCount);
+        if (BitConverter.IsLittleEndian && (bitWidth & 7) == 0)
+        {
+            WriteByteAlignedLiteralsUnchecked(literals, bitWidth >> 3, destination[..byteCount]);
+            writer.Advance(byteCount);
+            return;
+        }
+
         var mask = bitWidth == 32 ? uint.MaxValue : (1u << bitWidth) - 1u;
         ulong bitBuffer = 0;
         var bufferedBits = 0;
@@ -411,6 +418,39 @@ static class RleBitPackingHybridEncoding
             destination[outputOffset++] = (byte)bitBuffer;
 
         writer.Advance(outputOffset);
+    }
+
+    static void WriteByteAlignedLiteralsUnchecked(ReadOnlySpan<int> literals, int byteWidth, Span<byte> destination)
+    {
+        ref var source = ref MemoryMarshal.GetReference(literals);
+        ref var output = ref MemoryMarshal.GetReference(destination);
+        switch (byteWidth)
+        {
+            case 1:
+                for (nuint i = 0; i < (uint)literals.Length; i++)
+                    Unsafe.Add(ref output, i) = unchecked((byte)Unsafe.Add(ref source, i));
+                break;
+            case 2:
+                for (nuint i = 0; i < (uint)literals.Length; i++)
+                    Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, i * 2), unchecked((ushort)Unsafe.Add(ref source, i)));
+                break;
+            case 3:
+                for (nuint i = 0; i < (uint)literals.Length; i++)
+                {
+                    var value = unchecked((uint)Unsafe.Add(ref source, i));
+                    ref var encoded = ref Unsafe.Add(ref output, i * 3);
+                    encoded = (byte)value;
+                    Unsafe.Add(ref encoded, 1) = (byte)(value >> 8);
+                    Unsafe.Add(ref encoded, 2) = (byte)(value >> 16);
+                }
+                break;
+            case 4:
+                MemoryMarshal.AsBytes(literals).CopyTo(destination);
+                break;
+        }
+
+        var encodedByteCount = literals.Length * byteWidth;
+        destination.Slice(encodedByteCount, destination.Length - encodedByteCount).Clear();
     }
 
     static void WriteBooleanBitPackedRun(ReadOnlySpan<bool> literals, ref BufferWriter writer)

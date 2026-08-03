@@ -24,9 +24,14 @@ public readonly record struct PageHeader(
         EncodingKind encoding, int headerLength, uint repetitionLevelsByteLength,
         uint definitionLevelsByteLength, uint nullCount, bool isCompressed,
         EncodingKind repetitionLevelEncoding, EncodingKind definitionLevelEncoding, uint rowCount,
-        EncodedStatistics statistics)
+        EncodedStatistics statistics, uint? crc)
         : this(type, uncompressedPageSize, compressedPageSize, valueCount, encoding, headerLength,
             repetitionLevelsByteLength, definitionLevelsByteLength, nullCount, isCompressed,
             repetitionLevelEncoding, definitionLevelEncoding, rowCount)
-        => Statistics = statistics;
+    {
+        Statistics = statistics;
+        Crc = crc;
+    }
+
+    public uint? Crc { get; init; }
 }

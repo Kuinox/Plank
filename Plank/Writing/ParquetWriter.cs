@@ -23,6 +23,7 @@ public sealed class ParquetWriter
     internal readonly CompressionKind Compression;
     internal readonly int CompressionLevel;
     internal readonly bool WritePageIndexes;
+    internal readonly bool WritePageCrc;
     internal readonly CompressionContext CompressionContext;
     internal readonly ColumnChunkMetadata[] OpenRowGroupColumnMetadata;
     readonly RowGroupWriter _rowGroupWriter;
@@ -67,6 +68,7 @@ public sealed class ParquetWriter
         Compression = _options.Compression;
         CompressionLevel = _options.GetCompressionLevel();
         WritePageIndexes = _options.WritePageIndexes;
+        WritePageCrc = _options.WritePageCrc;
         CompressionContext = new CompressionContext(BufferWriters);
         OpenRowGroupColumnMetadata = ColumnCount == 0 ? [] : new ColumnChunkMetadata[ColumnCount];
         _rowGroupWriter = new RowGroupWriter(this);
@@ -184,6 +186,12 @@ public sealed class ParquetWriter
     {
         buffer.WriteTo(_stream);
         FileOffset = checked(FileOffset + buffer.WrittenLength);
+    }
+
+    internal void WriteBytes(ReadOnlySpan<byte> bytes)
+    {
+        _stream.Write(bytes);
+        FileOffset = checked(FileOffset + bytes.Length);
     }
 
     void OpenFile(Stream stream)

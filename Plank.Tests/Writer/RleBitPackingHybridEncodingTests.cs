@@ -20,6 +20,16 @@ internal sealed class RleBitPackingHybridEncodingTests
     }
 
     [Test]
+    public void ByteAlignedUncheckedWriterMatchesReferenceForPartialGroups()
+    {
+        int[] bitWidths = [8, 16, 24, 32];
+        int[] lengths = [1, 7, 9, 15, 17];
+        foreach (var bitWidth in bitWidths)
+            foreach (var length in lengths)
+                VerifyDictionaryIndexes(CreateLiteralValues(length, bitWidth), bitWidth);
+    }
+
+    [Test]
     public void CheckedWriterRejectsOutOfRangeLiteralsAtCommonBitWidths()
     {
         VerifyCheckedWriterRejects([0, 1, 0, 1, 0, 1, 0, 2], 1);
