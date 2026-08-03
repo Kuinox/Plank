@@ -37,6 +37,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     internal readonly ParquetWriter _owner;
     readonly LeafColumn _leafColumn;
     readonly Column _column;
+    T[]? _retainedValues;
     object? _dictionaryState;
     ParquetBuffer _statisticsMinValueBuffer;
     ParquetBuffer _statisticsMaxValueBuffer;
@@ -45,7 +46,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     bool _bloomFilterRetained;
     internal RepeatedRowShape[]? MapRowShapes;
 
-    internal SerializedColumn(ParquetWriter owner, LeafColumn column, uint initialPageCapacity)
+    internal SerializedColumn(ParquetWriter owner, LeafColumn column, uint initialPageCapacity, T[]? retainedValues)
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(column);
@@ -53,6 +54,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         _ = owner.GetColumnOrdinal(column);
         _leafColumn = column;
         _column = column.Column;
+        _retainedValues = retainedValues;
         Pages = new PageList(initialPageCapacity);
         ColumnOrdinal = 0;
         RowCount = 0;
@@ -87,6 +89,16 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         if (_bloomFilterRetained)
             throw new InvalidOperationException(
                 "SerializedColumn's Bloom filter is retained by an incomplete row group.");
+
+        if (_retainedValues is { } retainedValues)
+        {
+            _retainedValues = null;
+            var combined = new T[checked(retainedValues.Length + values.Length)];
+            retainedValues.CopyTo(combined, 0);
+            values.CopyTo(combined.AsSpan(retainedValues.Length));
+            Serialize(combined.AsSpan());
+            return;
+        }
 
         if (_column.Options.Repetition == ParquetRepetition.Repeated)
         {

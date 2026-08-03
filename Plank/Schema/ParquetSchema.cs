@@ -44,6 +44,9 @@ public sealed record ParquetSchema
     public ParquetWriter CreateWriter(Stream stream, ParquetWriterOptions? options = null)
         => new(stream, this, options ?? ParquetWriterOptions.Default);
 
+    public ParquetWriter CreateAppender(Stream stream, ParquetAppendOptions? options = null)
+        => new(stream, this, options ?? ParquetAppendOptions.Default);
+
     internal ImmutableArray<ImmutableArray<string>> LeafPaths { get; }
 
     internal ImmutableArray<LeafProjectionInfo> LeafProjectionInfos { get; }
