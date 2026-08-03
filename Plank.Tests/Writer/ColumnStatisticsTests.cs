@@ -8,6 +8,7 @@ using Plank.Reading.Logical.Internal;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
+using PlankDataPageVersion = Plank.Writing.ParquetDataPageVersion;
 using PlankLogicalType = Plank.Schema.LogicalType;
 using PlankParquetSchema = Plank.Schema.ParquetSchema;
 
@@ -240,9 +241,12 @@ internal sealed class ColumnStatisticsTests
     }
 
     [Test]
-    public void WriterEmitsPageIndexes()
+    [Arguments(PlankDataPageVersion.V1)]
+    [Arguments(PlankDataPageVersion.V2)]
+    public void WriterEmitsPageIndexes(PlankDataPageVersion dataPageVersion)
     {
-        var path = Path.Combine(Path.GetTempPath(), $"plank-page-index-{Guid.NewGuid():N}.parquet");
+        var path = Path.Combine(Path.GetTempPath(),
+            $"plank-page-index-{dataPageVersion}-{Guid.NewGuid():N}.parquet");
         var schema = new PlankParquetSchema([
             Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32,
                 pageStrategy: new FixedRowsPageStrategy(2)),
@@ -256,7 +260,8 @@ internal sealed class ColumnStatisticsTests
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
-                    WritePageIndexes = true
+                    WritePageIndexes = true,
+                    DataPageVersion = dataPageVersion
                 });
                 var idColumn = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
                 var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[1]);

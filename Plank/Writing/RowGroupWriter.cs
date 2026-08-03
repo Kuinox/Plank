@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Plank.Schema;
 using Plank.Writing.Compression;
 using Plank.Writing.Encoding;
@@ -79,6 +80,7 @@ public sealed class RowGroupWriter
         var columnOrdinal = (int)state.ColumnOrdinal;
         ValidateMapRowShapes(serialized.MapRowShapes, columnOrdinal);
         var column = _writer.ColumnsByOrdinal[columnOrdinal];
+        var projectionInfo = _writer.ColumnProjectionInfosByOrdinal[columnOrdinal];
         var pages = state.Pages;
         var compression = _writer.ColumnCompressionsByOrdinal[columnOrdinal];
         if (compression.Kind != CompressionKind.None && !_compressedContent.IsInitialized)
@@ -112,6 +114,7 @@ public sealed class RowGroupWriter
             var compressedContentSize = pageContentSize;
             var uncompressedPageHeaderSize = pageContentSize;
             var writeCompressedContent = false;
+            var writeTransformedContent = false;
             var storedContentSize = pageContentSize;
 
             switch (pageKind)
@@ -134,7 +137,7 @@ public sealed class RowGroupWriter
                     }
 
                     var dictionaryValueCount = page.DictionaryValueCount;
-                    var crc = GetPageCrc(writeCompressedContent, ref page);
+                    var crc = GetPageCrc(writeCompressedContent, writeTransformedContent, ref page);
                     page.Header.Reset();
                     ParquetMetadataThriftWriter.WriteDictionaryPageHeader(ref page.Header, dictionaryValueCount,
                         pageContentSize, compressedContentSize, crc);
@@ -161,33 +164,83 @@ public sealed class RowGroupWriter
                     compressedContentSize = pageContentSize;
                     storedContentSize = pageContentSize;
 
-                    if (compression.Kind != CompressionKind.None && valueBytes > 0)
+                    if (_writer.DataPageVersion == ParquetDataPageVersion.V1)
                     {
-                        if (levelBytes == 0)
+                        var hasRepetitionLevels = projectionInfo.MaxRepetitionLevel > 0;
+                        var hasDefinitionLevels = projectionInfo.MaxDefinitionLevel > 0;
+                        var hasLevels = hasRepetitionLevels || hasDefinitionLevels;
+                        if (hasLevels)
                         {
-                            Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
-                                _writer.CompressionContext, ref page.Content, ref _compressedContent);
-                            compressedContentSize = _compressedContent.WrittenLength;
+                            if (!_compressionInput.IsInitialized)
+                                _compressionInput = _writer.BufferWriters.CreatePageBufferWriter();
+                            WriteDataPageV1Content(ref page.Content, repetitionLevelsByteLength,
+                                definitionLevelsByteLength, hasRepetitionLevels, hasDefinitionLevels,
+                                _writer.CompressionContext, ref _compressionInput);
+                            uncompressedPageHeaderSize = _compressionInput.WrittenLength;
                         }
-                        else
+                        compressedContentSize = uncompressedPageHeaderSize;
+                        storedContentSize = uncompressedPageHeaderSize;
+
+                        if (compression.Kind != CompressionKind.None && uncompressedPageHeaderSize > 0)
                         {
-                            _compressionInput.Reset();
-                            _compressedValues.Reset();
-                            _compressedContent.Reset();
-
-                            var source = _writer.CompressionContext.GetContiguousSourceSpan(ref page.Content);
-                            var levels = source[..levelBytesInt32];
-                            var values = source[levelBytesInt32..];
-                            _compressionInput.Write(values);
-                            Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
-                                _writer.CompressionContext, ref _compressionInput, ref _compressedValues);
-                            _compressedContent.Write(levels);
-                            _compressedContent.CopyFrom(ref _compressedValues);
+                            if (!hasLevels)
+                                Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
+                                    _writer.CompressionContext, ref page.Content, ref _compressedContent);
+                            else
+                                Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
+                                    _writer.CompressionContext, ref _compressionInput, ref _compressedContent);
                             compressedContentSize = _compressedContent.WrittenLength;
+                            storedContentSize = compressedContentSize;
+                            writeCompressedContent = true;
+                        }
+                        else if (hasLevels)
+                        {
+                            storedContentSize = _compressionInput.WrittenLength;
+                            writeTransformedContent = true;
                         }
 
-                        storedContentSize = compressedContentSize;
-                        writeCompressedContent = true;
+                        var crc = GetPageCrc(writeCompressedContent, writeTransformedContent, ref page);
+                        page.Header.Reset();
+                        ParquetMetadataThriftWriter.WriteDataPageHeaderV1(ref page.Header, dataPageValueCount,
+                            pageEncoding, uncompressedPageHeaderSize, compressedContentSize, crc);
+                    }
+                    else
+                    {
+                        if (compression.Kind != CompressionKind.None && valueBytes > 0)
+                        {
+                            if (levelBytes == 0)
+                            {
+                                Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
+                                    _writer.CompressionContext, ref page.Content, ref _compressedContent);
+                                compressedContentSize = _compressedContent.WrittenLength;
+                            }
+                            else
+                            {
+                                _compressionInput.Reset();
+                                _compressedValues.Reset();
+                                _compressedContent.Reset();
+
+                                var source = _writer.CompressionContext.GetContiguousSourceSpan(ref page.Content);
+                                var levels = source[..levelBytesInt32];
+                                var values = source[levelBytesInt32..];
+                                _compressionInput.Write(values);
+                                Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
+                                    _writer.CompressionContext, ref _compressionInput, ref _compressedValues);
+                                _compressedContent.Write(levels);
+                                _compressedContent.CopyFrom(ref _compressedValues);
+                                compressedContentSize = _compressedContent.WrittenLength;
+                            }
+
+                            storedContentSize = compressedContentSize;
+                            writeCompressedContent = true;
+                        }
+
+                        var crc = GetPageCrc(writeCompressedContent, writeTransformedContent, ref page);
+                        page.Header.Reset();
+                        ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, dataPageRowCount,
+                            dataPageValueCount, dataPageNullCount, repetitionLevelsByteLength,
+                            definitionLevelsByteLength, pageEncoding, uncompressedPageHeaderSize,
+                            compressedContentSize, writeCompressedContent, crc);
                     }
 
                     if (dataPageOffset < 0)
@@ -195,12 +248,6 @@ public sealed class RowGroupWriter
                         dataPageOffset = pageOffset;
                         dataEncoding = pageEncoding;
                     }
-
-                    var crc = GetPageCrc(writeCompressedContent, ref page);
-                    page.Header.Reset();
-                    ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, dataPageRowCount,
-                        dataPageValueCount, dataPageNullCount, repetitionLevelsByteLength, definitionLevelsByteLength,
-                        pageEncoding, uncompressedPageHeaderSize, compressedContentSize, writeCompressedContent, crc);
                     break;
                 }
                 default:
@@ -210,13 +257,18 @@ public sealed class RowGroupWriter
             var headerSize = page.Header.WrittenLength;
             _writer.WriteBuffer(ref page.Header);
             if (!writeCompressedContent)
-                _writer.WriteBuffer(ref page.Content);
+            {
+                if (!writeTransformedContent)
+                    _writer.WriteBuffer(ref page.Content);
+                else
+                    _writer.WriteBuffer(ref _compressionInput);
+            }
             else
                 _writer.WriteBuffer(ref _compressedContent);
 
-            totalUncompressedSize += checked((long)headerSize + pageContentSize);
+            totalUncompressedSize += checked((long)headerSize + uncompressedPageHeaderSize);
             totalCompressedSize += checked((long)headerSize + storedContentSize);
-            if (pageKind != PageKind.DataV2)
+            if (pageKind == PageKind.Dictionary)
                 continue;
             if (writePageIndexes)
             {
@@ -274,10 +326,43 @@ public sealed class RowGroupWriter
         _mapKeyShapes?.Clear();
     }
 
-    uint? GetPageCrc(bool writeCompressedContent, ref Page page)
+    static void WriteDataPageV1Content(ref BufferWriter source, uint repetitionLevelsByteLength,
+        uint definitionLevelsByteLength, bool hasRepetitionLevels, bool hasDefinitionLevels,
+        CompressionContext compressionContext, ref BufferWriter destination)
+    {
+        destination.Reset();
+        var sourceSpan = compressionContext.GetContiguousSourceSpan(ref source);
+        var offset = 0;
+        if (hasRepetitionLevels)
+        {
+            WriteLevelLength(repetitionLevelsByteLength, ref destination);
+            var length = checked((int)repetitionLevelsByteLength);
+            destination.Write(sourceSpan.Slice(offset, length));
+            offset += length;
+        }
+        if (hasDefinitionLevels)
+        {
+            WriteLevelLength(definitionLevelsByteLength, ref destination);
+            var length = checked((int)definitionLevelsByteLength);
+            destination.Write(sourceSpan.Slice(offset, length));
+            offset += length;
+        }
+        destination.Write(sourceSpan[offset..]);
+    }
+
+    static void WriteLevelLength(uint length, ref BufferWriter destination)
+    {
+        var prefix = destination.GetSpan(sizeof(uint));
+        BinaryPrimitives.WriteUInt32LittleEndian(prefix, length);
+        destination.Advance(sizeof(uint));
+    }
+
+    uint? GetPageCrc(bool writeCompressedContent, bool writeTransformedContent, ref Page page)
         => !_writer.WritePageCrc
             ? null
-            : writeCompressedContent ? _compressedContent.ComputeCrc32() : page.Content.ComputeCrc32();
+            : writeCompressedContent
+                ? _compressedContent.ComputeCrc32()
+                : writeTransformedContent ? _compressionInput.ComputeCrc32() : page.Content.ComputeCrc32();
 
     void ValidateMapRowShapes(RepeatedRowShape[]? shapes, int columnOrdinal)
     {

@@ -26,6 +26,16 @@ static Plank.Schema.ColumnDefinition.OptionalLeaf(string! name, Plank.Schema.Par
 static Plank.Schema.ColumnDefinition.RequiredGroup(string! name, int fieldId, params Plank.Schema.ColumnDefinition![]! children) -> Plank.Schema.ColumnDefinition!
 static Plank.Schema.ColumnDefinition.RequiredLeaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.ColumnDefinition!
 static Plank.Schema.RowSchema.Column<TClr>(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null) -> Plank.Schema.RowSchemaColumn!
+Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetDataPageVersion.V1 = 1 -> Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetDataPageVersion.V2 = 2 -> Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetFileVersion.V1 = 1 -> Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetFileVersion.V2 = 2 -> Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetWriterOptions.DataPageVersion.get -> Plank.Writing.ParquetDataPageVersion
+Plank.Writing.ParquetWriterOptions.DataPageVersion.init -> void
+Plank.Writing.ParquetWriterOptions.FileVersion.get -> Plank.Writing.ParquetFileVersion
+Plank.Writing.ParquetWriterOptions.FileVersion.init -> void
 Plank.Reading.Logical.NestedColumnBuffer<T>
 Plank.Reading.Logical.NestedColumnBuffer<T>.Count.get -> int
 Plank.Reading.Logical.NestedColumnBuffer<T>.DefinitionLevels.get -> System.ReadOnlySpan<int>

@@ -23,6 +23,10 @@ public sealed class ParquetWriterOptions
 
     public uint TargetDataPageSizeBytes { get; init; } = 1024 * 1024;
 
+    public ParquetFileVersion FileVersion { get; init; } = ParquetFileVersion.V1;
+
+    public ParquetDataPageVersion DataPageVersion { get; init; } = ParquetDataPageVersion.V2;
+
     public CompressionKind Compression { get; init; } = CompressionKind.None;
 
     public int? CompressionLevel { get; init; }
@@ -67,6 +71,12 @@ public sealed class ParquetWriterOptions
         if (SortingColumns.IsDefault)
             throw new ArgumentException("Sorting columns must not be an uninitialized ImmutableArray.",
                 nameof(SortingColumns));
+        if (!Enum.IsDefined(FileVersion))
+            throw new ArgumentOutOfRangeException(nameof(FileVersion), FileVersion,
+                "File version must be a defined ParquetFileVersion value.");
+        if (!Enum.IsDefined(DataPageVersion))
+            throw new ArgumentOutOfRangeException(nameof(DataPageVersion), DataPageVersion,
+                "Data page version must be a defined ParquetDataPageVersion value.");
         _ = CompressionConfiguration.ResolveLevel(Compression, CompressionLevel,
             nameof(Compression), nameof(CompressionLevel));
         ArgumentNullException.ThrowIfNull(KeyValueMetadata);

@@ -22,6 +22,8 @@ public sealed class ParquetWriter
     internal readonly LeafProjectionInfo[] ColumnProjectionInfosByOrdinal;
     internal readonly int ColumnCount;
     internal readonly BufferWriterFactory BufferWriters;
+    internal readonly ParquetFileVersion FileVersion;
+    internal readonly ParquetDataPageVersion DataPageVersion;
     internal readonly ResolvedCompression[] ColumnCompressionsByOrdinal;
     internal readonly bool WritePageIndexes;
     internal readonly ParquetSortingColumn[] SortingColumns;
@@ -87,6 +89,8 @@ public sealed class ParquetWriter
             _options.TargetDataPageSizeBytes);
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
             _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
+        FileVersion = _options.FileVersion;
+        DataPageVersion = _options.DataPageVersion;
         ColumnCompressionsByOrdinal = ResolveColumnCompressions(ColumnsByOrdinal, _options);
         WritePageIndexes = _options.WritePageIndexes;
         SortingColumns = ValidateSortingColumns(_options.SortingColumns, ColumnCount);
@@ -611,8 +615,8 @@ public sealed class ParquetWriter
     void WriteFileFooter()
     {
         SerializedFileMetadata.Reset();
-        ParquetMetadataThriftWriter.WriteFileMetaData(ref SerializedFileMetadata, _schema, _rowGroupCount, _totalRowCount,
-            ref SerializedRowGroupsMetadata, _createdBy, _keyValueMetadata);
+        ParquetMetadataThriftWriter.WriteFileMetaData(ref SerializedFileMetadata, _schema, FileVersion, _rowGroupCount,
+            _totalRowCount, ref SerializedRowGroupsMetadata, _createdBy, _keyValueMetadata);
         var metadataLength = SerializedFileMetadata.WrittenLength;
         WriteBuffer(ref SerializedFileMetadata);
         Span<byte> suffix = stackalloc byte[sizeof(int) + 4];
