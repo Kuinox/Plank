@@ -1719,7 +1719,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     builder.Append(", default");
                 builder.Append(", 0");
             }
-            builder.Append(", new global::Plank.Schema.ParquetBloomFilterOptions { FalsePositiveProbability = ")
+            builder.Append(", bloomFilter: new global::Plank.Schema.ParquetBloomFilterOptions { FalsePositiveProbability = ")
                 .Append(column.BloomFilterFalsePositiveProbability.ToString("R", CultureInfo.InvariantCulture));
             if (column.BloomFilterExpectedDistinctValueCount > 0)
                 builder.Append(", ExpectedDistinctValueCount = ")

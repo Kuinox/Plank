@@ -7,5 +7,6 @@ public enum CompressionKind
     Gzip = 2,
     Zstd = 3,
     Lz4 = 4,
-    Brotli = 5
+    Brotli = 5,
+    Lz4Legacy = 6
 }

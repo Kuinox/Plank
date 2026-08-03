@@ -10,10 +10,12 @@ namespace Plank.Schema;
 public sealed class LeafColumn
 {
     internal readonly Column Column;
+    internal readonly LeafProjectionInfo ProjectionInfo;
 
-    internal LeafColumn(Column column, int ordinal)
+    internal LeafColumn(Column column, int ordinal, LeafProjectionInfo projectionInfo)
     {
         Column = column;
+        ProjectionInfo = projectionInfo;
         Ordinal = ordinal;
     }
 
@@ -27,6 +29,14 @@ public sealed class LeafColumn
     /// <summary>Gets the leaf's physical Parquet type.</summary>
     public ParquetPhysicalType PhysicalType
         => Column.PhysicalType;
+
+    /// <summary>Gets the maximum repetition level encoded for this leaf.</summary>
+    public int MaxRepetitionLevel
+        => ProjectionInfo.MaxRepetitionLevel;
+
+    /// <summary>Gets the maximum definition level encoded for this leaf.</summary>
+    public int MaxDefinitionLevel
+        => ProjectionInfo.MaxDefinitionLevel;
 
     /// <summary>Gets the leaf's encoding and physical storage options.</summary>
     public ColumnOptions Options

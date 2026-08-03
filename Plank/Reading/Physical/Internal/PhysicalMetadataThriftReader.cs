@@ -411,13 +411,16 @@ static class PhysicalMetadataThriftReader
             checked(rowGroupCount * metadata.ColumnCount));
         var rowGroups = metadata.RowGroupStorage;
         for (var ordinal = 0; ordinal < rowGroupCount; ordinal++)
+        {
+            var metadataStart = reader.Offset;
             rowGroups[ordinal] = ReadRowGroup(ref reader, metadata, ordinal,
-                metadata.FooterOffset + (ulong)reader.Offset);
+                metadata.FooterOffset + (ulong)metadataStart, metadataStart);
+        }
         metadata.RowGroupCount = rowGroupCount;
     }
 
     static ParquetRowGroupInfo ReadRowGroup(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
-        int ordinal, ulong metadataOffset)
+        int ordinal, ulong metadataOffset, int metadataStart)
     {
         var columnChunkOffset = 0UL;
         var rowCount = 0UL;
@@ -461,7 +464,7 @@ static class PhysicalMetadataThriftReader
                     $"Sorting column ordinal {sortingColumns[i].ColumnOrdinal} exceeds row group column count {columnCount}.");
 
         return new ParquetRowGroupInfo(ordinal, metadataOffset, columnChunkOffset, rowCount, columnStart, columnCount,
-            sortingColumnStart, sortingColumnCount);
+            sortingColumnStart, sortingColumnCount, reader.Offset - metadataStart);
     }
 
     static int ReadSortingColumns(ref CompactProtocolReader reader, ParquetFileMetadata metadata)

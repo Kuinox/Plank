@@ -74,6 +74,189 @@ static class ColumnChunkReader
         return TryDecodeValuesIntoNative(payload, column, header.ValueCount, header.Encoding, destination);
     }
 
+    internal static bool TryDecodeNestedPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
+        LeafColumn definition, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool,
+        out NestedColumnBuffer<T> buffer)
+    {
+        buffer = default;
+        if (header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2) ||
+            RuntimeHelpers.IsReferenceOrContainsReferences<T>() || GetPhysicalDecodeType<T>() != typeof(T))
+            return false;
+
+        var column = definition.Column;
+        var isBinary = typeof(T) == typeof(BinaryValueDescriptor);
+        if (isBinary != IsBinaryPhysicalType(column.PhysicalType))
+            return false;
+
+        var maxRepetitionLevel = definition.MaxRepetitionLevel;
+        var maxDefinitionLevel = definition.MaxDefinitionLevel;
+        if (maxRepetitionLevel < 0 || maxDefinitionLevel < 0)
+            throw new CorruptParquetException($"Column '{column.Name}' has negative maximum levels.");
+
+        var levelCount = checked((int)header.ValueCount);
+        state.GetLevels(levelCount, bufferPool, out var repetitionLevels, out var definitionLevels);
+
+        ReadOnlySpan<byte> dataPayload;
+        if (header.Type == PageHeaderType.DataPageV2)
+        {
+            if (header.NullCount > header.ValueCount)
+                throw new CorruptParquetException(
+                    $"Page null count ({header.NullCount}) exceeds value count ({header.ValueCount}).");
+            var repetitionByteLength = checked((int)header.RepetitionLevelsByteLength);
+            var definitionByteLength = checked((int)header.DefinitionLevelsByteLength);
+            var levelByteLength = checked(repetitionByteLength + definitionByteLength);
+            if ((uint)levelByteLength > (uint)payload.Length)
+                throw new CorruptParquetException(
+                    $"Level bytes ({levelByteLength}) exceed page payload size ({payload.Length}).");
+
+            DecodeLevels(payload[..repetitionByteLength], repetitionLevels, EncodingKind.Rle,
+                maxRepetitionLevel, "repetition");
+            DecodeLevels(payload.Slice(repetitionByteLength, definitionByteLength), definitionLevels,
+                EncodingKind.Rle, maxDefinitionLevel, "definition");
+            dataPayload = payload[levelByteLength..];
+        }
+        else
+        {
+            var remaining = payload;
+            DecodeDataPageV1Levels(ref remaining, header.ValueCount, header.RepetitionLevelEncoding,
+                maxRepetitionLevel, "repetition", repetitionLevels);
+            DecodeDataPageV1Levels(ref remaining, header.ValueCount, header.DefinitionLevelEncoding,
+                maxDefinitionLevel, "definition", definitionLevels);
+            dataPayload = remaining;
+        }
+
+        var physicalCount = 0;
+        var rowCount = 0;
+        for (var i = 0; i < levelCount; i++)
+        {
+            if (definitionLevels[i] == maxDefinitionLevel)
+                physicalCount++;
+            if (repetitionLevels[i] == 0)
+                rowCount++;
+        }
+
+        if (header.Type == PageHeaderType.DataPageV2 && header.NullCount != levelCount - physicalCount)
+            throw new CorruptParquetException(
+                $"Definition levels contain {levelCount - physicalCount} null entries, expected {header.NullCount}.");
+
+        if (isBinary)
+        {
+            var scratch = MemoryMarshal.Cast<byte, int>(
+                state.GetScratch(checked(physicalCount * 2 * sizeof(int)), bufferPool));
+            if (!TryDecodeBinaryValues(dataPayload, [], physicalCount, physicalCount, column,
+                    header.Encoding, scratch, ref state, bufferPool))
+                return false;
+        }
+        else
+        {
+            var destination = state.GetValues<T>(physicalCount, bufferPool);
+            if (header.Encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
+            {
+                if (!state.HasDictionary)
+                    return false;
+                DecodeDictionaryIndexesIntoBuffer(dataPayload, checked((uint)physicalCount),
+                    state.GetDictionary<T>(), destination);
+            }
+            else if (!TryDecodeValuesIntoNative(dataPayload, column, checked((uint)physicalCount),
+                         header.Encoding, destination))
+                return false;
+        }
+
+        buffer = new NestedColumnBuffer<T>(state.CreateNativeBuffer(physicalCount), state.Levels, levelCount,
+            rowCount, levelCount != 0 && repetitionLevels[0] != 0, maxRepetitionLevel, maxDefinitionLevel);
+        return true;
+    }
+
+    static void DecodeDataPageV1Levels(ref ReadOnlySpan<byte> payload, uint valueCount, EncodingKind encoding,
+        int maxLevel, string levelName, Span<int> destination)
+    {
+        if (maxLevel == 0)
+        {
+            destination.Clear();
+            return;
+        }
+
+        var bitWidth = GetLevelBitWidth(maxLevel);
+        var byteLength = GetDataPageV1LevelPayloadLength(payload, valueCount, encoding, bitWidth,
+            levelName, out var offset);
+        DecodeLevels(payload.Slice(offset, byteLength), destination, encoding, maxLevel, levelName);
+        payload = payload[(offset + byteLength)..];
+    }
+
+    static void DecodeLevels(ReadOnlySpan<byte> payload, Span<int> destination, EncodingKind encoding,
+        int maxLevel, string levelName)
+    {
+        if (destination.IsEmpty)
+            return;
+        var bitWidth = GetLevelBitWidth(maxLevel);
+        if (bitWidth == 0)
+            destination.Clear();
+        else if (encoding == EncodingKind.Rle)
+            DecodeRleBitPackedLevels(payload, bitWidth, destination, levelName);
+        else if (encoding == EncodingKind.BitPacked)
+            LegacyBitPackedDecoder.Decode(payload, bitWidth, destination);
+        else
+            throw new NotSupportedException($"{levelName} level encoding '{encoding}' is not supported.");
+
+        for (var i = 0; i < destination.Length; i++)
+            if ((uint)destination[i] > (uint)maxLevel)
+                throw new CorruptParquetException(
+                    $"{levelName} level {destination[i]} exceeds the schema maximum of {maxLevel}.");
+    }
+
+    static void DecodeRleBitPackedLevels(ReadOnlySpan<byte> payload, int bitWidth, Span<int> destination,
+        string levelName)
+    {
+        var valueIndex = 0;
+        while (valueIndex < destination.Length)
+        {
+            var header = ReadUnsignedVarInt(ref payload);
+            if ((header & 1U) == 0)
+            {
+                var runLength = header >> 1;
+                if (runLength == 0)
+                    throw new CorruptParquetException($"{levelName} levels contain an empty RLE run.");
+                var byteWidth = (bitWidth + 7) >> 3;
+                var repeated = ReadLittleEndian(ref payload, byteWidth);
+                var copyLength = (int)Math.Min(runLength, checked((uint)(destination.Length - valueIndex)));
+                destination.Slice(valueIndex, copyLength).Fill(repeated);
+                valueIndex += copyLength;
+                continue;
+            }
+
+            var literalGroupCount = header >> 1;
+            if (literalGroupCount == 0)
+                throw new CorruptParquetException($"{levelName} levels contain an empty bit-packed run.");
+            if (literalGroupCount > uint.MaxValue / 8)
+                throw new CorruptParquetException(
+                    $"{levelName} level literal run group count {literalGroupCount} is too large.");
+            var literalCount = literalGroupCount * 8U;
+            if (literalCount > (uint.MaxValue - 7) / checked((uint)bitWidth))
+                throw new CorruptParquetException(
+                    $"{levelName} level literal run bit count overflows its supported range.");
+            var literalByteCount = (literalCount * checked((uint)bitWidth) + 7U) >> 3;
+            if (literalByteCount > (uint)payload.Length)
+                throw new CorruptParquetException(
+                    $"{levelName} level literal run claims {literalByteCount} bytes but only {payload.Length} remain.");
+
+            var valuesToCopy = Math.Min(literalCount, checked((uint)(destination.Length - valueIndex)));
+            for (var i = 0U; i < valuesToCopy; i++)
+                destination[valueIndex++] = ReadBitPackedValue(ref payload, bitWidth, checked((int)i));
+            payload = payload[checked((int)literalByteCount)..];
+        }
+    }
+
+    static int GetLevelBitWidth(int maxLevel)
+    {
+        var bitWidth = 0;
+        while (maxLevel != 0)
+        {
+            bitWidth++;
+            maxLevel >>= 1;
+        }
+        return bitWidth;
+    }
+
     internal static bool TryDecodeNullablePageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ulong rowCount, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool,
         out ColumnBuffer<T> buffer)
@@ -948,10 +1131,10 @@ static class ColumnChunkReader
             }
             case ParquetPhysicalType.Int64 when typeof(T) == typeof(DateTimeOffset):
             {
-                var raw = new long[destination.Length];
-                DecodeByteStreamSplitInt64(payload, raw);
                 var typed = Unsafe.As<Span<T>, Span<DateTimeOffset>>(ref destination);
-                for (var i = 0; i < typed.Length; i++)
+                var raw = MemoryMarshal.Cast<DateTimeOffset, long>(typed)[..typed.Length];
+                DecodeByteStreamSplitInt64(payload, raw);
+                for (var i = typed.Length - 1; i >= 0; i--)
                     typed[i] = DecodeTimestamp(raw[i], column.LogicalType);
                 return true;
             }
@@ -1120,10 +1303,10 @@ static class ColumnChunkReader
         }
         if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTimeOffset))
         {
-            var raw = new long[destination.Length];
-            DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
             var typed = Unsafe.As<Span<T>, Span<DateTimeOffset>>(ref destination);
-            for (var i = 0; i < typed.Length; i++)
+            var raw = MemoryMarshal.Cast<DateTimeOffset, long>(typed)[..typed.Length];
+            DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
+            for (var i = typed.Length - 1; i >= 0; i--)
                 typed[i] = DecodeTimestamp(raw[i], column.LogicalType);
             return true;
         }
@@ -1176,7 +1359,8 @@ static class ColumnChunkReader
         ArgumentNullException.ThrowIfNull(column);
 
         if (column.Options.Repetition == ParquetRepetition.Repeated)
-            throw new NotSupportedException($"Repeated readback is not implemented yet for column '{column.Name}'.");
+            throw new NotSupportedException(
+                $"Repeated column '{column.Name}' cannot be materialized as a flat managed buffer; use RowGroup.NestedColumn<T>.");
 
         switch (header.Type)
         {
@@ -1272,7 +1456,8 @@ static class ColumnChunkReader
         ArgumentNullException.ThrowIfNull(column);
 
         if (column.Options.Repetition == ParquetRepetition.Repeated)
-            throw new NotSupportedException($"Repeated readback is not implemented yet for column '{column.Name}'.");
+            throw new NotSupportedException(
+                $"Repeated column '{column.Name}' cannot be materialized as a flat managed buffer; use RowGroup.NestedColumn<T>.");
 
         while (offset < bufferLength)
         {
