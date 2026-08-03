@@ -14,7 +14,7 @@ public sealed record ParquetSchema
             throw new ArgumentException("Schema definitions must form a valid, projectable schema.", nameof(definitions));
 
         Columns = projectedColumns;
-        LeafColumns = BuildLeafColumns(projectedColumns);
+        LeafColumns = BuildLeafColumns(projectedColumns, projectedInfos);
         LeafPaths = projectedPaths;
         LeafProjectionInfos = projectedInfos;
     }
@@ -51,14 +51,15 @@ public sealed record ParquetSchema
 
     internal ImmutableArray<LeafProjectionInfo> LeafProjectionInfos { get; }
 
-    static ImmutableArray<LeafColumn> BuildLeafColumns(ImmutableArray<Column> columns)
+    static ImmutableArray<LeafColumn> BuildLeafColumns(ImmutableArray<Column> columns,
+        ImmutableArray<LeafProjectionInfo> projectionInfos)
     {
         if (columns.IsDefaultOrEmpty)
             return [];
 
         var builder = ImmutableArray.CreateBuilder<LeafColumn>(columns.Length);
         for (var i = 0; i < columns.Length; i++)
-            builder.Add(new LeafColumn(columns[i], i));
+            builder.Add(new LeafColumn(columns[i], i, projectionInfos[i]));
         return builder.MoveToImmutable();
     }
 

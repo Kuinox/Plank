@@ -1,4 +1,29 @@
 #nullable enable
+Plank.Reading.Logical.NestedColumnBuffer<T>
+Plank.Reading.Logical.NestedColumnBuffer<T>.Count.get -> int
+Plank.Reading.Logical.NestedColumnBuffer<T>.DefinitionLevels.get -> System.ReadOnlySpan<int>
+Plank.Reading.Logical.NestedColumnBuffer<T>.MaxDefinitionLevel.get -> int
+Plank.Reading.Logical.NestedColumnBuffer<T>.MaxRepetitionLevel.get -> int
+Plank.Reading.Logical.NestedColumnBuffer<T>.NestedColumnBuffer() -> void
+Plank.Reading.Logical.NestedColumnBuffer<T>.RepetitionLevels.get -> System.ReadOnlySpan<int>
+Plank.Reading.Logical.NestedColumnBuffer<T>.RetainLevels() -> Plank.ParquetBuffer
+Plank.Reading.Logical.NestedColumnBuffer<T>.RowCount.get -> int
+Plank.Reading.Logical.NestedColumnBuffer<T>.StartsWithContinuation.get -> bool
+Plank.Reading.Logical.NestedColumnBuffer<T>.Values.get -> Plank.Reading.Logical.ColumnBuffer<T>
+Plank.Reading.Logical.NestedRowGroupColumn<T>
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Definition.get -> Plank.Schema.LeafColumn!
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Enumerator
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Enumerator.Current.get -> Plank.Reading.Logical.NestedColumnBuffer<T>
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Enumerator.Dispose() -> void
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Enumerator.Enumerator() -> void
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Enumerator.MoveNext() -> bool
+Plank.Reading.Logical.NestedRowGroupColumn<T>.GetEnumerator() -> Plank.Reading.Logical.NestedRowGroupColumn<T>.Enumerator
+Plank.Reading.Logical.NestedRowGroupColumn<T>.Metadata.get -> Plank.Reading.Logical.ParquetColumnChunkMetadata
+Plank.Reading.Logical.NestedRowGroupColumn<T>.NestedRowGroupColumn() -> void
+Plank.Reading.Logical.RowGroup.NestedColumn<T>(int columnOrdinal) -> Plank.Reading.Logical.NestedRowGroupColumn<T>
+Plank.Reading.Logical.RowGroup.NestedColumn<T>(Plank.Schema.LeafColumn! column) -> Plank.Reading.Logical.NestedRowGroupColumn<T>
+Plank.Schema.LeafColumn.MaxDefinitionLevel.get -> int
+Plank.Schema.LeafColumn.MaxRepetitionLevel.get -> int
 Plank.Schema.CompressionKind.Lz4Legacy = 6 -> Plank.Schema.CompressionKind
 Plank.Reading.Physical.ParquetFileMetadata.CreatedByUtf8.get -> System.ReadOnlySpan<byte>
 Plank.Reading.Physical.ParquetFileMetadata.HasCreatedBy.get -> bool
