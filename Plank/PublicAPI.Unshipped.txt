@@ -9,6 +9,10 @@ Plank.Writing.ParquetWriterOptions.DataPageVersion.get -> Plank.Writing.ParquetD
 Plank.Writing.ParquetWriterOptions.DataPageVersion.init -> void
 Plank.Writing.ParquetWriterOptions.FileVersion.get -> Plank.Writing.ParquetFileVersion
 Plank.Writing.ParquetWriterOptions.FileVersion.init -> void
+Plank.Schema.ParquetColumnAttribute.Precision.get -> int
+Plank.Schema.ParquetColumnAttribute.Precision.set -> void
+Plank.Schema.ParquetColumnAttribute.Scale.get -> int
+Plank.Schema.ParquetColumnAttribute.Scale.set -> void
 *REMOVED*Plank.Schema.ColumnOptions.ColumnOptions(Plank.Schema.ParquetRepetition repetition = Plank.Schema.ParquetRepetition.Unspecified, System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind> encodings = default(System.Collections.Immutable.ImmutableArray<Plank.Schema.EncodingKind>), uint typeLength = 0) -> void
 Plank.Reading.Logical.ParquetColumnChunkMetadata.HasBloomFilter.get -> bool
 Plank.Reading.Logical.ParquetColumnChunkMetadata.OpenBloomFilter() -> Plank.Reading.Physical.ParquetBloomFilter!

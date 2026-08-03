@@ -115,6 +115,39 @@ internal sealed class WriterAllocationTests
     }
 
     [Test]
+    public void DecimalWriteChainDoesNotAllocateAfterWarmup()
+    {
+        var column = ColumnDefinition.Leaf("value", ParquetPhysicalType.FixedLenByteArray,
+            new ColumnOptions(ParquetRepetition.Required, [EncodingKind.Plain], typeLength: 8),
+            new LogicalType.Decimal(18, 2));
+        var schema = new ParquetSchema([column]);
+        using var stream = new MemoryStream(capacity: 1024 * 1024);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None
+        });
+        var serialized = writer.CreateSerializedColumn<decimal>(schema.LeafColumns[0]);
+        var values = new decimal[4096];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = (i - 2048) / 100m;
+
+        for (var i = 0; i < 8; i++)
+            WriteOneRowGroup(writer, stream, serialized, values);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        WriteOneRowGroup(writer, stream, serialized, values);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        if (allocated != 0)
+            throw new InvalidOperationException(
+                $"Expected zero allocations for steady-state decimal write chain but saw {allocated} bytes.");
+    }
+
+    [Test]
     public void CompressedWriteChainsDoNotAllocateAfterWarmup()
     {
         var failures = new List<string>();
@@ -165,6 +198,14 @@ internal sealed class WriterAllocationTests
 
     static void WriteOneRowGroup(ParquetWriter writer, MemoryStream stream, SerializedColumn<int?> serialized,
         int?[] values)
+    {
+        writer.Reset(stream);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+    }
+
+    static void WriteOneRowGroup(ParquetWriter writer, MemoryStream stream, SerializedColumn<decimal> serialized,
+        decimal[] values)
     {
         writer.Reset(stream);
         serialized.Serialize(values);
