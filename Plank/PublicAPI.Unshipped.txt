@@ -38,6 +38,19 @@ Plank.Schema.ParquetSortingColumn.ParquetSortingColumn() -> void
 Plank.Schema.ParquetSortingColumn.ParquetSortingColumn(int columnOrdinal, bool descending = false, bool nullsFirst = false) -> void
 Plank.Schema.RowSchemaColumn.FieldId.get -> int?
 Plank.Schema.RowSchemaColumn.RowSchemaColumn(string! name, Plank.Schema.ParquetPhysicalType physicalType, System.Type! clrType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> void
+Plank.Untyped.ParquetUntypedReader
+Plank.Untyped.ParquetUntypedReader.Dispose() -> void
+Plank.Untyped.ParquetUntypedReader.ParquetUntypedReader(Plank.Reading.Logical.ParquetReaderOptions? options = null) -> void
+Plank.Untyped.ParquetUntypedReader.ReadAll() -> System.Collections.Generic.IReadOnlyList<System.Collections.Generic.IReadOnlyDictionary<string!, object?>!>!
+Plank.Untyped.ParquetUntypedReader.ReadRowGroup(int rowGroupIndex) -> System.Collections.Generic.IReadOnlyList<System.Collections.Generic.IReadOnlyDictionary<string!, object?>!>!
+Plank.Untyped.ParquetUntypedReader.Reset(Plank.Reading.IParquetReadSource! source) -> void
+Plank.Untyped.ParquetUntypedReader.Reset(System.IO.Stream! stream) -> void
+Plank.Untyped.ParquetUntypedReader.Schema.get -> Plank.Schema.ParquetSchema!
+Plank.Untyped.ParquetUntypedWriter
+Plank.Untyped.ParquetUntypedWriter.CloseFile() -> void
+Plank.Untyped.ParquetUntypedWriter.ParquetUntypedWriter(System.IO.Stream! stream, Plank.Schema.ParquetSchema! schema, Plank.Writing.ParquetWriterOptions? options = null) -> void
+Plank.Untyped.ParquetUntypedWriter.Schema.get -> Plank.Schema.ParquetSchema!
+Plank.Untyped.ParquetUntypedWriter.WriteRowGroup(System.Collections.Generic.IEnumerable<System.Collections.Generic.IReadOnlyDictionary<string!, object?>!>! rows) -> void
 Plank.Writing.ParquetWriterOptions.SortingColumns.get -> System.Collections.Immutable.ImmutableArray<Plank.Schema.ParquetSortingColumn>
 Plank.Writing.ParquetWriterOptions.SortingColumns.init -> void
 static Plank.Schema.ColumnDefinition.Leaf(string! name, Plank.Schema.ParquetPhysicalType physicalType, int fieldId, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> Plank.Schema.ColumnDefinition!
