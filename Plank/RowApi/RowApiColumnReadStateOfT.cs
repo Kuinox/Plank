@@ -51,7 +51,9 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
     internal override void Open(RowGroup rowGroup)
     {
         DisposeBuffers();
-        _buffers = rowGroup.Column<T>(Ordinal).GetEnumerator();
+        RowGroup.ValidatePhysicalType<T>(Column);
+        _buffers = new RowGroupColumn<T>.Enumerator(
+            rowGroup.EnumerateBuffers<T>(Definition, Ordinal).GetEnumerator());
         _buffersOpen = true;
         _buffer = default;
         _usingMissing = false;
@@ -60,9 +62,6 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
 
     internal override void Advance()
     {
-        if (!Projected)
-            return;
-
         CurrentIndex++;
         while ((uint)CurrentIndex >= (uint)_buffer.ValueCount)
         {

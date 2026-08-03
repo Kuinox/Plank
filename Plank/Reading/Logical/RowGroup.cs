@@ -107,13 +107,13 @@ public readonly struct RowGroup
         return new ParquetColumnChunkMetadata(this, columnOrdinal);
     }
 
-    internal ColumnBufferEnumerable<T> EnumerateBuffers<T>(Column column, int columnOrdinal)
+    internal ColumnBufferEnumerable<T> EnumerateBuffers<T>(LeafColumn definition, int columnOrdinal)
     {
         var reader = GetReader();
         reader.ValidateRowGroup(this);
         if ((uint)columnOrdinal >= (uint)Metadata.Columns.Length)
             throw new CorruptParquetException(
-                $"Column '{column.Name}' (ordinal {columnOrdinal}) is not present in this row group ({Metadata.Columns.Length} columns)."
+                $"Column '{definition.Column.Name}' (ordinal {columnOrdinal}) is not present in this row group ({Metadata.Columns.Length} columns)."
             );
 
         var columnChunk = Metadata.Columns[columnOrdinal];
@@ -121,13 +121,13 @@ public readonly struct RowGroup
             ? columnChunk.PhysicalColumnOrdinal
             : columnOrdinal;
         return new ColumnBufferEnumerable<T>(reader.PhysicalReader, Metadata.RowGroupOrdinal,
-            physicalColumnOrdinal, reader.Schema.LeafColumns[columnOrdinal], reader.Options.BufferPool,
+            physicalColumnOrdinal, definition, reader.Options.BufferPool,
             Metadata.RowCount, reader.PagePruner);
     }
 
-    internal VariableLengthColumnBufferEnumerable<T> EnumerateVariableLengthBuffers<T>(Column column,
+    internal VariableLengthColumnBufferEnumerable<T> EnumerateVariableLengthBuffers<T>(LeafColumn definition,
         int columnOrdinal)
-        => new(EnumerateBuffers<BinaryValueDescriptor>(column, columnOrdinal));
+        => new(EnumerateBuffers<BinaryValueDescriptor>(definition, columnOrdinal));
 
     internal NestedColumnBufferEnumerable<T> EnumerateNestedBuffers<T>(Column column, int columnOrdinal)
     {
@@ -181,8 +181,22 @@ public readonly struct RowGroup
         return new ParquetStatistics(reader.PhysicalReader.Metadata.FooterBytes, statistics, definition);
     }
 
-    static void ValidatePhysicalType<T>(Column column)
+    internal static void ValidatePhysicalType<T>(Column column)
     {
+        if (column.Converter is { } converter)
+        {
+            if (converter.SupportsValueType(typeof(T)))
+            {
+                if (column.Options.Repetition == ParquetRepetition.Optional &&
+                    !converter.IsNullableValueType(typeof(T)))
+                    throw new InvalidOperationException(
+                        $"Optional column '{column.Name}' must be read as '{converter.ValueType}?'.");
+                return;
+            }
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' uses a converter for '{converter.ValueType}' and cannot be read as '{typeof(T)}'.");
+        }
+
         if (typeof(T) == typeof(byte[]) ||
             typeof(T) == typeof(ReadOnlyMemory<byte>) ||
             typeof(T) == typeof(ReadOnlyMemory<byte>?) ||
@@ -200,6 +214,11 @@ public readonly struct RowGroup
             column.PhysicalType == ParquetPhysicalType.Int32 &&
             column.LogicalType is LogicalType.Time { Unit: TimeUnit.Millis })
             return;
+        if ((Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T)) == typeof(decimal))
+        {
+            _ = ParquetDecimalConverter.RequireLogicalType(column);
+            return;
+        }
         var resolution = ParquetTypeMap.ResolvePhysicalType<T>();
         if (!resolution.IsSuccess)
             throw new NotSupportedException(resolution.ErrorMessage);

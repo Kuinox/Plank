@@ -17,9 +17,13 @@ internal interface ISerializedColumn
 
     ColumnStatistics Statistics { get; }
 
+    ReadOnlySpan<byte> BloomFilterBitset { get; }
+
     bool HasPendingData { get; }
 
     void Consume();
+
+    void CompleteBloomFilterWrite();
 
     void ReleaseBuffers();
 }
@@ -33,12 +37,16 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     internal readonly ParquetWriter _owner;
     readonly LeafColumn _leafColumn;
     readonly Column _column;
+    T[]? _retainedValues;
     object? _dictionaryState;
     ParquetBuffer _statisticsMinValueBuffer;
     ParquetBuffer _statisticsMaxValueBuffer;
+    ParquetBuffer _bloomFilterBuffer;
+    int _bloomFilterByteLength;
+    bool _bloomFilterRetained;
     internal RepeatedRowShape[]? MapRowShapes;
 
-    internal SerializedColumn(ParquetWriter owner, LeafColumn column, uint initialPageCapacity)
+    internal SerializedColumn(ParquetWriter owner, LeafColumn column, uint initialPageCapacity, T[]? retainedValues)
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(column);
@@ -46,6 +54,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         _ = owner.GetColumnOrdinal(column);
         _leafColumn = column;
         _column = column.Column;
+        _retainedValues = retainedValues;
         Pages = new PageList(initialPageCapacity);
         ColumnOrdinal = 0;
         RowCount = 0;
@@ -70,13 +79,36 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     ColumnStatistics ISerializedColumn.Statistics => Statistics;
 
+    ReadOnlySpan<byte> ISerializedColumn.BloomFilterBitset
+        => _bloomFilterBuffer.Span[.._bloomFilterByteLength];
+
     bool ISerializedColumn.HasPendingData => HasPendingData;
 
     public void Serialize(ReadOnlySpan<T> values)
     {
+        if (_bloomFilterRetained)
+            throw new InvalidOperationException(
+                "SerializedColumn's Bloom filter is retained by an incomplete row group.");
+
+        if (_retainedValues is { } retainedValues)
+        {
+            _retainedValues = null;
+            var combined = new T[checked(retainedValues.Length + values.Length)];
+            retainedValues.CopyTo(combined, 0);
+            values.CopyTo(combined.AsSpan(retainedValues.Length));
+            Serialize(combined.AsSpan());
+            return;
+        }
+
         if (_column.Options.Repetition == ParquetRepetition.Repeated)
         {
             SerializeRepeated(values);
+            return;
+        }
+
+        if (_column.Converter is { } converter)
+        {
+            SerializeConverted(values, converter);
             return;
         }
 
@@ -188,6 +220,20 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
         }
 
+        if (typeof(T) == typeof(decimal?))
+        {
+            ParquetDecimalConverter.RequireLogicalType(_column);
+            SerializeOptionalTyped(AsNullableSpan<decimal>(values));
+            return;
+        }
+
+        if (typeof(T) == typeof(decimal))
+        {
+            ParquetDecimalConverter.RequireLogicalType(_column);
+            SerializeTyped(AsSpan<decimal>(values));
+            return;
+        }
+
         if (typeof(T) == typeof(byte[]))
         {
             if (_column.Options.Repetition == ParquetRepetition.Optional)
@@ -280,6 +326,139 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     public void Serialize(T[] values)
         => Serialize(values.AsSpan());
+
+    void SerializeConverted(ReadOnlySpan<T> values, ParquetValueConverter converter)
+    {
+        if (!converter.SupportsValueType(typeof(T)))
+            throw new InvalidOperationException(
+                $"Column '{_column.Name}' uses a converter for '{converter.ValueType}' and cannot serialize '{typeof(T)}'.");
+        var nullable = converter.IsNullableValueType(typeof(T));
+        var optional = _column.Options.Repetition == ParquetRepetition.Optional;
+        if (nullable != optional)
+            throw new InvalidOperationException(
+                $"Column '{_column.Name}' is {(optional ? "optional" : "required")} and cannot serialize " +
+                $"converter values of type '{typeof(T)}'.");
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+            throw new NotSupportedException(
+                $"Custom converter value type '{typeof(T)}' must be unmanaged.");
+
+        var physicalType = converter.PhysicalType;
+        if (physicalType == typeof(bool))
+            SerializeConverted<T, bool>(values, converter);
+        else if (physicalType == typeof(byte))
+            SerializeConverted<T, byte>(values, converter);
+        else if (physicalType == typeof(ushort))
+            SerializeConverted<T, ushort>(values, converter);
+        else if (physicalType == typeof(int))
+            SerializeConverted<T, int>(values, converter);
+        else if (physicalType == typeof(uint))
+            SerializeConverted<T, uint>(values, converter);
+        else if (physicalType == typeof(long))
+            SerializeConverted<T, long>(values, converter);
+        else if (physicalType == typeof(ulong))
+            SerializeConverted<T, ulong>(values, converter);
+        else if (physicalType == typeof(float))
+            SerializeConverted<T, float>(values, converter);
+        else if (physicalType == typeof(double))
+            SerializeConverted<T, double>(values, converter);
+        else if (physicalType == typeof(Guid))
+            SerializeConverted<T, Guid>(values, converter);
+        else if (physicalType == typeof(DateOnly))
+            SerializeConverted<T, DateOnly>(values, converter);
+        else if (physicalType == typeof(DateTime))
+            SerializeConverted<T, DateTime>(values, converter);
+        else if (physicalType == typeof(DateTimeOffset))
+            SerializeConverted<T, DateTimeOffset>(values, converter);
+        else if (physicalType == typeof(TimeOnly))
+            SerializeConverted<T, TimeOnly>(values, converter);
+        else
+            throw new NotSupportedException(
+                $"Converter physical CLR type '{physicalType}' is not supported for column '{_column.Name}'.");
+    }
+
+    void SerializeConverted<TValue, TPhysical>(ReadOnlySpan<TValue> values, ParquetValueConverter converter)
+        where TPhysical : unmanaged
+    {
+        var nullable = converter.IsNullableValueType(typeof(TValue));
+        var elementSize = nullable ? Unsafe.SizeOf<TPhysical?>() : Unsafe.SizeOf<TPhysical>();
+        var rented = _owner.BufferWriters.BufferPool.Rent(
+            checked((uint)values.Length * (uint)elementSize));
+        try
+        {
+            converter.ConvertToPhysical(AsBytes(values), rented.Span, values.Length, nullable);
+            if (nullable)
+                SerializeConvertedPhysical(ParquetBuffer.AsReadOnlySpan<TPhysical?>(rented, values.Length));
+            else
+                SerializeConvertedPhysical(ParquetBuffer.AsReadOnlySpan<TPhysical>(rented, values.Length));
+        }
+        finally
+        {
+            rented.Dispose();
+        }
+    }
+
+    void SerializeConvertedPhysical<TPhysical>(ReadOnlySpan<TPhysical> values)
+    {
+        if (typeof(TPhysical) == typeof(bool?))
+            SerializeOptionalTyped(Reinterpret<TPhysical, bool?>(values));
+        else if (typeof(TPhysical) == typeof(bool))
+            SerializeTyped(Reinterpret<TPhysical, bool>(values));
+        else if (typeof(TPhysical) == typeof(int?))
+            SerializeOptionalTyped(Reinterpret<TPhysical, int?>(values));
+        else if (typeof(TPhysical) == typeof(int))
+            SerializeTyped(Reinterpret<TPhysical, int>(values));
+        else if (typeof(TPhysical) == typeof(byte?))
+            SerializeNullableByte(Reinterpret<TPhysical, byte?>(values));
+        else if (typeof(TPhysical) == typeof(byte))
+            SerializeByte(Reinterpret<TPhysical, byte>(values));
+        else if (typeof(TPhysical) == typeof(ushort?))
+            SerializeNullableUInt16(Reinterpret<TPhysical, ushort?>(values));
+        else if (typeof(TPhysical) == typeof(ushort))
+            SerializeUInt16(Reinterpret<TPhysical, ushort>(values));
+        else if (typeof(TPhysical) == typeof(uint?))
+            SerializeNullableUInt32(Reinterpret<TPhysical, uint?>(values));
+        else if (typeof(TPhysical) == typeof(uint))
+            SerializeUInt32(Reinterpret<TPhysical, uint>(values));
+        else if (typeof(TPhysical) == typeof(long?))
+            SerializeOptionalTyped(Reinterpret<TPhysical, long?>(values));
+        else if (typeof(TPhysical) == typeof(long))
+            SerializeTyped(Reinterpret<TPhysical, long>(values));
+        else if (typeof(TPhysical) == typeof(ulong?))
+            SerializeNullableUInt64(Reinterpret<TPhysical, ulong?>(values));
+        else if (typeof(TPhysical) == typeof(ulong))
+            SerializeUInt64(Reinterpret<TPhysical, ulong>(values));
+        else if (typeof(TPhysical) == typeof(float?))
+            SerializeOptionalTyped(Reinterpret<TPhysical, float?>(values));
+        else if (typeof(TPhysical) == typeof(float))
+            SerializeTyped(Reinterpret<TPhysical, float>(values));
+        else if (typeof(TPhysical) == typeof(double?))
+            SerializeOptionalTyped(Reinterpret<TPhysical, double?>(values));
+        else if (typeof(TPhysical) == typeof(double))
+            SerializeTyped(Reinterpret<TPhysical, double>(values));
+        else if (typeof(TPhysical) == typeof(Guid?))
+            SerializeNullableGuids(Reinterpret<TPhysical, Guid?>(values));
+        else if (typeof(TPhysical) == typeof(Guid))
+            SerializeGuids(Reinterpret<TPhysical, Guid>(values));
+        else if (typeof(TPhysical) == typeof(DateOnly?))
+            SerializeNullableDateOnly(Reinterpret<TPhysical, DateOnly?>(values));
+        else if (typeof(TPhysical) == typeof(DateOnly))
+            SerializeDateOnly(Reinterpret<TPhysical, DateOnly>(values));
+        else if (typeof(TPhysical) == typeof(DateTime?))
+            SerializeNullableDateTime(Reinterpret<TPhysical, DateTime?>(values));
+        else if (typeof(TPhysical) == typeof(DateTime))
+            SerializeDateTime(Reinterpret<TPhysical, DateTime>(values));
+        else if (typeof(TPhysical) == typeof(DateTimeOffset?))
+            SerializeNullableDateTimeOffset(Reinterpret<TPhysical, DateTimeOffset?>(values));
+        else if (typeof(TPhysical) == typeof(DateTimeOffset))
+            SerializeDateTimeOffset(Reinterpret<TPhysical, DateTimeOffset>(values));
+        else if (typeof(TPhysical) == typeof(TimeOnly?))
+            SerializeNullableTimeOnly(Reinterpret<TPhysical, TimeOnly?>(values));
+        else if (typeof(TPhysical) == typeof(TimeOnly))
+            SerializeTimeOnly(Reinterpret<TPhysical, TimeOnly>(values));
+        else
+            throw new NotSupportedException(
+                $"Converter physical CLR type '{typeof(TPhysical)}' is not supported for column '{_column.Name}'.");
+    }
 
     void SerializeStrings(ReadOnlySpan<string> values)
     {
@@ -723,6 +902,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategyContext, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+        _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, values,
+            ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && TryAssignInt32ColumnAndPageStatistics(values))
             return;
 
@@ -749,6 +930,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategyContext, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+        _bloomFilterByteLength = BloomFilterBuilder.BuildOptional(_owner.BufferWriters, _column, values,
+            ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
             AssignOptionalPageStatistics(values);
     }
@@ -770,6 +953,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategyContext, Pages,
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+        _bloomFilterByteLength = BloomFilterBuilder.BuildOptionalReferences(_owner.BufferWriters, _column, values,
+            ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
             AssignOptionalPageStatistics(values);
     }
@@ -777,9 +962,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void ISerializedColumn.Consume()
         => Consume();
 
+    void ISerializedColumn.CompleteBloomFilterWrite()
+        => _bloomFilterRetained = false;
+
     internal void Consume()
     {
         HasPendingData = false;
+        _bloomFilterRetained = _bloomFilterByteLength != 0;
         MapRowShapes = null;
     }
 
@@ -791,6 +980,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Pages.ReleaseBuffers();
         _statisticsMinValueBuffer.Dispose();
         _statisticsMaxValueBuffer.Dispose();
+        _bloomFilterBuffer.Dispose();
+        _bloomFilterByteLength = 0;
+        _bloomFilterRetained = false;
         Statistics = default;
         HasPendingData = false;
         MapRowShapes = null;
@@ -1004,6 +1196,25 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         where TTo : struct
     {
         ref var first = ref Unsafe.As<T, TTo?>(ref MemoryMarshal.GetReference(values));
+        return MemoryMarshal.CreateReadOnlySpan(ref first, values.Length);
+    }
+
+    static ReadOnlySpan<byte> AsBytes<TValue>(ReadOnlySpan<TValue> values)
+    {
+        if (values.IsEmpty)
+            return [];
+        ref var first = ref Unsafe.As<TValue, byte>(ref MemoryMarshal.GetReference(values));
+        return MemoryMarshal.CreateReadOnlySpan(ref first, checked(values.Length * Unsafe.SizeOf<TValue>()));
+    }
+
+    static ReadOnlySpan<TTo> Reinterpret<TFrom, TTo>(ReadOnlySpan<TFrom> values)
+    {
+        if (Unsafe.SizeOf<TFrom>() != Unsafe.SizeOf<TTo>())
+            throw new InvalidOperationException(
+                $"Cannot reinterpret converter values from '{typeof(TFrom)}' to '{typeof(TTo)}'.");
+        if (values.IsEmpty)
+            return [];
+        ref var first = ref Unsafe.As<TFrom, TTo>(ref MemoryMarshal.GetReference(values));
         return MemoryMarshal.CreateReadOnlySpan(ref first, values.Length);
     }
 

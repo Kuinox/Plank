@@ -1,5 +1,5 @@
+using System.Collections.Immutable;
 using Plank.Schema;
-using ZstdSharp;
 
 namespace Plank.Writing;
 
@@ -23,11 +23,24 @@ public sealed class ParquetWriterOptions
 
     public uint TargetDataPageSizeBytes { get; init; } = 1024 * 1024;
 
+    public ParquetFileVersion FileVersion { get; init; } = ParquetFileVersion.V1;
+
+    public ParquetDataPageVersion DataPageVersion { get; init; } = ParquetDataPageVersion.V2;
+
     public CompressionKind Compression { get; init; } = CompressionKind.None;
 
     public int? CompressionLevel { get; init; }
 
+    public string? CreatedBy { get; init; }
+
+    public IReadOnlyList<ParquetKeyValueMetadata> KeyValueMetadata { get; init; } = [];
+
     public bool WritePageIndexes { get; init; } = true;
+
+    /// <summary>Gets or initializes the lexicographic sort order declared for every row group written to the file.</summary>
+    public ImmutableArray<ParquetSortingColumn> SortingColumns { get; init; } = [];
+
+    public bool WritePageCrc { get; init; }
 
     public uint RowApiMaxParallelism
     {
@@ -55,37 +68,24 @@ public sealed class ParquetWriterOptions
         if (TargetDataPageSizeBytes > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(TargetDataPageSizeBytes), TargetDataPageSizeBytes,
                 $"Target data page size must be <= {int.MaxValue}.");
-        if (!Enum.IsDefined(Compression))
-            throw new ArgumentOutOfRangeException(nameof(Compression), Compression,
-                "Compression must be a defined CompressionKind value.");
-        ValidateCompressionLevel();
-    }
-
-    internal int GetCompressionLevel()
-        => CompressionLevel ?? Compression switch
+        if (SortingColumns.IsDefault)
+            throw new ArgumentException("Sorting columns must not be an uninitialized ImmutableArray.",
+                nameof(SortingColumns));
+        if (!Enum.IsDefined(FileVersion))
+            throw new ArgumentOutOfRangeException(nameof(FileVersion), FileVersion,
+                "File version must be a defined ParquetFileVersion value.");
+        if (!Enum.IsDefined(DataPageVersion))
+            throw new ArgumentOutOfRangeException(nameof(DataPageVersion), DataPageVersion,
+                "Data page version must be a defined ParquetDataPageVersion value.");
+        _ = CompressionConfiguration.ResolveLevel(Compression, CompressionLevel,
+            nameof(Compression), nameof(CompressionLevel));
+        ArgumentNullException.ThrowIfNull(KeyValueMetadata);
+        for (var i = 0; i < KeyValueMetadata.Count; i++)
         {
-            CompressionKind.Gzip => 1,
-            CompressionKind.Zstd => 1,
-            CompressionKind.Lz4 => 0,
-            CompressionKind.Brotli => 4,
-            _ => 0
-        };
-
-    void ValidateCompressionLevel()
-    {
-        if (CompressionLevel is not { } level)
-            return;
-
-        var valid = Compression switch
-        {
-            CompressionKind.Gzip => level is >= 0 and <= 9,
-            CompressionKind.Zstd => level >= Compressor.MinCompressionLevel && level <= Compressor.MaxCompressionLevel,
-            CompressionKind.Lz4 => level is 0 or >= 3 and <= 12,
-            CompressionKind.Brotli => level is >= 0 and <= 11,
-            _ => false
-        };
-        if (!valid)
-            throw new ArgumentOutOfRangeException(nameof(CompressionLevel), level,
-                $"Compression level '{level}' is not supported for '{Compression}'.");
+            var entry = KeyValueMetadata[i];
+            if (string.IsNullOrEmpty(entry.Key))
+                throw new ArgumentException($"Key-value metadata entry {i} must have a non-empty key.",
+                    nameof(KeyValueMetadata));
+        }
     }
 }

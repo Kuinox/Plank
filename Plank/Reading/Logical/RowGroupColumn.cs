@@ -29,9 +29,9 @@ public readonly struct RowGroupColumn<T>
             Definition.PhysicalType is ParquetPhysicalType.ByteArray
                 or ParquetPhysicalType.FixedLenByteArray
                 or ParquetPhysicalType.Int96)
-            return new(_rowGroup.EnumerateVariableLengthBuffers<T>(Definition.Column, _columnOrdinal)
+            return new(_rowGroup.EnumerateVariableLengthBuffers<T>(Definition, _columnOrdinal)
                 .GetEnumerator());
-        return new(_rowGroup.EnumerateBuffers<T>(Definition.Column, _columnOrdinal).GetEnumerator());
+        return new(_rowGroup.EnumerateBuffers<T>(Definition, _columnOrdinal).GetEnumerator());
     }
 
     public struct Enumerator : IDisposable

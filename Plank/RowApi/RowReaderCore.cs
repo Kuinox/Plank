@@ -12,6 +12,7 @@ namespace Plank.RowApi;
 public sealed class RowReaderCore : IDisposable
 {
     readonly RowApiColumnReadState[] _states;
+    readonly RowApiColumnReadState[] _projectedStates;
     readonly ParquetReader _reader;
     RowGroup _rowGroup;
     ParquetSchemaEvolutionOptions? _schemaEvolution;
@@ -21,6 +22,7 @@ public sealed class RowReaderCore : IDisposable
     bool _started;
     bool _hasCurrent;
     bool _disposed;
+    int _projectedStateCount;
 
     /// <summary>Initializes a generated row reader over a stream.</summary>
     /// <param name="stream">The source stream.</param>
@@ -59,6 +61,7 @@ public sealed class RowReaderCore : IDisposable
         _schemaEvolution = schemaEvolution;
         _streamSource = source as StreamReadSource;
         _states = CreateStates(schema, columns);
+        _projectedStates = new RowApiColumnReadState[_states.Length];
         _reader = new ParquetReader(CreateLooseReaderOptions(options));
         _reader.Reset(source);
         _rowGroup = default;
@@ -69,6 +72,7 @@ public sealed class RowReaderCore : IDisposable
         _disposed = false;
         ApplyProjection(projection);
         ResolveFileSchema();
+        RebuildProjectedStates();
     }
 
     /// <summary>Advances the generated reader to the next row.</summary>
@@ -116,6 +120,7 @@ public sealed class RowReaderCore : IDisposable
         _started = false;
         _hasCurrent = false;
         ResolveFileSchema();
+        RebuildProjectedStates();
     }
 
     /// <summary>Gets a generated property's current value.</summary>
@@ -139,6 +144,19 @@ public sealed class RowReaderCore : IDisposable
         ThrowIfNotPositioned();
         var state = GetBinaryState(column);
         return new RowReaderBinaryValue(state.CurrentValue, state.CurrentIsNull);
+    }
+
+    /// <summary>Gets an allocating generated nested property's current leaf shape.</summary>
+    /// <typeparam name="TShape">The generated jagged leaf shape.</typeparam>
+    /// <typeparam name="TElement">The dense physical leaf value type.</typeparam>
+    /// <param name="column">The generated nested leaf descriptor.</param>
+    /// <returns>A reference to the current materialized shape.</returns>
+    public ref TShape GetCurrentNested<TShape, TElement>(
+        RowApiNestedColumnDescriptor<TShape, TElement> column)
+    {
+        ThrowIfNotPositioned();
+        var state = GetNestedState(column);
+        return ref state.Current;
     }
 
     /// <summary>Throws if the generated reader is not positioned on a row.</summary>
@@ -181,7 +199,8 @@ public sealed class RowReaderCore : IDisposable
         => new()
         {
             BufferPool = options.BufferPool,
-            Strict = false
+            Strict = false,
+            VerifyPageCrc = options.VerifyPageCrc
         };
 
     void ApplyProjection(RowApiColumnDescriptor[]? projection)
@@ -193,15 +212,14 @@ public sealed class RowReaderCore : IDisposable
             return;
         }
 
-        var projected = new bool[_states.Length];
         for (var i = 0; i < projection.Length; i++)
-        {
-            var state = GetSchemaState(projection[i], nameof(projection));
-            projected[state.Descriptor.Column.Ordinal] = true;
-        }
+            _ = GetSchemaState(projection[i], nameof(projection));
 
         for (var i = 0; i < _states.Length; i++)
-            _states[i].ResetForProjection(projected[i]);
+            _states[i].ResetForProjection(false);
+
+        for (var i = 0; i < projection.Length; i++)
+            GetSchemaState(projection[i], nameof(projection)).ResetForProjection(true);
     }
 
     bool ReadNextRow()
@@ -213,8 +231,8 @@ public sealed class RowReaderCore : IDisposable
                 return false;
             }
 
-        for (var i = 0; i < _states.Length; i++)
-            _states[i].Advance();
+        for (var i = 0; i < _projectedStateCount; i++)
+            _projectedStates[i].Advance();
 
         _rowGroupRowsRemaining--;
         return true;
@@ -266,6 +284,17 @@ public sealed class RowReaderCore : IDisposable
 
             state.Ordinal = ordinal;
             state.Materialized = false;
+        }
+    }
+
+    void RebuildProjectedStates()
+    {
+        _projectedStateCount = 0;
+        for (var i = 0; i < _states.Length; i++)
+        {
+            var state = _states[i];
+            if (state.Projected)
+                _projectedStates[_projectedStateCount++] = state;
         }
     }
 
@@ -404,5 +433,16 @@ public sealed class RowReaderCore : IDisposable
 
         throw new InvalidOperationException(
             $"Row API column '{state.PropertyName}' is not a variable-length byte column.");
+    }
+
+    RowApiNestedColumnReadState<TShape, TElement> GetNestedState<TShape, TElement>(
+        RowApiNestedColumnDescriptor<TShape, TElement> column)
+    {
+        var state = GetSelectedState(column);
+        if (state is RowApiNestedColumnReadState<TShape, TElement> nestedState)
+            return nestedState;
+
+        throw new InvalidOperationException(
+            $"Row API column '{state.PropertyName}' cannot be read as nested shape {typeof(TShape)}.");
     }
 }

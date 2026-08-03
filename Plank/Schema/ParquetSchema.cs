@@ -44,6 +44,12 @@ public sealed record ParquetSchema
     public ParquetWriter CreateWriter(Stream stream, ParquetWriterOptions? options = null)
         => new(stream, this, options ?? ParquetWriterOptions.Default);
 
+    public ParquetWriter CreateAppender(Stream stream, ParquetAppendOptions? options = null)
+        => new(stream, this, options ?? ParquetAppendOptions.Default);
+
+    public ParquetFileMerger CreateMerger(Stream destination, ParquetMergeOptions? options = null)
+        => new(destination, this, options ?? ParquetMergeOptions.Default);
+
     internal ImmutableArray<ImmutableArray<string>> LeafPaths { get; }
 
     internal ImmutableArray<LeafProjectionInfo> LeafProjectionInfos { get; }
@@ -119,11 +125,12 @@ public sealed record ParquetSchema
                         : nextDefinitionLevel > 0 ? ParquetRepetition.Optional : ParquetRepetition.Required;
                     var options = node.Options ?? ColumnOptions.Default;
                     if (options.Repetition != repetition)
-                        options = new ColumnOptions(repetition, options.Encodings, options.TypeLength);
+                        options = new ColumnOptions(repetition, options.Encodings, options.TypeLength,
+                            options.Compression, options.CompressionLevel, options.BloomFilter);
                     var path = pathBuffer.ToArray().ToImmutableArray();
                     var columnName = string.Join(".", path);
                     columnsBuilder.Add(new Column(columnName, node.PhysicalType.Value, options, node.LogicalType,
-                        node.PageStrategy));
+                        node.PageStrategy, node.Converter, node.FieldId));
                     pathsBuilder.Add(path);
                     infosBuilder.Add(new LeafProjectionInfo(isListLeaf, listOptional, elementOptional,
                         MaxRepetitionLevel: nextRepeatedLevel, MaxDefinitionLevel: nextDefinitionLevel,
@@ -134,6 +141,7 @@ public sealed record ParquetSchema
                 {
                     if (node.Children.IsDefaultOrEmpty)
                         return false;
+                    ColumnDefinition.ValidateGroupLogicalType(node.Name, node.LogicalType, node.Children.AsSpan());
                     for (var i = 0; i < node.Children.Length; i++)
                         if (!TryCollectLeaves(node.Children[i], columnsBuilder, pathsBuilder, pathBuffer, nextRepeatedLevel,
                                 nextDefinitionLevel, infosBuilder, isListLeaf, listOptional, elementOptional,

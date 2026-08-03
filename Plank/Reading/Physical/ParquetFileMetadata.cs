@@ -1,3 +1,5 @@
+using Plank.Schema;
+
 namespace Plank.Reading.Physical;
 
 public sealed class ParquetFileMetadata
@@ -7,8 +9,13 @@ public sealed class ParquetFileMetadata
     internal ParquetBuffer ColumnBuffer;
     internal ParquetBuffer RowGroupBuffer;
     internal ParquetBuffer ColumnChunkBuffer;
+    internal ParquetBuffer SortingColumnBuffer;
     internal int FooterByteCount;
     internal int ColumnChunkCount;
+    internal int SortingColumnCount;
+    internal ParquetBuffer KeyValueMetadataBuffer;
+    internal int CreatedByOffset;
+    internal int CreatedByLength;
 
     public int FileVersion { get; internal set; }
     public ulong FooterOffset { get; internal set; }
@@ -16,6 +23,8 @@ public sealed class ParquetFileMetadata
     public int SchemaNodeCount { get; internal set; }
     public int ColumnCount { get; internal set; }
     public int RowGroupCount { get; internal set; }
+    public int KeyValueMetadataCount { get; internal set; }
+    public bool HasCreatedBy { get; internal set; }
 
     public ReadOnlySpan<ParquetSchemaNodeInfo> SchemaNodes
         => ParquetBuffer.AsReadOnlySpan<ParquetSchemaNodeInfo>(SchemaNodeBuffer, SchemaNodeCount);
@@ -28,6 +37,16 @@ public sealed class ParquetFileMetadata
 
     public ReadOnlySpan<ParquetColumnChunkInfo> ColumnChunks
         => ParquetBuffer.AsReadOnlySpan<ParquetColumnChunkInfo>(ColumnChunkBuffer, ColumnChunkCount);
+
+    public ReadOnlySpan<ParquetSortingColumn> SortingColumns
+        => ParquetBuffer.AsReadOnlySpan<ParquetSortingColumn>(SortingColumnBuffer, SortingColumnCount);
+
+    public ReadOnlySpan<ParquetKeyValueMetadataInfo> KeyValueMetadata
+        => ParquetBuffer.AsReadOnlySpan<ParquetKeyValueMetadataInfo>(KeyValueMetadataBuffer,
+            KeyValueMetadataCount);
+
+    public ReadOnlySpan<byte> CreatedByUtf8
+        => HasCreatedBy ? FooterBytes.Slice(CreatedByOffset, CreatedByLength) : [];
 
     internal Span<ParquetSchemaNodeInfo> SchemaNodeStorage
         => ParquetBuffer.AsSpan<ParquetSchemaNodeInfo>(SchemaNodeBuffer,
@@ -45,10 +64,25 @@ public sealed class ParquetFileMetadata
         => ParquetBuffer.AsSpan<ParquetColumnChunkInfo>(ColumnChunkBuffer,
             ColumnChunkBuffer.Length / System.Runtime.CompilerServices.Unsafe.SizeOf<ParquetColumnChunkInfo>());
 
+    internal Span<ParquetSortingColumn> SortingColumnStorage
+        => ParquetBuffer.AsSpan<ParquetSortingColumn>(SortingColumnBuffer,
+            SortingColumnBuffer.Length / System.Runtime.CompilerServices.Unsafe.SizeOf<ParquetSortingColumn>());
+
+    internal Span<ParquetKeyValueMetadataInfo> KeyValueMetadataStorage
+        => ParquetBuffer.AsSpan<ParquetKeyValueMetadataInfo>(KeyValueMetadataBuffer,
+            KeyValueMetadataBuffer.Length /
+            System.Runtime.CompilerServices.Unsafe.SizeOf<ParquetKeyValueMetadataInfo>());
+
     public ReadOnlySpan<byte> SchemaNodeNameUtf8(int nodeOrdinal)
     {
         ValidateOrdinal(nodeOrdinal, SchemaNodeCount, nameof(nodeOrdinal));
         return GetName(SchemaNodes[nodeOrdinal]);
+    }
+
+    public ReadOnlySpan<byte> SchemaNodeLogicalTypeCrsUtf8(int nodeOrdinal)
+    {
+        ValidateOrdinal(nodeOrdinal, SchemaNodeCount, nameof(nodeOrdinal));
+        return GetLogicalTypeCrsUtf8(SchemaNodes[nodeOrdinal].LogicalType);
     }
 
     public ParquetColumnSchemaInfo ColumnSchema(int columnOrdinal)
@@ -64,6 +98,12 @@ public sealed class ParquetFileMetadata
         return GetName(GetPathNodeOrdinal(column, segmentOrdinal));
     }
 
+    public ReadOnlySpan<byte> ColumnLogicalTypeCrsUtf8(int columnOrdinal)
+    {
+        var column = ColumnSchema(columnOrdinal);
+        return GetLogicalTypeCrsUtf8(column.LogicalType);
+    }
+
     public ParquetRowGroupInfo RowGroup(int rowGroupOrdinal)
     {
         ValidateOrdinal(rowGroupOrdinal, RowGroupCount, nameof(rowGroupOrdinal));
@@ -77,6 +117,26 @@ public sealed class ParquetFileMetadata
         return ColumnChunks[rowGroup.ColumnStart + columnOrdinal];
     }
 
+    public ReadOnlySpan<ParquetSortingColumn> RowGroupSortingColumns(int rowGroupOrdinal)
+    {
+        var rowGroup = RowGroup(rowGroupOrdinal);
+        return SortingColumns.Slice(rowGroup.SortingColumnStart, rowGroup.SortingColumnCount);
+    }
+
+    public ReadOnlySpan<byte> KeyValueMetadataKeyUtf8(int metadataOrdinal)
+    {
+        ValidateOrdinal(metadataOrdinal, KeyValueMetadataCount, nameof(metadataOrdinal));
+        var entry = KeyValueMetadata[metadataOrdinal];
+        return FooterBytes.Slice(entry.KeyOffset, entry.KeyLength);
+    }
+
+    public ReadOnlySpan<byte> KeyValueMetadataValueUtf8(int metadataOrdinal)
+    {
+        ValidateOrdinal(metadataOrdinal, KeyValueMetadataCount, nameof(metadataOrdinal));
+        var entry = KeyValueMetadata[metadataOrdinal];
+        return entry.HasValue ? FooterBytes.Slice(entry.ValueOffset, entry.ValueLength) : [];
+    }
+
     internal ReadOnlySpan<byte> FooterBytes
         => FooterBuffer.Span[..FooterByteCount];
 
@@ -87,6 +147,8 @@ public sealed class ParquetFileMetadata
         ColumnBuffer.Dispose();
         RowGroupBuffer.Dispose();
         ColumnChunkBuffer.Dispose();
+        SortingColumnBuffer.Dispose();
+        KeyValueMetadataBuffer.Dispose();
         Clear();
     }
 
@@ -95,6 +157,11 @@ public sealed class ParquetFileMetadata
 
     ReadOnlySpan<byte> GetName(ParquetSchemaNodeInfo node)
         => FooterBytes.Slice(node.NameOffset, node.NameLength);
+
+    ReadOnlySpan<byte> GetLogicalTypeCrsUtf8(LogicalTypeInfo logicalType)
+        => logicalType.HasCrs
+            ? FooterBytes.Slice(logicalType.CrsOffset, logicalType.CrsLength)
+            : [];
 
     int GetPathNodeOrdinal(ParquetColumnSchemaInfo column, int segmentOrdinal)
     {
@@ -112,8 +179,13 @@ public sealed class ParquetFileMetadata
         SchemaNodeCount = 0;
         ColumnCount = 0;
         RowGroupCount = 0;
+        KeyValueMetadataCount = 0;
+        HasCreatedBy = false;
+        CreatedByOffset = 0;
+        CreatedByLength = 0;
         FooterByteCount = 0;
         ColumnChunkCount = 0;
+        SortingColumnCount = 0;
     }
 
     static void ValidateOrdinal(int ordinal, int count, string parameterName)

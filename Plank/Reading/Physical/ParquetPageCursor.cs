@@ -147,6 +147,7 @@ public struct ParquetPageCursor : IDisposable
         }
 
         _offset = pageOffset;
+        var pageFileOffset = _chunk.ChunkOffset + (ulong)pageOffset;
         var remainingChunkLength = _chunkLength - _offset;
         var headerProbeLength = Math.Min(remainingChunkLength, MaxPageHeaderLength);
         if (boundedPageLength.HasValue)
@@ -182,6 +183,8 @@ public struct ParquetPageCursor : IDisposable
             EnsurePayloadBuffer(owner, compressedLength);
             if (compressedLength > 0)
                 owner.Source.ReadExactly(sourceOffset, _payloadBuffer.Span[..compressedLength]);
+            if (owner.VerifyPageCrc && header.Crc.HasValue)
+                VerifyPageCrc(header, ParquetCrc32.Compute(_payloadBuffer.Span[..compressedLength]), pageFileOffset);
             _payloadLength = compressedLength;
             CurrentHeader = header;
             return true;
@@ -193,6 +196,8 @@ public struct ParquetPageCursor : IDisposable
         var uncompressedLength = checked((int)header.UncompressedPageSize);
         EnsurePayloadBuffer(owner, uncompressedLength);
         var destination = _payloadBuffer.Span[..uncompressedLength];
+        var verifyPageCrc = owner.VerifyPageCrc && header.Crc.HasValue;
+        var crcState = ParquetCrc32.InitialState;
 
         if (header.Type == PageHeaderType.DataPageV2)
         {
@@ -202,7 +207,11 @@ public struct ParquetPageCursor : IDisposable
                 throw new CorruptParquetException("DataPageV2 level bytes exceed the page payload.");
 
             if (levelLength > 0)
+            {
                 owner.Source.ReadExactly(sourceOffset, destination[..levelLength]);
+                if (verifyPageCrc)
+                    crcState = ParquetCrc32.Append(crcState, destination[..levelLength]);
+            }
 
             sourceOffset += (ulong)levelLength;
             compressedLength -= levelLength;
@@ -212,11 +221,22 @@ public struct ParquetPageCursor : IDisposable
         if (compressedLength > 0)
         {
             using var compressed = owner.BufferPool.Rent(checked((uint)compressedLength));
-            owner.Source.ReadExactly(sourceOffset, compressed.Span[..compressedLength]);
-            ParquetDecompressor.DecompressInto(compressed.Span[..compressedLength], _chunk.Compression, destination);
+            var compressedPayload = compressed.Span[..compressedLength];
+            owner.Source.ReadExactly(sourceOffset, compressedPayload);
+            if (verifyPageCrc)
+            {
+                crcState = ParquetCrc32.Append(crcState, compressedPayload);
+                VerifyPageCrc(header, ParquetCrc32.Complete(crcState), pageFileOffset);
+            }
+            ParquetDecompressor.DecompressInto(compressedPayload, _chunk.Compression, destination);
         }
-        else if (!destination.IsEmpty)
-            throw new CorruptParquetException("Compressed page payload is empty but its uncompressed payload is not.");
+        else
+        {
+            if (verifyPageCrc)
+                VerifyPageCrc(header, ParquetCrc32.Complete(crcState), pageFileOffset);
+            if (!destination.IsEmpty)
+                throw new CorruptParquetException("Compressed page payload is empty but its uncompressed payload is not.");
+        }
 
         _payloadLength = uncompressedLength;
         CurrentHeader = header;
@@ -241,6 +261,14 @@ public struct ParquetPageCursor : IDisposable
             header.CompressedPageSize == 0 && header.UncompressedPageSize == 0)
             return false;
         return header.Type != PageHeaderType.DataPageV2 || header.IsCompressed;
+    }
+
+    void VerifyPageCrc(PageHeader header, uint actual, ulong pageFileOffset)
+    {
+        var expected = header.Crc!.Value;
+        if (actual != expected)
+            throw new CorruptParquetException(
+                $"Page CRC mismatch at offset {pageFileOffset} for row group {_chunk.RowGroupOrdinal}, column {_chunk.ColumnOrdinal}: expected 0x{expected:X8}, computed 0x{actual:X8}.");
     }
 
     void EnsurePayloadBuffer(ParquetFileReader owner, int length)

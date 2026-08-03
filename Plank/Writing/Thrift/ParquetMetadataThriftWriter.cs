@@ -1,6 +1,9 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Text;
+using Plank.Reading;
+using Plank.Reading.Internal;
+using Plank.Reading.Physical;
 using Plank.Schema;
 using TextEncoding = System.Text.Encoding;
 
@@ -12,13 +15,15 @@ static class ParquetMetadataThriftWriter
 
     internal static void WriteDataPageHeaderV2(ref BufferWriter destination, uint rowCount, uint valueCount, uint nullCount,
         uint repetitionLevelsByteLength, uint definitionLevelsByteLength, EncodingKind encoding, int uncompressedPageSize,
-        int compressedPageSize, bool isCompressed)
+        int compressedPageSize, bool isCompressed, uint? crc)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
         writer.WriteFieldI32(1, (int)PageType.DataPageV2);
         writer.WriteFieldI32(2, uncompressedPageSize);
         writer.WriteFieldI32(3, compressedPageSize);
+        if (crc.HasValue)
+            writer.WriteFieldI32(4, unchecked((int)crc.Value));
         writer.WriteFieldHeader(8, CompactType.Struct);
 
         var previousData = writer.BeginStruct();
@@ -34,14 +39,38 @@ static class ParquetMetadataThriftWriter
         writer.EndStruct(previous);
     }
 
+    internal static void WriteDataPageHeaderV1(ref BufferWriter destination, uint valueCount, EncodingKind encoding,
+        int uncompressedPageSize, int compressedPageSize, uint? crc)
+    {
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        writer.WriteFieldI32(1, (int)PageType.DataPage);
+        writer.WriteFieldI32(2, uncompressedPageSize);
+        writer.WriteFieldI32(3, compressedPageSize);
+        if (crc.HasValue)
+            writer.WriteFieldI32(4, unchecked((int)crc.Value));
+        writer.WriteFieldHeader(5, CompactType.Struct);
+
+        var previousData = writer.BeginStruct();
+        writer.WriteFieldI32(1, checked((int)valueCount));
+        writer.WriteFieldI32(2, GetEncoding(encoding));
+        writer.WriteFieldI32(3, GetEncoding(EncodingKind.Rle));
+        writer.WriteFieldI32(4, GetEncoding(EncodingKind.Rle));
+        writer.EndStruct(previousData);
+
+        writer.EndStruct(previous);
+    }
+
     internal static void WriteDictionaryPageHeader(ref BufferWriter destination, uint valueCount, int uncompressedPageSize,
-        int compressedPageSize)
+        int compressedPageSize, uint? crc)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
         writer.WriteFieldI32(1, (int)PageType.DictionaryPage);
         writer.WriteFieldI32(2, uncompressedPageSize);
         writer.WriteFieldI32(3, compressedPageSize);
+        if (crc.HasValue)
+            writer.WriteFieldI32(4, unchecked((int)crc.Value));
         writer.WriteFieldHeader(7, CompactType.Struct);
 
         var previousDictionary = writer.BeginStruct();
@@ -101,19 +130,147 @@ static class ParquetMetadataThriftWriter
         writer.EndStruct(previous);
     }
 
-    internal static void WriteFileMetaData(ref BufferWriter destination, ParquetSchema schema, int rowGroupCount,
-        long totalRowCount, ref BufferWriter serializedRowGroups)
+    internal static void RelocateOffsetIndex(ref BufferWriter destination, ReadOnlySpan<byte> source,
+        long relocation)
+    {
+        var reader = new CompactProtocolReader(source);
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        var hasPageLocations = false;
+        reader.BeginStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
+        {
+            if (fieldId != 1)
+            {
+                reader.Skip(type, inlineBool);
+                continue;
+            }
+            if (hasPageLocations)
+                throw new CorruptParquetException("Offset index contains duplicate page_locations fields.");
+            if (type != CompactProtocolType.List)
+                throw new CorruptParquetException("Offset index page_locations must be encoded as a list.");
+
+            var (count, elementType) = reader.ReadListHeader();
+            if (elementType != CompactProtocolType.Struct)
+                throw new CorruptParquetException("Offset index page_locations must contain structs.");
+            writer.WriteFieldHeader(1, CompactType.List);
+            writer.WriteListHeader(checked((int)count), CompactType.Struct);
+            for (var i = 0U; i < count; i++)
+            {
+                var offset = 0UL;
+                var compressedPageSize = 0U;
+                var firstRowIndex = 0UL;
+                var hasOffset = false;
+                var hasCompressedPageSize = false;
+                var hasFirstRowIndex = false;
+                reader.BeginStruct();
+                while (reader.TryReadFieldHeader(out var locationFieldId, out var locationType,
+                           out var locationInlineBool))
+                {
+                    switch (locationFieldId)
+                    {
+                        case 1:
+                            offset = reader.ReadI64AsU64(long.MaxValue);
+                            hasOffset = true;
+                            break;
+                        case 2:
+                            compressedPageSize = reader.ReadI32AsU32(int.MaxValue);
+                            hasCompressedPageSize = true;
+                            break;
+                        case 3:
+                            firstRowIndex = reader.ReadI64AsU64(long.MaxValue);
+                            hasFirstRowIndex = true;
+                            break;
+                        default:
+                            reader.Skip(locationType, locationInlineBool);
+                            break;
+                    }
+                }
+                if (!hasOffset || !hasCompressedPageSize || !hasFirstRowIndex)
+                    throw new CorruptParquetException(
+                        $"Offset index page location {i} is missing a required field.");
+
+                var previousLocation = writer.BeginStruct();
+                writer.WriteFieldI64(1, checked(checked((long)offset) + relocation));
+                writer.WriteFieldI32(2, checked((int)compressedPageSize));
+                writer.WriteFieldI64(3, checked((long)firstRowIndex));
+                writer.EndStruct(previousLocation);
+            }
+            hasPageLocations = true;
+        }
+        if (!hasPageLocations)
+            throw new CorruptParquetException("Offset index is missing page_locations.");
+        if (reader.Remaining != 0)
+            throw new CorruptParquetException("Offset index contains trailing bytes.");
+        writer.EndStruct(previous);
+    }
+
+    internal static void WriteBloomFilterHeader(ref BufferWriter destination, int bitsetByteLength)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
-        writer.WriteFieldI32(1, 1);
+        writer.WriteFieldI32(1, bitsetByteLength);
+
+        writer.WriteFieldHeader(2, CompactType.Struct);
+        var previousAlgorithm = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.Struct);
+        var previousSplitBlock = writer.BeginStruct();
+        writer.EndStruct(previousSplitBlock);
+        writer.EndStruct(previousAlgorithm);
+
+        writer.WriteFieldHeader(3, CompactType.Struct);
+        var previousHash = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.Struct);
+        var previousXxHash = writer.BeginStruct();
+        writer.EndStruct(previousXxHash);
+        writer.EndStruct(previousHash);
+
+        writer.WriteFieldHeader(4, CompactType.Struct);
+        var previousCompression = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.Struct);
+        var previousUncompressed = writer.BeginStruct();
+        writer.EndStruct(previousUncompressed);
+        writer.EndStruct(previousCompression);
+        writer.EndStruct(previous);
+    }
+
+    internal static void WriteFileMetaData(ref BufferWriter destination, ParquetSchema schema,
+        ParquetFileVersion fileVersion, int rowGroupCount, long totalRowCount, ref BufferWriter serializedRowGroups,
+        string? createdBy,
+        ReadOnlySpan<ParquetKeyValueMetadata> keyValueMetadata)
+    {
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        writer.WriteFieldI32(1, (int)fileVersion);
         WriteSchema(ref writer, schema);
         writer.WriteFieldI64(3, totalRowCount);
         writer.WriteFieldHeader(4, CompactType.List);
         writer.WriteListHeader(rowGroupCount, CompactType.Struct);
         writer.WriteRaw(ref serializedRowGroups);
+        WriteKeyValueMetadata(ref writer, keyValueMetadata);
+        if (createdBy is not null)
+            writer.WriteFieldBinary(6, createdBy);
         WriteColumnOrders(ref writer, schema.Columns.Length);
         writer.EndStruct(previous);
+    }
+
+    static void WriteKeyValueMetadata(ref CompactWriter writer,
+        ReadOnlySpan<ParquetKeyValueMetadata> keyValueMetadata)
+    {
+        if (keyValueMetadata.IsEmpty)
+            return;
+
+        writer.WriteFieldHeader(5, CompactType.List);
+        writer.WriteListHeader(keyValueMetadata.Length, CompactType.Struct);
+        for (var i = 0; i < keyValueMetadata.Length; i++)
+        {
+            var entry = keyValueMetadata[i];
+            var previous = writer.BeginStruct();
+            writer.WriteFieldBinary(1, entry.Key);
+            if (entry.Value is not null)
+                writer.WriteFieldBinary(2, entry.Value);
+            writer.EndStruct(previous);
+        }
     }
 
     static void WriteColumnOrders(ref CompactWriter writer, int columnCount)
@@ -132,10 +289,11 @@ static class ParquetMetadataThriftWriter
 
     internal static void WriteRowGroup(ref BufferWriter destination, ReadOnlySpan<Column> columns,
         ReadOnlySpan<ColumnChunkMetadata> metadata, uint rowCount)
-        => WriteRowGroup(ref destination, columns, default, metadata, rowCount);
+        => WriteRowGroup(ref destination, columns, default, metadata, default, rowCount);
 
     internal static void WriteRowGroup(ref BufferWriter destination, ReadOnlySpan<Column> columns,
-        ReadOnlySpan<string[]> columnPaths, ReadOnlySpan<ColumnChunkMetadata> metadata, uint rowCount)
+        ReadOnlySpan<string[]> columnPaths, ReadOnlySpan<ColumnChunkMetadata> metadata,
+        ReadOnlySpan<ParquetSortingColumn> sortingColumns, uint rowCount)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
@@ -161,8 +319,54 @@ static class ParquetMetadataThriftWriter
 
         writer.WriteFieldI64(2, totalUncompressedSize);
         writer.WriteFieldI64(3, rowCount);
+        if (!sortingColumns.IsEmpty)
+            WriteSortingColumns(ref writer, sortingColumns);
         if (hasRowGroupOffset)
             writer.WriteFieldI64(5, rowGroupOffset);
+        writer.WriteFieldI64(6, totalCompressedSize);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteSortingColumns(ref CompactWriter writer, ReadOnlySpan<ParquetSortingColumn> sortingColumns)
+    {
+        writer.WriteFieldHeader(4, CompactType.List);
+        writer.WriteListHeader(sortingColumns.Length, CompactType.Struct);
+        for (var i = 0; i < sortingColumns.Length; i++)
+        {
+            ref readonly var sortingColumn = ref sortingColumns[i];
+            var previous = writer.BeginStruct();
+            writer.WriteFieldI32(1, sortingColumn.ColumnOrdinal);
+            writer.WriteFieldBool(2, sortingColumn.Descending);
+            writer.WriteFieldBool(3, sortingColumn.NullsFirst);
+            writer.EndStruct(previous);
+        }
+    }
+
+    internal static void WriteImportedRowGroup(ref BufferWriter destination, ReadOnlySpan<Column> columns,
+        ReadOnlySpan<string[]> columnPaths, ReadOnlySpan<ColumnChunkMetadata> relocatedMetadata,
+        ParquetFileMetadata sourceMetadata, int sourceRowGroupOrdinal, ulong rowCount)
+    {
+        var writer = new CompactWriter(ref destination);
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(1, CompactType.List);
+        writer.WriteListHeader(columns.Length, CompactType.Struct);
+
+        long totalUncompressedSize = 0;
+        long totalCompressedSize = 0;
+        for (var i = 0; i < columns.Length; i++)
+        {
+            ref readonly var relocated = ref relocatedMetadata[i];
+            var source = sourceMetadata.ColumnChunk(sourceRowGroupOrdinal, i);
+            var path = columnPaths.IsEmpty ? GetPathSegments(columns[i].Name) : columnPaths[i];
+            WriteImportedColumnChunk(ref writer, columns[i], path, relocated, source, sourceMetadata.FooterBytes);
+            totalUncompressedSize = checked(totalUncompressedSize + relocated.TotalUncompressedSize);
+            totalCompressedSize = checked(totalCompressedSize + relocated.TotalCompressedSize);
+        }
+
+        writer.WriteFieldI64(2, totalUncompressedSize);
+        writer.WriteFieldI64(3, checked((long)rowCount));
+        if (columns.Length != 0)
+            writer.WriteFieldI64(5, GetColumnChunkStartOffset(relocatedMetadata[0]));
         writer.WriteFieldI64(6, totalCompressedSize);
         writer.EndStruct(previous);
     }
@@ -243,7 +447,9 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI32(3, GetRepetition(node.Repetition));
         writer.WriteFieldBinary(4, name);
         if (node.LogicalType is not null)
-            WriteLogicalType(ref writer, node.LogicalType);
+            WriteLogicalType(ref writer, node.LogicalType, node.FieldId);
+        else
+            WriteSchemaFieldId(ref writer, node.FieldId);
         writer.EndStruct(previous);
     }
 
@@ -253,6 +459,10 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI32(3, GetRepetition(node.Repetition));
         writer.WriteFieldBinary(4, name);
         writer.WriteFieldI32(5, node.Children.Length);
+        if (node.LogicalType is not null)
+            WriteLogicalType(ref writer, node.LogicalType, node.FieldId);
+        else
+            WriteSchemaFieldId(ref writer, node.FieldId);
         writer.EndStruct(previous);
 
         for (var i = 0; i < node.Children.Length; i++)
@@ -268,6 +478,8 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldBinary(4, name);
         writer.WriteFieldI32(5, 1);
         writer.WriteFieldI32(6, (int)ConvertedType.List);
+        if (node.FieldId is { } fieldId)
+            writer.WriteFieldI32(9, fieldId);
         writer.WriteFieldHeader(10, CompactType.Struct);
         var previousLogicalType = writer.BeginStruct();
         writer.WriteFieldHeader(3, CompactType.Struct);
@@ -303,6 +515,8 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldBinary(4, name);
         writer.WriteFieldI32(5, 1);
         writer.WriteFieldI32(6, (int)ConvertedType.Map);
+        if (node.FieldId is { } fieldId)
+            writer.WriteFieldI32(9, fieldId);
         writer.WriteFieldHeader(10, CompactType.Struct);
         var previousLogicalType = writer.BeginStruct();
         writer.WriteFieldHeader(2, CompactType.Struct);
@@ -343,12 +557,13 @@ static class ParquetMetadataThriftWriter
     static ColumnDefinition ForceRepetition(ColumnDefinition node, ParquetRepetition repetition)
         => node with { Repetition = repetition };
 
-    static void WriteLogicalType(ref CompactWriter writer, LogicalType logicalType)
+    static void WriteLogicalType(ref CompactWriter writer, LogicalType logicalType, int? fieldId)
     {
         switch (logicalType)
         {
             case LogicalType.Date:
                 writer.WriteFieldI32(6, (int)ConvertedType.Date);
+                WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
                 WriteDateLogicalType(ref writer);
                 return;
@@ -357,6 +572,7 @@ static class ParquetMetadataThriftWriter
                     writer.WriteFieldI32(6, (int)ConvertedType.TimeMillis);
                 else if (time.Unit == TimeUnit.Micros)
                     writer.WriteFieldI32(6, (int)ConvertedType.TimeMicros);
+                WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
                 WriteTimeLogicalType(ref writer, time.IsAdjustedToUtc, time.Unit);
                 return;
@@ -365,38 +581,91 @@ static class ParquetMetadataThriftWriter
                     writer.WriteFieldI32(6, (int)ConvertedType.TimestampMillis);
                 else if (timestamp.Unit == TimeUnit.Micros)
                     writer.WriteFieldI32(6, (int)ConvertedType.TimestampMicros);
+                WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
                 WriteTimestampLogicalType(ref writer, timestamp.IsAdjustedToUtc, timestamp.Unit);
                 return;
             case LogicalType.Int integer:
                 writer.WriteFieldI32(6, GetConvertedType(integer));
+                WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
                 WriteIntegerLogicalType(ref writer, integer.BitWidth, integer.IsSigned);
                 return;
             case LogicalType.String:
                 writer.WriteFieldI32(6, (int)ConvertedType.Utf8);
+                WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
                 WriteStringLogicalType(ref writer);
                 return;
             case LogicalType.Json:
                 writer.WriteFieldI32(6, (int)ConvertedType.Json);
+                WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
                 WriteJsonLogicalType(ref writer);
                 return;
+            case LogicalType.Bson:
+                writer.WriteFieldI32(6, (int)ConvertedType.Bson);
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteEmptyLogicalType(ref writer, 13);
+                return;
+            case LogicalType.Enum:
+                writer.WriteFieldI32(6, (int)ConvertedType.Enum);
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteEmptyLogicalType(ref writer, 4);
+                return;
             case LogicalType.Uuid:
+                WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
                 WriteUuidLogicalType(ref writer);
+                return;
+            case LogicalType.Float16:
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteEmptyLogicalType(ref writer, 15);
+                return;
+            case LogicalType.Interval:
+                writer.WriteFieldI32(6, (int)ConvertedType.Interval);
+                WriteSchemaFieldId(ref writer, fieldId);
+                return;
+            case LogicalType.Unknown:
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteEmptyLogicalType(ref writer, 11);
+                return;
+            case LogicalType.Variant variant:
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteVariantLogicalType(ref writer, variant.SpecificationVersion);
+                return;
+            case LogicalType.Geometry geometry:
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteGeometryLogicalType(ref writer, geometry.Crs);
+                return;
+            case LogicalType.Geography geography:
+                WriteSchemaFieldId(ref writer, fieldId);
+                writer.WriteFieldHeader(10, CompactType.Struct);
+                WriteGeographyLogicalType(ref writer, geography.Crs, geography.Algorithm);
                 return;
             case LogicalType.Decimal decimalType:
                 writer.WriteFieldI32(6, (int)ConvertedType.Decimal);
                 writer.WriteFieldI32(7, decimalType.Scale);
                 writer.WriteFieldI32(8, decimalType.Precision);
+                WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
                 WriteDecimalLogicalType(ref writer, decimalType.Scale, decimalType.Precision);
                 return;
             default:
                 throw new NotSupportedException($"Logical type '{logicalType.GetType()}' is not supported.");
         }
+    }
+
+    static void WriteSchemaFieldId(ref CompactWriter writer, int? fieldId)
+    {
+        if (fieldId is { } value)
+            writer.WriteFieldI32(9, value);
     }
 
     static void WriteDateLogicalType(ref CompactWriter writer)
@@ -456,6 +725,51 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldHeader(14, CompactType.Struct);
         var previousUuid = writer.BeginStruct();
         writer.EndStruct(previousUuid);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteEmptyLogicalType(ref CompactWriter writer, int fieldId)
+    {
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(fieldId, CompactType.Struct);
+        var previousValue = writer.BeginStruct();
+        writer.EndStruct(previousValue);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteVariantLogicalType(ref CompactWriter writer, sbyte? specificationVersion)
+    {
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(16, CompactType.Struct);
+        var previousVariant = writer.BeginStruct();
+        if (specificationVersion.HasValue)
+            writer.WriteFieldByte(1, unchecked((byte)specificationVersion.Value));
+        writer.EndStruct(previousVariant);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteGeometryLogicalType(ref CompactWriter writer, string? crs)
+    {
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(17, CompactType.Struct);
+        var previousGeometry = writer.BeginStruct();
+        if (crs is not null)
+            writer.WriteFieldBinary(1, crs);
+        writer.EndStruct(previousGeometry);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteGeographyLogicalType(ref CompactWriter writer, string? crs,
+        EdgeInterpolationAlgorithm? algorithm)
+    {
+        var previous = writer.BeginStruct();
+        writer.WriteFieldHeader(18, CompactType.Struct);
+        var previousGeography = writer.BeginStruct();
+        if (crs is not null)
+            writer.WriteFieldBinary(1, crs);
+        if (algorithm.HasValue)
+            writer.WriteFieldI32(2, (int)algorithm.Value);
+        writer.EndStruct(previousGeography);
         writer.EndStruct(previous);
     }
 
@@ -523,6 +837,11 @@ static class ParquetMetadataThriftWriter
         if (metadata.HasDictionaryPage)
             writer.WriteFieldI64(11, metadata.DictionaryPageOffset);
         WriteStatistics(ref writer, metadata.Statistics);
+        if (metadata.BloomFilterLength > 0)
+        {
+            writer.WriteFieldI64(14, metadata.BloomFilterOffset);
+            writer.WriteFieldI32(15, checked((int)metadata.BloomFilterLength));
+        }
         writer.EndStruct(previousMetadata);
 
         if (metadata.OffsetIndexLength > 0)
@@ -534,6 +853,40 @@ static class ParquetMetadataThriftWriter
         {
             writer.WriteFieldI64(6, metadata.ColumnIndexOffset);
             writer.WriteFieldI32(7, checked((int)metadata.ColumnIndexLength));
+        }
+        writer.EndStruct(previousChunk);
+    }
+
+    static void WriteImportedColumnChunk(ref CompactWriter writer, Column column, ReadOnlySpan<string> path,
+        in ColumnChunkMetadata relocated, in ParquetColumnChunkInfo source, ReadOnlySpan<byte> sourceFooter)
+    {
+        var previousChunk = writer.BeginStruct();
+        writer.WriteFieldI64(2, GetColumnChunkStartOffset(relocated));
+        writer.WriteFieldHeader(3, CompactType.Struct);
+
+        var previousMetadata = writer.BeginStruct();
+        writer.WriteFieldI32(1, GetPhysicalType(column.PhysicalType));
+        WriteEncodings(ref writer, source.Encodings);
+        WritePath(ref writer, path);
+        writer.WriteFieldI32(4, GetCompression(source.Compression));
+        writer.WriteFieldI64(5, checked((long)source.ValueCount));
+        writer.WriteFieldI64(6, relocated.TotalUncompressedSize);
+        writer.WriteFieldI64(7, relocated.TotalCompressedSize);
+        writer.WriteFieldI64(9, relocated.DataPageOffset);
+        if (relocated.HasDictionaryPage)
+            writer.WriteFieldI64(11, relocated.DictionaryPageOffset);
+        WriteImportedStatistics(ref writer, source.Statistics, sourceFooter);
+        writer.EndStruct(previousMetadata);
+
+        if (relocated.OffsetIndexLength > 0)
+        {
+            writer.WriteFieldI64(4, relocated.OffsetIndexOffset);
+            writer.WriteFieldI32(5, checked((int)relocated.OffsetIndexLength));
+        }
+        if (relocated.ColumnIndexLength > 0)
+        {
+            writer.WriteFieldI64(6, relocated.ColumnIndexOffset);
+            writer.WriteFieldI32(7, checked((int)relocated.ColumnIndexLength));
         }
         writer.EndStruct(previousChunk);
     }
@@ -569,6 +922,31 @@ static class ParquetMetadataThriftWriter
             writer.WriteFieldBool(8, true);
         if (statistics.NanCount >= 0)
             writer.WriteFieldI64(9, statistics.NanCount);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteImportedStatistics(ref CompactWriter writer, in EncodedStatistics statistics,
+        ReadOnlySpan<byte> sourceFooter)
+    {
+        if (!statistics.HasValues)
+            return;
+
+        writer.WriteFieldHeader(12, CompactType.Struct);
+        var previous = writer.BeginStruct();
+        if (statistics.HasNullCount)
+            writer.WriteFieldI64(3, statistics.NullCount);
+        if (statistics.HasDistinctCount)
+            writer.WriteFieldI64(4, statistics.DistinctCount);
+        if (statistics.HasMaximum)
+            writer.WriteFieldBinary(5,
+                sourceFooter.Slice(statistics.MaximumOffset, statistics.MaximumLength));
+        if (statistics.HasMinimum)
+            writer.WriteFieldBinary(6,
+                sourceFooter.Slice(statistics.MinimumOffset, statistics.MinimumLength));
+        if (statistics.HasMaximum)
+            writer.WriteFieldBool(7, statistics.IsMaximumExact);
+        if (statistics.HasMinimum)
+            writer.WriteFieldBool(8, statistics.IsMinimumExact);
         writer.EndStruct(previous);
     }
 
@@ -660,6 +1038,14 @@ static class ParquetMetadataThriftWriter
         writer.WriteI32(data);
         if (includeLevels)
             writer.WriteI32(levels);
+    }
+
+    static void WriteEncodings(ref CompactWriter writer, ParquetColumnChunkEncodings encodings)
+    {
+        writer.WriteFieldHeader(2, CompactType.List);
+        writer.WriteListHeader(encodings.Count, CompactType.I32);
+        for (var i = 0; i < encodings.Count; i++)
+            writer.WriteI32(GetEncoding(encodings[i]));
     }
 
     static string[] GetPathSegments(string columnName)
@@ -804,6 +1190,7 @@ static class ParquetMetadataThriftWriter
         Utf8 = 0,
         Map = 1,
         List = 3,
+        Enum = 4,
         Decimal = 5,
         Date = 6,
         TimeMillis = 7,
@@ -818,7 +1205,9 @@ static class ParquetMetadataThriftWriter
         Int16 = 16,
         Int32 = 17,
         Int64 = 18,
-        Json = 19
+        Json = 19,
+        Bson = 20,
+        Interval = 21
     }
 
     enum CompactType : byte

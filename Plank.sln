@@ -28,8 +28,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Fuzzing.Target", "Pla
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Fuzzing.Reader.Target", "Plank.Fuzzing.Reader.Target\Plank.Fuzzing.Reader.Target.csproj", "{F49E820C-A458-486D-ABDC-DB28CED268F8}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plank.Untyped", "Plank.Untyped\Plank.Untyped.csproj", "{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -196,18 +194,6 @@ Global
 		{F49E820C-A458-486D-ABDC-DB28CED268F8}.Release|x64.Build.0 = Release|Any CPU
 		{F49E820C-A458-486D-ABDC-DB28CED268F8}.Release|x86.ActiveCfg = Release|Any CPU
 		{F49E820C-A458-486D-ABDC-DB28CED268F8}.Release|x86.Build.0 = Release|Any CPU
-		{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}.Debug|x64.Build.0 = Debug|Any CPU
-		{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}.Debug|x86.Build.0 = Debug|Any CPU
-		{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}.Release|Any CPU.Build.0 = Release|Any CPU
-		{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}.Release|x64.ActiveCfg = Release|Any CPU
-		{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}.Release|x64.Build.0 = Release|Any CPU
-		{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}.Release|x86.ActiveCfg = Release|Any CPU
-		{AF964D10-05A8-4E39-A1C3-8693E0DD7ABB}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
