@@ -45,6 +45,8 @@ static class ColumnChunkReader
             return TryDecodeDictionaryIntoNative<T, float>(header, payload, column, ref state, bufferPool);
         if (physicalType == typeof(double))
             return TryDecodeDictionaryIntoNative<T, double>(header, payload, column, ref state, bufferPool);
+        if (physicalType == typeof(decimal))
+            return TryDecodeDictionaryIntoNative<T, decimal>(header, payload, column, ref state, bufferPool);
         if (physicalType == typeof(byte))
             return TryDecodeDictionaryIntoNative<T, byte>(header, payload, column, ref state, bufferPool);
         if (physicalType == typeof(ushort))
@@ -348,6 +350,9 @@ static class ColumnChunkReader
                 column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(double))
             return TryDecodeNullableValues<T, double>(payload, definitionPayload, valueCount, physicalCount,
+                column, encoding, definitionLevelEncoding, ref state, bufferPool);
+        if (physicalType == typeof(decimal))
+            return TryDecodeNullableValues<T, decimal>(payload, definitionPayload, valueCount, physicalCount,
                 column, encoding, definitionLevelEncoding, ref state, bufferPool);
         if (physicalType == typeof(byte))
             return TryDecodeNullableValues<T, byte>(payload, definitionPayload, valueCount, physicalCount,
@@ -1022,6 +1027,54 @@ static class ColumnChunkReader
             }
             return true;
         }
+        if (typeof(T) == typeof(decimal))
+        {
+            var typed = Unsafe.As<Span<T>, Span<decimal>>(ref destination);
+            switch (column.PhysicalType)
+            {
+                case ParquetPhysicalType.Int32:
+                    ValidatePlainPayload(payload, valueCount, sizeof(int));
+                    for (var i = 0; i < typed.Length; i++)
+                        typed[i] = ParquetDecimalConverter.FromInt32(
+                            BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * sizeof(int), sizeof(int))),
+                            column);
+                    return true;
+                case ParquetPhysicalType.Int64:
+                    ValidatePlainPayload(payload, valueCount, sizeof(long));
+                    for (var i = 0; i < typed.Length; i++)
+                        typed[i] = ParquetDecimalConverter.FromInt64(
+                            BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long))),
+                            column);
+                    return true;
+                case ParquetPhysicalType.FixedLenByteArray:
+                {
+                    var valueLength = GetFixedBinaryLength(column);
+                    ValidatePlainPayload(payload, valueCount, checked((uint)valueLength));
+                    for (var i = 0; i < typed.Length; i++)
+                        typed[i] = ParquetDecimalConverter.ReadBigEndian(
+                            payload.Slice(i * valueLength, valueLength), column);
+                    return true;
+                }
+                case ParquetPhysicalType.ByteArray:
+                {
+                    var offset = 0;
+                    for (var i = 0; i < typed.Length; i++)
+                    {
+                        if (payload.Length - offset < sizeof(int))
+                            throw new CorruptParquetException(
+                                $"Plain decimal payload ended before length prefix {i}.");
+                        var length = BinaryPrimitives.ReadInt32LittleEndian(payload[offset..]);
+                        offset += sizeof(int);
+                        if (length <= 0 || length > payload.Length - offset)
+                            throw new CorruptParquetException(
+                                $"Plain decimal value {i} declares invalid length {length}.");
+                        typed[i] = ParquetDecimalConverter.ReadBigEndian(payload.Slice(offset, length), column);
+                        offset += length;
+                    }
+                    return true;
+                }
+            }
+        }
 
         return false;
     }
@@ -1118,6 +1171,40 @@ static class ColumnChunkReader
                         (payload[((int)valueCount * 3) + i] << 24)));
                 return true;
             }
+            case ParquetPhysicalType.Int32 when typeof(T) == typeof(decimal):
+            {
+                ValidatePlainPayload(payload, valueCount, sizeof(int));
+                var typed = Unsafe.As<Span<T>, Span<decimal>>(ref destination);
+                var raw = MemoryMarshal.Cast<decimal, int>(typed)[..typed.Length];
+                DecodeByteStreamSplitInt32(payload, raw);
+                for (var i = typed.Length - 1; i >= 0; i--)
+                    typed[i] = ParquetDecimalConverter.FromInt32(raw[i], column);
+                return true;
+            }
+            case ParquetPhysicalType.Int64 when typeof(T) == typeof(decimal):
+            {
+                ValidatePlainPayload(payload, valueCount, sizeof(long));
+                var typed = Unsafe.As<Span<T>, Span<decimal>>(ref destination);
+                var raw = MemoryMarshal.Cast<decimal, long>(typed)[..typed.Length];
+                DecodeByteStreamSplitInt64(payload, raw);
+                for (var i = typed.Length - 1; i >= 0; i--)
+                    typed[i] = ParquetDecimalConverter.FromInt64(raw[i], column);
+                return true;
+            }
+            case ParquetPhysicalType.FixedLenByteArray when typeof(T) == typeof(decimal):
+            {
+                var valueLength = GetFixedBinaryLength(column);
+                ValidatePlainPayload(payload, valueCount, checked((uint)valueLength));
+                var typed = Unsafe.As<Span<T>, Span<decimal>>(ref destination);
+                Span<byte> encoded = valueLength <= 256 ? stackalloc byte[valueLength] : new byte[valueLength];
+                for (var i = 0; i < typed.Length; i++)
+                {
+                    for (var lane = 0; lane < valueLength; lane++)
+                        encoded[lane] = payload[(lane * typed.Length) + i];
+                    typed[i] = ParquetDecimalConverter.ReadBigEndian(encoded, column);
+                }
+                return true;
+            }
             default:
                 return false;
         }
@@ -1158,6 +1245,24 @@ static class ColumnChunkReader
         {
             DeltaBinaryPackedDecoder.ReadInt64(payload,
                 Unsafe.As<Span<T>, Span<long>>(ref destination));
+            return true;
+        }
+        if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(decimal))
+        {
+            var typed = Unsafe.As<Span<T>, Span<decimal>>(ref destination);
+            var raw = MemoryMarshal.Cast<decimal, int>(typed)[..typed.Length];
+            DeltaBinaryPackedDecoder.ReadInt32(payload, raw);
+            for (var i = typed.Length - 1; i >= 0; i--)
+                typed[i] = ParquetDecimalConverter.FromInt32(raw[i], column);
+            return true;
+        }
+        if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(decimal))
+        {
+            var typed = Unsafe.As<Span<T>, Span<decimal>>(ref destination);
+            var raw = MemoryMarshal.Cast<decimal, long>(typed)[..typed.Length];
+            DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
+            for (var i = typed.Length - 1; i >= 0; i--)
+                typed[i] = ParquetDecimalConverter.FromInt64(raw[i], column);
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(DateOnly))
@@ -1743,6 +1848,19 @@ static class ColumnChunkReader
             return true;
         }
 
+        if (typeof(T) == typeof(decimal))
+        {
+            var typed = (decimal[])(object)EnsureManagedBuffer(ref valuesBuffer, valueCount);
+            if (!TryDecodePlainIntoNative(payload, column, valueCount,
+                    typed.AsSpan(0, checked((int)valueCount))))
+            {
+                values = default;
+                return false;
+            }
+            values = new ReadOnlyMemory<T>(valuesBuffer!, 0, checked((int)valueCount));
+            return true;
+        }
+
         values = default;
         return false;
     }
@@ -1829,6 +1947,19 @@ static class ColumnChunkReader
                 values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
                 return true;
             }
+            case ParquetPhysicalType.Int32 or ParquetPhysicalType.Int64 or ParquetPhysicalType.FixedLenByteArray
+                when typeof(T) == typeof(decimal):
+            {
+                var typed = (decimal[])(object)EnsureManagedBuffer(ref valuesBuffer, valueCount);
+                if (!TryDecodeByteStreamSplitIntoNative(payload, column, valueCount,
+                        typed.AsSpan(0, checked((int)valueCount))))
+                {
+                    values = default;
+                    return false;
+                }
+                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, checked((int)valueCount));
+                return true;
+            }
             default:
                 values = default;
                 return false;
@@ -1852,6 +1983,18 @@ static class ColumnChunkReader
                 var typed = (long[])(object)EnsureManagedBuffer(ref valuesBuffer, valueCount);
                 DeltaBinaryPackedDecoder.ReadInt64(payload, typed.AsSpan(0, (int)valueCount));
                 values = new ReadOnlyMemory<T>(valuesBuffer!, 0, (int)valueCount);
+                return true;
+            }
+            case ParquetPhysicalType.Int32 or ParquetPhysicalType.Int64 when typeof(T) == typeof(decimal):
+            {
+                var typed = (decimal[])(object)EnsureManagedBuffer(ref valuesBuffer, valueCount);
+                if (!TryDecodeDeltaBinaryPackedIntoNative(payload, column,
+                        typed.AsSpan(0, checked((int)valueCount))))
+                {
+                    values = default;
+                    return false;
+                }
+                values = new ReadOnlyMemory<T>(valuesBuffer!, 0, checked((int)valueCount));
                 return true;
             }
             default:
@@ -2379,7 +2522,17 @@ static class ColumnChunkReader
     }
 
     static Array DecodePlain(ReadOnlySpan<byte> payload, Column column, uint valueCount, Type targetType)
-        => column.PhysicalType switch
+    {
+        if (targetType == typeof(decimal))
+        {
+            var values = new decimal[checked((int)valueCount)];
+            if (TryDecodePlainIntoNative(payload, column, valueCount, values))
+                return values;
+            throw new CorruptParquetException(
+                $"Decimal column '{column.Name}' cannot be decoded from physical type '{column.PhysicalType}'.");
+        }
+
+        return column.PhysicalType switch
         {
             ParquetPhysicalType.Boolean => DecodePlainBoolean(payload, valueCount, targetType),
             ParquetPhysicalType.Int32 => DecodePlainInt32(payload, valueCount, column.LogicalType, targetType),
@@ -2392,6 +2545,7 @@ static class ColumnChunkReader
             ParquetPhysicalType.Int96 => DecodeFixedLengthByteArray(payload, valueCount, 12, targetType),
             _ => throw new NotSupportedException($"Physical type '{column.PhysicalType}' is not supported.")
         };
+    }
 
     static Array DecodePlainBoolean(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
     {
@@ -2585,6 +2739,15 @@ static class ColumnChunkReader
 
     static Array DecodeByteStreamSplit(ReadOnlySpan<byte> payload, Column column, uint valueCount, Type targetType)
     {
+        if (targetType == typeof(decimal))
+        {
+            var values = new decimal[checked((int)valueCount)];
+            if (TryDecodeByteStreamSplitIntoNative(payload, column, valueCount, values))
+                return values;
+            throw new CorruptParquetException(
+                $"Decimal column '{column.Name}' cannot be decoded with byte-stream split encoding.");
+        }
+
         switch (column.PhysicalType)
         {
             case ParquetPhysicalType.Int32:
@@ -2687,6 +2850,28 @@ static class ColumnChunkReader
 
     static Array DecodeDeltaBinaryPacked(ReadOnlySpan<byte> payload, Column column, Type targetType)
     {
+        if (targetType == typeof(decimal))
+        {
+            if (column.PhysicalType == ParquetPhysicalType.Int32)
+            {
+                var raw = DeltaBinaryPackedDecoder.ReadInt32(payload);
+                var values = new decimal[raw.Length];
+                for (var i = 0; i < values.Length; i++)
+                    values[i] = ParquetDecimalConverter.FromInt32(raw[i], column);
+                return values;
+            }
+            if (column.PhysicalType == ParquetPhysicalType.Int64)
+            {
+                var raw = DeltaBinaryPackedDecoder.ReadInt64(payload);
+                var values = new decimal[raw.Length];
+                for (var i = 0; i < values.Length; i++)
+                    values[i] = ParquetDecimalConverter.FromInt64(raw[i], column);
+                return values;
+            }
+            throw new CorruptParquetException(
+                $"Decimal column '{column.Name}' cannot be decoded with delta binary packed encoding.");
+        }
+
         if (column.PhysicalType == ParquetPhysicalType.Int32)
         {
             var values = DeltaBinaryPackedDecoder.ReadInt32(payload);
@@ -2820,6 +3005,7 @@ static class ColumnChunkReader
         if (typeof(T) == typeof(bool?)) return typeof(bool);
         if (typeof(T) == typeof(float?)) return typeof(float);
         if (typeof(T) == typeof(double?)) return typeof(double);
+        if (typeof(T) == typeof(decimal?)) return typeof(decimal);
         if (typeof(T) == typeof(byte?)) return typeof(byte);
         if (typeof(T) == typeof(ushort?)) return typeof(ushort);
         if (typeof(T) == typeof(uint?)) return typeof(uint);
@@ -2883,6 +3069,12 @@ static class ColumnChunkReader
         {
             var src = (double[])physicalValues;
             var dst = (double?[])(object)result;
+            for (var i = 0; i < valueCount; i++) dst[i] = src[i];
+        }
+        else if (typeof(T) == typeof(decimal?))
+        {
+            var src = (decimal[])physicalValues;
+            var dst = (decimal?[])(object)result;
             for (var i = 0; i < valueCount; i++) dst[i] = src[i];
         }
         else if (typeof(T) == typeof(byte?))
@@ -3105,6 +3297,13 @@ static class ColumnChunkReader
         {
             var src = (double[])physicalValues;
             var dst = (double?[])(object)result;
+            for (var i = 0; i < totalValueCount; i++)
+                dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
+        }
+        else if (typeof(T) == typeof(decimal?))
+        {
+            var src = (decimal[])physicalValues;
+            var dst = (decimal?[])(object)result;
             for (var i = 0; i < totalValueCount; i++)
                 dst[i] = definitionLevels[i] != 0 ? src[valueIndex++] : null;
         }
