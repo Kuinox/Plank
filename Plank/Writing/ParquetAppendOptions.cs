@@ -8,6 +8,8 @@ public sealed class ParquetAppendOptions
 
     public bool PreserveExistingMetadata { get; init; } = true;
 
+    public bool AppendToLatestRowGroup { get; init; }
+
     internal void Validate()
     {
         ArgumentNullException.ThrowIfNull(WriterOptions);

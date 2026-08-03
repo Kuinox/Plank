@@ -13,6 +13,8 @@ Plank.Reading.Physical.ParquetKeyValueMetadataInfo.ValueLength.get -> int
 Plank.Schema.ParquetSchema.CreateAppender(System.IO.Stream! stream, Plank.Writing.ParquetAppendOptions? options = null) -> Plank.Writing.ParquetWriter!
 Plank.Writing.ParquetAppendOptions
 Plank.Writing.ParquetAppendOptions.ParquetAppendOptions() -> void
+Plank.Writing.ParquetAppendOptions.AppendToLatestRowGroup.get -> bool
+Plank.Writing.ParquetAppendOptions.AppendToLatestRowGroup.init -> void
 Plank.Writing.ParquetAppendOptions.PreserveExistingMetadata.get -> bool
 Plank.Writing.ParquetAppendOptions.PreserveExistingMetadata.init -> void
 Plank.Writing.ParquetAppendOptions.WriterOptions.get -> Plank.Writing.ParquetWriterOptions!

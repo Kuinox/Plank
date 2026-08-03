@@ -35,6 +35,12 @@ public sealed class ParquetWriter
     internal long FileOffset;
     int _rowGroupCount;
     long _totalRowCount;
+    LatestRowGroupValues? _latestRowGroupValues;
+    byte[]? _latestRowGroupMetadata;
+    long _latestRowGroupOffset;
+    long _originalFooterOffset;
+    uint _latestRowCount;
+    bool _replacingLatestRowGroup;
     bool _rowGroupOpen;
     bool _streamDisposed;
 
@@ -117,7 +123,9 @@ public sealed class ParquetWriter
 
     public SerializedColumn<T> CreateSerializedColumn<T>(LeafColumn column)
     {
-        var serialized = new SerializedColumn<T>(this, column, _options.InitialPageCapacity);
+        var ordinal = GetColumnOrdinal(column);
+        var retainedValues = _latestRowGroupValues?.GetValues<T>(checked((int)ordinal));
+        var serialized = new SerializedColumn<T>(this, column, _options.InitialPageCapacity, retainedValues);
         _serializedColumns.Add(serialized);
         return serialized;
     }
@@ -143,6 +151,8 @@ public sealed class ParquetWriter
         if (_rowGroupCount == int.MaxValue)
             throw new InvalidOperationException($"Cannot write more than {int.MaxValue} row groups to one file.");
 
+        PrepareLatestRowGroupReplacement();
+
         _rowGroupOpen = true;
         if (ColumnCount == 0)
         {
@@ -161,6 +171,7 @@ public sealed class ParquetWriter
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot close the file while a row group is still open.");
 
+        RestoreUnchangedLatestRowGroup();
         WriteFileFooter();
         DisposeCurrentStream();
         ReleaseBuffers();
@@ -234,6 +245,9 @@ public sealed class ParquetWriter
         _rowGroupCount = 0;
         _totalRowCount = 0;
         _rowGroupOpen = false;
+        _latestRowGroupValues = null;
+        _latestRowGroupMetadata = null;
+        _replacingLatestRowGroup = false;
         FileOffset = 0;
         if (!SerializedRowGroupsMetadata.IsInitialized)
             SerializedRowGroupsMetadata = BufferWriters.CreateMetadataBufferWriter();
@@ -259,9 +273,24 @@ public sealed class ParquetWriter
         reader.Reset(stream);
         var metadata = reader.PhysicalReader.Metadata;
 
+        var appendLatest = appendOptions.AppendToLatestRowGroup && metadata.RowGroupCount > 0;
+        var retainedRowGroupCount = metadata.RowGroupCount - (appendLatest ? 1 : 0);
+        if (appendLatest)
+        {
+            var latestOrdinal = metadata.RowGroupCount - 1;
+            var latestPhysical = metadata.RowGroups[latestOrdinal];
+            _latestRowGroupValues = LatestRowGroupValues.Read(reader.RowGroups[latestOrdinal], ColumnsByOrdinal);
+            var latestRelativeOffset = checked((int)(latestPhysical.MetadataOffset - metadata.FooterOffset));
+            _latestRowGroupMetadata = metadata.FooterBytes
+                .Slice(latestRelativeOffset, latestPhysical.MetadataLength).ToArray();
+            _latestRowGroupOffset = checked((long)latestPhysical.ColumnChunkOffset);
+            _originalFooterOffset = checked((long)metadata.FooterOffset);
+            _latestRowCount = checked((uint)latestPhysical.RowCount);
+        }
+
         SerializedRowGroupsMetadata.Reset();
         long totalRowCount = 0;
-        for (var i = 0; i < metadata.RowGroupCount; i++)
+        for (var i = 0; i < retainedRowGroupCount; i++)
         {
             var rowGroup = metadata.RowGroups[i];
             var relativeOffset = checked((int)(rowGroup.MetadataOffset - metadata.FooterOffset));
@@ -282,13 +311,40 @@ public sealed class ParquetWriter
 
         _stream = stream;
         _streamDisposed = false;
-        _rowGroupCount = metadata.RowGroupCount;
+        _rowGroupCount = retainedRowGroupCount;
         _totalRowCount = totalRowCount;
         _rowGroupOpen = false;
         FileOffset = checked((long)metadata.FooterOffset);
         stream.Position = FileOffset;
         stream.SetLength(FileOffset);
         SerializedFileMetadata.Reset();
+    }
+
+    void PrepareLatestRowGroupReplacement()
+    {
+        if (_latestRowGroupMetadata is null)
+            return;
+
+        _stream.Position = _latestRowGroupOffset;
+        _stream.SetLength(_latestRowGroupOffset);
+        FileOffset = _latestRowGroupOffset;
+        _latestRowGroupMetadata = null;
+        _replacingLatestRowGroup = true;
+    }
+
+    void RestoreUnchangedLatestRowGroup()
+    {
+        if (_latestRowGroupMetadata is not { } metadata)
+            return;
+
+        SerializedRowGroupsMetadata.Write(metadata);
+        _rowGroupCount++;
+        _totalRowCount = checked(_totalRowCount + _latestRowCount);
+        _stream.Position = _originalFooterOffset;
+        _stream.SetLength(_originalFooterOffset);
+        FileOffset = _originalFooterOffset;
+        _latestRowGroupMetadata = null;
+        _latestRowGroupValues = null;
     }
 
     static string? DecodeCreatedBy(Reading.Physical.ParquetFileMetadata metadata)
@@ -351,5 +407,10 @@ public sealed class ParquetWriter
         _rowGroupCount++;
         _totalRowCount = checked(_totalRowCount + rowCount);
         _rowGroupOpen = false;
+        if (_replacingLatestRowGroup)
+        {
+            _latestRowGroupValues = null;
+            _replacingLatestRowGroup = false;
+        }
     }
 }
