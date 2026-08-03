@@ -1044,7 +1044,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var physicalType = inferredPhysicalType;
         var logicalType = inferredLogicalType;
         ImmutableArray<string> encodings = [];
-        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref encodings, out error))
+        var bloomFilter = false;
+        var bloomFilterFalsePositiveProbability = 0.01;
+        var bloomFilterExpectedDistinctValueCount = 0U;
+        var bloomFilterMaximumBytes = 128U * 1024 * 1024;
+        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref encodings,
+                ref bloomFilter, ref bloomFilterFalsePositiveProbability, ref bloomFilterExpectedDistinctValueCount,
+                ref bloomFilterMaximumBytes, out error))
             return false;
         if (columnName.Length == 0)
         {
@@ -1054,7 +1060,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
         column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType, property.Name, encodings,
-            GetTypeLength(physicalType, clrTypeName, logicalType));
+            GetTypeLength(physicalType, clrTypeName, logicalType), bloomFilter, bloomFilterFalsePositiveProbability,
+            bloomFilterExpectedDistinctValueCount, bloomFilterMaximumBytes);
         return true;
     }
 
@@ -1073,7 +1080,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     }
 
     static bool TryReadColumnOverrides(IPropertySymbol property, ref string columnName, ref string physicalType,
-        ref LogicalTypeSpec? logicalType, ref ImmutableArray<string> encodings, out string error)
+        ref LogicalTypeSpec? logicalType, ref ImmutableArray<string> encodings, ref bool bloomFilter,
+        ref double bloomFilterFalsePositiveProbability, ref uint bloomFilterExpectedDistinctValueCount,
+        ref uint bloomFilterMaximumBytes, out string error)
     {
         error = string.Empty;
         var attributes = property.GetAttributes()
@@ -1130,7 +1139,19 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     error = $"Property '{property.Name}' declares an invalid LogicalTypeKind override.";
                     return false;
                 }
+                continue;
             }
+
+            if (namedArgument.Key == "BloomFilter" && namedArgument.Value.Value is bool enabled)
+                bloomFilter = enabled;
+            else if (namedArgument.Key == "BloomFilterFalsePositiveProbability" &&
+                     namedArgument.Value.Value is double probability)
+                bloomFilterFalsePositiveProbability = probability;
+            else if (namedArgument.Key == "BloomFilterExpectedDistinctValueCount" &&
+                     namedArgument.Value.Value is uint expectedDistinctValueCount)
+                bloomFilterExpectedDistinctValueCount = expectedDistinctValueCount;
+            else if (namedArgument.Key == "BloomFilterMaximumBytes" && namedArgument.Value.Value is uint maximumBytes)
+                bloomFilterMaximumBytes = maximumBytes;
         }
 
         return true;
@@ -1652,6 +1673,24 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append(", ").Append(column.TypeLength);
         }
 
+        if (column.BloomFilter)
+        {
+            if (column.TypeLength == 0)
+            {
+                if (column.Encodings.IsDefaultOrEmpty)
+                    builder.Append(", default");
+                builder.Append(", 0");
+            }
+            builder.Append(", new global::Plank.Schema.ParquetBloomFilterOptions { FalsePositiveProbability = ")
+                .Append(column.BloomFilterFalsePositiveProbability.ToString("R", CultureInfo.InvariantCulture));
+            if (column.BloomFilterExpectedDistinctValueCount > 0)
+                builder.Append(", ExpectedDistinctValueCount = ")
+                    .Append(column.BloomFilterExpectedDistinctValueCount);
+            if (column.BloomFilterMaximumBytes != 128U * 1024 * 1024)
+                builder.Append(", MaximumBytes = ").Append(column.BloomFilterMaximumBytes);
+            builder.Append(" }");
+        }
+
         builder.Append(')');
         return builder.ToString();
     }
@@ -1659,7 +1698,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     readonly struct SchemaColumn
     {
         public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName,
-            LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings, uint typeLength)
+            LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings, uint typeLength,
+            bool bloomFilter, double bloomFilterFalsePositiveProbability, uint bloomFilterExpectedDistinctValueCount,
+            uint bloomFilterMaximumBytes)
         {
             Name = name;
             PhysicalType = physicalType;
@@ -1669,6 +1710,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             RowPropertyName = rowPropertyName;
             Encodings = encodings;
             TypeLength = typeLength;
+            BloomFilter = bloomFilter;
+            BloomFilterFalsePositiveProbability = bloomFilterFalsePositiveProbability;
+            BloomFilterExpectedDistinctValueCount = bloomFilterExpectedDistinctValueCount;
+            BloomFilterMaximumBytes = bloomFilterMaximumBytes;
         }
 
         public string Name { get; }
@@ -1686,6 +1731,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public ImmutableArray<string> Encodings { get; }
 
         public uint TypeLength { get; }
+
+        public bool BloomFilter { get; }
+
+        public double BloomFilterFalsePositiveProbability { get; }
+
+        public uint BloomFilterExpectedDistinctValueCount { get; }
+
+        public uint BloomFilterMaximumBytes { get; }
     }
 
     readonly struct LogicalTypeSpec
