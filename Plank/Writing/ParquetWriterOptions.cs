@@ -33,6 +33,8 @@ public sealed class ParquetWriterOptions
     /// <summary>Gets or initializes the lexicographic sort order declared for every row group written to the file.</summary>
     public ImmutableArray<ParquetSortingColumn> SortingColumns { get; init; } = [];
 
+    public bool WritePageCrc { get; init; }
+
     public uint RowApiMaxParallelism
     {
         get => _rowApiMaxParallelism == 0 ? checked((uint)Execution.WorkerCount) : _rowApiMaxParallelism;

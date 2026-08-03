@@ -6,6 +6,8 @@ public sealed class ParquetFileReaderOptions
 
     public IParquetBufferPool BufferPool { get; init; } = DefaultParquetBufferPool.Shared;
 
+    public bool VerifyPageCrc { get; init; }
+
     internal void Validate()
         => ArgumentNullException.ThrowIfNull(BufferPool);
 }
