@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using Plank.IO.ZeroAlloc;
 using Plank.RowApi;
 using Plank.Schema;
 using Plank.Writing;
@@ -253,7 +254,8 @@ public abstract class DatasetWriterBase<TRow, TSlot>
             CloseAndRelease(victim);
         }
 
-        var stream = Utf8File.Open(state.Path.Span[..state.PathLength], _bufferPool);
+        var stream = state.Stream;
+        stream.Open(state.Path.Span[..state.PathLength], FileMode.OpenOrCreate, FileAccess.ReadWrite);
         ParquetWriter? writer = null;
         try
         {
@@ -266,7 +268,7 @@ public abstract class DatasetWriterBase<TRow, TSlot>
         {
             state.Slot.Unbind();
             if (writer is null)
-                stream.Dispose();
+                stream.CloseFile();
             else
                 try
                 {
@@ -274,6 +276,10 @@ public abstract class DatasetWriterBase<TRow, TSlot>
                 }
                 catch
                 {
+                }
+                finally
+                {
+                    stream.CloseFile();
                 }
             throw;
         }
@@ -314,6 +320,7 @@ public abstract class DatasetWriterBase<TRow, TSlot>
     {
         if (state.Kind == PartitionKind.Active)
         {
+            state.Stream.CloseFile();
             state.Slot.Unbind();
             state.Writer = null;
             _activeWriterCount--;
@@ -345,6 +352,7 @@ public abstract class DatasetWriterBase<TRow, TSlot>
     sealed class PartitionState(TSlot slot)
     {
         internal readonly TSlot Slot = slot;
+        internal readonly ReusableFileWriteStream Stream = new();
         internal ParquetBuffer Path;
         internal int PathLength;
         internal ParquetWriter? Writer;

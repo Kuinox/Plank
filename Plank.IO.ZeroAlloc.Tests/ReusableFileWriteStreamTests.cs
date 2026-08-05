@@ -4,6 +4,78 @@ namespace Plank.IO.ZeroAlloc.Tests;
 sealed class ReusableFileWriteStreamTests
 {
     [Test]
+    public async Task Utf8OpenOrCreateSupportsReadSeekAndSetLength()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-zeroalloc-utf8-{Guid.NewGuid():N}.bin");
+
+        try
+        {
+            await File.WriteAllBytesAsync(path, [1, 2, 3]);
+            var utf8Path = System.Text.Encoding.UTF8.GetBytes(path);
+            using var stream = new ReusableFileWriteStream();
+            stream.Open(utf8Path, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+
+            var first = new byte[3];
+            var count = stream.Read(first);
+            stream.Seek(0, SeekOrigin.End);
+            stream.Write([4, 5]);
+            stream.Position = 1;
+            var middle = new byte[3];
+            var middleCount = stream.Read(middle);
+            stream.SetLength(4);
+            stream.CloseFile();
+
+            await Assert.That(stream.CanRead).IsFalse();
+            await Assert.That(stream.CanSeek).IsFalse();
+            await Assert.That(stream.CanWrite).IsFalse();
+            await Assert.That(count).IsEqualTo(3);
+            await Assert.That(first.AsSpan().SequenceEqual(new byte[] { 1, 2, 3 })).IsTrue();
+            await Assert.That(middleCount).IsEqualTo(3);
+            await Assert.That(middle.AsSpan().SequenceEqual(new byte[] { 2, 3, 4 })).IsTrue();
+            await Assert.That(await File.ReadAllBytesAsync(path)).IsEquivalentTo(new byte[] { 1, 2, 3, 4 });
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task ReadSeekAndWriteDoNotAllocateAfterWarmup()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-zeroalloc-rw-{Guid.NewGuid():N}.bin");
+
+        try
+        {
+            var utf8Path = System.Text.Encoding.UTF8.GetBytes(path);
+            var buffer = new byte[] { 7 };
+            using var stream = new ReusableFileWriteStream();
+            stream.Open(utf8Path, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+            stream.Write(buffer);
+            stream.Position = 0;
+            _ = stream.Read(buffer);
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 100; i++)
+            {
+                stream.Position = 0;
+                _ = stream.Read(buffer);
+                stream.Position = 0;
+                stream.Write(buffer);
+            }
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            await Assert.That(allocated).IsEqualTo(0);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
     public async Task OpenWriteCloseAndReopenWritesDifferentFiles()
     {
         var pathA = Path.Combine(Path.GetTempPath(), $"plank-zeroalloc-a-{Guid.NewGuid():N}.bin");
