@@ -1,5 +1,4 @@
 using System.Runtime.ExceptionServices;
-using Plank.IO.ZeroAlloc;
 using Plank.RowApi;
 using Plank.Schema;
 using Plank.Writing;
@@ -15,13 +14,16 @@ public abstract class DatasetWriterBase<TRow, TSlot>
 {
     readonly ParquetSchema _schema;
     readonly DatasetWriterOptions _options;
+    readonly IParquetFileFactory _fileFactory;
     readonly IParquetBufferPool _bufferPool;
     readonly PartitionState[] _states;
+    readonly IParquetFile[] _files;
     readonly int _maximumActiveWriters;
     readonly int _maximumPendingPartitions;
     readonly int _activationRowCount;
     int _activeWriterCount;
     int _pendingPartitionCount;
+    int _availableFileCount;
     ulong _clock;
     bool _initialized;
     bool _disposed;
@@ -29,10 +31,13 @@ public abstract class DatasetWriterBase<TRow, TSlot>
     /// <summary>Initializes the state used by a generated dataset writer.</summary>
     /// <param name="schema">The one schema shared by all files in the dataset.</param>
     /// <param name="rowBufferCapacity">The row capacity of each generated buffer slot.</param>
+    /// <param name="fileFactory">The factory for the fixed reusable file pool.</param>
     /// <param name="options">The dataset writer options.</param>
-    protected DatasetWriterBase(ParquetSchema schema, int rowBufferCapacity, DatasetWriterOptions options)
+    protected DatasetWriterBase(ParquetSchema schema, int rowBufferCapacity, IParquetFileFactory fileFactory,
+        DatasetWriterOptions options)
     {
         ArgumentNullException.ThrowIfNull(schema);
+        ArgumentNullException.ThrowIfNull(fileFactory);
         ArgumentNullException.ThrowIfNull(options);
         if (rowBufferCapacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(rowBufferCapacity), rowBufferCapacity,
@@ -41,13 +46,16 @@ public abstract class DatasetWriterBase<TRow, TSlot>
         options.Validate(rowBufferCapacity);
         _schema = schema;
         _options = options;
+        _fileFactory = fileFactory;
         _bufferPool = options.AppendOptions.WriterOptions.BufferPool;
         _maximumActiveWriters = checked((int)options.MaximumActiveWriters);
         _maximumPendingPartitions = checked((int)options.MaximumPendingPartitions);
         _activationRowCount = checked((int)options.RowsBeforeWriterActivation);
         _states = new PartitionState[checked(_maximumActiveWriters + _maximumPendingPartitions)];
+        _files = new IParquetFile[_maximumActiveWriters];
         _activeWriterCount = 0;
         _pendingPartitionCount = 0;
+        _availableFileCount = 0;
         _clock = 0;
         _initialized = false;
         _disposed = false;
@@ -83,6 +91,26 @@ public abstract class DatasetWriterBase<TRow, TSlot>
             var slot = CreateSlot();
             ArgumentNullException.ThrowIfNull(slot);
             _states[i] = new PartitionState(slot);
+        }
+
+        try
+        {
+            for (var i = 0; i < _files.Length; i++)
+            {
+                var file = _fileFactory.Create();
+                ArgumentNullException.ThrowIfNull(file);
+                for (var previous = 0; previous < i; previous++)
+                    if (ReferenceEquals(file, _files[previous]))
+                        throw new InvalidOperationException("The file factory returned the same file more than once.");
+                _files[i] = file;
+                _availableFileCount++;
+            }
+        }
+        catch
+        {
+            for (var i = 0; i < _availableFileCount; i++)
+                _files[i].Dispose();
+            throw;
         }
 
         _initialized = true;
@@ -148,9 +176,26 @@ public abstract class DatasetWriterBase<TRow, TSlot>
             catch (Exception exception)
             {
                 failure ??= ExceptionDispatchInfo.Capture(exception);
-                ReleaseAfterFailure(state);
+                try
+                {
+                    ReleaseAfterFailure(state);
+                }
+                catch (Exception cleanupException)
+                {
+                    failure ??= ExceptionDispatchInfo.Capture(cleanupException);
+                }
             }
         }
+
+        for (var i = 0; i < _files.Length; i++)
+            try
+            {
+                _files[i].Dispose();
+            }
+            catch (Exception exception)
+            {
+                failure ??= ExceptionDispatchInfo.Capture(exception);
+            }
 
         failure?.Throw();
     }
@@ -254,21 +299,27 @@ public abstract class DatasetWriterBase<TRow, TSlot>
             CloseAndRelease(victim);
         }
 
-        var stream = state.Stream;
-        stream.Open(state.Path.Span[..state.PathLength], FileMode.OpenOrCreate, FileAccess.ReadWrite);
+        var file = TakeFile();
         ParquetWriter? writer = null;
         try
         {
-            writer = stream.Length == 0
-                ? _schema.CreateWriter(stream, _options.AppendOptions.WriterOptions)
-                : _schema.CreateAppender(stream, _options.AppendOptions);
+            file.Open(state.Path.Span[..state.PathLength], FileMode.OpenOrCreate);
+            writer = file.Length == 0
+                ? _schema.CreateWriter(file, _options.AppendOptions.WriterOptions)
+                : _schema.CreateAppender(file, _options.AppendOptions);
             state.Slot.Bind(writer);
         }
         catch
         {
             state.Slot.Unbind();
             if (writer is null)
-                stream.CloseFile();
+                try
+                {
+                    file.Close();
+                }
+                catch
+                {
+                }
             else
                 try
                 {
@@ -276,14 +327,19 @@ public abstract class DatasetWriterBase<TRow, TSlot>
                 }
                 catch
                 {
+                    try
+                    {
+                        file.Close();
+                    }
+                    catch
+                    {
+                    }
                 }
-                finally
-                {
-                    stream.CloseFile();
-                }
+            ReturnFile(file);
             throw;
         }
 
+        state.File = file;
         state.Writer = writer;
         state.Kind = PartitionKind.Active;
         _pendingPartitionCount--;
@@ -305,14 +361,17 @@ public abstract class DatasetWriterBase<TRow, TSlot>
 
     void CloseAndRelease(PartitionState state)
     {
-        if (state.Kind != PartitionKind.Active || state.Writer is null)
+        if (state.Kind != PartitionKind.Active || state.Writer is null || state.File is null)
             throw new InvalidOperationException("The partition does not have an active writer.");
 
+        var file = state.File;
         WriteRows(state);
         state.Writer.CloseFile();
         state.Slot.Unbind();
+        state.File = null;
         state.Writer = null;
         _activeWriterCount--;
+        ReturnFile(file);
         ReleaseState(state);
     }
 
@@ -320,10 +379,20 @@ public abstract class DatasetWriterBase<TRow, TSlot>
     {
         if (state.Kind == PartitionKind.Active)
         {
-            state.Stream.CloseFile();
-            state.Slot.Unbind();
-            state.Writer = null;
-            _activeWriterCount--;
+            var file = state.File;
+            try
+            {
+                file?.Close();
+            }
+            finally
+            {
+                state.Slot.Unbind();
+                state.File = null;
+                state.Writer = null;
+                _activeWriterCount--;
+                if (file is not null)
+                    ReturnFile(file);
+            }
         }
         else if (state.Kind == PartitionKind.Pending)
             _pendingPartitionCount--;
@@ -341,6 +410,24 @@ public abstract class DatasetWriterBase<TRow, TSlot>
         state.Kind = PartitionKind.Free;
     }
 
+    IParquetFile TakeFile()
+    {
+        if (_availableFileCount == 0)
+            throw new InvalidOperationException("The dataset writer has no reusable file available.");
+
+        var index = --_availableFileCount;
+        var file = _files[index];
+        _files[index] = null!;
+        return file;
+    }
+
+    void ReturnFile(IParquetFile file)
+    {
+        if (_availableFileCount >= _files.Length)
+            throw new InvalidOperationException("The dataset writer file pool is already full.");
+        _files[_availableFileCount++] = file;
+    }
+
     void ThrowIfUnavailable()
     {
         if (!_initialized)
@@ -352,9 +439,9 @@ public abstract class DatasetWriterBase<TRow, TSlot>
     sealed class PartitionState(TSlot slot)
     {
         internal readonly TSlot Slot = slot;
-        internal readonly ReusableFileWriteStream Stream = new();
         internal ParquetBuffer Path;
         internal int PathLength;
+        internal IParquetFile? File;
         internal ParquetWriter? Writer;
         internal ulong LastUse;
         internal PartitionKind Kind;

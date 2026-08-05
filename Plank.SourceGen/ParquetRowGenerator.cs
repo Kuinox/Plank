@@ -286,8 +286,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.Append("    public static ").Append(datasetWriterTypeName).Append(" CreateDatasetWriter(")
             .Append(routeTypeName)
-            .AppendLine(" route, global::Plank.Dataset.DatasetWriterOptions? options = null)");
-        builder.AppendLine("        => new(route, options ?? global::Plank.Dataset.DatasetWriterOptions.Default);");
+            .AppendLine(" route, global::Plank.Dataset.IParquetFileFactory fileFactory, global::Plank.Dataset.DatasetWriterOptions? options = null)");
+        builder.AppendLine("        => new(route ?? throw new global::System.ArgumentNullException(nameof(route)),");
+        builder.AppendLine("            fileFactory ?? throw new global::System.ArgumentNullException(nameof(fileFactory)),");
+        builder.AppendLine("            options ?? global::Plank.Dataset.DatasetWriterOptions.Default);");
         builder.AppendLine();
         builder.Append("    public static ").Append(writerTypeName)
             .AppendLine(" CreateRowWriter(global::Plank.Writing.RowGroupWriter rowGroupWriter, global::Plank.Writing.ParquetWriterOptions? options = null)");
@@ -447,11 +449,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.Append("        readonly ").Append(routeTypeName).AppendLine(" _route;");
         builder.AppendLine();
         builder.Append("        internal ").Append(datasetWriterTypeName).Append('(').Append(routeTypeName)
-            .AppendLine(" route, global::Plank.Dataset.DatasetWriterOptions options)");
+            .AppendLine(" route, global::Plank.Dataset.IParquetFileFactory fileFactory, global::Plank.Dataset.DatasetWriterOptions options)");
         builder.Append("            : base(").Append(schemaMemberName)
-            .AppendLine(", DefaultRowBatchSize, options)");
+            .AppendLine(", DefaultRowBatchSize, fileFactory, options)");
         builder.AppendLine("        {");
-        builder.AppendLine("            _route = route ?? throw new global::System.ArgumentNullException(nameof(route));");
+        builder.AppendLine("            _route = route;");
         builder.AppendLine("            InitializeSlots();");
         builder.AppendLine("        }");
         builder.AppendLine();

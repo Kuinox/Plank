@@ -16,13 +16,15 @@ internal sealed class DatasetWriterTests
         {
             var pathAUtf8 = Encoding.UTF8.GetBytes(pathA);
             var pathBUtf8 = Encoding.UTF8.GetBytes(pathB);
-            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, new DatasetWriterOptions
+            var factory = new TestParquetFileFactory();
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, factory, new DatasetWriterOptions
             {
                 MaximumActiveWriters = 1,
                 MaximumPendingPartitions = 2,
                 RowsBeforeWriterActivation = 2
             }))
             {
+                await Assert.That(factory.CreateCount).IsEqualTo(1);
                 writer.Queue(new DatasetRowSchema { Value = 1, Path = pathAUtf8 });
                 writer.Queue(new DatasetRowSchema { Value = 2, Path = pathBUtf8 });
                 writer.Queue(new DatasetRowSchema { Value = 3, Path = pathAUtf8 });
@@ -31,6 +33,7 @@ internal sealed class DatasetWriterTests
                 writer.Queue(new DatasetRowSchema { Value = 6, Path = pathBUtf8 });
             }
 
+            await Assert.That(factory.CreateCount).IsEqualTo(1);
             await Assert.That(ReadValues(pathA)).IsEquivalentTo([1, 3, 5]);
             await Assert.That(ReadValues(pathB)).IsEquivalentTo([2, 4, 6]);
             await Assert.That(ReadRowGroupCount(pathA)).IsEqualTo(2);
@@ -51,7 +54,8 @@ internal sealed class DatasetWriterTests
         {
             var pathAUtf8 = Encoding.UTF8.GetBytes(pathA);
             var pathBUtf8 = Encoding.UTF8.GetBytes(pathB);
-            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, new DatasetWriterOptions
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, new TestParquetFileFactory(),
+                new DatasetWriterOptions
             {
                 MaximumActiveWriters = 1,
                 MaximumPendingPartitions = 0,
@@ -88,7 +92,8 @@ internal sealed class DatasetWriterTests
         {
             var pathUtf8 = Encoding.UTF8.GetBytes(path);
             var row = new DatasetRowSchema { Path = pathUtf8 };
-            var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, new DatasetWriterOptions
+            var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, new TestParquetFileFactory(),
+                new DatasetWriterOptions
             {
                 MaximumActiveWriters = 1,
                 MaximumPendingPartitions = 0,
@@ -115,7 +120,7 @@ internal sealed class DatasetWriterTests
     [Test]
     public async Task SecondDisposeThrows()
     {
-        var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath);
+        var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, new TestParquetFileFactory());
         writer.Dispose();
 
         await Assert.That(() => writer.Dispose()).Throws<InvalidOperationException>();
@@ -128,7 +133,8 @@ internal sealed class DatasetWriterTests
         try
         {
             var pathUtf8 = Encoding.UTF8.GetBytes(path);
-            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectAllocatedPath, new DatasetWriterOptions
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectAllocatedPath,
+                new TestParquetFileFactory(), new DatasetWriterOptions
             {
                 MaximumActiveWriters = 1,
                 MaximumPendingPartitions = 1,
@@ -186,5 +192,63 @@ internal sealed class DatasetWriterTests
     {
         if (File.Exists(path))
             File.Delete(path);
+    }
+
+    sealed class TestParquetFileFactory : IParquetFileFactory
+    {
+        internal int CreateCount;
+
+        public IParquetFile Create()
+        {
+            CreateCount++;
+            return new TestParquetFile();
+        }
+    }
+
+    sealed class TestParquetFile : IParquetFile
+    {
+        FileStream? _stream;
+
+        public ulong Length
+            => checked((ulong)GetStream().Length);
+
+        public void Open(ReadOnlySpan<byte> path, FileMode mode)
+        {
+            if (_stream is not null)
+                throw new InvalidOperationException("The file is already open.");
+            _stream = new FileStream(Encoding.UTF8.GetString(path), mode, FileAccess.ReadWrite, FileShare.None);
+        }
+
+        public void Close()
+        {
+            _stream?.Dispose();
+            _stream = null;
+        }
+
+        public void ReadExactly(ulong offset, Span<byte> destination)
+        {
+            var stream = GetStream();
+            stream.Position = checked((long)offset);
+            stream.ReadExactly(destination);
+        }
+
+        public void Write(ulong offset, ReadOnlySpan<byte> source)
+        {
+            var stream = GetStream();
+            stream.Position = checked((long)offset);
+            stream.Write(source);
+        }
+
+        public void SetLength(ulong length)
+            => GetStream().SetLength(checked((long)length));
+
+        public void Flush()
+            => GetStream().Flush();
+
+        public void Dispose()
+            => Close();
+
+        FileStream GetStream()
+            => _stream ?? throw new InvalidOperationException("The file is not open.");
     }
 }

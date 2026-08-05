@@ -140,9 +140,9 @@ struct BufferWriter : IDisposable
         WrittenLength = length;
     }
 
-    internal void WriteTo(Stream stream)
+    internal void WriteTo(IParquetFile file, ulong offset)
     {
-        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(file);
         if (_segments is null || WrittenLength == 0)
             return;
 
@@ -151,7 +151,8 @@ struct BufferWriter : IDisposable
             var written = _segments[i].Written;
             if (written == 0)
                 continue;
-            stream.Write(_segments[i].Buffer.Span[..written]);
+            file.Write(offset, _segments[i].Buffer.Span[..written]);
+            offset = checked(offset + (uint)written);
         }
     }
 

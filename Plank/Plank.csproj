@@ -23,7 +23,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Plank.IO.ZeroAlloc\Plank.IO.ZeroAlloc.csproj" />
     <ProjectReference Include="..\Plank.Snappy\Plank.Snappy.csproj" />
     <ProjectReference Include="..\Plank.SourceGen\Plank.SourceGen.csproj"
                       OutputItemType="Analyzer"
