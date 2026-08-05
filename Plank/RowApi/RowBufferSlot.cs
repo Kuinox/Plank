@@ -138,8 +138,15 @@ public abstract class RowBufferSlot
         }
 
         for (var i = 0; i < _columns.Length; i++)
-            _columns[i].ResetForReuse(Index);
+            _columns[i].ResetForReuse(0, Index);
         Index = 0;
+    }
+
+    internal void ClearRow(int index)
+    {
+        ValidateRowIndex(index);
+        for (var i = 0; i < _columns.Length; i++)
+            _columns[i].ResetForReuse(index, 1);
     }
 
     /// <summary>Throws if the generated writer has filled this slot.</summary>
@@ -161,6 +168,14 @@ public abstract class RowBufferSlot
         }
 
         return states;
+    }
+
+    /// <summary>Throws if an index is outside this slot.</summary>
+    /// <param name="index">The row index.</param>
+    protected void ValidateRowIndex(int index)
+    {
+        if ((uint)index >= (uint)_rowCount)
+            throw new ArgumentOutOfRangeException(nameof(index), index, "Row index is outside the buffer slot.");
     }
 
     static RowApiColumnWriteState[] CreateColumnStates(RowApiColumnDescriptor[] columns, int rowCount)

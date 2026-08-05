@@ -588,15 +588,16 @@ static class NestedParquetRowEmitter
         builder.AppendLine("            _route = route;");
         builder.AppendLine("            InitializeSlots();");
         builder.AppendLine("        }");
-        builder.AppendLine("        protected override BufferSlot CreateSlot() => new(DefaultRowBatchSize);");
+        builder.AppendLine("        protected override BufferSlot CreateSlot(int rowCapacity) => new(rowCapacity);");
         builder.Append("        protected override void CopyRow(").Append(rowTypeName)
-            .AppendLine(" row, BufferSlot slot)");
+            .AppendLine(" row, BufferSlot slot, int index)");
         builder.AppendLine("        {");
-        builder.AppendLine("            var target = slot.GetRow();");
+        builder.AppendLine("            var target = slot.GetRow(index);");
         for (var i = 0; i < model.Roots.Length; i++)
             builder.Append("            target.").Append(EscapeIdentifier(model.Roots[i].PropertyName))
                 .Append(" = row.").Append(EscapeIdentifier(model.Roots[i].PropertyName)).AppendLine(";");
         builder.AppendLine("        }");
+        builder.AppendLine("        protected override void CopyBufferedRow(BufferSlot source, int sourceIndex, BufferSlot destination, int destinationIndex) => source.CopyRowTo(sourceIndex, destination, destinationIndex);");
         builder.Append("        protected override global::System.ReadOnlySpan<byte> SelectPath(")
             .Append(rowTypeName)
             .AppendLine(" row, global::Plank.IParquetBufferPool bufferPool, out global::Plank.ParquetBuffer? allocation)");
@@ -613,10 +614,24 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        internal Row GetRow()");
         builder.AppendLine("        {");
         builder.AppendLine("            EnsureRowAvailable();");
-        builder.Append("            return new Row(Index, this");
+        builder.AppendLine("            return GetRow(Index);");
+        builder.AppendLine("        }");
+        builder.AppendLine("        internal Row GetRow(int index)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            ValidateRowIndex(index);");
+        builder.Append("            return new Row(index, this");
         for (var i = 0; i < model.Leaves.Length; i++)
             builder.Append(", GetValues<").Append(model.Leaves[i].StorageShapeType).Append(">(").Append(i).Append(')');
         builder.AppendLine(");");
+        builder.AppendLine("        }");
+        builder.AppendLine("        internal void CopyRowTo(int sourceIndex, BufferSlot destination, int destinationIndex)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            ValidateRowIndex(sourceIndex);");
+        builder.AppendLine("            destination.ValidateRowIndex(destinationIndex);");
+        for (var i = 0; i < model.Leaves.Length; i++)
+            builder.Append("            destination.GetValues<").Append(model.Leaves[i].StorageShapeType).Append(">(").Append(i)
+                .Append(")[destinationIndex] = GetValues<").Append(model.Leaves[i].StorageShapeType).Append(">(").Append(i)
+                .AppendLine(")[sourceIndex];");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();

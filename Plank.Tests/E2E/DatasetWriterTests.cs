@@ -20,7 +20,7 @@ internal sealed class DatasetWriterTests
             var files = CreateFiles(1);
             using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, files, new DatasetWriterOptions
             {
-                MaximumPendingPartitions = 2,
+                PendingRowCapacity = 2,
                 RowsBeforeWriterActivation = 2
             }))
             {
@@ -56,7 +56,7 @@ internal sealed class DatasetWriterTests
             using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1),
                 new DatasetWriterOptions
             {
-                MaximumPendingPartitions = 0,
+                PendingRowCapacity = 0,
                 RowsBeforeWriterActivation = 1,
                 AppendOptions = new ParquetAppendOptions
                 {
@@ -93,7 +93,7 @@ internal sealed class DatasetWriterTests
             var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1),
                 new DatasetWriterOptions
             {
-                MaximumPendingPartitions = 0,
+                PendingRowCapacity = 0,
                 RowsBeforeWriterActivation = 1
             });
             writer.Queue(row);
@@ -111,6 +111,40 @@ internal sealed class DatasetWriterTests
         finally
         {
             DeleteIfPresent(path);
+        }
+    }
+
+    [Test]
+    public async Task ParkedPartitionQueueDoesNotAllocate()
+    {
+        var activePath = NewPath();
+        var parkedPath = NewPath();
+        try
+        {
+            var activePathUtf8 = Encoding.UTF8.GetBytes(activePath);
+            var parkedRow = new DatasetRowSchema { Path = Encoding.UTF8.GetBytes(parkedPath) };
+            var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1),
+                new DatasetWriterOptions
+                {
+                    PendingRowCapacity = 256,
+                    RowsBeforeWriterActivation = 256
+                });
+            writer.Queue(new DatasetRowSchema { Path = activePathUtf8 });
+            for (var i = 0; i < 8; i++)
+                writer.Queue(parkedRow);
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 100; i++)
+                writer.Queue(parkedRow);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            writer.Dispose();
+
+            await Assert.That(allocated).IsEqualTo(0);
+        }
+        finally
+        {
+            DeleteIfPresent(activePath);
+            DeleteIfPresent(parkedPath);
         }
     }
 
@@ -133,7 +167,7 @@ internal sealed class DatasetWriterTests
             using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectAllocatedPath,
                 CreateFiles(1), new DatasetWriterOptions
             {
-                MaximumPendingPartitions = 1,
+                PendingRowCapacity = 1,
                 RowsBeforeWriterActivation = 1
             }))
                 writer.Queue(new DatasetRowSchema { Value = 42, Path = pathUtf8 });
@@ -143,6 +177,88 @@ internal sealed class DatasetWriterTests
         finally
         {
             DeleteIfPresent(path);
+        }
+    }
+
+    [Test]
+    public async Task ReturnsTheLeastBusyWriterForAParkedPartition()
+    {
+        var pathA = NewPath();
+        var pathB = NewPath();
+        var pathC = NewPath();
+        try
+        {
+            var pathAUtf8 = Encoding.UTF8.GetBytes(pathA);
+            var pathBUtf8 = Encoding.UTF8.GetBytes(pathB);
+            var pathCUtf8 = Encoding.UTF8.GetBytes(pathC);
+            var files = CreateFiles(2);
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, files, new DatasetWriterOptions
+            {
+                PendingRowCapacity = 4,
+                RowsBeforeWriterActivation = 1
+            }))
+            {
+                for (var value = 1; value <= 5; value++)
+                    writer.Queue(new DatasetRowSchema { Value = value, Path = pathAUtf8 });
+                writer.Queue(new DatasetRowSchema { Value = 10, Path = pathBUtf8 });
+                writer.Queue(new DatasetRowSchema { Value = 20, Path = pathCUtf8 });
+                writer.Queue(new DatasetRowSchema { Value = 6, Path = pathAUtf8 });
+            }
+
+            var pathAOpenCount = files.Sum(file => file.OpenedPaths.Count(path => path == pathA));
+            await Assert.That(pathAOpenCount).IsEqualTo(1);
+            await Assert.That(ReadValues(pathA)).IsEquivalentTo([1, 2, 3, 4, 5, 6]);
+            await Assert.That(ReadValues(pathB)).IsEquivalentTo([10]);
+            await Assert.That(ReadValues(pathC)).IsEquivalentTo([20]);
+        }
+        finally
+        {
+            DeleteIfPresent(pathA);
+            DeleteIfPresent(pathB);
+            DeleteIfPresent(pathC);
+        }
+    }
+
+    [Test]
+    public async Task ReusesParkedRowsWithoutCompactingOtherPartitions()
+    {
+        var pathA = NewPath();
+        var pathB = NewPath();
+        var pathC = NewPath();
+        var pathD = NewPath();
+        try
+        {
+            var pathAUtf8 = Encoding.UTF8.GetBytes(pathA);
+            var pathBUtf8 = Encoding.UTF8.GetBytes(pathB);
+            var pathCUtf8 = Encoding.UTF8.GetBytes(pathC);
+            var pathDUtf8 = Encoding.UTF8.GetBytes(pathD);
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1),
+                new DatasetWriterOptions
+                {
+                    PendingRowCapacity = 4,
+                    RowsBeforeWriterActivation = 4
+                }))
+            {
+                writer.Queue(new DatasetRowSchema { Value = 1, Path = pathAUtf8 });
+                writer.Queue(new DatasetRowSchema { Value = 10, Path = pathBUtf8 });
+                writer.Queue(new DatasetRowSchema { Value = 20, Path = pathCUtf8 });
+                writer.Queue(new DatasetRowSchema { Value = 11, Path = pathBUtf8 });
+                writer.Queue(new DatasetRowSchema { Value = 21, Path = pathCUtf8 });
+                writer.Queue(new DatasetRowSchema { Value = 12, Path = pathBUtf8 });
+                writer.Queue(new DatasetRowSchema { Value = 30, Path = pathDUtf8 });
+                writer.Queue(new DatasetRowSchema { Value = 13, Path = pathBUtf8 });
+            }
+
+            await Assert.That(ReadValues(pathB).SequenceEqual([10, 11, 12, 13])).IsTrue();
+            await Assert.That(ReadValues(pathC).SequenceEqual([20, 21])).IsTrue();
+            await Assert.That(ReadValues(pathD)).IsEquivalentTo([30]);
+        }
+        finally
+        {
+            DeleteIfPresent(pathA);
+            DeleteIfPresent(pathB);
+            DeleteIfPresent(pathC);
+            DeleteIfPresent(pathD);
         }
     }
 
@@ -202,6 +318,7 @@ internal sealed class DatasetWriterTests
     {
         FileStream? _stream;
         internal int OpenCount;
+        internal readonly List<string> OpenedPaths = [];
 
         public ulong Length
             => checked((ulong)GetStream().Length);
@@ -210,7 +327,9 @@ internal sealed class DatasetWriterTests
         {
             if (_stream is not null)
                 throw new InvalidOperationException("The file is already open.");
-            _stream = new FileStream(Encoding.UTF8.GetString(path), mode, FileAccess.ReadWrite, FileShare.None);
+            var filePath = Encoding.UTF8.GetString(path);
+            OpenedPaths.Add(filePath);
+            _stream = new FileStream(filePath, mode, FileAccess.ReadWrite, FileShare.None);
             OpenCount++;
         }
 

@@ -18,12 +18,18 @@ public abstract class DatasetWriterBase<TRow, TSlot>
     readonly IParquetBufferPool _bufferPool;
     readonly PartitionState[] _states;
     readonly FileSources[] _files;
-    readonly int _maximumActiveWriters;
-    readonly int _maximumPendingPartitions;
+    readonly PendingKeyState[] _pendingKeys;
+    readonly int[] _parkedRowKeys;
+    readonly int[] _parkedRowLinks;
+    readonly int _rowBufferCapacity;
+    readonly int _pendingRowCapacity;
     readonly int _activationRowCount;
-    int _activeWriterCount;
-    int _pendingPartitionCount;
+    TSlot _parkedRows = null!;
     int _availableFileCount;
+    int _parkedRowCount;
+    int _parkedRowHead;
+    int _parkedRowTail;
+    int _freeParkedRowHead;
     ulong _clock;
     bool _initialized;
     bool _disposed;
@@ -42,27 +48,25 @@ public abstract class DatasetWriterBase<TRow, TSlot>
         if (rowBufferCapacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(rowBufferCapacity), rowBufferCapacity,
                 "Row buffer capacity must be greater than zero.");
+        if (files.Length == 0)
+            throw new ArgumentException("At least one file source is required.", nameof(files));
 
-        options.Validate(rowBufferCapacity);
+        options.Validate();
         _schema = schema;
         _options = options;
         _bufferPool = options.AppendOptions.WriterOptions.BufferPool;
-        if (files.Length == 0)
-            throw new ArgumentException("At least one file source is required.", nameof(files));
-        _maximumActiveWriters = files.Length;
-        _maximumPendingPartitions = checked((int)options.MaximumPendingPartitions);
+        _rowBufferCapacity = rowBufferCapacity;
+        _pendingRowCapacity = checked((int)options.PendingRowCapacity);
         _activationRowCount = checked((int)options.RowsBeforeWriterActivation);
-        if ((long)_maximumActiveWriters + _maximumPendingPartitions > int.MaxValue)
-            throw new ArgumentOutOfRangeException(nameof(options),
-                "The total number of tracked partitions must be <= int.MaxValue.");
-        _states = new PartitionState[checked(_maximumActiveWriters + _maximumPendingPartitions)];
-        _files = new FileSources[_maximumActiveWriters];
-        _activeWriterCount = 0;
-        _pendingPartitionCount = 0;
+        _states = new PartitionState[files.Length];
+        _files = new FileSources[files.Length];
+        _pendingKeys = new PendingKeyState[_pendingRowCapacity];
+        _parkedRowKeys = new int[_pendingRowCapacity];
+        _parkedRowLinks = new int[_pendingRowCapacity];
         _availableFileCount = 0;
-        _clock = 0;
-        _initialized = false;
-        _disposed = false;
+        _parkedRowHead = -1;
+        _parkedRowTail = -1;
+        _freeParkedRowHead = _pendingRowCapacity == 0 ? -1 : 0;
 
         for (var i = 0; i < _files.Length; i++)
         {
@@ -75,16 +79,28 @@ public abstract class DatasetWriterBase<TRow, TSlot>
             _files[i] = new FileSources(source, destination);
             _availableFileCount++;
         }
+
+        for (var i = 0; i < _parkedRowLinks.Length; i++)
+            _parkedRowLinks[i] = i + 1 < _parkedRowLinks.Length ? i + 1 : -1;
     }
 
     /// <summary>Creates an unbound generated row-buffer slot.</summary>
+    /// <param name="rowCapacity">The required row capacity.</param>
     /// <returns>A new row-buffer slot.</returns>
-    protected abstract TSlot CreateSlot();
+    protected abstract TSlot CreateSlot(int rowCapacity);
 
     /// <summary>Copies one schema row into a generated row-buffer slot.</summary>
     /// <param name="row">The source schema row.</param>
     /// <param name="slot">The destination row-buffer slot.</param>
-    protected abstract void CopyRow(TRow row, TSlot slot);
+    /// <param name="index">The destination row index.</param>
+    protected abstract void CopyRow(TRow row, TSlot slot, int index);
+
+    /// <summary>Copies one buffered row into another generated row-buffer slot.</summary>
+    /// <param name="source">The source row-buffer slot.</param>
+    /// <param name="sourceIndex">The source row index.</param>
+    /// <param name="destination">The destination row-buffer slot.</param>
+    /// <param name="destinationIndex">The destination row index.</param>
+    protected abstract void CopyBufferedRow(TSlot source, int sourceIndex, TSlot destination, int destinationIndex);
 
     /// <summary>Gets the UTF-8 path for one schema row.</summary>
     /// <param name="row">The schema row.</param>
@@ -104,11 +120,13 @@ public abstract class DatasetWriterBase<TRow, TSlot>
 
         for (var i = 0; i < _states.Length; i++)
         {
-            var slot = CreateSlot();
+            var slot = CreateSlot(_rowBufferCapacity);
             ArgumentNullException.ThrowIfNull(slot);
             _states[i] = new PartitionState(slot);
         }
 
+        _parkedRows = CreateSlot(_pendingRowCapacity);
+        ArgumentNullException.ThrowIfNull(_parkedRows);
         _initialized = true;
     }
 
@@ -127,20 +145,57 @@ public abstract class DatasetWriterBase<TRow, TSlot>
             if (path.IsEmpty)
                 throw new InvalidOperationException("The dataset path selector returned an empty path.");
 
-            var state = FindState(path);
-            if (state is null)
-                state = AddState(path, ref selectedPathAllocation);
+            var active = FindActiveState(path);
+            if (active is not null)
+            {
+                QueueActiveRow(row, active);
+                return;
+            }
 
-            state.LastUse = unchecked(++_clock);
-            CopyRow(row, state.Slot);
-            state.Slot.Next();
+            var pendingKeyIndex = FindPendingKey(path);
+            if (pendingKeyIndex < 0 && _availableFileCount > 0)
+            {
+                active = ActivatePath(path, ref selectedPathAllocation);
+                QueueActiveRow(row, active);
+                return;
+            }
 
-            if (state.Kind == PartitionKind.Pending &&
-                (state.Slot.Count >= _activationRowCount || _pendingPartitionCount > _maximumPendingPartitions))
-                Activate(state);
+            if (_pendingRowCapacity == 0)
+            {
+                active = ActivatePath(path, ref selectedPathAllocation);
+                QueueActiveRow(row, active);
+                return;
+            }
 
-            if (state.Kind == PartitionKind.Active && state.Slot.IsFull)
-                WriteRows(state);
+            if (_parkedRowCount == _pendingRowCapacity)
+            {
+                PromoteLatestParkedPartition();
+                active = FindActiveState(path);
+                if (active is not null)
+                {
+                    QueueActiveRow(row, active);
+                    return;
+                }
+                pendingKeyIndex = FindPendingKey(path);
+            }
+
+            var addedPendingKey = pendingKeyIndex < 0;
+            if (addedPendingKey)
+                pendingKeyIndex = AddPendingKey(path, ref selectedPathAllocation);
+            try
+            {
+                ParkRow(row, pendingKeyIndex);
+            }
+            catch
+            {
+                if (addedPendingKey)
+                    ReleaseEmptyPendingKey(pendingKeyIndex);
+                throw;
+            }
+
+            if (_pendingKeys[pendingKeyIndex].RowCount >= _activationRowCount ||
+                _parkedRowCount == _pendingRowCapacity)
+                PromotePendingPartition(pendingKeyIndex);
         }
         finally
         {
@@ -160,38 +215,54 @@ public abstract class DatasetWriterBase<TRow, TSlot>
         for (var i = 0; i < _states.Length; i++)
         {
             var state = _states[i];
-            if (state.Kind == PartitionKind.Free)
+            if (!state.Active)
                 continue;
 
             try
             {
-                if (state.Kind == PartitionKind.Pending)
-                    Activate(state);
                 CloseAndRelease(state);
             }
             catch (Exception exception)
             {
                 failure ??= ExceptionDispatchInfo.Capture(exception);
-                try
-                {
-                    ReleaseAfterFailure(state);
-                }
-                catch (Exception cleanupException)
-                {
-                    failure ??= ExceptionDispatchInfo.Capture(cleanupException);
-                }
+                TryReleaseAfterFailure(state, ref failure);
             }
         }
 
+        while (_parkedRowCount > 0)
+        {
+            var keyIndex = _parkedRowKeys[_parkedRowTail];
+            try
+            {
+                var state = PromotePendingPartition(keyIndex);
+                CloseAndRelease(state);
+            }
+            catch (Exception exception)
+            {
+                failure ??= ExceptionDispatchInfo.Capture(exception);
+                DiscardPendingPartition(keyIndex, ref failure);
+            }
+        }
+
+        _parkedRows.ResetForReuse();
         failure?.Throw();
     }
 
-    PartitionState? FindState(ReadOnlySpan<byte> path)
+    void QueueActiveRow(TRow row, PartitionState state)
+    {
+        state.LastUse = unchecked(++_clock);
+        CopyRow(row, state.Slot, state.Slot.Count);
+        state.Slot.Next();
+        if (state.Slot.IsFull)
+            WriteRows(state);
+    }
+
+    PartitionState? FindActiveState(ReadOnlySpan<byte> path)
     {
         for (var i = 0; i < _states.Length; i++)
         {
             var state = _states[i];
-            if (state.Kind != PartitionKind.Free && state.PathLength == path.Length &&
+            if (state.Active && state.PathLength == path.Length &&
                 path.SequenceEqual(state.Path.Span[..state.PathLength]))
                 return state;
         }
@@ -199,25 +270,201 @@ public abstract class DatasetWriterBase<TRow, TSlot>
         return null;
     }
 
-    PartitionState AddState(ReadOnlySpan<byte> path, ref ParquetBuffer? selectedPathAllocation)
+    int FindPendingKey(ReadOnlySpan<byte> path)
     {
-        var state = FindFreeState();
-        if (state is null)
+        for (var i = 0; i < _pendingKeys.Length; i++)
         {
-            state = FindLeastRecentlyUsedActive();
-            if (state is null)
-                throw new InvalidOperationException("The dataset writer has no reusable partition state.");
-            CloseAndRelease(state);
+            ref var key = ref _pendingKeys[i];
+            if (key.Used && key.PathLength == path.Length && path.SequenceEqual(key.Path.Span[..key.PathLength]))
+                return i;
         }
 
+        return -1;
+    }
+
+    int AddPendingKey(ReadOnlySpan<byte> path, ref ParquetBuffer? selectedPathAllocation)
+    {
+        for (var i = 0; i < _pendingKeys.Length; i++)
+        {
+            ref var key = ref _pendingKeys[i];
+            if (key.Used)
+                continue;
+
+            key.Path = TakePathBuffer(path, ref selectedPathAllocation);
+            key.PathLength = path.Length;
+            key.RowCount = 0;
+            key.Used = true;
+            return i;
+        }
+
+        throw new InvalidOperationException("The parked-row pool has no free partition key.");
+    }
+
+    void ParkRow(TRow row, int keyIndex)
+    {
+        if (_freeParkedRowHead < 0)
+            throw new InvalidOperationException("The parked-row pool is full.");
+
+        var rowIndex = _freeParkedRowHead;
+        var nextFree = _parkedRowLinks[rowIndex];
+        try
+        {
+            CopyRow(row, _parkedRows, rowIndex);
+        }
+        catch
+        {
+            _parkedRows.ClearRow(rowIndex);
+            throw;
+        }
+        _freeParkedRowHead = nextFree;
+        _parkedRowKeys[rowIndex] = keyIndex;
+        _parkedRowLinks[rowIndex] = -1;
+        if (_parkedRowTail < 0)
+            _parkedRowHead = rowIndex;
+        else
+            _parkedRowLinks[_parkedRowTail] = rowIndex;
+        _parkedRowTail = rowIndex;
+        _parkedRowCount++;
+        _pendingKeys[keyIndex].RowCount++;
+    }
+
+    void ReleaseEmptyPendingKey(int keyIndex)
+    {
+        ref var key = ref _pendingKeys[keyIndex];
+        if (!key.Used || key.RowCount != 0)
+            return;
+        key.Path.Dispose();
+        key = default;
+    }
+
+    void PromoteLatestParkedPartition()
+    {
+        if (_parkedRowTail < 0)
+            throw new InvalidOperationException("The parked-row pool is empty.");
+        PromotePendingPartition(_parkedRowKeys[_parkedRowTail]);
+    }
+
+    PartitionState PromotePendingPartition(int keyIndex)
+    {
+        ref var key = ref _pendingKeys[keyIndex];
+        if (!key.Used || key.RowCount == 0)
+            throw new InvalidOperationException("The pending partition has no parked rows.");
+
+        var state = ActivatePathBuffer(key.Path, key.PathLength);
+        key.Path = default;
+        try
+        {
+            DrainPendingRows(keyIndex, state);
+            key = default;
+            return state;
+        }
+        catch (Exception exception)
+        {
+            var failure = ExceptionDispatchInfo.Capture(exception);
+            try
+            {
+                ReleaseAfterFailure(state);
+            }
+            catch
+            {
+            }
+            ExceptionDispatchInfo? cleanupFailure = null;
+            DiscardPendingPartition(keyIndex, ref cleanupFailure);
+            failure.Throw();
+            throw;
+        }
+    }
+
+    void DrainPendingRows(int keyIndex, PartitionState state)
+    {
+        var previous = -1;
+        var current = _parkedRowHead;
+        while (current >= 0)
+        {
+            var next = _parkedRowLinks[current];
+            if (_parkedRowKeys[current] != keyIndex)
+            {
+                previous = current;
+                current = next;
+                continue;
+            }
+
+            CopyBufferedRow(_parkedRows, current, state.Slot, state.Slot.Count);
+            state.Slot.Next();
+            RemoveParkedRow(current, previous, next);
+            _pendingKeys[keyIndex].RowCount--;
+            if (state.Slot.IsFull)
+                WriteRows(state);
+            current = next;
+        }
+    }
+
+    void RemoveParkedRow(int rowIndex, int previous, int next)
+    {
+        if (previous < 0)
+            _parkedRowHead = next;
+        else
+            _parkedRowLinks[previous] = next;
+        if (_parkedRowTail == rowIndex)
+            _parkedRowTail = previous;
+
+        _parkedRows.ClearRow(rowIndex);
+        _parkedRowKeys[rowIndex] = -1;
+        _parkedRowLinks[rowIndex] = _freeParkedRowHead;
+        _freeParkedRowHead = rowIndex;
+        _parkedRowCount--;
+    }
+
+    PartitionState ActivatePath(ReadOnlySpan<byte> path, ref ParquetBuffer? selectedPathAllocation)
+    {
         var pathBuffer = TakePathBuffer(path, ref selectedPathAllocation);
+        try
+        {
+            return ActivatePathBuffer(pathBuffer, path.Length);
+        }
+        catch
+        {
+            pathBuffer.Dispose();
+            throw;
+        }
+    }
+
+    PartitionState ActivatePathBuffer(ParquetBuffer pathBuffer, int pathLength)
+    {
+        if (_availableFileCount == 0)
+        {
+            var victim = FindLeastBusyActive();
+            if (victim is null)
+                throw new InvalidOperationException("The dataset writer has no active writer to return a file.");
+            CloseAndRelease(victim);
+        }
+
+        var state = FindFreeState() ??
+            throw new InvalidOperationException("The dataset writer has no free active partition state.");
+        var file = TakeFile();
+        ParquetWriter? writer = null;
+        try
+        {
+            file.Destination.Open(pathBuffer.Span[..pathLength], FileMode.OpenOrCreate);
+            writer = file.Source.Length == 0
+                ? _schema.CreateWriter(file.Destination, _options.AppendOptions.WriterOptions)
+                : _schema.CreateAppender(file.Source, file.Destination, _options.AppendOptions);
+            state.Slot.Bind(writer);
+        }
+        catch
+        {
+            state.Slot.Unbind();
+            CloseFailedOpen(file, writer);
+            ReturnFile(file);
+            throw;
+        }
 
         state.Path = pathBuffer;
-        state.PathLength = path.Length;
-        state.Kind = PartitionKind.Pending;
+        state.PathLength = pathLength;
+        state.File = file;
+        state.Writer = writer;
         state.LastUse = unchecked(++_clock);
-        _pendingPartitionCount++;
-
+        state.Active = true;
         return state;
     }
 
@@ -254,87 +501,30 @@ public abstract class DatasetWriterBase<TRow, TSlot>
     PartitionState? FindFreeState()
     {
         for (var i = 0; i < _states.Length; i++)
-            if (_states[i].Kind == PartitionKind.Free)
+            if (!_states[i].Active)
                 return _states[i];
         return null;
     }
 
-    PartitionState? FindLeastRecentlyUsedActive()
+    PartitionState? FindLeastBusyActive()
     {
         PartitionState? result = null;
         for (var i = 0; i < _states.Length; i++)
         {
             var state = _states[i];
-            if (state.Kind == PartitionKind.Active && (result is null || state.LastUse < result.LastUse))
+            if (!state.Active)
+                continue;
+            if (result is null || state.Slot.Count < result.Slot.Count ||
+                state.Slot.Count == result.Slot.Count && state.LastUse < result.LastUse)
                 result = state;
         }
 
         return result;
     }
 
-    void Activate(PartitionState state)
-    {
-        if (state.Kind != PartitionKind.Pending)
-            return;
-
-        if (_activeWriterCount == _maximumActiveWriters)
-        {
-            var victim = FindLeastRecentlyUsedActive();
-            if (victim is null)
-                throw new InvalidOperationException("The dataset writer has no active writer to evict.");
-            CloseAndRelease(victim);
-        }
-
-        var file = TakeFile();
-        ParquetWriter? writer = null;
-        try
-        {
-            file.Destination.Open(state.Path.Span[..state.PathLength], FileMode.OpenOrCreate);
-            writer = file.Source.Length == 0
-                ? _schema.CreateWriter(file.Destination, _options.AppendOptions.WriterOptions)
-                : _schema.CreateAppender(file.Source, file.Destination, _options.AppendOptions);
-            state.Slot.Bind(writer);
-        }
-        catch
-        {
-            state.Slot.Unbind();
-            if (writer is null)
-                try
-                {
-                    file.Destination.Close();
-                }
-                catch
-                {
-                }
-            else
-                try
-                {
-                    writer.CloseFile();
-                }
-                catch
-                {
-                    try
-                    {
-                        file.Destination.Close();
-                    }
-                    catch
-                    {
-                    }
-                }
-            ReturnFile(file);
-            throw;
-        }
-
-        state.File = file;
-        state.Writer = writer;
-        state.Kind = PartitionKind.Active;
-        _pendingPartitionCount--;
-        _activeWriterCount++;
-    }
-
     void WriteRows(PartitionState state)
     {
-        if (state.Kind != PartitionKind.Active || state.Writer is null)
+        if (!state.Active || state.Writer is null)
             throw new InvalidOperationException("The partition does not have an active writer.");
         if (state.Slot.IsEmpty)
             return;
@@ -347,7 +537,7 @@ public abstract class DatasetWriterBase<TRow, TSlot>
 
     void CloseAndRelease(PartitionState state)
     {
-        if (state.Kind != PartitionKind.Active || state.Writer is null || state.File is not { } file)
+        if (!state.Active || state.Writer is null || state.File is not { } file)
             throw new InvalidOperationException("The partition does not have an active writer.");
 
         WriteRows(state);
@@ -355,36 +545,103 @@ public abstract class DatasetWriterBase<TRow, TSlot>
         state.Slot.Unbind();
         state.File = null;
         state.Writer = null;
-        _activeWriterCount--;
+        state.Active = false;
         ReturnFile(file);
         ReleaseState(state);
     }
 
+    void TryReleaseAfterFailure(PartitionState state, ref ExceptionDispatchInfo? failure)
+    {
+        try
+        {
+            ReleaseAfterFailure(state);
+        }
+        catch (Exception cleanupException)
+        {
+            failure ??= ExceptionDispatchInfo.Capture(cleanupException);
+        }
+    }
+
     void ReleaseAfterFailure(PartitionState state)
     {
-        if (state.Kind == PartitionKind.Active)
+        if (!state.Active)
+            return;
+
+        var file = state.File;
+        try
         {
-            var file = state.File;
-            try
+            if (file is { } sources)
+                sources.Destination.Close();
+        }
+        finally
+        {
+            state.Slot.Unbind();
+            state.Slot.ResetForReuse();
+            state.File = null;
+            state.Writer = null;
+            state.Active = false;
+            if (file is { } sources)
+                ReturnFile(sources);
+            ReleaseState(state);
+        }
+    }
+
+    void DiscardPendingPartition(int keyIndex, ref ExceptionDispatchInfo? failure)
+    {
+        ref var key = ref _pendingKeys[keyIndex];
+        try
+        {
+            var previous = -1;
+            var current = _parkedRowHead;
+            while (current >= 0)
             {
-                if (file is { } sources)
-                    sources.Destination.Close();
-            }
-            finally
-            {
-                state.Slot.Unbind();
-                state.File = null;
-                state.Writer = null;
-                _activeWriterCount--;
-                if (file is { } sources)
-                    ReturnFile(sources);
+                var next = _parkedRowLinks[current];
+                if (_parkedRowKeys[current] == keyIndex)
+                    RemoveParkedRow(current, previous, next);
+                else
+                    previous = current;
+                current = next;
             }
         }
-        else if (state.Kind == PartitionKind.Pending)
-            _pendingPartitionCount--;
+        catch (Exception cleanupException)
+        {
+            failure ??= ExceptionDispatchInfo.Capture(cleanupException);
+        }
+        finally
+        {
+            key.Path.Dispose();
+            key = default;
+        }
+    }
 
-        state.Slot.ResetForReuse();
-        ReleaseState(state);
+    static void CloseFailedOpen(FileSources file, ParquetWriter? writer)
+    {
+        if (writer is null)
+        {
+            try
+            {
+                file.Destination.Close();
+            }
+            catch
+            {
+            }
+            return;
+        }
+
+        try
+        {
+            writer.CloseFile();
+        }
+        catch
+        {
+            try
+            {
+                file.Destination.Close();
+            }
+            catch
+            {
+            }
+        }
     }
 
     static void ReleaseState(PartitionState state)
@@ -393,7 +650,6 @@ public abstract class DatasetWriterBase<TRow, TSlot>
         state.Path = default;
         state.PathLength = 0;
         state.LastUse = 0;
-        state.Kind = PartitionKind.Free;
     }
 
     FileSources TakeFile()
@@ -430,14 +686,15 @@ public abstract class DatasetWriterBase<TRow, TSlot>
         internal FileSources? File;
         internal ParquetWriter? Writer;
         internal ulong LastUse;
-        internal PartitionKind Kind;
+        internal bool Active;
     }
 
-    enum PartitionKind : byte
+    struct PendingKeyState
     {
-        Free,
-        Pending,
-        Active
+        internal ParquetBuffer Path;
+        internal int PathLength;
+        internal int RowCount;
+        internal bool Used;
     }
 
     readonly struct FileSources(IParquetReadSource source, IParquetWriteSource destination)

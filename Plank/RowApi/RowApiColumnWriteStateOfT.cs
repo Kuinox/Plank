@@ -51,10 +51,10 @@ sealed class RowApiColumnWriteState<T> : RowApiColumnWriteState
     internal override void Write(RowGroupWriter rowGroupWriter)
         => rowGroupWriter.Write(GetSerialized());
 
-    internal override void ResetForReuse(int count)
+    internal override void ResetForReuse(int start, int count)
     {
         if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
-            Array.Clear(Values, 0, count);
+            Array.Clear(Values, start, count);
     }
 
     SerializedColumn<T> GetSerialized()
