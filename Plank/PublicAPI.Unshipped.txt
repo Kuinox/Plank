@@ -259,7 +259,7 @@ static Plank.Schema.RowSchema.Column<TClr>(string! name, Plank.Schema.ParquetPhy
 virtual Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ConvertFromPhysical(System.ReadOnlySpan<TPhysical> source, System.Span<TValue> destination) -> void
 virtual Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ConvertToPhysical(System.ReadOnlySpan<TValue> source, System.Span<TPhysical> destination) -> void
 Plank.Dataset.DatasetWriterBase<TRow, TSlot>
-Plank.Dataset.DatasetWriterBase<TRow, TSlot>.DatasetWriterBase(Plank.Schema.ParquetSchema! schema, int rowBufferCapacity, Plank.Dataset.IParquetFileFactory! fileFactory, Plank.Dataset.DatasetWriterOptions! options) -> void
+Plank.Dataset.DatasetWriterBase<TRow, TSlot>.DatasetWriterBase(Plank.Schema.ParquetSchema! schema, int rowBufferCapacity, Plank.Writing.IParquetWriteSource![]! files, Plank.Dataset.DatasetWriterOptions! options) -> void
 Plank.Dataset.DatasetWriterBase<TRow, TSlot>.DisposeDataset() -> void
 Plank.Dataset.DatasetWriterBase<TRow, TSlot>.InitializeSlots() -> void
 Plank.Dataset.DatasetWriterBase<TRow, TSlot>.QueueRow(TRow row) -> void
@@ -270,22 +270,18 @@ Plank.Dataset.DatasetWriterOptions
 Plank.Dataset.DatasetWriterOptions.AppendOptions.get -> Plank.Writing.ParquetAppendOptions!
 Plank.Dataset.DatasetWriterOptions.AppendOptions.init -> void
 Plank.Dataset.DatasetWriterOptions.DatasetWriterOptions() -> void
-Plank.Dataset.DatasetWriterOptions.MaximumActiveWriters.get -> uint
-Plank.Dataset.DatasetWriterOptions.MaximumActiveWriters.init -> void
 Plank.Dataset.DatasetWriterOptions.MaximumPendingPartitions.get -> uint
 Plank.Dataset.DatasetWriterOptions.MaximumPendingPartitions.init -> void
 Plank.Dataset.DatasetWriterOptions.RowsBeforeWriterActivation.get -> uint
 Plank.Dataset.DatasetWriterOptions.RowsBeforeWriterActivation.init -> void
 Plank.RowApi.RowBufferSlot.RowBufferSlot(Plank.RowApi.RowApiColumnDescriptor![]! columns, int rowCount) -> void
 static readonly Plank.Dataset.DatasetWriterOptions.Default -> Plank.Dataset.DatasetWriterOptions!
-Plank.Dataset.IParquetFileFactory
-Plank.Dataset.IParquetFileFactory.Create() -> Plank.IParquetFile!
-Plank.IParquetFile
-Plank.IParquetFile.Close() -> void
-Plank.IParquetFile.Flush() -> void
-Plank.IParquetFile.Open(System.ReadOnlySpan<byte> path, System.IO.FileMode mode) -> void
-Plank.IParquetFile.SetLength(ulong length) -> void
-Plank.IParquetFile.Write(ulong offset, System.ReadOnlySpan<byte> source) -> void
-Plank.Schema.ParquetSchema.CreateAppender(Plank.IParquetFile! file, Plank.Writing.ParquetAppendOptions? options = null) -> Plank.Writing.ParquetWriter!
-Plank.Schema.ParquetSchema.CreateWriter(Plank.IParquetFile! file, Plank.Writing.ParquetWriterOptions? options = null) -> Plank.Writing.ParquetWriter!
-Plank.Writing.ParquetWriter.Reset(Plank.IParquetFile! file) -> void
+Plank.Schema.ParquetSchema.CreateAppender(Plank.Reading.IParquetReadSource! source, Plank.Writing.IParquetWriteSource! destination, Plank.Writing.ParquetAppendOptions? options = null) -> Plank.Writing.ParquetWriter!
+Plank.Schema.ParquetSchema.CreateWriter(Plank.Writing.IParquetWriteSource! destination, Plank.Writing.ParquetWriterOptions? options = null) -> Plank.Writing.ParquetWriter!
+Plank.Writing.IParquetWriteSource
+Plank.Writing.IParquetWriteSource.Close() -> void
+Plank.Writing.IParquetWriteSource.Flush() -> void
+Plank.Writing.IParquetWriteSource.Open(System.ReadOnlySpan<byte> path, System.IO.FileMode mode) -> void
+Plank.Writing.IParquetWriteSource.SetLength(ulong length) -> void
+Plank.Writing.IParquetWriteSource.Write(ulong offset, System.ReadOnlySpan<byte> source) -> void
+Plank.Writing.ParquetWriter.Reset(Plank.Writing.IParquetWriteSource! destination) -> void

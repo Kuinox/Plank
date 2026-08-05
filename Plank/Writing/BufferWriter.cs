@@ -140,9 +140,9 @@ struct BufferWriter : IDisposable
         WrittenLength = length;
     }
 
-    internal void WriteTo(IParquetFile file, ulong offset)
+    internal void WriteTo(IParquetWriteSource destination, ulong offset)
     {
-        ArgumentNullException.ThrowIfNull(file);
+        ArgumentNullException.ThrowIfNull(destination);
         if (_segments is null || WrittenLength == 0)
             return;
 
@@ -151,7 +151,7 @@ struct BufferWriter : IDisposable
             var written = _segments[i].Written;
             if (written == 0)
                 continue;
-            file.Write(offset, _segments[i].Buffer.Span[..written]);
+            destination.Write(offset, _segments[i].Buffer.Span[..written]);
             offset = checked(offset + (uint)written);
         }
     }

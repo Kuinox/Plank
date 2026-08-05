@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing.PageStrategy;
@@ -11,7 +12,7 @@ public sealed class ParquetWriter
 {
     static readonly byte[] _fileMagic = "PAR1"u8.ToArray();
 
-    IParquetFile _file = null!;
+    IParquetWriteSource _destination = null!;
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
     string? _createdBy;
@@ -47,29 +48,35 @@ public sealed class ParquetWriter
     bool _fileClosed;
 
     internal ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options)
-        : this(new StreamParquetFile(stream), schema, options, appendOptions: null)
+        : this(new StreamParquetSource(stream), schema, options, appendOptions: null)
     {
     }
 
     internal ParquetWriter(Stream stream, ParquetSchema schema, ParquetAppendOptions options)
-        : this(new StreamParquetFile(stream), schema, options.WriterOptions, options)
+        : this(new StreamParquetSource(stream), schema, options)
     {
     }
 
-    internal ParquetWriter(IParquetFile file, ParquetSchema schema, ParquetWriterOptions options)
-        : this(file, schema, options, appendOptions: null)
+    ParquetWriter(StreamParquetSource source, ParquetSchema schema, ParquetAppendOptions options)
+        : this(source, source, schema, options)
     {
     }
 
-    internal ParquetWriter(IParquetFile file, ParquetSchema schema, ParquetAppendOptions options)
-        : this(file, schema, options.WriterOptions, options)
+    internal ParquetWriter(IParquetWriteSource destination, ParquetSchema schema, ParquetWriterOptions options)
+        : this(destination, schema, options, appendOptions: null)
     {
     }
 
-    ParquetWriter(IParquetFile file, ParquetSchema schema, ParquetWriterOptions options,
-        ParquetAppendOptions? appendOptions)
+    internal ParquetWriter(IParquetReadSource source, IParquetWriteSource destination, ParquetSchema schema,
+        ParquetAppendOptions options)
+        : this(destination, schema, options.WriterOptions, options, source)
     {
-        ArgumentNullException.ThrowIfNull(file);
+    }
+
+    ParquetWriter(IParquetWriteSource destination, ParquetSchema schema, ParquetWriterOptions options,
+        ParquetAppendOptions? appendOptions, IParquetReadSource? appendSource = null)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(options);
 
@@ -116,13 +123,14 @@ public sealed class ParquetWriter
         {
             _createdBy = options.CreatedBy;
             _keyValueMetadata = SnapshotMetadata(options.KeyValueMetadata);
-            OpenFile(file);
+            OpenFile(destination);
         }
         else
         {
             try
             {
-                OpenAppendFile(file, appendOptions);
+                OpenAppendFile(appendSource ?? throw new ArgumentNullException(nameof(appendSource)), destination,
+                    appendOptions);
             }
             catch
             {
@@ -147,26 +155,26 @@ public sealed class ParquetWriter
     public void Reset(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        if (_file is StreamParquetFile streamFile && ReferenceEquals(stream, streamFile.Stream))
+        if (_destination is StreamParquetSource streamSource && ReferenceEquals(stream, streamSource.Stream))
         {
-            Reset(_file);
+            Reset(_destination);
             return;
         }
 
-        Reset(new StreamParquetFile(stream));
+        Reset(new StreamParquetSource(stream));
     }
 
-    public void Reset(IParquetFile file)
+    public void Reset(IParquetWriteSource destination)
     {
-        ArgumentNullException.ThrowIfNull(file);
+        ArgumentNullException.ThrowIfNull(destination);
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot reset while a row group is open.");
 
-        if (ReferenceEquals(file, _file))
+        if (ReferenceEquals(destination, _destination))
             PrepareCurrentFileForReset();
         else
             CloseCurrentFile();
-        OpenFile(file);
+        OpenFile(destination);
     }
 
     internal (int RowGroupCount, long RowCount) ImportFile(Stream source, ParquetReader reader,
@@ -178,7 +186,7 @@ public sealed class ParquetWriter
             throw new InvalidOperationException("Cannot merge a file while a row group is open.");
         if (!source.CanRead || !source.CanSeek)
             throw new ArgumentException("Merging requires a readable, seekable source stream.", nameof(source));
-        if (_file is StreamParquetFile streamFile && ReferenceEquals(source, streamFile.Stream))
+        if (_destination is StreamParquetSource streamSource && ReferenceEquals(source, streamSource.Stream))
             throw new ArgumentException("The merge source and destination streams must be different.", nameof(source));
 
         var originalSourcePosition = source.Position;
@@ -212,7 +220,7 @@ public sealed class ParquetWriter
                 _totalRowCount = totalRowCountBeforeImport;
                 SerializedRowGroupsMetadata.Truncate(metadataLengthBeforeImport);
                 SerializedFileMetadata.Reset();
-                _file.SetLength(checked((ulong)fileOffsetBeforeImport));
+                _destination.SetLength(checked((ulong)fileOffsetBeforeImport));
                 throw;
             }
 
@@ -259,7 +267,7 @@ public sealed class ParquetWriter
 
         RestoreUnchangedLatestRowGroup();
         WriteFileFooter();
-        _file.Flush();
+        _destination.Flush();
         CloseCurrentFile();
         ReleaseBuffers();
     }
@@ -274,13 +282,13 @@ public sealed class ParquetWriter
     {
         if (_fileClosed)
             return;
-        _file.Close();
+        _destination.Close();
         _fileClosed = true;
     }
 
     void PrepareCurrentFileForReset()
     {
-        _file.SetLength(0);
+        _destination.SetLength(0);
     }
 
     internal uint GetColumnOrdinal(LeafColumn column)
@@ -351,19 +359,19 @@ public sealed class ParquetWriter
 
     internal void WriteBuffer(ref BufferWriter buffer)
     {
-        buffer.WriteTo(_file, checked((ulong)FileOffset));
+        buffer.WriteTo(_destination, checked((ulong)FileOffset));
         FileOffset = checked(FileOffset + buffer.WrittenLength);
     }
 
     internal void WriteBytes(ReadOnlySpan<byte> bytes)
     {
-        _file.Write(checked((ulong)FileOffset), bytes);
+        _destination.Write(checked((ulong)FileOffset), bytes);
         FileOffset = checked(FileOffset + bytes.Length);
     }
 
-    void OpenFile(IParquetFile file)
+    void OpenFile(IParquetWriteSource destination)
     {
-        _file = file;
+        _destination = destination;
         _fileClosed = false;
         _rowGroupCount = 0;
         _totalRowCount = 0;
@@ -383,14 +391,15 @@ public sealed class ParquetWriter
         WriteFileHeader();
     }
 
-    void OpenAppendFile(IParquetFile file, ParquetAppendOptions appendOptions)
+    void OpenAppendFile(IParquetReadSource source, IParquetWriteSource destination,
+        ParquetAppendOptions appendOptions)
     {
         using var reader = new ParquetReader(_schema, new ParquetReaderOptions
         {
             BufferPool = _options.BufferPool,
             Strict = true
         });
-        reader.Reset(file);
+        reader.Reset(source);
         var metadata = reader.PhysicalReader.Metadata;
 
         var appendLatest = appendOptions.AppendToLatestRowGroup && metadata.RowGroupCount > 0;
@@ -429,13 +438,13 @@ public sealed class ParquetWriter
             _keyValueMetadata = SnapshotMetadata(_options.KeyValueMetadata);
         }
 
-        _file = file;
+        _destination = destination;
         _fileClosed = false;
         _rowGroupCount = retainedRowGroupCount;
         _totalRowCount = totalRowCount;
         _rowGroupOpen = false;
         FileOffset = checked((long)metadata.FooterOffset);
-        file.SetLength(checked((ulong)FileOffset));
+        destination.SetLength(checked((ulong)FileOffset));
         SerializedFileMetadata.Reset();
     }
 
@@ -444,7 +453,7 @@ public sealed class ParquetWriter
         if (_latestRowGroupMetadata is null)
             return;
 
-        _file.SetLength(checked((ulong)_latestRowGroupOffset));
+        _destination.SetLength(checked((ulong)_latestRowGroupOffset));
         FileOffset = _latestRowGroupOffset;
         _latestRowGroupMetadata = null;
         _replacingLatestRowGroup = true;
@@ -458,7 +467,7 @@ public sealed class ParquetWriter
         SerializedRowGroupsMetadata.Write(metadata);
         _rowGroupCount++;
         _totalRowCount = checked(_totalRowCount + _latestRowCount);
-        _file.SetLength(checked((ulong)_originalFooterOffset));
+        _destination.SetLength(checked((ulong)_originalFooterOffset));
         FileOffset = _originalFooterOffset;
         _latestRowGroupMetadata = null;
         _latestRowGroupValues = null;
@@ -596,7 +605,7 @@ public sealed class ParquetWriter
         {
             var count = checked((int)Math.Min(remaining, (ulong)buffer.Length));
             source.ReadExactly(buffer[..count]);
-            _file.Write(checked((ulong)FileOffset), buffer[..count]);
+            _destination.Write(checked((ulong)FileOffset), buffer[..count]);
             FileOffset = checked(FileOffset + count);
             remaining -= (uint)count;
         }
@@ -617,7 +626,7 @@ public sealed class ParquetWriter
 
     void WriteFileHeader()
     {
-        _file.Write(checked((ulong)FileOffset), _fileMagic);
+        _destination.Write(checked((ulong)FileOffset), _fileMagic);
         FileOffset = checked(FileOffset + _fileMagic.Length);
     }
 
@@ -631,7 +640,7 @@ public sealed class ParquetWriter
         Span<byte> suffix = stackalloc byte[sizeof(int) + 4];
         BinaryPrimitives.WriteInt32LittleEndian(suffix, metadataLength);
         _fileMagic.CopyTo(suffix[sizeof(int)..]);
-        _file.Write(checked((ulong)FileOffset), suffix);
+        _destination.Write(checked((ulong)FileOffset), suffix);
         FileOffset = checked(FileOffset + suffix.Length);
     }
 

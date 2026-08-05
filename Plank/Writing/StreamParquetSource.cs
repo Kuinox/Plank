@@ -1,11 +1,13 @@
+using Plank.Reading;
+
 namespace Plank.Writing;
 
-sealed class StreamParquetFile : IParquetFile
+sealed class StreamParquetSource : IParquetReadSource, IParquetWriteSource
 {
     internal Stream? Stream;
     ulong _position;
 
-    internal StreamParquetFile(Stream stream)
+    internal StreamParquetSource(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
         Stream = stream;
@@ -58,9 +60,6 @@ sealed class StreamParquetFile : IParquetFile
     public void Flush()
         => GetStream().Flush();
 
-    public void Dispose()
-        => Close();
-
     Stream GetStream()
-        => Stream ?? throw new ObjectDisposedException(nameof(StreamParquetFile));
+        => Stream ?? throw new ObjectDisposedException(nameof(StreamParquetSource));
 }

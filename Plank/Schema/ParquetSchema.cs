@@ -44,14 +44,15 @@ public sealed record ParquetSchema
     public ParquetWriter CreateWriter(Stream stream, ParquetWriterOptions? options = null)
         => new(stream, this, options ?? ParquetWriterOptions.Default);
 
-    public ParquetWriter CreateWriter(IParquetFile file, ParquetWriterOptions? options = null)
-        => new(file, this, options ?? ParquetWriterOptions.Default);
+    public ParquetWriter CreateWriter(IParquetWriteSource destination, ParquetWriterOptions? options = null)
+        => new(destination, this, options ?? ParquetWriterOptions.Default);
 
     public ParquetWriter CreateAppender(Stream stream, ParquetAppendOptions? options = null)
         => new(stream, this, options ?? ParquetAppendOptions.Default);
 
-    public ParquetWriter CreateAppender(IParquetFile file, ParquetAppendOptions? options = null)
-        => new(file, this, options ?? ParquetAppendOptions.Default);
+    public ParquetWriter CreateAppender(IParquetReadSource source, IParquetWriteSource destination,
+        ParquetAppendOptions? options = null)
+        => new(source, destination, this, options ?? ParquetAppendOptions.Default);
 
     public ParquetFileMerger CreateMerger(Stream destination, ParquetMergeOptions? options = null)
         => new(destination, this, options ?? ParquetMergeOptions.Default);

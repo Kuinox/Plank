@@ -1,5 +1,6 @@
 using System.Text;
 using Plank.Dataset;
+using Plank.Reading;
 using Plank.Reading.Physical;
 using Plank.Writing;
 
@@ -16,15 +17,13 @@ internal sealed class DatasetWriterTests
         {
             var pathAUtf8 = Encoding.UTF8.GetBytes(pathA);
             var pathBUtf8 = Encoding.UTF8.GetBytes(pathB);
-            var factory = new TestParquetFileFactory();
-            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, factory, new DatasetWriterOptions
+            var files = CreateFiles(1);
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, files, new DatasetWriterOptions
             {
-                MaximumActiveWriters = 1,
                 MaximumPendingPartitions = 2,
                 RowsBeforeWriterActivation = 2
             }))
             {
-                await Assert.That(factory.CreateCount).IsEqualTo(1);
                 writer.Queue(new DatasetRowSchema { Value = 1, Path = pathAUtf8 });
                 writer.Queue(new DatasetRowSchema { Value = 2, Path = pathBUtf8 });
                 writer.Queue(new DatasetRowSchema { Value = 3, Path = pathAUtf8 });
@@ -33,7 +32,7 @@ internal sealed class DatasetWriterTests
                 writer.Queue(new DatasetRowSchema { Value = 6, Path = pathBUtf8 });
             }
 
-            await Assert.That(factory.CreateCount).IsEqualTo(1);
+            await Assert.That(files[0].OpenCount).IsGreaterThan(1);
             await Assert.That(ReadValues(pathA)).IsEquivalentTo([1, 3, 5]);
             await Assert.That(ReadValues(pathB)).IsEquivalentTo([2, 4, 6]);
             await Assert.That(ReadRowGroupCount(pathA)).IsEqualTo(2);
@@ -54,10 +53,9 @@ internal sealed class DatasetWriterTests
         {
             var pathAUtf8 = Encoding.UTF8.GetBytes(pathA);
             var pathBUtf8 = Encoding.UTF8.GetBytes(pathB);
-            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, new TestParquetFileFactory(),
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1),
                 new DatasetWriterOptions
             {
-                MaximumActiveWriters = 1,
                 MaximumPendingPartitions = 0,
                 RowsBeforeWriterActivation = 1,
                 AppendOptions = new ParquetAppendOptions
@@ -92,10 +90,9 @@ internal sealed class DatasetWriterTests
         {
             var pathUtf8 = Encoding.UTF8.GetBytes(path);
             var row = new DatasetRowSchema { Path = pathUtf8 };
-            var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, new TestParquetFileFactory(),
+            var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1),
                 new DatasetWriterOptions
             {
-                MaximumActiveWriters = 1,
                 MaximumPendingPartitions = 0,
                 RowsBeforeWriterActivation = 1
             });
@@ -120,7 +117,7 @@ internal sealed class DatasetWriterTests
     [Test]
     public async Task SecondDisposeThrows()
     {
-        var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, new TestParquetFileFactory());
+        var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1));
         writer.Dispose();
 
         await Assert.That(() => writer.Dispose()).Throws<InvalidOperationException>();
@@ -134,9 +131,8 @@ internal sealed class DatasetWriterTests
         {
             var pathUtf8 = Encoding.UTF8.GetBytes(path);
             using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectAllocatedPath,
-                new TestParquetFileFactory(), new DatasetWriterOptions
+                CreateFiles(1), new DatasetWriterOptions
             {
-                MaximumActiveWriters = 1,
                 MaximumPendingPartitions = 1,
                 RowsBeforeWriterActivation = 1
             }))
@@ -194,20 +190,18 @@ internal sealed class DatasetWriterTests
             File.Delete(path);
     }
 
-    sealed class TestParquetFileFactory : IParquetFileFactory
+    static TestParquetSource[] CreateFiles(int count)
     {
-        internal int CreateCount;
-
-        public IParquetFile Create()
-        {
-            CreateCount++;
-            return new TestParquetFile();
-        }
+        var result = new TestParquetSource[count];
+        for (var i = 0; i < result.Length; i++)
+            result[i] = new TestParquetSource();
+        return result;
     }
 
-    sealed class TestParquetFile : IParquetFile
+    sealed class TestParquetSource : IParquetReadSource, IParquetWriteSource, IDisposable
     {
         FileStream? _stream;
+        internal int OpenCount;
 
         public ulong Length
             => checked((ulong)GetStream().Length);
@@ -217,6 +211,7 @@ internal sealed class DatasetWriterTests
             if (_stream is not null)
                 throw new InvalidOperationException("The file is already open.");
             _stream = new FileStream(Encoding.UTF8.GetString(path), mode, FileAccess.ReadWrite, FileShare.None);
+            OpenCount++;
         }
 
         public void Close()

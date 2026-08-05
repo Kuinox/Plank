@@ -482,9 +482,10 @@ static class NestedParquetRowEmitter
         builder.Append("    public delegate global::System.ReadOnlySpan<byte> Route(").Append(rowTypeName)
             .AppendLine(" row, global::Plank.IParquetBufferPool bufferPool, out global::Plank.ParquetBuffer? allocation);");
         builder.AppendLine();
-        builder.AppendLine("    public static DatasetWriter CreateDatasetWriter(Route route, global::Plank.Dataset.IParquetFileFactory fileFactory, global::Plank.Dataset.DatasetWriterOptions? options = null)");
+        builder.AppendLine("    public static DatasetWriter CreateDatasetWriter<TFile>(Route route, TFile[] files, global::Plank.Dataset.DatasetWriterOptions? options = null)");
+        builder.AppendLine("        where TFile : class, global::Plank.Reading.IParquetReadSource, global::Plank.Writing.IParquetWriteSource");
         builder.AppendLine("        => new(route ?? throw new global::System.ArgumentNullException(nameof(route)),");
-        builder.AppendLine("            fileFactory ?? throw new global::System.ArgumentNullException(nameof(fileFactory)),");
+        builder.AppendLine("            files ?? throw new global::System.ArgumentNullException(nameof(files)),");
         builder.AppendLine("            options ?? global::Plank.Dataset.DatasetWriterOptions.Default);");
         builder.AppendLine();
         builder.AppendLine("    public static Writer CreateRowWriter(global::Plank.Writing.RowGroupWriter rowGroupWriter, global::Plank.Writing.ParquetWriterOptions? options = null)");
@@ -581,8 +582,8 @@ static class NestedParquetRowEmitter
             .Append(rowTypeName).AppendLine(", BufferSlot>, global::System.IDisposable");
         builder.AppendLine("    {");
         builder.AppendLine("        readonly Route _route;");
-        builder.AppendLine("        internal DatasetWriter(Route route, global::Plank.Dataset.IParquetFileFactory fileFactory, global::Plank.Dataset.DatasetWriterOptions options)");
-        builder.AppendLine("            : base(Schema, DefaultRowBatchSize, fileFactory, options)");
+        builder.AppendLine("        internal DatasetWriter(Route route, global::Plank.Writing.IParquetWriteSource[] files, global::Plank.Dataset.DatasetWriterOptions options)");
+        builder.AppendLine("            : base(Schema, DefaultRowBatchSize, files, options)");
         builder.AppendLine("        {");
         builder.AppendLine("            _route = route;");
         builder.AppendLine("            InitializeSlots();");

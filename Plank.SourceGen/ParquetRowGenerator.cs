@@ -284,11 +284,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             .Append(rowTypeName)
             .AppendLine(" row, global::Plank.IParquetBufferPool bufferPool, out global::Plank.ParquetBuffer? allocation);");
         builder.AppendLine();
-        builder.Append("    public static ").Append(datasetWriterTypeName).Append(" CreateDatasetWriter(")
+        builder.Append("    public static ").Append(datasetWriterTypeName).Append(" CreateDatasetWriter<TFile>(")
             .Append(routeTypeName)
-            .AppendLine(" route, global::Plank.Dataset.IParquetFileFactory fileFactory, global::Plank.Dataset.DatasetWriterOptions? options = null)");
+            .AppendLine(" route, TFile[] files, global::Plank.Dataset.DatasetWriterOptions? options = null)");
+        builder.AppendLine("        where TFile : class, global::Plank.Reading.IParquetReadSource, global::Plank.Writing.IParquetWriteSource");
         builder.AppendLine("        => new(route ?? throw new global::System.ArgumentNullException(nameof(route)),");
-        builder.AppendLine("            fileFactory ?? throw new global::System.ArgumentNullException(nameof(fileFactory)),");
+        builder.AppendLine("            files ?? throw new global::System.ArgumentNullException(nameof(files)),");
         builder.AppendLine("            options ?? global::Plank.Dataset.DatasetWriterOptions.Default);");
         builder.AppendLine();
         builder.Append("    public static ").Append(writerTypeName)
@@ -449,9 +450,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.Append("        readonly ").Append(routeTypeName).AppendLine(" _route;");
         builder.AppendLine();
         builder.Append("        internal ").Append(datasetWriterTypeName).Append('(').Append(routeTypeName)
-            .AppendLine(" route, global::Plank.Dataset.IParquetFileFactory fileFactory, global::Plank.Dataset.DatasetWriterOptions options)");
+            .AppendLine(" route, global::Plank.Writing.IParquetWriteSource[] files, global::Plank.Dataset.DatasetWriterOptions options)");
         builder.Append("            : base(").Append(schemaMemberName)
-            .AppendLine(", DefaultRowBatchSize, fileFactory, options)");
+            .AppendLine(", DefaultRowBatchSize, files, options)");
         builder.AppendLine("        {");
         builder.AppendLine("            _route = route;");
         builder.AppendLine("            InitializeSlots();");
