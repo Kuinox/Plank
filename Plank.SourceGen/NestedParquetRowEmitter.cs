@@ -373,11 +373,11 @@ static class NestedParquetRowEmitter
         builder.AppendLine();
         AppendDescriptors(builder, model);
         builder.AppendLine();
-        AppendFactories(builder);
+        AppendFactories(builder, schemaType);
         builder.AppendLine();
         AppendProjection(builder, model);
         builder.AppendLine();
-        AppendWriters(builder, model);
+        AppendWriters(builder, model, schemaType);
         builder.AppendLine();
         AppendRowReader(builder, model);
         builder.AppendLine();
@@ -476,8 +476,15 @@ static class NestedParquetRowEmitter
         builder.AppendLine("    ];");
     }
 
-    static void AppendFactories(StringBuilder builder)
+    static void AppendFactories(StringBuilder builder, INamedTypeSymbol schemaType)
     {
+        var rowTypeName = EscapeIdentifier(schemaType.Name);
+        builder.Append("    public delegate global::System.ReadOnlySpan<byte> Route(").Append(rowTypeName)
+            .AppendLine(" row, global::Plank.IParquetBufferPool bufferPool, out global::Plank.ParquetBuffer? allocation);");
+        builder.AppendLine();
+        builder.AppendLine("    public static DatasetWriter CreateDatasetWriter(Route route, global::Plank.Dataset.DatasetWriterOptions? options = null)");
+        builder.AppendLine("        => new(route, options ?? global::Plank.Dataset.DatasetWriterOptions.Default);");
+        builder.AppendLine();
         builder.AppendLine("    public static Writer CreateRowWriter(global::Plank.Writing.RowGroupWriter rowGroupWriter, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(rowGroupWriter, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
         builder.AppendLine();
@@ -535,8 +542,9 @@ static class NestedParquetRowEmitter
         builder.AppendLine("    }");
     }
 
-    static void AppendWriters(StringBuilder builder, Model model)
+    static void AppendWriters(StringBuilder builder, Model model, INamedTypeSymbol schemaType)
     {
+        var rowTypeName = EscapeIdentifier(schemaType.Name);
         builder.AppendLine("    public struct Writer");
         builder.AppendLine("    {");
         builder.AppendLine("        readonly global::Plank.RowApi.RowGroupWriterCore<BufferSlot> _core;");
@@ -567,8 +575,36 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        public void Complete() => CompleteWriter();");
         builder.AppendLine("    }");
         builder.AppendLine();
+        builder.Append("    public sealed class DatasetWriter : global::Plank.Dataset.DatasetWriterBase<")
+            .Append(rowTypeName).AppendLine(", BufferSlot>, global::System.IDisposable");
+        builder.AppendLine("    {");
+        builder.AppendLine("        readonly Route _route;");
+        builder.AppendLine("        internal DatasetWriter(Route route, global::Plank.Dataset.DatasetWriterOptions options)");
+        builder.AppendLine("            : base(Schema, DefaultRowBatchSize, options)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            _route = route ?? throw new global::System.ArgumentNullException(nameof(route));");
+        builder.AppendLine("            InitializeSlots();");
+        builder.AppendLine("        }");
+        builder.AppendLine("        protected override BufferSlot CreateSlot() => new(DefaultRowBatchSize);");
+        builder.Append("        protected override void CopyRow(").Append(rowTypeName)
+            .AppendLine(" row, BufferSlot slot)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            var target = slot.GetRow();");
+        for (var i = 0; i < model.Roots.Length; i++)
+            builder.Append("            target.").Append(EscapeIdentifier(model.Roots[i].PropertyName))
+                .Append(" = row.").Append(EscapeIdentifier(model.Roots[i].PropertyName)).AppendLine(";");
+        builder.AppendLine("        }");
+        builder.Append("        protected override global::System.ReadOnlySpan<byte> SelectPath(")
+            .Append(rowTypeName)
+            .AppendLine(" row, global::Plank.IParquetBufferPool bufferPool, out global::Plank.ParquetBuffer? allocation)");
+        builder.AppendLine("            => _route(row, bufferPool, out allocation);");
+        builder.Append("        public void Queue(").Append(rowTypeName).AppendLine(" row) => QueueRow(row);");
+        builder.AppendLine("        public void Dispose() => DisposeDataset();");
+        builder.AppendLine("    }");
+        builder.AppendLine();
         builder.AppendLine("    public sealed class BufferSlot : global::Plank.RowApi.RowBufferSlot");
         builder.AppendLine("    {");
+        builder.AppendLine("        internal BufferSlot(int rowCount) : base(s_rowApiColumns, rowCount) { }");
         builder.AppendLine("        internal BufferSlot(global::Plank.Writing.RowGroupWriter rowGroupWriter, int rowCount) : base(rowGroupWriter, s_rowApiColumns, rowCount) { }");
         builder.AppendLine("        internal BufferSlot(global::Plank.Writing.ParquetWriter writer, int rowCount) : base(writer, s_rowApiColumns, rowCount) { }");
         builder.AppendLine("        internal Row GetRow()");

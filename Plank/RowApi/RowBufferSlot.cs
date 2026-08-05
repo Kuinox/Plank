@@ -12,6 +12,20 @@ public abstract class RowBufferSlot
     readonly RowApiColumnWriteState[] _columns;
     List<IDisposable>? _ownedBuffers;
 
+    /// <summary>Initializes a generated buffer slot that can later be bound to a Parquet writer.</summary>
+    /// <param name="columns">The generated column descriptors.</param>
+    /// <param name="rowCount">The slot's row capacity.</param>
+    protected RowBufferSlot(RowApiColumnDescriptor[] columns, int rowCount)
+    {
+        ArgumentNullException.ThrowIfNull(columns);
+        if (rowCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(rowCount), rowCount, "Row count must be non-negative.");
+
+        _rowCount = rowCount;
+        _columns = CreateColumnStates(columns, rowCount);
+        Index = 0;
+    }
+
     /// <summary>Initializes a generated buffer slot that writes directly to a row group.</summary>
     /// <param name="rowGroupWriter">The destination row-group writer.</param>
     /// <param name="columns">The generated column descriptors.</param>
@@ -52,6 +66,19 @@ public abstract class RowBufferSlot
 
     internal int Count
         => Index;
+
+    internal void Bind(ParquetWriter writer)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        for (var i = 0; i < _columns.Length; i++)
+            _columns[i].Bind(writer);
+    }
+
+    internal void Unbind()
+    {
+        for (var i = 0; i < _columns.Length; i++)
+            _columns[i].Unbind();
+    }
 
     /// <summary>Gets the index at which the generated writer stores the next row.</summary>
     protected int Index { get; private set; }
@@ -131,6 +158,19 @@ public abstract class RowBufferSlot
             var column = columns[i] ?? throw new ArgumentException("Row API column descriptors cannot contain null values.",
                 nameof(columns));
             states[i] = column.CreateWriteState(rowGroupWriter, rowCount);
+        }
+
+        return states;
+    }
+
+    static RowApiColumnWriteState[] CreateColumnStates(RowApiColumnDescriptor[] columns, int rowCount)
+    {
+        var states = new RowApiColumnWriteState[columns.Length];
+        for (var i = 0; i < columns.Length; i++)
+        {
+            var column = columns[i] ?? throw new ArgumentException("Row API column descriptors cannot contain null values.",
+                nameof(columns));
+            states[i] = column.CreateWriteState(rowCount);
         }
 
         return states;

@@ -64,6 +64,9 @@ public sealed class RowApiNestedColumnDescriptor<TShape, TElement> : RowApiColum
     internal override RowApiColumnWriteState CreateWriteState(RowGroupWriter rowGroupWriter, int rowCount)
         => new RowApiColumnWriteState<TShape>(this, rowGroupWriter, rowCount);
 
+    internal override RowApiColumnWriteState CreateWriteState(int rowCount)
+        => new RowApiColumnWriteState<TShape>(this, rowCount);
+
     internal override RowApiColumnWriteState CreateWriteState(ParquetWriter writer, int rowCount)
         => new RowApiColumnWriteState<TShape>(this, writer, rowCount);
 }

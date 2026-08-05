@@ -39,6 +39,9 @@ public sealed class RowApiColumnDescriptor<T> : RowApiColumnDescriptor
     internal override RowApiColumnWriteState CreateWriteState(RowGroupWriter rowGroupWriter, int rowCount)
         => new RowApiColumnWriteState<T>(this, rowGroupWriter, rowCount);
 
+    internal override RowApiColumnWriteState CreateWriteState(int rowCount)
+        => new RowApiColumnWriteState<T>(this, rowCount);
+
     internal override RowApiColumnWriteState CreateWriteState(ParquetWriter writer, int rowCount)
         => new RowApiColumnWriteState<T>(this, writer, rowCount);
 }

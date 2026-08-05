@@ -258,3 +258,23 @@ static Plank.Schema.ColumnDefinition.RequiredLeaf(string! name, Plank.Schema.Par
 static Plank.Schema.RowSchema.Column<TClr>(string! name, Plank.Schema.ParquetPhysicalType physicalType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> Plank.Schema.RowSchemaColumn!
 virtual Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ConvertFromPhysical(System.ReadOnlySpan<TPhysical> source, System.Span<TValue> destination) -> void
 virtual Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ConvertToPhysical(System.ReadOnlySpan<TValue> source, System.Span<TPhysical> destination) -> void
+Plank.Dataset.DatasetWriterBase<TRow, TSlot>
+Plank.Dataset.DatasetWriterBase<TRow, TSlot>.DatasetWriterBase(Plank.Schema.ParquetSchema! schema, int rowBufferCapacity, Plank.Dataset.DatasetWriterOptions! options) -> void
+Plank.Dataset.DatasetWriterBase<TRow, TSlot>.DisposeDataset() -> void
+Plank.Dataset.DatasetWriterBase<TRow, TSlot>.InitializeSlots() -> void
+Plank.Dataset.DatasetWriterBase<TRow, TSlot>.QueueRow(TRow row) -> void
+abstract Plank.Dataset.DatasetWriterBase<TRow, TSlot>.CopyRow(TRow row, TSlot! slot) -> void
+abstract Plank.Dataset.DatasetWriterBase<TRow, TSlot>.CreateSlot() -> TSlot!
+abstract Plank.Dataset.DatasetWriterBase<TRow, TSlot>.SelectPath(TRow row, Plank.IParquetBufferPool! bufferPool, out Plank.ParquetBuffer? allocation) -> System.ReadOnlySpan<byte>
+Plank.Dataset.DatasetWriterOptions
+Plank.Dataset.DatasetWriterOptions.AppendOptions.get -> Plank.Writing.ParquetAppendOptions!
+Plank.Dataset.DatasetWriterOptions.AppendOptions.init -> void
+Plank.Dataset.DatasetWriterOptions.DatasetWriterOptions() -> void
+Plank.Dataset.DatasetWriterOptions.MaximumActiveWriters.get -> uint
+Plank.Dataset.DatasetWriterOptions.MaximumActiveWriters.init -> void
+Plank.Dataset.DatasetWriterOptions.MaximumPendingPartitions.get -> uint
+Plank.Dataset.DatasetWriterOptions.MaximumPendingPartitions.init -> void
+Plank.Dataset.DatasetWriterOptions.RowsBeforeWriterActivation.get -> uint
+Plank.Dataset.DatasetWriterOptions.RowsBeforeWriterActivation.init -> void
+Plank.RowApi.RowBufferSlot.RowBufferSlot(Plank.RowApi.RowApiColumnDescriptor![]! columns, int rowCount) -> void
+static readonly Plank.Dataset.DatasetWriterOptions.Default -> Plank.Dataset.DatasetWriterOptions!
