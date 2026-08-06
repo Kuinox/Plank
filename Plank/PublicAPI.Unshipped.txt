@@ -258,15 +258,14 @@ static Plank.Schema.ColumnDefinition.RequiredLeaf(string! name, Plank.Schema.Par
 static Plank.Schema.RowSchema.Column<TClr>(string! name, Plank.Schema.ParquetPhysicalType physicalType, Plank.Schema.ColumnOptions? options = null, Plank.Schema.LogicalType? logicalType = null, Plank.Writing.PageStrategy.IPageStrategy? pageStrategy = null, Plank.Schema.ParquetValueConverter? converter = null) -> Plank.Schema.RowSchemaColumn!
 virtual Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ConvertFromPhysical(System.ReadOnlySpan<TPhysical> source, System.Span<TValue> destination) -> void
 virtual Plank.Schema.ParquetValueConverter<TValue, TPhysical>.ConvertToPhysical(System.ReadOnlySpan<TValue> source, System.Span<TPhysical> destination) -> void
-Plank.Dataset.DatasetWriterBase<TRow, TSlot>
-Plank.Dataset.DatasetWriterBase<TRow, TSlot>.DatasetWriterBase(Plank.Schema.ParquetSchema! schema, int rowBufferCapacity, Plank.Writing.IParquetWriteSource![]! files, Plank.Dataset.DatasetWriterOptions! options) -> void
-Plank.Dataset.DatasetWriterBase<TRow, TSlot>.DisposeDataset() -> void
-Plank.Dataset.DatasetWriterBase<TRow, TSlot>.InitializeSlots() -> void
-Plank.Dataset.DatasetWriterBase<TRow, TSlot>.QueueRow(TRow row) -> void
-abstract Plank.Dataset.DatasetWriterBase<TRow, TSlot>.CopyBufferedRow(TSlot! source, int sourceIndex, TSlot! destination, int destinationIndex) -> void
-abstract Plank.Dataset.DatasetWriterBase<TRow, TSlot>.CopyRow(TRow row, TSlot! slot, int index) -> void
-abstract Plank.Dataset.DatasetWriterBase<TRow, TSlot>.CreateSlot(int rowCapacity) -> TSlot!
-abstract Plank.Dataset.DatasetWriterBase<TRow, TSlot>.SelectPath(TRow row, Plank.IParquetBufferPool! bufferPool, out Plank.ParquetBuffer? allocation) -> System.ReadOnlySpan<byte>
+Plank.Dataset.DatasetWriterBase<TRow>
+Plank.Dataset.DatasetWriterBase<TRow>.DatasetWriterBase(Plank.Schema.ParquetSchema! schema, Plank.RowApi.RowApiColumnDescriptor![]! columns, int rowBufferCapacity, Plank.Writing.IParquetWriteSource![]! files, Plank.Dataset.DatasetWriterOptions! options) -> void
+Plank.Dataset.DatasetWriterBase<TRow>.DisposeDataset() -> void
+Plank.Dataset.DatasetWriterBase<TRow>.InitializeSlots() -> void
+Plank.Dataset.DatasetWriterBase<TRow>.QueueRow(TRow row) -> void
+Plank.Dataset.DatasetWriterBase<TRow>.SetColumnValue<T>(int slotIndex, int columnIndex, int rowIndex, T value) -> void
+abstract Plank.Dataset.DatasetWriterBase<TRow>.CopyRow(TRow row, int slotIndex, int rowIndex) -> void
+abstract Plank.Dataset.DatasetWriterBase<TRow>.SelectPath(TRow row, Plank.IParquetBufferPool! bufferPool, out Plank.ParquetBuffer? allocation) -> System.ReadOnlySpan<byte>
 Plank.Dataset.DatasetWriterOptions
 Plank.Dataset.DatasetWriterOptions.AppendOptions.get -> Plank.Writing.ParquetAppendOptions!
 Plank.Dataset.DatasetWriterOptions.AppendOptions.init -> void
@@ -275,8 +274,6 @@ Plank.Dataset.DatasetWriterOptions.PendingRowCapacity.get -> uint
 Plank.Dataset.DatasetWriterOptions.PendingRowCapacity.init -> void
 Plank.Dataset.DatasetWriterOptions.RowsBeforeWriterActivation.get -> uint
 Plank.Dataset.DatasetWriterOptions.RowsBeforeWriterActivation.init -> void
-Plank.RowApi.RowBufferSlot.RowBufferSlot(Plank.RowApi.RowApiColumnDescriptor![]! columns, int rowCount) -> void
-Plank.RowApi.RowBufferSlot.ValidateRowIndex(int index) -> void
 static readonly Plank.Dataset.DatasetWriterOptions.Default -> Plank.Dataset.DatasetWriterOptions!
 Plank.Schema.ParquetSchema.CreateAppender(Plank.Reading.IParquetReadSource! source, Plank.Writing.IParquetWriteSource! destination, Plank.Writing.ParquetAppendOptions? options = null) -> Plank.Writing.ParquetWriter!
 Plank.Schema.ParquetSchema.CreateWriter(Plank.Writing.IParquetWriteSource! destination, Plank.Writing.ParquetWriterOptions? options = null) -> Plank.Writing.ParquetWriter!

@@ -13,4 +13,6 @@ abstract class RowApiColumnWriteState
     internal abstract void Write(RowGroupWriter rowGroupWriter);
 
     internal abstract void ResetForReuse(int start, int count);
+
+    internal abstract void CopyValueTo(int sourceIndex, RowApiColumnWriteState destination, int destinationIndex);
 }

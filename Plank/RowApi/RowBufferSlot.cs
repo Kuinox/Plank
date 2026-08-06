@@ -12,10 +12,7 @@ public abstract class RowBufferSlot
     readonly RowApiColumnWriteState[] _columns;
     List<IDisposable>? _ownedBuffers;
 
-    /// <summary>Initializes a generated buffer slot that can later be bound to a Parquet writer.</summary>
-    /// <param name="columns">The generated column descriptors.</param>
-    /// <param name="rowCount">The slot's row capacity.</param>
-    protected RowBufferSlot(RowApiColumnDescriptor[] columns, int rowCount)
+    internal RowBufferSlot(RowApiColumnDescriptor[] columns, int rowCount)
     {
         ArgumentNullException.ThrowIfNull(columns);
         if (rowCount < 0)
@@ -149,6 +146,28 @@ public abstract class RowBufferSlot
             _columns[i].ResetForReuse(index, 1);
     }
 
+    internal void SetValue<T>(int columnIndex, int rowIndex, T value)
+    {
+        ValidateRowIndex(rowIndex);
+        if ((uint)columnIndex >= (uint)_columns.Length)
+            throw new ArgumentOutOfRangeException(nameof(columnIndex), columnIndex,
+                "Column index is outside the row API schema.");
+        if (_columns[columnIndex] is not RowApiColumnWriteState<T> state)
+            throw new InvalidOperationException($"Row API column at index {columnIndex} cannot be written as {typeof(T)}.");
+        state.Values[rowIndex] = value;
+    }
+
+    internal void CopyRowTo(int sourceIndex, RowBufferSlot destination, int destinationIndex)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        ValidateRowIndex(sourceIndex);
+        destination.ValidateRowIndex(destinationIndex);
+        if (_columns.Length != destination._columns.Length)
+            throw new InvalidOperationException("Row API buffer schemas do not match.");
+        for (var i = 0; i < _columns.Length; i++)
+            _columns[i].CopyValueTo(sourceIndex, destination._columns[i], destinationIndex);
+    }
+
     /// <summary>Throws if the generated writer has filled this slot.</summary>
     protected void EnsureRowAvailable()
     {
@@ -170,9 +189,7 @@ public abstract class RowBufferSlot
         return states;
     }
 
-    /// <summary>Throws if an index is outside this slot.</summary>
-    /// <param name="index">The row index.</param>
-    protected void ValidateRowIndex(int index)
+    void ValidateRowIndex(int index)
     {
         if ((uint)index >= (uint)_rowCount)
             throw new ArgumentOutOfRangeException(nameof(index), index, "Row index is outside the buffer slot.");

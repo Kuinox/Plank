@@ -57,6 +57,13 @@ sealed class RowApiColumnWriteState<T> : RowApiColumnWriteState
             Array.Clear(Values, start, count);
     }
 
+    internal override void CopyValueTo(int sourceIndex, RowApiColumnWriteState destination, int destinationIndex)
+    {
+        if (destination is not RowApiColumnWriteState<T> target)
+            throw new InvalidOperationException("Row API column buffer types do not match.");
+        target.Values[destinationIndex] = Values[sourceIndex];
+    }
+
     SerializedColumn<T> GetSerialized()
         => _serialized ?? throw new InvalidOperationException("The row API column is not bound to a writer.");
 }

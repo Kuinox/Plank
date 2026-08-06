@@ -9,6 +9,15 @@ namespace Plank.Tests.E2E;
 internal sealed class DatasetWriterTests
 {
     [Test]
+    public async Task GeneratedDatasetWriterDoesNotExposeBufferSlot()
+    {
+        var baseType = typeof(DatasetRowSchema.DatasetWriter).BaseType!;
+
+        await Assert.That(baseType.GetGenericTypeDefinition()).IsEqualTo(typeof(DatasetWriterBase<>));
+        await Assert.That(baseType.GetGenericArguments().Length).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task RoutesRowsAndReopensForgottenPartitions()
     {
         var pathA = NewPath();

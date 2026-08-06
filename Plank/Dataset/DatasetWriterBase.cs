@@ -8,12 +8,11 @@ namespace Plank.Dataset;
 
 /// <summary>Provides the bounded partition state used by generated dataset writers.</summary>
 /// <typeparam name="TRow">The generated schema row type.</typeparam>
-/// <typeparam name="TSlot">The generated row-buffer slot type.</typeparam>
 /// <remarks>This unstable API supports Plank-generated code and is not intended for direct use.</remarks>
-public abstract class DatasetWriterBase<TRow, TSlot>
-    where TSlot : RowBufferSlot
+public abstract class DatasetWriterBase<TRow>
 {
     readonly ParquetSchema _schema;
+    readonly RowApiColumnDescriptor[] _columns;
     readonly DatasetWriterOptions _options;
     readonly IParquetBufferPool _bufferPool;
     readonly PartitionState[] _states;
@@ -24,7 +23,7 @@ public abstract class DatasetWriterBase<TRow, TSlot>
     readonly int _rowBufferCapacity;
     readonly int _pendingRowCapacity;
     readonly int _activationRowCount;
-    TSlot _parkedRows = null!;
+    DatasetBufferSlot _parkedRows = null!;
     int _availableFileCount;
     int _parkedRowCount;
     int _parkedRowHead;
@@ -36,13 +35,15 @@ public abstract class DatasetWriterBase<TRow, TSlot>
 
     /// <summary>Initializes the state used by a generated dataset writer.</summary>
     /// <param name="schema">The one schema shared by all files in the dataset.</param>
+    /// <param name="columns">The generated column descriptors for the schema.</param>
     /// <param name="rowBufferCapacity">The row capacity of each generated buffer slot.</param>
     /// <param name="files">The fixed reusable file sources.</param>
     /// <param name="options">The dataset writer options.</param>
-    protected DatasetWriterBase(ParquetSchema schema, int rowBufferCapacity, IParquetWriteSource[] files,
-        DatasetWriterOptions options)
+    protected DatasetWriterBase(ParquetSchema schema, RowApiColumnDescriptor[] columns, int rowBufferCapacity,
+        IParquetWriteSource[] files, DatasetWriterOptions options)
     {
         ArgumentNullException.ThrowIfNull(schema);
+        ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(files);
         ArgumentNullException.ThrowIfNull(options);
         if (rowBufferCapacity <= 0)
@@ -53,6 +54,7 @@ public abstract class DatasetWriterBase<TRow, TSlot>
 
         options.Validate();
         _schema = schema;
+        _columns = columns;
         _options = options;
         _bufferPool = options.AppendOptions.WriterOptions.BufferPool;
         _rowBufferCapacity = rowBufferCapacity;
@@ -84,23 +86,20 @@ public abstract class DatasetWriterBase<TRow, TSlot>
             _parkedRowLinks[i] = i + 1 < _parkedRowLinks.Length ? i + 1 : -1;
     }
 
-    /// <summary>Creates an unbound generated row-buffer slot.</summary>
-    /// <param name="rowCapacity">The required row capacity.</param>
-    /// <returns>A new row-buffer slot.</returns>
-    protected abstract TSlot CreateSlot(int rowCapacity);
-
-    /// <summary>Copies one schema row into a generated row-buffer slot.</summary>
+    /// <summary>Copies one schema row into the dataset column buffers.</summary>
     /// <param name="row">The source schema row.</param>
-    /// <param name="slot">The destination row-buffer slot.</param>
-    /// <param name="index">The destination row index.</param>
-    protected abstract void CopyRow(TRow row, TSlot slot, int index);
+    /// <param name="slotIndex">The destination slot identifier.</param>
+    /// <param name="rowIndex">The destination row index.</param>
+    protected abstract void CopyRow(TRow row, int slotIndex, int rowIndex);
 
-    /// <summary>Copies one buffered row into another generated row-buffer slot.</summary>
-    /// <param name="source">The source row-buffer slot.</param>
-    /// <param name="sourceIndex">The source row index.</param>
-    /// <param name="destination">The destination row-buffer slot.</param>
-    /// <param name="destinationIndex">The destination row index.</param>
-    protected abstract void CopyBufferedRow(TSlot source, int sourceIndex, TSlot destination, int destinationIndex);
+    /// <summary>Sets one typed value in a dataset column buffer.</summary>
+    /// <typeparam name="T">The generated column value type.</typeparam>
+    /// <param name="slotIndex">The destination slot identifier.</param>
+    /// <param name="columnIndex">The destination column index.</param>
+    /// <param name="rowIndex">The destination row index.</param>
+    /// <param name="value">The value to set.</param>
+    protected void SetColumnValue<T>(int slotIndex, int columnIndex, int rowIndex, T value)
+        => GetSlot(slotIndex).SetValue(columnIndex, rowIndex, value);
 
     /// <summary>Gets the UTF-8 path for one schema row.</summary>
     /// <param name="row">The schema row.</param>
@@ -120,13 +119,11 @@ public abstract class DatasetWriterBase<TRow, TSlot>
 
         for (var i = 0; i < _states.Length; i++)
         {
-            var slot = CreateSlot(_rowBufferCapacity);
-            ArgumentNullException.ThrowIfNull(slot);
-            _states[i] = new PartitionState(slot);
+            var slot = new DatasetBufferSlot(_columns, _rowBufferCapacity);
+            _states[i] = new PartitionState(slot, i);
         }
 
-        _parkedRows = CreateSlot(_pendingRowCapacity);
-        ArgumentNullException.ThrowIfNull(_parkedRows);
+        _parkedRows = new DatasetBufferSlot(_columns, _pendingRowCapacity);
         _initialized = true;
     }
 
@@ -251,7 +248,7 @@ public abstract class DatasetWriterBase<TRow, TSlot>
     void QueueActiveRow(TRow row, PartitionState state)
     {
         state.LastUse = unchecked(++_clock);
-        CopyRow(row, state.Slot, state.Slot.Count);
+        CopyRow(row, state.SlotIndex, state.Slot.Count);
         state.Slot.Next();
         if (state.Slot.IsFull)
             WriteRows(state);
@@ -309,7 +306,7 @@ public abstract class DatasetWriterBase<TRow, TSlot>
         var nextFree = _parkedRowLinks[rowIndex];
         try
         {
-            CopyRow(row, _parkedRows, rowIndex);
+            CopyRow(row, _states.Length, rowIndex);
         }
         catch
         {
@@ -389,7 +386,7 @@ public abstract class DatasetWriterBase<TRow, TSlot>
                 continue;
             }
 
-            CopyBufferedRow(_parkedRows, current, state.Slot, state.Slot.Count);
+            _parkedRows.CopyRowTo(current, state.Slot, state.Slot.Count);
             state.Slot.Next();
             RemoveParkedRow(current, previous, next);
             _pendingKeys[keyIndex].RowCount--;
@@ -670,6 +667,16 @@ public abstract class DatasetWriterBase<TRow, TSlot>
         _files[_availableFileCount++] = file;
     }
 
+    DatasetBufferSlot GetSlot(int slotIndex)
+    {
+        if ((uint)slotIndex < (uint)_states.Length)
+            return _states[slotIndex].Slot;
+        if (slotIndex == _states.Length)
+            return _parkedRows;
+        throw new ArgumentOutOfRangeException(nameof(slotIndex), slotIndex,
+            "Slot index is outside the dataset writer.");
+    }
+
     void ThrowIfUnavailable()
     {
         if (!_initialized)
@@ -678,9 +685,10 @@ public abstract class DatasetWriterBase<TRow, TSlot>
             throw new ObjectDisposedException(GetType().Name);
     }
 
-    sealed class PartitionState(TSlot slot)
+    sealed class PartitionState(DatasetBufferSlot slot, int slotIndex)
     {
-        internal readonly TSlot Slot = slot;
+        internal readonly DatasetBufferSlot Slot = slot;
+        internal readonly int SlotIndex = slotIndex;
         internal ParquetBuffer Path;
         internal int PathLength;
         internal FileSources? File;
@@ -688,6 +696,9 @@ public abstract class DatasetWriterBase<TRow, TSlot>
         internal ulong LastUse;
         internal bool Active;
     }
+
+    sealed class DatasetBufferSlot(RowApiColumnDescriptor[] columns, int rowCount)
+        : RowBufferSlot(columns, rowCount);
 
     struct PendingKeyState
     {
