@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing.PageStrategy;
@@ -11,7 +12,7 @@ public sealed class ParquetWriter
 {
     static readonly byte[] _fileMagic = "PAR1"u8.ToArray();
 
-    Stream _stream = null!;
+    IParquetWriteSource _destination = null!;
     readonly ParquetSchema _schema;
     readonly ParquetWriterOptions _options;
     string? _createdBy;
@@ -44,22 +45,38 @@ public sealed class ParquetWriter
     uint _latestRowCount;
     bool _replacingLatestRowGroup;
     bool _rowGroupOpen;
-    bool _streamDisposed;
+    bool _fileClosed;
 
     internal ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options)
-        : this(stream, schema, options, appendOptions: null)
+        : this(new StreamParquetSource(stream), schema, options, appendOptions: null)
     {
     }
 
     internal ParquetWriter(Stream stream, ParquetSchema schema, ParquetAppendOptions options)
-        : this(stream, schema, options.WriterOptions, options)
+        : this(new StreamParquetSource(stream), schema, options)
     {
     }
 
-    ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options,
-        ParquetAppendOptions? appendOptions)
+    ParquetWriter(StreamParquetSource source, ParquetSchema schema, ParquetAppendOptions options)
+        : this(source, source, schema, options)
     {
-        ArgumentNullException.ThrowIfNull(stream);
+    }
+
+    internal ParquetWriter(IParquetWriteSource destination, ParquetSchema schema, ParquetWriterOptions options)
+        : this(destination, schema, options, appendOptions: null)
+    {
+    }
+
+    internal ParquetWriter(IParquetReadSource source, IParquetWriteSource destination, ParquetSchema schema,
+        ParquetAppendOptions options)
+        : this(destination, schema, options.WriterOptions, options, source)
+    {
+    }
+
+    ParquetWriter(IParquetWriteSource destination, ParquetSchema schema, ParquetWriterOptions options,
+        ParquetAppendOptions? appendOptions, IParquetReadSource? appendSource = null)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(options);
 
@@ -106,13 +123,14 @@ public sealed class ParquetWriter
         {
             _createdBy = options.CreatedBy;
             _keyValueMetadata = SnapshotMetadata(options.KeyValueMetadata);
-            OpenFile(stream);
+            OpenFile(destination);
         }
         else
         {
             try
             {
-                OpenAppendFile(stream, appendOptions);
+                OpenAppendFile(appendSource ?? throw new ArgumentNullException(nameof(appendSource)), destination,
+                    appendOptions);
             }
             catch
             {
@@ -137,29 +155,39 @@ public sealed class ParquetWriter
     public void Reset(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
+        if (_destination is StreamParquetSource streamSource && ReferenceEquals(stream, streamSource.Stream))
+        {
+            Reset(_destination);
+            return;
+        }
+
+        Reset(new StreamParquetSource(stream));
+    }
+
+    public void Reset(IParquetWriteSource destination)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot reset while a row group is open.");
 
-        if (ReferenceEquals(stream, _stream))
-            PrepareCurrentStreamForReset();
+        if (ReferenceEquals(destination, _destination))
+            PrepareCurrentFileForReset();
         else
-            DisposeCurrentStream();
-        OpenFile(stream);
+            CloseCurrentFile();
+        OpenFile(destination);
     }
 
     internal (int RowGroupCount, long RowCount) ImportFile(Stream source, ParquetReader reader,
         bool preserveMetadata)
     {
-        ThrowIfStreamClosed();
+        ThrowIfFileClosed();
         ArgumentNullException.ThrowIfNull(source);
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot merge a file while a row group is open.");
         if (!source.CanRead || !source.CanSeek)
             throw new ArgumentException("Merging requires a readable, seekable source stream.", nameof(source));
-        if (ReferenceEquals(source, _stream))
+        if (_destination is StreamParquetSource streamSource && ReferenceEquals(source, streamSource.Stream))
             throw new ArgumentException("The merge source and destination streams must be different.", nameof(source));
-        if (!_stream.CanSeek)
-            throw new InvalidOperationException("The merge destination stream must be seekable.");
 
         var originalSourcePosition = source.Position;
         try
@@ -192,8 +220,7 @@ public sealed class ParquetWriter
                 _totalRowCount = totalRowCountBeforeImport;
                 SerializedRowGroupsMetadata.Truncate(metadataLengthBeforeImport);
                 SerializedFileMetadata.Reset();
-                _stream.Position = fileOffsetBeforeImport;
-                _stream.SetLength(fileOffsetBeforeImport);
+                _destination.SetLength(checked((ulong)fileOffsetBeforeImport));
                 throw;
             }
 
@@ -212,7 +239,7 @@ public sealed class ParquetWriter
 
     public RowGroupWriter StartRowGroup()
     {
-        ThrowIfStreamClosed();
+        ThrowIfFileClosed();
         if (_rowGroupOpen)
             throw new InvalidOperationException("A row group is already open for this writer.");
         if (_rowGroupCount == int.MaxValue)
@@ -234,38 +261,34 @@ public sealed class ParquetWriter
 
     public void CloseFile()
     {
-        ThrowIfStreamClosed();
+        ThrowIfFileClosed();
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot close the file while a row group is still open.");
 
         RestoreUnchangedLatestRowGroup();
         WriteFileFooter();
-        DisposeCurrentStream();
+        _destination.Flush();
+        CloseCurrentFile();
         ReleaseBuffers();
     }
 
-    void ThrowIfStreamClosed()
+    void ThrowIfFileClosed()
     {
-        if (_streamDisposed)
-            throw new InvalidOperationException("The current file stream is closed. Call Reset(stream) to start a new file.");
+        if (_fileClosed)
+            throw new InvalidOperationException("The current file is closed. Call Reset(file) to start a new file.");
     }
 
-    void DisposeCurrentStream()
+    void CloseCurrentFile()
     {
-        if (_streamDisposed)
+        if (_fileClosed)
             return;
-        _stream.Dispose();
-        _streamDisposed = true;
+        _destination.Close();
+        _fileClosed = true;
     }
 
-    void PrepareCurrentStreamForReset()
+    void PrepareCurrentFileForReset()
     {
-        if (!_stream.CanSeek)
-            throw new InvalidOperationException("Cannot reset to the same stream when it is not seekable.");
-        if (!_stream.CanWrite)
-            throw new InvalidOperationException("Cannot reset to the same stream when it is not writable.");
-        _stream.Position = 0;
-        _stream.SetLength(0);
+        _destination.SetLength(0);
     }
 
     internal uint GetColumnOrdinal(LeafColumn column)
@@ -336,20 +359,20 @@ public sealed class ParquetWriter
 
     internal void WriteBuffer(ref BufferWriter buffer)
     {
-        buffer.WriteTo(_stream);
+        buffer.WriteTo(_destination, checked((ulong)FileOffset));
         FileOffset = checked(FileOffset + buffer.WrittenLength);
     }
 
     internal void WriteBytes(ReadOnlySpan<byte> bytes)
     {
-        _stream.Write(bytes);
+        _destination.Write(checked((ulong)FileOffset), bytes);
         FileOffset = checked(FileOffset + bytes.Length);
     }
 
-    void OpenFile(Stream stream)
+    void OpenFile(IParquetWriteSource destination)
     {
-        _stream = stream;
-        _streamDisposed = false;
+        _destination = destination;
+        _fileClosed = false;
         _rowGroupCount = 0;
         _totalRowCount = 0;
         _rowGroupOpen = false;
@@ -368,17 +391,15 @@ public sealed class ParquetWriter
         WriteFileHeader();
     }
 
-    void OpenAppendFile(Stream stream, ParquetAppendOptions appendOptions)
+    void OpenAppendFile(IParquetReadSource source, IParquetWriteSource destination,
+        ParquetAppendOptions appendOptions)
     {
-        if (!stream.CanRead || !stream.CanWrite || !stream.CanSeek)
-            throw new ArgumentException("Appending requires a readable, writable, seekable stream.", nameof(stream));
-
         using var reader = new ParquetReader(_schema, new ParquetReaderOptions
         {
             BufferPool = _options.BufferPool,
             Strict = true
         });
-        reader.Reset(stream);
+        reader.Reset(source);
         var metadata = reader.PhysicalReader.Metadata;
 
         var appendLatest = appendOptions.AppendToLatestRowGroup && metadata.RowGroupCount > 0;
@@ -417,14 +438,13 @@ public sealed class ParquetWriter
             _keyValueMetadata = SnapshotMetadata(_options.KeyValueMetadata);
         }
 
-        _stream = stream;
-        _streamDisposed = false;
+        _destination = destination;
+        _fileClosed = false;
         _rowGroupCount = retainedRowGroupCount;
         _totalRowCount = totalRowCount;
         _rowGroupOpen = false;
         FileOffset = checked((long)metadata.FooterOffset);
-        stream.Position = FileOffset;
-        stream.SetLength(FileOffset);
+        destination.SetLength(checked((ulong)FileOffset));
         SerializedFileMetadata.Reset();
     }
 
@@ -433,8 +453,7 @@ public sealed class ParquetWriter
         if (_latestRowGroupMetadata is null)
             return;
 
-        _stream.Position = _latestRowGroupOffset;
-        _stream.SetLength(_latestRowGroupOffset);
+        _destination.SetLength(checked((ulong)_latestRowGroupOffset));
         FileOffset = _latestRowGroupOffset;
         _latestRowGroupMetadata = null;
         _replacingLatestRowGroup = true;
@@ -448,8 +467,7 @@ public sealed class ParquetWriter
         SerializedRowGroupsMetadata.Write(metadata);
         _rowGroupCount++;
         _totalRowCount = checked(_totalRowCount + _latestRowCount);
-        _stream.Position = _originalFooterOffset;
-        _stream.SetLength(_originalFooterOffset);
+        _destination.SetLength(checked((ulong)_originalFooterOffset));
         FileOffset = _originalFooterOffset;
         _latestRowGroupMetadata = null;
         _latestRowGroupValues = null;
@@ -587,7 +605,7 @@ public sealed class ParquetWriter
         {
             var count = checked((int)Math.Min(remaining, (ulong)buffer.Length));
             source.ReadExactly(buffer[..count]);
-            _stream.Write(buffer[..count]);
+            _destination.Write(checked((ulong)FileOffset), buffer[..count]);
             FileOffset = checked(FileOffset + count);
             remaining -= (uint)count;
         }
@@ -608,7 +626,7 @@ public sealed class ParquetWriter
 
     void WriteFileHeader()
     {
-        _stream.Write(_fileMagic);
+        _destination.Write(checked((ulong)FileOffset), _fileMagic);
         FileOffset = checked(FileOffset + _fileMagic.Length);
     }
 
@@ -622,7 +640,7 @@ public sealed class ParquetWriter
         Span<byte> suffix = stackalloc byte[sizeof(int) + 4];
         BinaryPrimitives.WriteInt32LittleEndian(suffix, metadataLength);
         _fileMagic.CopyTo(suffix[sizeof(int)..]);
-        _stream.Write(suffix);
+        _destination.Write(checked((ulong)FileOffset), suffix);
         FileOffset = checked(FileOffset + suffix.Length);
     }
 

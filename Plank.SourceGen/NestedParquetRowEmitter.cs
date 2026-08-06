@@ -373,11 +373,11 @@ static class NestedParquetRowEmitter
         builder.AppendLine();
         AppendDescriptors(builder, model);
         builder.AppendLine();
-        AppendFactories(builder);
+        AppendFactories(builder, schemaType);
         builder.AppendLine();
         AppendProjection(builder, model);
         builder.AppendLine();
-        AppendWriters(builder, model);
+        AppendWriters(builder, model, schemaType);
         builder.AppendLine();
         AppendRowReader(builder, model);
         builder.AppendLine();
@@ -476,8 +476,18 @@ static class NestedParquetRowEmitter
         builder.AppendLine("    ];");
     }
 
-    static void AppendFactories(StringBuilder builder)
+    static void AppendFactories(StringBuilder builder, INamedTypeSymbol schemaType)
     {
+        var rowTypeName = EscapeIdentifier(schemaType.Name);
+        builder.Append("    public delegate global::System.ReadOnlySpan<byte> Route(").Append(rowTypeName)
+            .AppendLine(" row, global::Plank.IParquetBufferPool bufferPool, out global::Plank.ParquetBuffer? allocation);");
+        builder.AppendLine();
+        builder.AppendLine("    public static DatasetWriter CreateDatasetWriter<TFile>(Route route, TFile[] files, global::Plank.Dataset.DatasetWriterOptions? options = null)");
+        builder.AppendLine("        where TFile : class, global::Plank.Reading.IParquetReadSource, global::Plank.Writing.IParquetWriteSource");
+        builder.AppendLine("        => new(route ?? throw new global::System.ArgumentNullException(nameof(route)),");
+        builder.AppendLine("            files ?? throw new global::System.ArgumentNullException(nameof(files)),");
+        builder.AppendLine("            options ?? global::Plank.Dataset.DatasetWriterOptions.Default);");
+        builder.AppendLine();
         builder.AppendLine("    public static Writer CreateRowWriter(global::Plank.Writing.RowGroupWriter rowGroupWriter, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(rowGroupWriter, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
         builder.AppendLine();
@@ -535,8 +545,9 @@ static class NestedParquetRowEmitter
         builder.AppendLine("    }");
     }
 
-    static void AppendWriters(StringBuilder builder, Model model)
+    static void AppendWriters(StringBuilder builder, Model model, INamedTypeSymbol schemaType)
     {
+        var rowTypeName = EscapeIdentifier(schemaType.Name);
         builder.AppendLine("    public struct Writer");
         builder.AppendLine("    {");
         builder.AppendLine("        readonly global::Plank.RowApi.RowGroupWriterCore<BufferSlot> _core;");
@@ -565,6 +576,50 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        public Row GetRow() => GetSlotForRow().GetRow();");
         builder.AppendLine("        public void Next() => NextRow();");
         builder.AppendLine("        public void Complete() => CompleteWriter();");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.Append("    public sealed class DatasetWriter : global::Plank.Dataset.DatasetWriterBase<")
+            .Append(rowTypeName).AppendLine(">, global::System.IDisposable");
+        builder.AppendLine("    {");
+        builder.AppendLine("        readonly Route _route;");
+        builder.AppendLine("        internal DatasetWriter(Route route, global::Plank.Writing.IParquetWriteSource[] files, global::Plank.Dataset.DatasetWriterOptions options)");
+        builder.AppendLine("            : base(Schema, s_rowApiColumns, DefaultRowBatchSize, files, options)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            _route = route;");
+        builder.AppendLine("            InitializeSlots();");
+        builder.AppendLine("        }");
+        builder.Append("        protected override void CopyRow(").Append(rowTypeName)
+            .AppendLine(" row, int slotIndex, int rowIndex)");
+        builder.AppendLine("        {");
+        for (var i = 0; i < model.Roots.Length; i++)
+        {
+            var root = model.Roots[i];
+            if (root.Kind == NodeKind.Leaf)
+            {
+                var leaf = root.Leaves[0];
+                builder.Append("            SetColumnValue<").Append(leaf.StorageShapeType)
+                    .Append(">(slotIndex, ").Append(leaf.Ordinal).Append(", rowIndex, row.")
+                    .Append(EscapeIdentifier(root.PropertyName)).AppendLine(");");
+                continue;
+            }
+
+            builder.Append("            var value").Append(i).Append(" = row.")
+                .Append(EscapeIdentifier(root.PropertyName)).AppendLine(";");
+            for (var leafIndex = 0; leafIndex < root.Leaves.Count; leafIndex++)
+            {
+                var leaf = root.Leaves[leafIndex];
+                builder.Append("            SetColumnValue<").Append(leaf.StorageShapeType)
+                    .Append(">(slotIndex, ").Append(leaf.Ordinal).Append(", rowIndex, Project")
+                    .Append(leaf.UniqueName).Append("(value").Append(i).AppendLine("));");
+            }
+        }
+        builder.AppendLine("        }");
+        builder.Append("        protected override global::System.ReadOnlySpan<byte> SelectPath(")
+            .Append(rowTypeName)
+            .AppendLine(" row, global::Plank.IParquetBufferPool bufferPool, out global::Plank.ParquetBuffer? allocation)");
+        builder.AppendLine("            => _route(row, bufferPool, out allocation);");
+        builder.Append("        public void Queue(").Append(rowTypeName).AppendLine(" row) => QueueRow(row);");
+        builder.AppendLine("        public void Dispose() => DisposeDataset();");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    public sealed class BufferSlot : global::Plank.RowApi.RowBufferSlot");

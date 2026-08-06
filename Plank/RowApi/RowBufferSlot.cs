@@ -12,6 +12,17 @@ public abstract class RowBufferSlot
     readonly RowApiColumnWriteState[] _columns;
     List<IDisposable>? _ownedBuffers;
 
+    internal RowBufferSlot(RowApiColumnDescriptor[] columns, int rowCount)
+    {
+        ArgumentNullException.ThrowIfNull(columns);
+        if (rowCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(rowCount), rowCount, "Row count must be non-negative.");
+
+        _rowCount = rowCount;
+        _columns = CreateColumnStates(columns, rowCount);
+        Index = 0;
+    }
+
     /// <summary>Initializes a generated buffer slot that writes directly to a row group.</summary>
     /// <param name="rowGroupWriter">The destination row-group writer.</param>
     /// <param name="columns">The generated column descriptors.</param>
@@ -52,6 +63,19 @@ public abstract class RowBufferSlot
 
     internal int Count
         => Index;
+
+    internal void Bind(ParquetWriter writer)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        for (var i = 0; i < _columns.Length; i++)
+            _columns[i].Bind(writer);
+    }
+
+    internal void Unbind()
+    {
+        for (var i = 0; i < _columns.Length; i++)
+            _columns[i].Unbind();
+    }
 
     /// <summary>Gets the index at which the generated writer stores the next row.</summary>
     protected int Index { get; private set; }
@@ -111,8 +135,37 @@ public abstract class RowBufferSlot
         }
 
         for (var i = 0; i < _columns.Length; i++)
-            _columns[i].ResetForReuse(Index);
+            _columns[i].ResetForReuse(0, Index);
         Index = 0;
+    }
+
+    internal void ClearRow(int index)
+    {
+        ValidateRowIndex(index);
+        for (var i = 0; i < _columns.Length; i++)
+            _columns[i].ResetForReuse(index, 1);
+    }
+
+    internal void SetValue<T>(int columnIndex, int rowIndex, T value)
+    {
+        ValidateRowIndex(rowIndex);
+        if ((uint)columnIndex >= (uint)_columns.Length)
+            throw new ArgumentOutOfRangeException(nameof(columnIndex), columnIndex,
+                "Column index is outside the row API schema.");
+        if (_columns[columnIndex] is not RowApiColumnWriteState<T> state)
+            throw new InvalidOperationException($"Row API column at index {columnIndex} cannot be written as {typeof(T)}.");
+        state.Values[rowIndex] = value;
+    }
+
+    internal void CopyRowTo(int sourceIndex, RowBufferSlot destination, int destinationIndex)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        ValidateRowIndex(sourceIndex);
+        destination.ValidateRowIndex(destinationIndex);
+        if (_columns.Length != destination._columns.Length)
+            throw new InvalidOperationException("Row API buffer schemas do not match.");
+        for (var i = 0; i < _columns.Length; i++)
+            _columns[i].CopyValueTo(sourceIndex, destination._columns[i], destinationIndex);
     }
 
     /// <summary>Throws if the generated writer has filled this slot.</summary>
@@ -131,6 +184,25 @@ public abstract class RowBufferSlot
             var column = columns[i] ?? throw new ArgumentException("Row API column descriptors cannot contain null values.",
                 nameof(columns));
             states[i] = column.CreateWriteState(rowGroupWriter, rowCount);
+        }
+
+        return states;
+    }
+
+    void ValidateRowIndex(int index)
+    {
+        if ((uint)index >= (uint)_rowCount)
+            throw new ArgumentOutOfRangeException(nameof(index), index, "Row index is outside the buffer slot.");
+    }
+
+    static RowApiColumnWriteState[] CreateColumnStates(RowApiColumnDescriptor[] columns, int rowCount)
+    {
+        var states = new RowApiColumnWriteState[columns.Length];
+        for (var i = 0; i < columns.Length; i++)
+        {
+            var column = columns[i] ?? throw new ArgumentException("Row API column descriptors cannot contain null values.",
+                nameof(columns));
+            states[i] = column.CreateWriteState(rowCount);
         }
 
         return states;
