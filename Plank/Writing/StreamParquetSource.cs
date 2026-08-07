@@ -1,8 +1,6 @@
-using Plank.Reading;
-
 namespace Plank.Writing;
 
-sealed class StreamParquetSource : IParquetReadSource, IParquetWriteSource
+sealed class StreamParquetSource : IParquetReadWriteSource
 {
     internal Stream? Stream;
     ulong _position;

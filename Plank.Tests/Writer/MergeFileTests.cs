@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text;
+using Plank.Reading;
 using Plank.Reading.Physical;
 using Plank.Schema;
 using Plank.Writing;
@@ -12,22 +13,20 @@ internal sealed class MergeFileTests
     public async Task MergesCompressedRowGroupsWithoutReencoding()
     {
         var schema = CreateSchema(ParquetPhysicalType.Int32);
-        using var first = WriteFile(schema, [1, 2, 3], new ParquetWriterOptions
+        var first = WriteFile(schema, [1, 2, 3], new ParquetWriterOptions
         {
             Compression = CompressionKind.Gzip,
             CreatedBy = "first-writer",
             KeyValueMetadata = [new ParquetKeyValueMetadata("source", "first")]
         });
-        using var second = WriteFile(schema, [4, 5], new ParquetWriterOptions
+        var second = WriteFile(schema, [4, 5], new ParquetWriterOptions
         {
             Compression = CompressionKind.Snappy
         });
         var firstChunk = ReadChunkBytes(first, 0);
         var secondChunk = ReadChunkBytes(second, 0);
-        first.Position = 2;
-        second.Position = 3;
 
-        using var destination = new MemoryStream();
+        using var destination = new MemoryParquetSource();
         var merger = schema.CreateMerger(destination, new ParquetMergeOptions
         {
             WriterOptions = new ParquetWriterOptions
@@ -35,28 +34,27 @@ internal sealed class MergeFileTests
                 KeyValueMetadata = [new ParquetKeyValueMetadata("merged", "yes")]
             }
         });
-        merger.AppendFile(first);
-        merger.AppendFile(second);
+        merger.AppendFile(new MemoryReadSource(first));
+        merger.AppendFile(new MemoryReadSource(second));
         await Assert.That(merger.SourceFileCount).IsEqualTo(2);
         await Assert.That(merger.RowGroupCount).IsEqualTo(2);
         await Assert.That(merger.RowCount).IsEqualTo(5L);
-        await Assert.That(first.Position).IsEqualTo(2L);
-        await Assert.That(second.Position).IsEqualTo(3L);
         merger.CloseFile();
 
-        using var merged = new MemoryStream(destination.ToArray(), writable: false);
+        var mergedBytes = destination.ToArray();
+        using var merged = new MemoryStream(mergedBytes, writable: false);
         using var physicalReader = new ParquetFileReader();
         physicalReader.Reset(merged);
         var metadata = physicalReader.Metadata;
         await Assert.That(metadata.RowGroupCount).IsEqualTo(2);
         await Assert.That(metadata.ColumnChunk(0, 0).Compression).IsEqualTo(CompressionKind.Gzip);
         await Assert.That(metadata.ColumnChunk(1, 0).Compression).IsEqualTo(CompressionKind.Snappy);
-        await Assert.That(ReadChunkBytes(merged, 0)).IsEquivalentTo(firstChunk);
-        await Assert.That(ReadChunkBytes(merged, 1)).IsEquivalentTo(secondChunk);
+        await Assert.That(ReadChunkBytes(mergedBytes, 0)).IsEquivalentTo(firstChunk);
+        await Assert.That(ReadChunkBytes(mergedBytes, 1)).IsEquivalentTo(secondChunk);
         await Assert.That(Encoding.UTF8.GetString(metadata.CreatedByUtf8)).IsEqualTo("first-writer");
         await Assert.That(metadata.KeyValueMetadataCount).IsEqualTo(2);
         await Assert.That(Encoding.UTF8.GetString(metadata.KeyValueMetadataKeyUtf8(1))).IsEqualTo("merged");
-        await Assert.That(ReadValues(merged, schema)).IsEquivalentTo([1, 2, 3, 4, 5]);
+        await Assert.That(ReadValues(mergedBytes, schema)).IsEquivalentTo([1, 2, 3, 4, 5]);
 
         using var logicalReader = schema.CreateReader(merged);
         using var pages = logicalReader.RowGroups[0].GetColumnMetadata(0).OpenPages();
@@ -71,15 +69,14 @@ internal sealed class MergeFileTests
         try
         {
             var schema = CreateSchema(ParquetPhysicalType.Int32);
-            using var first = WriteFile(schema, [10, 20], ParquetWriterOptions.Default);
-            using var second = WriteFile(schema, [30], ParquetWriterOptions.Default);
-            using (var destination = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            {
-                var merger = schema.CreateMerger(destination);
-                merger.AppendFile(first);
-                merger.AppendFile(second);
-                merger.CloseFile();
-            }
+            var first = WriteFile(schema, [10, 20], ParquetWriterOptions.Default);
+            var second = WriteFile(schema, [30], ParquetWriterOptions.Default);
+            using var destination = new MemoryParquetSource();
+            var merger = schema.CreateMerger(destination);
+            merger.AppendFile(new MemoryReadSource(first));
+            merger.AppendFile(new MemoryReadSource(second));
+            merger.CloseFile();
+            File.WriteAllBytes(path, destination.ToArray());
 
             using var reader = new ParquetSharp.ParquetFileReader(path);
             await Assert.That(reader.FileMetaData.NumRowGroups).IsEqualTo(2);
@@ -96,28 +93,51 @@ internal sealed class MergeFileTests
     }
 
     [Test]
+    public async Task MergeInPlaceAppendsSourceFile()
+    {
+        var schema = CreateSchema(ParquetPhysicalType.Int32);
+        var existing = WriteFile(schema, [1, 2], new ParquetWriterOptions
+        {
+            CreatedBy = "existing-writer"
+        });
+        var source = WriteFile(schema, [3, 4], ParquetWriterOptions.Default);
+        using var destination = new MemoryParquetSource(existing);
+
+        var merger = schema.CreateInPlaceMerger(destination);
+        merger.AppendFile(new MemoryReadSource(source));
+        merger.CloseFile();
+
+        var mergedBytes = destination.ToArray();
+        using var merged = new MemoryStream(mergedBytes, writable: false);
+        using var reader = new ParquetFileReader();
+        reader.Reset(merged);
+        await Assert.That(reader.Metadata.RowGroupCount).IsEqualTo(2);
+        await Assert.That(Encoding.UTF8.GetString(reader.Metadata.CreatedByUtf8)).IsEqualTo("existing-writer");
+        await Assert.That(ReadValues(mergedBytes, schema)).IsEquivalentTo([1, 2, 3, 4]);
+    }
+
+    [Test]
     public async Task SchemaMismatchLeavesMergerReusable()
     {
         var schema = CreateSchema(ParquetPhysicalType.Int32);
         var mismatchedSchema = CreateSchema(ParquetPhysicalType.Int32, "Other");
-        using var mismatched = WriteFile(mismatchedSchema, [1, 2], ParquetWriterOptions.Default);
-        using var valid = WriteFile(schema, [3, 4], ParquetWriterOptions.Default);
-        using var destination = new MemoryStream();
-        var merger = schema.CreateMerger(destination);
-        var before = destination.ToArray();
+        var mismatched = WriteFile(mismatchedSchema, [1, 2], ParquetWriterOptions.Default);
+        var existing = WriteFile(schema, [3, 4], ParquetWriterOptions.Default);
+        var valid = WriteFile(schema, [5, 6], ParquetWriterOptions.Default);
+        using var destination = new MemoryParquetSource(existing);
+        var merger = schema.CreateInPlaceMerger(destination);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await Task.Run(() => merger.AppendFile(mismatched)).ConfigureAwait(false));
-        await Assert.That(destination.ToArray()).IsEquivalentTo(before);
+            await Task.Run(() => merger.AppendFile(new MemoryReadSource(mismatched)))
+                .ConfigureAwait(false));
         await Assert.That(merger.SourceFileCount).IsEqualTo(0);
 
-        merger.AppendFile(valid);
+        merger.AppendFile(new MemoryReadSource(valid));
         merger.CloseFile();
-        using var merged = new MemoryStream(destination.ToArray(), writable: false);
-        await Assert.That(ReadValues(merged, schema)).IsEquivalentTo([3, 4]);
+        await Assert.That(ReadValues(destination.ToArray(), schema)).IsEquivalentTo([3, 4, 5, 6]);
     }
 
-    static MemoryStream WriteFile(ParquetSchema schema, int[] values, ParquetWriterOptions options)
+    static byte[] WriteFile(ParquetSchema schema, int[] values, ParquetWriterOptions options)
     {
         using var destination = new MemoryStream();
         var writer = schema.CreateWriter(destination, options);
@@ -125,32 +145,76 @@ internal sealed class MergeFileTests
         column.Serialize(values);
         writer.StartRowGroup().Write(column);
         writer.CloseFile();
-        return new MemoryStream(destination.ToArray(), writable: false);
+        return destination.ToArray();
     }
 
-    static byte[] ReadChunkBytes(MemoryStream stream, int rowGroupOrdinal)
+    static byte[] ReadChunkBytes(byte[] bytes, int rowGroupOrdinal)
     {
+        using var stream = new MemoryStream(bytes, writable: false);
         using var reader = new ParquetFileReader();
         reader.Reset(stream);
         var chunk = reader.Metadata.ColumnChunk(rowGroupOrdinal, 0);
-        var bytes = new byte[checked((int)chunk.TotalCompressedSize)];
-        var position = stream.Position;
+        var chunkBytes = new byte[checked((int)chunk.TotalCompressedSize)];
         stream.Position = checked((long)chunk.ChunkOffset);
-        stream.ReadExactly(bytes);
-        stream.Position = position;
-        return bytes;
+        stream.ReadExactly(chunkBytes);
+        return chunkBytes;
     }
 
-    static int[] ReadValues(MemoryStream stream, ParquetSchema schema)
+    static int[] ReadValues(byte[] bytes, ParquetSchema schema)
     {
-        var position = stream.Position;
+        using var stream = new MemoryStream(bytes, writable: false);
         using var reader = schema.CreateReader(stream);
         var values = new List<int>();
         foreach (var rowGroup in reader.RowGroups)
             foreach (var buffer in rowGroup.Column<int>(0))
                 values.AddRange(buffer.Values);
-        stream.Position = position;
         return values.ToArray();
+    }
+
+    sealed class MemoryParquetSource : IParquetReadWriteSource, IDisposable
+    {
+        readonly MemoryStream _stream;
+
+        internal MemoryParquetSource(byte[]? bytes = null)
+        {
+            _stream = bytes is null ? new MemoryStream() : new MemoryStream(bytes.Length * 2);
+            if (bytes is not null)
+                _stream.Write(bytes);
+        }
+
+        public ulong Length
+            => checked((ulong)_stream.Length);
+
+        public void Open(ReadOnlySpan<byte> path, FileMode mode)
+            => throw new NotSupportedException();
+
+        public void Close()
+        {
+        }
+
+        public void ReadExactly(ulong offset, Span<byte> destination)
+        {
+            _stream.Position = checked((long)offset);
+            _stream.ReadExactly(destination);
+        }
+
+        public void Write(ulong offset, ReadOnlySpan<byte> source)
+        {
+            _stream.Position = checked((long)offset);
+            _stream.Write(source);
+        }
+
+        public void SetLength(ulong length)
+            => _stream.SetLength(checked((long)length));
+
+        public void Flush()
+            => _stream.Flush();
+
+        public void Dispose()
+            => _stream.Dispose();
+
+        internal byte[] ToArray()
+            => _stream.ToArray();
     }
 
     static ParquetSchema CreateSchema(ParquetPhysicalType physicalType, string name = "Value")

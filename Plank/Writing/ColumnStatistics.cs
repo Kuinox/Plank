@@ -1591,10 +1591,8 @@ internal readonly struct ColumnStatistics
             if (value is null)
                 return;
 
-            if ((_column.PhysicalType is ParquetPhysicalType.ByteArray
-                    or ParquetPhysicalType.FixedLenByteArray
-                    or ParquetPhysicalType.Int96) &&
-                (value is byte[] or ReadOnlyMemory<byte>))
+            if ((_column.PhysicalType is ParquetPhysicalType.ByteArray or ParquetPhysicalType.FixedLenByteArray
+                    or ParquetPhysicalType.Int96) && value is byte[])
             {
                 AddLeaf(value);
                 return;

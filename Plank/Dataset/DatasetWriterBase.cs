@@ -22,7 +22,6 @@ public abstract class DatasetWriterBase<TRow>
     readonly int[] _parkedRowLinks;
     readonly int _rowBufferCapacity;
     readonly int _pendingRowCapacity;
-    readonly int _activationRowCount;
     DatasetBufferSlot _parkedRows = null!;
     int _availableFileCount;
     int _parkedRowCount;
@@ -59,7 +58,6 @@ public abstract class DatasetWriterBase<TRow>
         _bufferPool = options.AppendOptions.WriterOptions.BufferPool;
         _rowBufferCapacity = rowBufferCapacity;
         _pendingRowCapacity = checked((int)options.PendingRowCapacity);
-        _activationRowCount = checked((int)options.RowsBeforeWriterActivation);
         _states = new PartitionState[files.Length];
         _files = new FileSources[files.Length];
         _pendingKeys = new PendingKeyState[_pendingRowCapacity];
@@ -190,8 +188,7 @@ public abstract class DatasetWriterBase<TRow>
                 throw;
             }
 
-            if (_pendingKeys[pendingKeyIndex].RowCount >= _activationRowCount ||
-                _parkedRowCount == _pendingRowCapacity)
+            if (_parkedRowCount == _pendingRowCapacity)
                 PromotePendingPartition(pendingKeyIndex);
         }
         finally

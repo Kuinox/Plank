@@ -29,8 +29,7 @@ internal sealed class DatasetWriterTests
             var files = CreateFiles(1);
             using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, files, new DatasetWriterOptions
             {
-                PendingRowCapacity = 2,
-                RowsBeforeWriterActivation = 2
+                PendingRowCapacity = 2
             }))
             {
                 writer.Queue(new DatasetRowSchema { Value = 1, Path = pathAUtf8 });
@@ -66,7 +65,6 @@ internal sealed class DatasetWriterTests
                 new DatasetWriterOptions
             {
                 PendingRowCapacity = 0,
-                RowsBeforeWriterActivation = 1,
                 AppendOptions = new ParquetAppendOptions
                 {
                     AppendToLatestRowGroup = true
@@ -102,8 +100,7 @@ internal sealed class DatasetWriterTests
             var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1),
                 new DatasetWriterOptions
             {
-                PendingRowCapacity = 0,
-                RowsBeforeWriterActivation = 1
+                PendingRowCapacity = 0
             });
             writer.Queue(row);
             for (var i = 0; i < 8; i++)
@@ -135,8 +132,7 @@ internal sealed class DatasetWriterTests
             var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1),
                 new DatasetWriterOptions
                 {
-                    PendingRowCapacity = 256,
-                    RowsBeforeWriterActivation = 256
+                    PendingRowCapacity = 256
                 });
             writer.Queue(new DatasetRowSchema { Path = activePathUtf8 });
             for (var i = 0; i < 8; i++)
@@ -176,8 +172,7 @@ internal sealed class DatasetWriterTests
             using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectAllocatedPath,
                 CreateFiles(1), new DatasetWriterOptions
             {
-                PendingRowCapacity = 1,
-                RowsBeforeWriterActivation = 1
+                PendingRowCapacity = 1
             }))
                 writer.Queue(new DatasetRowSchema { Value = 42, Path = pathUtf8 });
 
@@ -203,8 +198,7 @@ internal sealed class DatasetWriterTests
             var files = CreateFiles(2);
             using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, files, new DatasetWriterOptions
             {
-                PendingRowCapacity = 4,
-                RowsBeforeWriterActivation = 1
+                PendingRowCapacity = 1
             }))
             {
                 for (var value = 1; value <= 5; value++)
@@ -244,8 +238,7 @@ internal sealed class DatasetWriterTests
             using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1),
                 new DatasetWriterOptions
                 {
-                    PendingRowCapacity = 4,
-                    RowsBeforeWriterActivation = 4
+                    PendingRowCapacity = 4
                 }))
             {
                 writer.Queue(new DatasetRowSchema { Value = 1, Path = pathAUtf8 });

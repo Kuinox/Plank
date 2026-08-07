@@ -177,64 +177,54 @@ public sealed class ParquetWriter
         OpenFile(destination);
     }
 
-    internal (int RowGroupCount, long RowCount) ImportFile(Stream source, ParquetReader reader,
+    internal (int RowGroupCount, long RowCount) ImportFile(IParquetReadSource source, ParquetReader reader,
         bool preserveMetadata)
     {
         ThrowIfFileClosed();
         ArgumentNullException.ThrowIfNull(source);
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot merge a file while a row group is open.");
-        if (!source.CanRead || !source.CanSeek)
-            throw new ArgumentException("Merging requires a readable, seekable source stream.", nameof(source));
-        if (_destination is StreamParquetSource streamSource && ReferenceEquals(source, streamSource.Stream))
-            throw new ArgumentException("The merge source and destination streams must be different.", nameof(source));
+        if (ReferenceEquals(source, _destination))
+            throw new ArgumentException("The merge source and destination must be different.", nameof(source));
 
-        var originalSourcePosition = source.Position;
+        reader.Reset(source);
+        var metadata = reader.PhysicalReader.Metadata;
+        if (metadata.RowGroupCount > int.MaxValue - _rowGroupCount)
+            throw new InvalidOperationException($"Cannot write more than {int.MaxValue} row groups to one file.");
+
+        var importedRowCount = ValidateImport(metadata);
+        var importedCreatedBy = preserveMetadata ? _options.CreatedBy ?? DecodeCreatedBy(metadata) : _createdBy;
+        var importedKeyValueMetadata = preserveMetadata
+            ? MergeMetadata(metadata, _options.KeyValueMetadata)
+            : _keyValueMetadata;
+        var fileOffsetBeforeImport = FileOffset;
+        var metadataLengthBeforeImport = SerializedRowGroupsMetadata.WrittenLength;
+        var rowGroupCountBeforeImport = _rowGroupCount;
+        var totalRowCountBeforeImport = _totalRowCount;
+
         try
         {
-            reader.Reset(source);
-            var metadata = reader.PhysicalReader.Metadata;
-            if (metadata.RowGroupCount > int.MaxValue - _rowGroupCount)
-                throw new InvalidOperationException($"Cannot write more than {int.MaxValue} row groups to one file.");
-
-            var importedRowCount = ValidateImport(metadata);
-            var importedCreatedBy = preserveMetadata ? _options.CreatedBy ?? DecodeCreatedBy(metadata) : _createdBy;
-            var importedKeyValueMetadata = preserveMetadata
-                ? MergeMetadata(metadata, _options.KeyValueMetadata)
-                : _keyValueMetadata;
-            var fileOffsetBeforeImport = FileOffset;
-            var metadataLengthBeforeImport = SerializedRowGroupsMetadata.WrittenLength;
-            var rowGroupCountBeforeImport = _rowGroupCount;
-            var totalRowCountBeforeImport = _totalRowCount;
-
-            try
-            {
-                using var copyBuffer = _options.BufferPool.Rent(64 * 1024);
-                for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroupOrdinal++)
-                    ImportRowGroup(source, metadata, rowGroupOrdinal, copyBuffer.Span);
-            }
-            catch
-            {
-                FileOffset = fileOffsetBeforeImport;
-                _rowGroupCount = rowGroupCountBeforeImport;
-                _totalRowCount = totalRowCountBeforeImport;
-                SerializedRowGroupsMetadata.Truncate(metadataLengthBeforeImport);
-                SerializedFileMetadata.Reset();
-                _destination.SetLength(checked((ulong)fileOffsetBeforeImport));
-                throw;
-            }
-
-            if (preserveMetadata)
-            {
-                _createdBy = importedCreatedBy;
-                _keyValueMetadata = importedKeyValueMetadata;
-            }
-            return (metadata.RowGroupCount, importedRowCount);
+            using var copyBuffer = _options.BufferPool.Rent(64 * 1024);
+            for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroupOrdinal++)
+                ImportRowGroup(source, metadata, rowGroupOrdinal, copyBuffer.Span);
         }
-        finally
+        catch
         {
-            source.Position = originalSourcePosition;
+            FileOffset = fileOffsetBeforeImport;
+            _rowGroupCount = rowGroupCountBeforeImport;
+            _totalRowCount = totalRowCountBeforeImport;
+            SerializedRowGroupsMetadata.Truncate(metadataLengthBeforeImport);
+            SerializedFileMetadata.Reset();
+            _destination.SetLength(checked((ulong)fileOffsetBeforeImport));
+            throw;
         }
+
+        if (preserveMetadata)
+        {
+            _createdBy = importedCreatedBy;
+            _keyValueMetadata = importedKeyValueMetadata;
+        }
+        return (metadata.RowGroupCount, importedRowCount);
     }
 
     public RowGroupWriter StartRowGroup()
@@ -545,7 +535,8 @@ public sealed class ParquetWriter
             throw new NotSupportedException($"The {name} exceeds the supported stream offset range.");
     }
 
-    void ImportRowGroup(Stream source, Reading.Physical.ParquetFileMetadata sourceMetadata, int rowGroupOrdinal,
+    void ImportRowGroup(IParquetReadSource source, Reading.Physical.ParquetFileMetadata sourceMetadata,
+        int rowGroupOrdinal,
         Span<byte> copyBuffer)
     {
         var rowGroup = sourceMetadata.RowGroups[rowGroupOrdinal];
@@ -580,8 +571,8 @@ public sealed class ParquetWriter
                 continue;
 
             using var offsetIndex = _options.BufferPool.Rent(sourceChunk.OffsetIndexLength);
-            source.Position = checked((long)sourceChunk.OffsetIndexOffset);
-            source.ReadExactly(offsetIndex.Span[..checked((int)sourceChunk.OffsetIndexLength)]);
+            source.ReadExactly(sourceChunk.OffsetIndexOffset,
+                offsetIndex.Span[..checked((int)sourceChunk.OffsetIndexLength)]);
             SerializedFileMetadata.Reset();
             var relocation = checked(importedChunk.DataPageOffset - checked((long)sourceChunk.DataPageOffset));
             ParquetMetadataThriftWriter.RelocateOffsetIndex(ref SerializedFileMetadata,
@@ -597,16 +588,16 @@ public sealed class ParquetWriter
         _totalRowCount = checked(_totalRowCount + checked((long)rowGroup.RowCount));
     }
 
-    void CopyRange(Stream source, ulong offset, ulong length, Span<byte> buffer)
+    void CopyRange(IParquetReadSource source, ulong offset, ulong length, Span<byte> buffer)
     {
-        source.Position = checked((long)offset);
         var remaining = length;
         while (remaining > 0)
         {
             var count = checked((int)Math.Min(remaining, (ulong)buffer.Length));
-            source.ReadExactly(buffer[..count]);
+            source.ReadExactly(offset, buffer[..count]);
             _destination.Write(checked((ulong)FileOffset), buffer[..count]);
             FileOffset = checked(FileOffset + count);
+            offset += (uint)count;
             remaining -= (uint)count;
         }
     }

@@ -1,5 +1,6 @@
-using Plank.Schema;
+using Plank.Reading;
 using Plank.Reading.Logical;
+using Plank.Schema;
 
 namespace Plank.Writing;
 
@@ -10,18 +11,23 @@ public sealed class ParquetFileMerger
     readonly bool _preserveFirstFileMetadata;
     bool _closed;
 
-    internal ParquetFileMerger(Stream destination, ParquetSchema schema, ParquetMergeOptions options)
+    internal ParquetFileMerger(IParquetWriteSource destination, ParquetSchema schema, ParquetMergeOptions options)
+        : this(destination, existingSource: null, schema, options)
+    {
+    }
+
+    internal ParquetFileMerger(IParquetReadWriteSource destination, ParquetSchema schema,
+        ParquetMergeOptions options)
+        : this(destination, destination, schema, options)
+    {
+    }
+
+    ParquetFileMerger(IParquetWriteSource destination, IParquetReadSource? existingSource,
+        ParquetSchema schema, ParquetMergeOptions options)
     {
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(options);
-        if (!destination.CanWrite || !destination.CanSeek)
-            throw new ArgumentException("Merging requires a writable, seekable destination stream.",
-                nameof(destination));
-        if (destination.Position != 0 || destination.Length != 0)
-            throw new ArgumentException("The merge destination stream must be empty and positioned at zero.",
-                nameof(destination));
-
         options.Validate();
         _reader = new ParquetReader(schema, new ParquetReaderOptions
         {
@@ -30,14 +36,24 @@ public sealed class ParquetFileMerger
         });
         try
         {
-            _writer = new ParquetWriter(destination, schema, options.WriterOptions);
+            if (existingSource is null)
+            {
+                destination.SetLength(0);
+                _writer = new ParquetWriter(destination, schema, options.WriterOptions);
+            }
+            else
+                _writer = new ParquetWriter(existingSource, destination, schema, new ParquetAppendOptions
+                {
+                    WriterOptions = options.WriterOptions,
+                    PreserveExistingMetadata = options.PreserveFirstFileMetadata
+                });
         }
         catch
         {
             _reader.Dispose();
             throw;
         }
-        _preserveFirstFileMetadata = options.PreserveFirstFileMetadata;
+        _preserveFirstFileMetadata = existingSource is null && options.PreserveFirstFileMetadata;
     }
 
     public int SourceFileCount { get; private set; }
@@ -46,7 +62,7 @@ public sealed class ParquetFileMerger
 
     public long RowCount { get; private set; }
 
-    public void AppendFile(Stream source)
+    public void AppendFile(IParquetReadSource source)
     {
         if (_closed)
             throw new InvalidOperationException("The merged file is already closed.");

@@ -24,6 +24,8 @@ Minimal Parquet writer under construction.
 
 ## TODO:
 
+Improve file merging by compacting row groups.
+
 Make read schemas not require an encoding to be specified, while write schemas must specify one.
 
 logical type widening.
