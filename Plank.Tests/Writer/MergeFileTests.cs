@@ -27,14 +27,13 @@ internal sealed class MergeFileTests
         var secondChunk = ReadChunkBytes(second, 0);
 
         using var destination = new MemoryParquetSource();
-        var merger = schema.CreateMerger(destination, new ParquetMergeOptions
+        var merger = schema.CreateMerger(new MemoryReadSource(first), destination, new ParquetMergeOptions
         {
             WriterOptions = new ParquetWriterOptions
             {
                 KeyValueMetadata = [new ParquetKeyValueMetadata("merged", "yes")]
             }
         });
-        merger.AppendFile(new MemoryReadSource(first));
         merger.AppendFile(new MemoryReadSource(second));
         await Assert.That(merger.SourceFileCount).IsEqualTo(2);
         await Assert.That(merger.RowGroupCount).IsEqualTo(2);
@@ -72,8 +71,7 @@ internal sealed class MergeFileTests
             var first = WriteFile(schema, [10, 20], ParquetWriterOptions.Default);
             var second = WriteFile(schema, [30], ParquetWriterOptions.Default);
             using var destination = new MemoryParquetSource();
-            var merger = schema.CreateMerger(destination);
-            merger.AppendFile(new MemoryReadSource(first));
+            var merger = schema.CreateMerger(new MemoryReadSource(first), destination);
             merger.AppendFile(new MemoryReadSource(second));
             merger.CloseFile();
             File.WriteAllBytes(path, destination.ToArray());
@@ -103,8 +101,11 @@ internal sealed class MergeFileTests
         var source = WriteFile(schema, [3, 4], ParquetWriterOptions.Default);
         using var destination = new MemoryParquetSource(existing);
 
-        var merger = schema.CreateInPlaceMerger(destination);
+        var merger = schema.CreateMerger(destination);
         merger.AppendFile(new MemoryReadSource(source));
+        await Assert.That(merger.SourceFileCount).IsEqualTo(2);
+        await Assert.That(merger.RowGroupCount).IsEqualTo(2);
+        await Assert.That(merger.RowCount).IsEqualTo(4L);
         merger.CloseFile();
 
         var mergedBytes = destination.ToArray();
@@ -125,16 +126,32 @@ internal sealed class MergeFileTests
         var existing = WriteFile(schema, [3, 4], ParquetWriterOptions.Default);
         var valid = WriteFile(schema, [5, 6], ParquetWriterOptions.Default);
         using var destination = new MemoryParquetSource(existing);
-        var merger = schema.CreateInPlaceMerger(destination);
+        var merger = schema.CreateMerger(destination);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await Task.Run(() => merger.AppendFile(new MemoryReadSource(mismatched)))
                 .ConfigureAwait(false));
-        await Assert.That(merger.SourceFileCount).IsEqualTo(0);
+        await Assert.That(merger.SourceFileCount).IsEqualTo(1);
+        await Assert.That(merger.RowGroupCount).IsEqualTo(1);
+        await Assert.That(merger.RowCount).IsEqualTo(2L);
 
         merger.AppendFile(new MemoryReadSource(valid));
+        await Assert.That(merger.SourceFileCount).IsEqualTo(2);
+        await Assert.That(merger.RowGroupCount).IsEqualTo(2);
+        await Assert.That(merger.RowCount).IsEqualTo(4L);
         merger.CloseFile();
         await Assert.That(ReadValues(destination.ToArray(), schema)).IsEquivalentTo([3, 4, 5, 6]);
+    }
+
+    [Test]
+    public async Task OutOfPlaceMergeRejectsTheSameSourceAndDestination()
+    {
+        var schema = CreateSchema(ParquetPhysicalType.Int32);
+        var existing = WriteFile(schema, [1, 2], ParquetWriterOptions.Default);
+        using var file = new MemoryParquetSource(existing);
+
+        await Assert.That(() => schema.CreateMerger(file, file)).Throws<ArgumentException>();
+        await Assert.That(ReadValues(file.ToArray(), schema)).IsEquivalentTo([1, 2]);
     }
 
     static byte[] WriteFile(ParquetSchema schema, int[] values, ParquetWriterOptions options)

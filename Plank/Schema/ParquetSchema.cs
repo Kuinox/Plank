@@ -54,12 +54,13 @@ public sealed record ParquetSchema
         ParquetAppendOptions? options = null)
         => new(source, destination, this, options ?? ParquetAppendOptions.Default);
 
-    public ParquetFileMerger CreateMerger(IParquetWriteSource destination, ParquetMergeOptions? options = null)
-        => new(destination, this, options ?? ParquetMergeOptions.Default);
-
-    public ParquetFileMerger CreateInPlaceMerger(IParquetReadWriteSource destination,
+    public ParquetFileMerger CreateMerger(IParquetReadWriteSource destination,
         ParquetMergeOptions? options = null)
         => new(destination, this, options ?? ParquetMergeOptions.Default);
+
+    public ParquetFileMerger CreateMerger(IParquetReadSource source, IParquetWriteSource destination,
+        ParquetMergeOptions? options = null)
+        => new(source, destination, this, options ?? ParquetMergeOptions.Default);
 
     internal ImmutableArray<ImmutableArray<string>> LeafPaths { get; }
 

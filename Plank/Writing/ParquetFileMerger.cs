@@ -11,19 +11,29 @@ public sealed class ParquetFileMerger
     readonly bool _preserveFirstFileMetadata;
     bool _closed;
 
-    internal ParquetFileMerger(IParquetWriteSource destination, ParquetSchema schema, ParquetMergeOptions options)
-        : this(destination, existingSource: null, schema, options)
+    internal ParquetFileMerger(IParquetReadSource source, IParquetWriteSource destination, ParquetSchema schema,
+        ParquetMergeOptions options)
+        : this(ValidateDistinctDestination(source, destination), schema, options, existingSource: null)
     {
+        try
+        {
+            AppendFile(source);
+        }
+        catch
+        {
+            AbortConstruction();
+            throw;
+        }
     }
 
     internal ParquetFileMerger(IParquetReadWriteSource destination, ParquetSchema schema,
         ParquetMergeOptions options)
-        : this(destination, destination, schema, options)
+        : this(destination, schema, options, destination)
     {
     }
 
-    ParquetFileMerger(IParquetWriteSource destination, IParquetReadSource? existingSource,
-        ParquetSchema schema, ParquetMergeOptions options)
+    ParquetFileMerger(IParquetWriteSource destination, ParquetSchema schema, ParquetMergeOptions options,
+        IParquetReadSource? existingSource)
     {
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(schema);
@@ -42,11 +52,14 @@ public sealed class ParquetFileMerger
                 _writer = new ParquetWriter(destination, schema, options.WriterOptions);
             }
             else
+            {
+                InitializeCounts(existingSource);
                 _writer = new ParquetWriter(existingSource, destination, schema, new ParquetAppendOptions
                 {
                     WriterOptions = options.WriterOptions,
                     PreserveExistingMetadata = options.PreserveFirstFileMetadata
                 });
+            }
         }
         catch
         {
@@ -82,5 +95,42 @@ public sealed class ParquetFileMerger
         _writer.CloseFile();
         _reader.Dispose();
         _closed = true;
+    }
+
+    void InitializeCounts(IParquetReadSource source)
+    {
+        _reader.Reset(source);
+        var metadata = _reader.PhysicalReader.Metadata;
+        long rowCount = 0;
+        for (var i = 0; i < metadata.RowGroupCount; i++)
+            rowCount = checked(rowCount + checked((long)metadata.RowGroups[i].RowCount));
+
+        SourceFileCount = 1;
+        RowGroupCount = metadata.RowGroupCount;
+        RowCount = rowCount;
+    }
+
+    void AbortConstruction()
+    {
+        try
+        {
+            _writer.CloseFile();
+        }
+        catch
+        {
+        }
+        _reader.Dispose();
+        _closed = true;
+    }
+
+    static IParquetWriteSource ValidateDistinctDestination(IParquetReadSource source,
+        IParquetWriteSource destination)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(destination);
+        if (ReferenceEquals(source, destination))
+            throw new ArgumentException("The source and destination must be different for an out-of-place merge.",
+                nameof(destination));
+        return destination;
     }
 }
