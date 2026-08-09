@@ -2,7 +2,7 @@
 
 The physical read layer is the lowest-level reader in Plank. It reads parquet file metadata and exposes encoded column data as raw bytes, without decoding it into C# values.
 
-Use it when you need direct access to the raw structure of a parquet file, for example when building a parquet viewer, analyzer, diagnostics tool, or custom reader.
+Use it when you need direct access to the raw structure of a parquet file, for example when building a parquet metadata viewer, analyzer, diagnostics tool, or custom reader.
 
 ## Open a file
 
@@ -16,13 +16,14 @@ using ParquetFileReader reader = new();
 reader.Reset(stream);
 ```
 
-[`ParquetFileReader`](xref:Plank.Reading.Physical.ParquetFileReader) is reusable. [`Reset(Stream)`](xref:Plank.Reading.Physical.ParquetFileReader.Reset(System.IO.Stream)) attaches it to a file, reads the footer, and makes the parsed metadata available.
-
-Call [`Reset`](xref:Plank.Reading.Physical.ParquetFileReader.Reset*) again to reuse the same reader for another file.
-
-After the first stream reset, the reader keeps the same stream wrapper. Metadata buffers come from the configured pool, so reset does not allocate them when the pool already has arrays big enough.
-
-Existing page cursors become invalid after a reset.
+> [!NOTE]
+> Reuse a single [`ParquetFileReader`](xref:Plank.Reading.Physical.ParquetFileReader) across files so it can reuse its stream wrapper and pooled metadata buffers instead of allocating them again.
+>
+> Call [`Reset(Stream)`](xref:Plank.Reading.Physical.ParquetFileReader.Reset(System.IO.Stream)) for each file. It attaches the reader, reads the footer, and makes the parsed metadata available.
+>
+> Reset does not allocate metadata buffers when the configured pool already has arrays large enough.
+>
+> Existing page cursors become invalid after a reset.
 
 ## Inspect metadata
 

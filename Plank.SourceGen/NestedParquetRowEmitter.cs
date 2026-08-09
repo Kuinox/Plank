@@ -488,11 +488,22 @@ static class NestedParquetRowEmitter
         builder.AppendLine("            files ?? throw new global::System.ArgumentNullException(nameof(files)),");
         builder.AppendLine("            options ?? global::Plank.Dataset.DatasetWriterOptions.Default);");
         builder.AppendLine();
+        builder.AppendLine("    public static DatasetWriter CreateDatasetWriter<TFile>(Route route, global::Plank.Dataset.DatasetFilePath filePath, TFile[] files, global::Plank.Dataset.DatasetWriterOptions? options = null)");
+        builder.AppendLine("        where TFile : class, global::Plank.Writing.IParquetWriteSource");
+        builder.AppendLine("        => new(route ?? throw new global::System.ArgumentNullException(nameof(route)),");
+        builder.AppendLine("            filePath ?? throw new global::System.ArgumentNullException(nameof(filePath)),");
+        builder.AppendLine("            files ?? throw new global::System.ArgumentNullException(nameof(files)),");
+        builder.AppendLine("            options ?? global::Plank.Dataset.DatasetWriterOptions.Default);");
+        builder.AppendLine();
         builder.AppendLine("    public static Writer CreateRowWriter(global::Plank.Writing.RowGroupWriter rowGroupWriter, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(rowGroupWriter, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
         builder.AppendLine();
         builder.AppendLine("    public static PipelineWriter CreateRowWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(stream, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
+        builder.AppendLine();
+        builder.AppendLine("    public static PipelineWriter CreateRowWriter<TFile>(global::Plank.Writing.ParquetFilePath filePath, TFile file, global::Plank.Writing.ParquetWriterOptions? options = null)");
+        builder.AppendLine("        where TFile : class, global::Plank.Writing.IParquetWriteSource");
+        builder.AppendLine("        => new(file, filePath ?? throw new global::System.ArgumentNullException(nameof(filePath)), options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
         builder.AppendLine();
         builder.AppendLine("    public static PipelineWriter CreateRowWriter(global::System.IO.Stream stream, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(stream, onFlush, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
@@ -566,6 +577,8 @@ static class NestedParquetRowEmitter
         builder.AppendLine("    {");
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, options.RowApiMaxParallelism, null, options) { }");
+        builder.AppendLine("        internal PipelineWriter(global::Plank.Writing.IParquetWriteSource file, global::Plank.Writing.ParquetFilePath filePath, global::Plank.Writing.ParquetWriterOptions options)");
+        builder.AppendLine("            : base(file, filePath, Schema, options.RowApiMaxParallelism, null, options, DefaultRowBatchSize, \"PlankNestedRowApiWorker\") { }");
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, options.RowApiMaxParallelism, onFlush, options) { }");
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, uint maxParallelism, global::Plank.Writing.ParquetWriterOptions options)");
@@ -584,6 +597,12 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        readonly Route _route;");
         builder.AppendLine("        internal DatasetWriter(Route route, global::Plank.Writing.IParquetWriteSource[] files, global::Plank.Dataset.DatasetWriterOptions options)");
         builder.AppendLine("            : base(Schema, s_rowApiColumns, DefaultRowBatchSize, files, options)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            _route = route;");
+        builder.AppendLine("            InitializeSlots();");
+        builder.AppendLine("        }");
+        builder.AppendLine("        internal DatasetWriter(Route route, global::Plank.Dataset.DatasetFilePath filePath, global::Plank.Writing.IParquetWriteSource[] files, global::Plank.Dataset.DatasetWriterOptions options)");
+        builder.AppendLine("            : base(Schema, s_rowApiColumns, DefaultRowBatchSize, files, filePath, options)");
         builder.AppendLine("        {");
         builder.AppendLine("            _route = route;");
         builder.AppendLine("            InitializeSlots();");
@@ -1117,10 +1136,12 @@ static class NestedParquetRowEmitter
             _ => null
         };
         ImmutableArray<string> encodings = [];
+        string? compression = null;
+        int? compressionLevel = null;
         var inferredPhysicalType = physicalType;
         if (allowOverrides && property is not null &&
             !TryReadLeafOverrides(property, normalized, ref physicalType, ref logicalExpression, ref encodings,
-                out error))
+                ref compression, ref compressionLevel, out error))
         {
             scalar = default!;
             return false;
@@ -1157,7 +1178,8 @@ static class NestedParquetRowEmitter
             "global::System.DateOnly" or "global::System.DateTime" or "global::System.DateTimeOffset" or
             "global::System.TimeOnly";
         scalar = new Scalar(userType, normalized, physicalType, logicalExpression, encodings,
-            normalized == "global::System.Guid" ? 16u : 0u, storageType, supportsNestedStorage,
+            normalized == "global::System.Guid" ? 16u : 0u, compression, compressionLevel, storageType,
+            supportsNestedStorage,
             physicalType is "ByteArray" or "FixedLenByteArray" or "Int96");
         error = string.Empty;
         return true;
@@ -1177,7 +1199,8 @@ static class NestedParquetRowEmitter
     }
 
     static bool TryReadLeafOverrides(IPropertySymbol property, string normalizedType, ref string physicalType,
-        ref string? logicalExpression, ref ImmutableArray<string> encodings, out string error)
+        ref string? logicalExpression, ref ImmutableArray<string> encodings, ref string? compression,
+        ref int? compressionLevel, out string error)
     {
         error = string.Empty;
         var attribute = GetColumnAttribute(property);
@@ -1210,6 +1233,24 @@ static class NestedParquetRowEmitter
                     encodingBuilder.Add(encoding);
                 }
                 encodings = encodingBuilder.ToImmutable();
+            }
+            else if (argument.Key == "Compression")
+            {
+                if (!TryGetEnumValue(argument.Value, out var value) ||
+                    !TryGetCompression(value, out compression))
+                {
+                    error = $"Property '{property.Name}' declares an invalid CompressionKind override.";
+                    return false;
+                }
+            }
+            else if (argument.Key == "CompressionLevel")
+            {
+                if (argument.Value.Value is not int value)
+                {
+                    error = $"Property '{property.Name}' declares an invalid compression level.";
+                    return false;
+                }
+                compressionLevel = value;
             }
             else if (argument.Key == "LogicalType")
             {
@@ -1294,6 +1335,10 @@ static class NestedParquetRowEmitter
                 builder.Append(", default");
             builder.Append(", ").Append(scalar.TypeLength);
         }
+        if (scalar.Compression is { } compression)
+            builder.Append(", compression: global::Plank.Schema.CompressionKind.").Append(compression);
+        if (scalar.CompressionLevel is { } compressionLevel)
+            builder.Append(", compressionLevel: ").Append(compressionLevel);
         return builder.Append(')').ToString();
     }
 
@@ -1476,6 +1521,22 @@ static class NestedParquetRowEmitter
         return encoding.Length > 0;
     }
 
+    static bool TryGetCompression(int value, out string? compression)
+    {
+        compression = value switch
+        {
+            0 => "None",
+            1 => "Snappy",
+            2 => "Gzip",
+            3 => "Zstd",
+            4 => "Lz4",
+            5 => "Brotli",
+            6 => "Lz4Legacy",
+            _ => null
+        };
+        return compression is not null;
+    }
+
     static string GetHintName(INamedTypeSymbol schemaType)
         => ToIdentifier(schemaType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)) + ".NestedSchemaApi.g.cs";
 
@@ -1529,8 +1590,8 @@ static class NestedParquetRowEmitter
     }
 
     sealed class Scalar(string userType, string nonNullableUserType, string physicalType,
-        string? logicalExpression, ImmutableArray<string> encodings, uint typeLength, string storageType,
-        bool supportsNestedStorage, bool isBinary)
+        string? logicalExpression, ImmutableArray<string> encodings, uint typeLength, string? compression,
+        int? compressionLevel, string storageType, bool supportsNestedStorage, bool isBinary)
     {
         internal string UserType { get; } = userType;
         internal string NonNullableUserType { get; } = nonNullableUserType;
@@ -1538,6 +1599,8 @@ static class NestedParquetRowEmitter
         internal string? LogicalExpression { get; } = logicalExpression;
         internal ImmutableArray<string> Encodings { get; } = encodings;
         internal uint TypeLength { get; } = typeLength;
+        internal string? Compression { get; } = compression;
+        internal int? CompressionLevel { get; } = compressionLevel;
         internal string StorageType { get; } = storageType;
         internal bool SupportsNestedStorage { get; } = supportsNestedStorage;
         internal bool IsBinary { get; } = isBinary;

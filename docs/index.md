@@ -1,10 +1,7 @@
 # Plank
 
-The docs are being rewritten collaboratively.
+Plank is a Parquet reader and writer for .NET.
 
-Current scope:
+It provides several layers, from rows and datasets down to columns, pages, and file metadata. The higher-level APIs are easier to grasp and handle the Parquet details for you. Use the lower-level APIs when you need control over the file structure.
 
-- [Schema](articles/schema.md)
-- [Reading](articles/reading/index.md)
-- [Writing](articles/writing.md)
-- [API reference](xref:Plank)
+Declare schemas as C# types. Source generators create type-safe readers and writers, while analyzers report incompatible mappings at build time.

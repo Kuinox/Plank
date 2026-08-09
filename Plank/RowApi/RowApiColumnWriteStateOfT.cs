@@ -57,6 +57,12 @@ sealed class RowApiColumnWriteState<T> : RowApiColumnWriteState
             Array.Clear(Values, start, count);
     }
 
+    internal override ulong GetValueSize(int index)
+        => RowValueSizeEstimator.Estimate(Values[index], _descriptor.Column.Column);
+
+    internal override void Resize(int rowCount)
+        => Array.Resize(ref Values, rowCount);
+
     internal override void CopyValueTo(int sourceIndex, RowApiColumnWriteState destination, int destinationIndex)
     {
         if (destination is not RowApiColumnWriteState<T> target)

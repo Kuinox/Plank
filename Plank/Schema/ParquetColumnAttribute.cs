@@ -29,6 +29,12 @@ public sealed class ParquetColumnAttribute : Attribute
 
     public EncodingKind[]? Encodings { get; set; }
 
+    /// <summary>Gets or sets the compression used when writing this column.</summary>
+    public CompressionKind Compression { get; set; }
+
+    /// <summary>Gets or sets the codec-specific compression level used when writing this column.</summary>
+    public int CompressionLevel { get; set; }
+
     public LogicalTypeKind LogicalType { get; set; }
 
     public int FieldId { get; set; }

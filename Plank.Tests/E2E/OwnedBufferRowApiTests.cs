@@ -33,7 +33,8 @@ internal sealed class OwnedBufferRowApiTests
             {
                 var writer = OwnedBufferRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
                 {
-                    RowApiMaxParallelism = 1
+                    RowApiMaxParallelism = 1,
+                    TargetRowGroupSizeBytes = 1024
                 });
 
                 for (var i = 0; i < 1024; i++)

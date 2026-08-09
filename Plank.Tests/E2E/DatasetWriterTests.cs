@@ -264,6 +264,32 @@ internal sealed class DatasetWriterTests
         }
     }
 
+    [Test]
+    public async Task RollsPartitionRowsIntoTargetSizedFiles()
+    {
+        using var paths = new DatasetPartPaths();
+        using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, paths.SelectPath, CreateFiles(1),
+                   new DatasetWriterOptions
+                   {
+                       PendingRowCapacity = 0,
+                       WriterOptions = new ParquetWriterOptions
+                       {
+                           TargetRowGroupSizeBytes = 20,
+                           TargetFileSizeBytes = 1
+                       }
+                   }))
+        {
+            for (var i = 0; i < 10; i++)
+                writer.Queue(new DatasetRowSchema { Value = i, Path = "a"u8.ToArray() });
+        }
+
+        await Assert.That(paths.Paths.Count).IsEqualTo(3);
+        var values = new List<int>();
+        for (var i = 0; i < paths.Paths.Count; i++)
+            values.AddRange(ReadValues(paths.Paths[i]));
+        await Assert.That(values.SequenceEqual(Enumerable.Range(0, 10))).IsTrue();
+    }
+
     static ReadOnlySpan<byte> SelectPath(DatasetRowSchema row, IParquetBufferPool bufferPool,
         out ParquetBuffer? allocation)
     {
@@ -366,5 +392,33 @@ internal sealed class DatasetWriterTests
 
         FileStream GetStream()
             => _stream ?? throw new InvalidOperationException("The file is not open.");
+    }
+
+    sealed class DatasetPartPaths : IDisposable
+    {
+        readonly List<byte[]> _pathsUtf8 = [];
+
+        internal readonly List<string> Paths = [];
+
+        internal ReadOnlySpan<byte> SelectPath(ReadOnlySpan<byte> partitionKey, ulong fileIndex,
+            IParquetBufferPool bufferPool, out ParquetBuffer? allocation)
+        {
+            _ = partitionKey;
+            _ = bufferPool;
+            allocation = null;
+            if (fileIndex != checked((ulong)_pathsUtf8.Count))
+                throw new InvalidOperationException("The dataset file index is not sequential.");
+            var path = NewPath();
+            Paths.Add(path);
+            var pathUtf8 = Encoding.UTF8.GetBytes(path);
+            _pathsUtf8.Add(pathUtf8);
+            return pathUtf8;
+        }
+
+        public void Dispose()
+        {
+            for (var i = 0; i < Paths.Count; i++)
+                DeleteIfPresent(Paths[i]);
+        }
     }
 }

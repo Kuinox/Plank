@@ -64,7 +64,8 @@ foreach (EventSchema.ReadRowGroup rowGroup in reader.RowGroups)
 
 [`RowGroups`](xref:Plank.Reading.Logical.ParquetReader.RowGroups) can be enumerated or indexed. Each generated row group exposes its row count and a strongly typed [`RowGroupColumn<T>`](xref:Plank.Reading.Logical.RowGroupColumn`1) property for every schema property.
 
-Each [`ColumnBuffer<T>`](xref:Plank.Reading.Logical.ColumnBuffer`1) contains one decoded batch. Consume [`Values`](xref:Plank.Reading.Logical.ColumnBuffer`1.Values) before advancing the column enumerator. The span is temporary and may refer to pooled storage that is reused for the next buffer.
+> [!NOTE]
+> Each [`ColumnBuffer<T>`](xref:Plank.Reading.Logical.ColumnBuffer`1) contains one decoded batch. Consume [`Values`](xref:Plank.Reading.Logical.ColumnBuffer`1.Values) before advancing the column enumerator. The span is temporary and may refer to pooled storage that is reused for the next buffer.
 
 Nullable schema properties generate nullable column types such as [`RowGroupColumn<int?>`](xref:Plank.Reading.Logical.RowGroupColumn`1).
 

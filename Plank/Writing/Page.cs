@@ -24,6 +24,8 @@ internal struct Page
 
     public uint DictionaryValueCount;
 
+    public int UncompressedContentSize;
+
     internal ColumnStatistics Statistics;
 
     internal ParquetBuffer StatisticsMinValueBuffer;
@@ -40,6 +42,7 @@ internal struct Page
         RepetitionLevelsByteLength = 0;
         DefinitionLevelsByteLength = 0;
         DictionaryValueCount = 0;
+        UncompressedContentSize = 0;
         Statistics = default;
     }
 

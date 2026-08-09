@@ -83,6 +83,37 @@ internal sealed class RowGroupWriterContractTests
     }
 
     [Test]
+    public void SerializePreparesCompressionBeforeRowGroupWrite()
+    {
+        using var stream = new NonClosingMemoryStream();
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("A", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.Plain], compression: CompressionKind.Gzip,
+                    compressionLevel: 1))
+        ]);
+        var writer = schema.CreateWriter(stream);
+        var serialized = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+
+        serialized.Serialize(new int[4096]);
+
+        if (serialized.Pages.Count != 1)
+            throw new InvalidOperationException($"Expected one prepared page, got {serialized.Pages.Count}.");
+        ref var page = ref serialized.Pages[0];
+        if (page.Header.WrittenLength == 0)
+            throw new InvalidOperationException("Serialize did not prepare the page header.");
+        if (page.Content.WrittenLength >= page.UncompressedContentSize)
+            throw new InvalidOperationException("Serialize did not prepare the compressed page payload.");
+
+        var preparedHeaderCrc = page.Header.ComputeCrc32();
+        var preparedContentCrc = page.Content.ComputeCrc32();
+        writer.StartRowGroup().Write(serialized);
+        if (page.Header.ComputeCrc32() != preparedHeaderCrc || page.Content.ComputeCrc32() != preparedContentCrc)
+            throw new InvalidOperationException("Writing changed a prepared page.");
+
+        writer.CloseFile();
+    }
+
+    [Test]
     public async Task ThrowsWhenRleEncodingIsUsedForNonBooleanColumn()
     {
         await Assert.ThrowsAsync<NotSupportedException>(async () =>

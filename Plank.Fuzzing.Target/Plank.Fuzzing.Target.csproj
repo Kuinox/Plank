@@ -8,11 +8,13 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <AnalysisLevel>latest</AnalysisLevel>
     <AnalysisMode>All</AnalysisMode>
-    <NoWarn>$(NoWarn);CA1822</NoWarn>
+    <NoWarn>$(NoWarn);CA1822;CA5392;CA1031;CA2000;CA1806</NoWarn>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="SharpFuzz" Version="2.2.0" />
+    <PackageReference Include="SharpFuzz.Common" Version="2.2.0" />
   </ItemGroup>
 
   <ItemGroup>

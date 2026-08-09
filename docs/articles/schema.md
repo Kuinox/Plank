@@ -1,6 +1,6 @@
 # Schema
 
-Plank can generate a Parquet schema from a C# type.
+Declare a schema to keep the C# model and parquet file aligned on column names, types, and options. Plank uses that declaration to generate type-safe readers and writers and reports incompatible mappings at build time.
 
 ## Define a schema
 
@@ -22,7 +22,7 @@ public sealed partial class EventSchema
 
 Each property becomes a column. Non-nullable properties are required and nullable properties are optional.
 
-Plank generates the readers and writers for `EventSchema`. See [Reading](reading/index.md) and [Writing](writing.md) for usage.
+Plank generates the readers and writers for `EventSchema`. See [Reading](reading/index.md) and [Writing](writing/index.md) for usage.
 
 ## Customize a column
 
@@ -32,7 +32,9 @@ Use [`[ParquetColumn]`](xref:Plank.Schema.ParquetColumnAttribute) to change a co
 [ParquetColumn(
     "event_name",
     LogicalType = LogicalTypeKind.String,
-    Encodings = [EncodingKind.RleDictionary])]
+    Encodings = [EncodingKind.RleDictionary],
+    Compression = CompressionKind.Zstd,
+    CompressionLevel = 3)]
 public byte[]? Name { get; init; }
 ```
 
@@ -73,7 +75,7 @@ Without `AllowAllocatingValues`, the source generator reports an error for every
 
 ## Runtime schemas
 
-Use [`ParquetSchema`](xref:Plank.Schema.ParquetSchema) when a schema is created at runtime:
+Use [`ParquetSchema`](xref:Plank.Schema.ParquetSchema) when a schema needs to be created at runtime:
 
 ```csharp
 var schema = new ParquetSchema([
@@ -84,5 +86,3 @@ var schema = new ParquetSchema([
         logicalType: new LogicalType.String())
 ]);
 ```
-
-[`ColumnDefinition`](xref:Plank.Schema.ColumnDefinition) also supports groups, lists, and maps.

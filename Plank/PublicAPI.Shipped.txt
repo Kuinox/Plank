@@ -869,3 +869,18 @@ Plank.Writing.IParquetWriteSource.Open(System.ReadOnlySpan<byte> path, System.IO
 Plank.Writing.IParquetWriteSource.SetLength(ulong length) -> void
 Plank.Writing.IParquetWriteSource.Write(ulong offset, System.ReadOnlySpan<byte> source) -> void
 Plank.Writing.ParquetWriter.Reset(Plank.Writing.IParquetWriteSource! destination) -> void
+Plank.Dataset.DatasetFilePath
+Plank.Dataset.DatasetWriterOptions.WriterOptions.get -> Plank.Writing.ParquetWriterOptions!
+Plank.Dataset.DatasetWriterOptions.WriterOptions.init -> void
+Plank.Dataset.DatasetWriterBase<TRow>.DatasetWriterBase(Plank.Schema.ParquetSchema! schema, Plank.RowApi.RowApiColumnDescriptor![]! columns, int rowBufferCapacity, Plank.Writing.IParquetWriteSource![]! files, Plank.Dataset.DatasetFilePath! filePath, Plank.Dataset.DatasetWriterOptions! options) -> void
+Plank.Schema.ParquetColumnAttribute.Compression.get -> Plank.Schema.CompressionKind
+Plank.Schema.ParquetColumnAttribute.Compression.set -> void
+Plank.Schema.ParquetColumnAttribute.CompressionLevel.get -> int
+Plank.Schema.ParquetColumnAttribute.CompressionLevel.set -> void
+Plank.RowApi.PipelineRowWriterBase<TSlot>.PipelineRowWriterBase(Plank.Writing.IParquetWriteSource! file, Plank.Writing.ParquetFilePath! filePath, Plank.Schema.ParquetSchema! schema, uint maxParallelism, System.Action<int>? onFlush, Plank.Writing.ParquetWriterOptions! options, int rowBatchSize, string! workerThreadNamePrefix) -> void
+Plank.Writing.ParquetWriterOptions.TargetFileSizeBytes.get -> ulong
+Plank.Writing.ParquetWriterOptions.TargetFileSizeBytes.init -> void
+Plank.Writing.ParquetWriterOptions.TargetRowGroupSizeBytes.get -> ulong
+Plank.Writing.ParquetWriterOptions.TargetRowGroupSizeBytes.init -> void
+Plank.Writing.ParquetFilePath
+Plank.Writing.RowWriterBase<TSlot>.RowWriterBase(Plank.Writing.IParquetWriteSource! file, Plank.Writing.ParquetFilePath! filePath, Plank.Schema.ParquetSchema! schema, uint maxParallelism, Plank.Writing.ParquetWriterOptions! options) -> void

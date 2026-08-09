@@ -12,6 +12,10 @@ public abstract class RowWriterBase<TSlot>
     where TSlot : class
 {
     readonly ParquetWriter _writer;
+    readonly IParquetWriteSource? _rollingFile;
+    readonly ParquetFilePath? _filePath;
+    readonly IParquetBufferPool _bufferPool;
+    readonly ulong _targetFileSizeBytes;
     readonly Queue<QueuedSlot> _readySlots;
     readonly Queue<TSlot> _freeSlots;
     readonly Thread[] _workers;
@@ -24,6 +28,8 @@ public abstract class RowWriterBase<TSlot>
     ulong _nextWriteSequence;
     bool _addingCompleted;
     bool _completed;
+    ulong _fileIndex;
+    bool _rolloverPending;
     ExceptionDispatchInfo? _fault;
 
     /// <summary>Initializes the pipeline used by a generated row writer.</summary>
@@ -44,6 +50,10 @@ public abstract class RowWriterBase<TSlot>
                 $"Max parallelism must be <= {int.MaxValue}.");
 
         _writer = schema.CreateWriter(stream, options);
+        _rollingFile = null;
+        _filePath = null;
+        _bufferPool = options.BufferPool;
+        _targetFileSizeBytes = options.TargetFileSizeBytes;
         var workerCount = checked((int)maxParallelism);
         _execution = options.Execution;
         _readySlots = new Queue<QueuedSlot>(workerCount);
@@ -57,6 +67,62 @@ public abstract class RowWriterBase<TSlot>
         _nextWriteSequence = 0;
         _addingCompleted = false;
         _completed = false;
+        _fileIndex = 0;
+        _rolloverPending = false;
+        _fault = null;
+    }
+
+    /// <summary>Initializes a rolling pipeline used by a generated row writer.</summary>
+    /// <param name="file">The reusable destination used for each produced file.</param>
+    /// <param name="filePath">Selects the path of each produced file.</param>
+    /// <param name="schema">The generated Parquet schema.</param>
+    /// <param name="maxParallelism">The maximum number of serialization workers.</param>
+    /// <param name="options">The Parquet writer options.</param>
+    protected RowWriterBase(IParquetWriteSource file, ParquetFilePath filePath, ParquetSchema schema,
+        uint maxParallelism, ParquetWriterOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        ArgumentNullException.ThrowIfNull(filePath);
+        ArgumentNullException.ThrowIfNull(schema);
+        ArgumentNullException.ThrowIfNull(options);
+        if (maxParallelism == 0)
+            throw new ArgumentOutOfRangeException(nameof(maxParallelism), maxParallelism,
+                "Max parallelism must be greater than zero.");
+        if (maxParallelism > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(maxParallelism), maxParallelism,
+                $"Max parallelism must be <= {int.MaxValue}.");
+
+        options.Validate();
+        OpenRollingFile(file, filePath, 0, options.BufferPool);
+        try
+        {
+            _writer = schema.CreateWriter(file, options);
+        }
+        catch
+        {
+            file.Close();
+            throw;
+        }
+
+        _rollingFile = file;
+        _filePath = filePath;
+        _bufferPool = options.BufferPool;
+        _targetFileSizeBytes = options.TargetFileSizeBytes;
+        var workerCount = checked((int)maxParallelism);
+        _execution = options.Execution;
+        _readySlots = new Queue<QueuedSlot>(workerCount);
+        _freeSlots = new Queue<TSlot>(workerCount);
+        _workers = new Thread[workerCount];
+        _gate = new object();
+        _writeGate = new object();
+        _initialSlotTaken = false;
+        _slotsInitialized = false;
+        _nextQueuedSequence = 0;
+        _nextWriteSequence = 0;
+        _addingCompleted = false;
+        _completed = false;
+        _fileIndex = 0;
+        _rolloverPending = false;
         _fault = null;
     }
 
@@ -249,9 +315,13 @@ public abstract class RowWriterBase<TSlot>
                         Monitor.Wait(_writeGate);
 
                     ThrowIfFaulted();
+                    if (_rolloverPending)
+                        Rollover();
                     var rowGroupWriter = _writer.StartRowGroup();
                     WriteSerializedSlot(queuedSlot.Slot, rowGroupWriter);
                     OnSlotWritten(queuedSlot.Slot);
+                    if (_rollingFile is not null && checked((ulong)_writer.FileOffset) >= _targetFileSizeBytes)
+                        _rolloverPending = true;
                     _nextWriteSequence++;
                     Monitor.PulseAll(_writeGate);
                 }
@@ -286,6 +356,34 @@ public abstract class RowWriterBase<TSlot>
 
         lock (_writeGate)
             Monitor.PulseAll(_writeGate);
+    }
+
+    void Rollover()
+    {
+        var file = _rollingFile ?? throw new InvalidOperationException("The row writer does not have a rolling file.");
+        var filePath = _filePath ?? throw new InvalidOperationException("The row writer does not have a file path selector.");
+        _writer.FinishFile();
+        _fileIndex = checked(_fileIndex + 1);
+        OpenRollingFile(file, filePath, _fileIndex, _bufferPool);
+        _writer.Reset(file);
+        _rolloverPending = false;
+    }
+
+    static void OpenRollingFile(IParquetWriteSource file, ParquetFilePath filePath, ulong fileIndex,
+        IParquetBufferPool bufferPool)
+    {
+        var path = filePath(fileIndex, bufferPool, out var allocation);
+        try
+        {
+            if (path.IsEmpty)
+                throw new InvalidOperationException("The row writer file path selector returned an empty path.");
+            file.Open(path, FileMode.Create);
+        }
+        finally
+        {
+            if (allocation is { } owner)
+                owner.Dispose();
+        }
     }
 
     readonly struct QueuedSlot(TSlot slot, ulong sequence)

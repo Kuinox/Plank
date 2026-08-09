@@ -22,6 +22,10 @@ public abstract class DatasetWriterBase<TRow>
     readonly int[] _parkedRowLinks;
     readonly int _rowBufferCapacity;
     readonly int _pendingRowCapacity;
+    readonly ulong _targetRowGroupSizeBytes;
+    readonly ulong _targetFileSizeBytes;
+    readonly DatasetFilePath? _filePath;
+    readonly bool _createFileParts;
     DatasetBufferSlot _parkedRows = null!;
     int _availableFileCount;
     int _parkedRowCount;
@@ -29,6 +33,7 @@ public abstract class DatasetWriterBase<TRow>
     int _parkedRowTail;
     int _freeParkedRowHead;
     ulong _clock;
+    ulong _nextFileIndex;
     bool _initialized;
     bool _disposed;
 
@@ -40,6 +45,26 @@ public abstract class DatasetWriterBase<TRow>
     /// <param name="options">The dataset writer options.</param>
     protected DatasetWriterBase(ParquetSchema schema, RowApiColumnDescriptor[] columns, int rowBufferCapacity,
         IParquetWriteSource[] files, DatasetWriterOptions options)
+        : this(schema, columns, rowBufferCapacity, files, options, null)
+    {
+    }
+
+    /// <summary>Initializes the state used by a generated dataset writer that can create file parts.</summary>
+    /// <param name="schema">The one schema shared by all files in the dataset.</param>
+    /// <param name="columns">The generated column descriptors for the schema.</param>
+    /// <param name="rowBufferCapacity">The row capacity of each generated buffer slot.</param>
+    /// <param name="files">The fixed reusable file sources.</param>
+    /// <param name="filePath">Selects the path of each produced file.</param>
+    /// <param name="options">The dataset writer options.</param>
+    protected DatasetWriterBase(ParquetSchema schema, RowApiColumnDescriptor[] columns, int rowBufferCapacity,
+        IParquetWriteSource[] files, DatasetFilePath filePath, DatasetWriterOptions options)
+        : this(schema, columns, rowBufferCapacity, files, options,
+            filePath ?? throw new ArgumentNullException(nameof(filePath)))
+    {
+    }
+
+    DatasetWriterBase(ParquetSchema schema, RowApiColumnDescriptor[] columns, int rowBufferCapacity,
+        IParquetWriteSource[] files, DatasetWriterOptions options, DatasetFilePath? filePath)
     {
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(columns);
@@ -55,15 +80,22 @@ public abstract class DatasetWriterBase<TRow>
         _schema = schema;
         _columns = columns;
         _options = options;
-        _bufferPool = options.AppendOptions.WriterOptions.BufferPool;
+        var createFileParts = filePath is not null;
+        var writerOptions = createFileParts ? options.WriterOptions : options.AppendOptions.WriterOptions;
+        _bufferPool = writerOptions.BufferPool;
         _rowBufferCapacity = rowBufferCapacity;
         _pendingRowCapacity = checked((int)options.PendingRowCapacity);
+        _targetRowGroupSizeBytes = writerOptions.TargetRowGroupSizeBytes;
+        _targetFileSizeBytes = writerOptions.TargetFileSizeBytes;
+        _filePath = filePath;
+        _createFileParts = createFileParts;
         _states = new PartitionState[files.Length];
         _files = new FileSources[files.Length];
         _pendingKeys = new PendingKeyState[_pendingRowCapacity];
         _parkedRowKeys = new int[_pendingRowCapacity];
         _parkedRowLinks = new int[_pendingRowCapacity];
         _availableFileCount = 0;
+        _nextFileIndex = 0;
         _parkedRowHead = -1;
         _parkedRowTail = -1;
         _freeParkedRowHead = _pendingRowCapacity == 0 ? -1 : 0;
@@ -71,12 +103,12 @@ public abstract class DatasetWriterBase<TRow>
         for (var i = 0; i < _files.Length; i++)
         {
             var destination = files[i] ?? throw new ArgumentException("A file source cannot be null.", nameof(files));
-            if (destination is not IParquetReadSource source)
+            if (!createFileParts && destination is not IParquetReadSource)
                 throw new ArgumentException("Each file source must also implement IParquetReadSource.", nameof(files));
             for (var previous = 0; previous < i; previous++)
                 if (ReferenceEquals(destination, _files[previous].Destination))
                     throw new ArgumentException("A file source cannot occur more than once.", nameof(files));
-            _files[i] = new FileSources(source, destination);
+            _files[i] = new FileSources(destination as IParquetReadSource, destination);
             _availableFileCount++;
         }
 
@@ -245,9 +277,12 @@ public abstract class DatasetWriterBase<TRow>
     void QueueActiveRow(TRow row, PartitionState state)
     {
         state.LastUse = unchecked(++_clock);
+        if (state.RolloverPending)
+            Rollover(state);
         CopyRow(row, state.SlotIndex, state.Slot.Count);
         state.Slot.Next();
-        if (state.Slot.IsFull)
+        if (state.Slot.BufferedSizeBytes >= _targetRowGroupSizeBytes ||
+            state.Slot.IsFull && !state.Slot.Grow())
             WriteRows(state);
     }
 
@@ -383,11 +418,15 @@ public abstract class DatasetWriterBase<TRow>
                 continue;
             }
 
+            if (state.RolloverPending)
+                Rollover(state);
+
             _parkedRows.CopyRowTo(current, state.Slot, state.Slot.Count);
             state.Slot.Next();
             RemoveParkedRow(current, previous, next);
             _pendingKeys[keyIndex].RowCount--;
-            if (state.Slot.IsFull)
+            if (state.Slot.BufferedSizeBytes >= _targetRowGroupSizeBytes ||
+                state.Slot.IsFull && !state.Slot.Grow())
                 WriteRows(state);
             current = next;
         }
@@ -437,13 +476,29 @@ public abstract class DatasetWriterBase<TRow>
             throw new InvalidOperationException("The dataset writer has no free active partition state.");
         var file = TakeFile();
         ParquetWriter? writer = null;
+        ParquetBuffer? filePathAllocation = null;
         try
         {
-            file.Destination.Open(pathBuffer.Span[..pathLength], FileMode.OpenOrCreate);
-            writer = file.Source.Length == 0
-                ? _schema.CreateWriter(file.Destination, _options.AppendOptions.WriterOptions)
-                : _schema.CreateAppender(file.Source, file.Destination, _options.AppendOptions);
+            if (_createFileParts)
+            {
+                var filePath = GetFilePath(pathBuffer.Span[..pathLength], _nextFileIndex, out filePathAllocation);
+                if (filePath.IsEmpty)
+                    throw new InvalidOperationException("The dataset file path selector returned an empty path.");
+                file.Destination.Open(filePath, FileMode.Create);
+                writer = _schema.CreateWriter(file.Destination, _options.WriterOptions);
+            }
+            else
+            {
+                var source = file.Source ?? throw new InvalidOperationException(
+                    "The dataset file does not support reads required for append.");
+                file.Destination.Open(pathBuffer.Span[..pathLength], FileMode.OpenOrCreate);
+                writer = source.Length == 0
+                    ? _schema.CreateWriter(file.Destination, _options.AppendOptions.WriterOptions)
+                    : _schema.CreateAppender(source, file.Destination, _options.AppendOptions);
+            }
             state.Slot.Bind(writer);
+            if (_createFileParts)
+                _nextFileIndex = checked(_nextFileIndex + 1);
         }
         catch
         {
@@ -452,12 +507,18 @@ public abstract class DatasetWriterBase<TRow>
             ReturnFile(file);
             throw;
         }
+        finally
+        {
+            if (filePathAllocation is { } allocation)
+                allocation.Dispose();
+        }
 
         state.Path = pathBuffer;
         state.PathLength = pathLength;
         state.File = file;
         state.Writer = writer;
         state.LastUse = unchecked(++_clock);
+        state.RolloverPending = false;
         state.Active = true;
         return state;
     }
@@ -527,7 +588,56 @@ public abstract class DatasetWriterBase<TRow>
         var rowGroupWriter = state.Writer.StartRowGroup();
         state.Slot.WriteSerialized(rowGroupWriter);
         state.Slot.ResetForReuse();
+        if (_createFileParts && checked((ulong)state.Writer.FileOffset) >= _targetFileSizeBytes)
+            state.RolloverPending = true;
     }
+
+    void Rollover(PartitionState state)
+    {
+        if (!state.Active || state.Writer is null || state.File is not { } file)
+            throw new InvalidOperationException("The partition does not have an active writer.");
+        if (!state.Slot.IsEmpty)
+            throw new InvalidOperationException("Cannot roll over a dataset file while rows are buffered.");
+
+        state.Writer.CloseFile();
+        state.Slot.Unbind();
+        state.Writer = null;
+        ParquetWriter? writer = null;
+        ParquetBuffer? filePathAllocation = null;
+        try
+        {
+            var filePath = GetFilePath(state.Path.Span[..state.PathLength], _nextFileIndex,
+                out filePathAllocation);
+            if (filePath.IsEmpty)
+                throw new InvalidOperationException("The dataset file path selector returned an empty path.");
+            file.Destination.Open(filePath, FileMode.Create);
+            writer = _schema.CreateWriter(file.Destination, _options.WriterOptions);
+            state.Slot.Bind(writer);
+            state.Writer = writer;
+            state.RolloverPending = false;
+            _nextFileIndex = checked(_nextFileIndex + 1);
+        }
+        catch
+        {
+            state.Slot.Unbind();
+            CloseFailedOpen(file, writer);
+            state.File = null;
+            state.Active = false;
+            ReturnFile(file);
+            ReleaseState(state);
+            throw;
+        }
+        finally
+        {
+            if (filePathAllocation is { } allocation)
+                allocation.Dispose();
+        }
+    }
+
+    ReadOnlySpan<byte> GetFilePath(ReadOnlySpan<byte> partitionKey, ulong fileIndex,
+        out ParquetBuffer? allocation)
+        => (_filePath ?? throw new InvalidOperationException("The dataset writer does not have a file path selector."))(
+            partitionKey, fileIndex, _bufferPool, out allocation);
 
     void CloseAndRelease(PartitionState state)
     {
@@ -539,6 +649,7 @@ public abstract class DatasetWriterBase<TRow>
         state.Slot.Unbind();
         state.File = null;
         state.Writer = null;
+        state.RolloverPending = false;
         state.Active = false;
         ReturnFile(file);
         ReleaseState(state);
@@ -573,6 +684,7 @@ public abstract class DatasetWriterBase<TRow>
             state.Slot.ResetForReuse();
             state.File = null;
             state.Writer = null;
+            state.RolloverPending = false;
             state.Active = false;
             if (file is { } sources)
                 ReturnFile(sources);
@@ -691,6 +803,7 @@ public abstract class DatasetWriterBase<TRow>
         internal FileSources? File;
         internal ParquetWriter? Writer;
         internal ulong LastUse;
+        internal bool RolloverPending;
         internal bool Active;
     }
 
@@ -705,9 +818,9 @@ public abstract class DatasetWriterBase<TRow>
         internal bool Used;
     }
 
-    readonly struct FileSources(IParquetReadSource source, IParquetWriteSource destination)
+    readonly struct FileSources(IParquetReadSource? source, IParquetWriteSource destination)
     {
-        internal readonly IParquetReadSource Source = source;
+        internal readonly IParquetReadSource? Source = source;
         internal readonly IParquetWriteSource Destination = destination;
     }
 }

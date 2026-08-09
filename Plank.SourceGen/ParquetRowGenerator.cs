@@ -292,12 +292,25 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            files ?? throw new global::System.ArgumentNullException(nameof(files)),");
         builder.AppendLine("            options ?? global::Plank.Dataset.DatasetWriterOptions.Default);");
         builder.AppendLine();
+        builder.Append("    public static ").Append(datasetWriterTypeName).Append(" CreateDatasetWriter<TFile>(")
+            .Append(routeTypeName)
+            .AppendLine(" route, global::Plank.Dataset.DatasetFilePath filePath, TFile[] files, global::Plank.Dataset.DatasetWriterOptions? options = null)");
+        builder.AppendLine("        where TFile : class, global::Plank.Writing.IParquetWriteSource");
+        builder.AppendLine("        => new(route ?? throw new global::System.ArgumentNullException(nameof(route)),");
+        builder.AppendLine("            filePath ?? throw new global::System.ArgumentNullException(nameof(filePath)),");
+        builder.AppendLine("            files ?? throw new global::System.ArgumentNullException(nameof(files)),");
+        builder.AppendLine("            options ?? global::Plank.Dataset.DatasetWriterOptions.Default);");
+        builder.AppendLine();
         builder.Append("    public static ").Append(writerTypeName)
             .AppendLine(" CreateRowWriter(global::Plank.Writing.RowGroupWriter rowGroupWriter, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(rowGroupWriter, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
         builder.AppendLine();
         builder.AppendLine("    public static PipelineWriter CreateRowWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(stream, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
+        builder.AppendLine();
+        builder.AppendLine("    public static PipelineWriter CreateRowWriter<TFile>(global::Plank.Writing.ParquetFilePath filePath, TFile file, global::Plank.Writing.ParquetWriterOptions? options = null)");
+        builder.AppendLine("        where TFile : class, global::Plank.Writing.IParquetWriteSource");
+        builder.AppendLine("        => new(file, filePath ?? throw new global::System.ArgumentNullException(nameof(filePath)), options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
         builder.AppendLine();
         builder.AppendLine("    public static PipelineWriter CreateRowWriter(global::System.IO.Stream stream, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(stream, onFlush, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
@@ -412,6 +425,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        {");
         builder.AppendLine("        }");
         builder.AppendLine();
+        builder.AppendLine("        internal PipelineWriter(global::Plank.Writing.IParquetWriteSource file, global::Plank.Writing.ParquetFilePath filePath, global::Plank.Writing.ParquetWriterOptions options)");
+        builder.Append("            : base(file, filePath, ").Append(schemaMemberName)
+            .Append(", options.RowApiMaxParallelism, null, options, DefaultRowBatchSize, \"Plank")
+            .Append(Escape(schemaType.Name))
+            .AppendLine("RowApiWorker\")");
+        builder.AppendLine("        {");
+        builder.AppendLine("        }");
+        builder.AppendLine();
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, options.RowApiMaxParallelism, onFlush, options)");
         builder.AppendLine("        {");
@@ -453,6 +474,15 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             .AppendLine(" route, global::Plank.Writing.IParquetWriteSource[] files, global::Plank.Dataset.DatasetWriterOptions options)");
         builder.Append("            : base(").Append(schemaMemberName)
             .AppendLine(", s_rowApiColumns, DefaultRowBatchSize, files, options)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            _route = route;");
+        builder.AppendLine("            InitializeSlots();");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.Append("        internal ").Append(datasetWriterTypeName).Append('(').Append(routeTypeName)
+            .AppendLine(" route, global::Plank.Dataset.DatasetFilePath filePath, global::Plank.Writing.IParquetWriteSource[] files, global::Plank.Dataset.DatasetWriterOptions options)");
+        builder.Append("            : base(").Append(schemaMemberName)
+            .AppendLine(", s_rowApiColumns, DefaultRowBatchSize, files, filePath, options)");
         builder.AppendLine("        {");
         builder.AppendLine("            _route = route;");
         builder.AppendLine("            InitializeSlots();");
@@ -1133,12 +1163,15 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var logicalType = inferredLogicalType;
         int? fieldId = null;
         ImmutableArray<string> encodings = [];
+        string? compression = null;
+        int? compressionLevel = null;
         var bloomFilter = false;
         var bloomFilterFalsePositiveProbability = 0.01;
         var bloomFilterExpectedDistinctValueCount = 0U;
         var bloomFilterMaximumBytes = 128U * 1024 * 1024;
-        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref fieldId, ref encodings,
-                ref bloomFilter, ref bloomFilterFalsePositiveProbability, ref bloomFilterExpectedDistinctValueCount,
+        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref fieldId,
+                ref encodings, ref compression, ref compressionLevel, ref bloomFilter,
+                ref bloomFilterFalsePositiveProbability, ref bloomFilterExpectedDistinctValueCount,
                 ref bloomFilterMaximumBytes, out error))
             return false;
         if (converter is not null && physicalType != inferredPhysicalType)
@@ -1157,7 +1190,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
         column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType, property.Name, encodings,
             GetTypeLength(physicalType, converter?.PhysicalClrTypeName ?? clrTypeName, logicalType), converter?.TypeName,
-            fieldId, bloomFilter, bloomFilterFalsePositiveProbability,
+            fieldId, compression, compressionLevel, bloomFilter, bloomFilterFalsePositiveProbability,
             bloomFilterExpectedDistinctValueCount, bloomFilterMaximumBytes);
         return true;
     }
@@ -1269,7 +1302,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     }
 
     static bool TryReadColumnOverrides(IPropertySymbol property, ref string columnName, ref string physicalType,
-        ref LogicalTypeSpec? logicalType, ref int? fieldId, ref ImmutableArray<string> encodings, ref bool bloomFilter,
+        ref LogicalTypeSpec? logicalType, ref int? fieldId, ref ImmutableArray<string> encodings,
+        ref string? compression, ref int? compressionLevel, ref bool bloomFilter,
         ref double bloomFilterFalsePositiveProbability, ref uint bloomFilterExpectedDistinctValueCount,
         ref uint bloomFilterMaximumBytes, out string error)
     {
@@ -1320,6 +1354,27 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     error = $"Property '{property.Name}' declares an invalid EncodingKind override.";
                     return false;
                 }
+                continue;
+            }
+
+            if (namedArgument.Key == "Compression")
+            {
+                if (!TryGetCompressionName(namedArgument.Value, out compression))
+                {
+                    error = $"Property '{property.Name}' declares an invalid CompressionKind override.";
+                    return false;
+                }
+                continue;
+            }
+
+            if (namedArgument.Key == "CompressionLevel")
+            {
+                if (namedArgument.Value.Value is not int value)
+                {
+                    error = $"Property '{property.Name}' declares an invalid compression level.";
+                    return false;
+                }
+                compressionLevel = value;
                 continue;
             }
 
@@ -1427,6 +1482,26 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             _ => string.Empty
         };
         return encoding.Length > 0;
+    }
+
+    static bool TryGetCompressionName(TypedConstant constant, out string? compression)
+    {
+        compression = null;
+        if (!TryGetEnumValue(constant, out var enumValue))
+            return false;
+
+        compression = enumValue switch
+        {
+            0 => "None",
+            1 => "Snappy",
+            2 => "Gzip",
+            3 => "Zstd",
+            4 => "Lz4",
+            5 => "Brotli",
+            6 => "Lz4Legacy",
+            _ => null
+        };
+        return compression is not null;
     }
 
     static bool TryGetPhysicalTypeName(TypedConstant constant, out string physicalType)
@@ -1947,14 +2022,20 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append(", ").Append(column.TypeLength);
         }
 
+        if (column.BloomFilter && column.TypeLength == 0)
+        {
+            if (column.Encodings.IsDefaultOrEmpty)
+                builder.Append(", default");
+            builder.Append(", 0");
+        }
+
+        if (column.Compression is { } compression)
+            builder.Append(", compression: global::Plank.Schema.CompressionKind.").Append(compression);
+        if (column.CompressionLevel is { } compressionLevel)
+            builder.Append(", compressionLevel: ").Append(compressionLevel);
+
         if (column.BloomFilter)
         {
-            if (column.TypeLength == 0)
-            {
-                if (column.Encodings.IsDefaultOrEmpty)
-                    builder.Append(", default");
-                builder.Append(", 0");
-            }
             builder.Append(", bloomFilter: new global::Plank.Schema.ParquetBloomFilterOptions { FalsePositiveProbability = ")
                 .Append(column.BloomFilterFalsePositiveProbability.ToString("R", CultureInfo.InvariantCulture));
             if (column.BloomFilterExpectedDistinctValueCount > 0)
@@ -1973,7 +2054,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     {
         public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName,
             LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings, uint typeLength,
-            string? converterTypeName, int? fieldId,
+            string? converterTypeName, int? fieldId, string? compression, int? compressionLevel,
             bool bloomFilter, double bloomFilterFalsePositiveProbability, uint bloomFilterExpectedDistinctValueCount,
             uint bloomFilterMaximumBytes)
         {
@@ -1987,6 +2068,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             TypeLength = typeLength;
             ConverterTypeName = converterTypeName;
             FieldId = fieldId;
+            Compression = compression;
+            CompressionLevel = compressionLevel;
             BloomFilter = bloomFilter;
             BloomFilterFalsePositiveProbability = bloomFilterFalsePositiveProbability;
             BloomFilterExpectedDistinctValueCount = bloomFilterExpectedDistinctValueCount;
@@ -2012,6 +2095,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public string? ConverterTypeName { get; }
 
         public int? FieldId { get; }
+
+        public string? Compression { get; }
+
+        public int? CompressionLevel { get; }
 
         public bool BloomFilter { get; }
 

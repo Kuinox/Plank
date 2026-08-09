@@ -12,6 +12,21 @@ internal sealed class ParquetWriterOptionsTests
 
         await Assert.That(options.FileVersion).IsEqualTo(ParquetFileVersion.V1);
         await Assert.That(options.DataPageVersion).IsEqualTo(ParquetDataPageVersion.V2);
+        await Assert.That(options.TargetRowGroupSizeBytes).IsEqualTo(128UL * 1024 * 1024);
+        await Assert.That(options.TargetFileSizeBytes).IsEqualTo(512UL * 1024 * 1024);
+    }
+
+    [Test]
+    public void ZeroSizeTargetsAreRejected()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ParquetWriterOptions
+        {
+            TargetRowGroupSizeBytes = 0
+        }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ParquetWriterOptions
+        {
+            TargetFileSizeBytes = 0
+        }.Validate());
     }
 
     [Test]

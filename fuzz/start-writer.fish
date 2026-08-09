@@ -42,7 +42,7 @@ end
 mkdir -p $OUT
 
 set dump_env "DOTNET_DbgEnableMiniDump=1 DOTNET_DbgMiniDumpType=1 DOTNET_DbgMiniDumpName=/tmp/plank-crash-%p.dmp"
-set worker_env "AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 AFL_TMPDIR=/tmp $dump_env"
+set worker_env "AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 AFL_TMPDIR=/tmp AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 $dump_env"
 
 # Main loop: respawns workers on every restart
 # Core 0: main (OOP), cores 1-19: workers, cores 20-23: free for desktop
@@ -55,7 +55,7 @@ while true
         end
     end
 
-    env AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 AFL_TMPDIR=/tmp $dump_env afl-fuzz -b 0 -i $CORPUS -o $OUT -t 5000 -M main -- $BIN > /dev/null 2>&1
+    env AFL_SKIP_BIN_CHECK=1 AFL_AUTORESUME=1 AFL_TMPDIR=/tmp AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 $dump_env afl-fuzz -b 0 -i $CORPUS -o $OUT -t 5000 -M main -- $BIN > /dev/null 2>&1
     echo "==> main crashed, restarting in 2s..."
     sleep 2
 end

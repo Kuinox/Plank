@@ -29,42 +29,16 @@ public static class PlankWriterFuzzTarget
     public static void Validate(FuzzCase fuzzCase)
     {
         ArgumentNullException.ThrowIfNull(fuzzCase);
-
-        var path = Path.Combine(Path.GetTempPath(), $"plank-sharpfuzz-{Guid.NewGuid():N}.parquet");
-        var phase = "write";
-        var succeeded = false;
-
-        try
-        {
-            WriteFile(fuzzCase, path);
-            phase = "plank-read";
-            AssertPlankCanRead(path, fuzzCase);
-            phase = "parquetsharp-read";
-            AssertParquetSharpCanRead(path, fuzzCase);
-            succeeded = true;
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            var pathDetail = ShouldPreserveFailureFile()
-                ? $" File preserved at '{path}'."
-                : $" Temp file was '{path}'.";
-            throw new InvalidOperationException(
-                $"Fuzz phase '{phase}' failed. {fuzzCase.Describe()}.{pathDetail}", ex);
-        }
-        finally
-        {
-            if ((succeeded || !ShouldPreserveFailureFile()) && File.Exists(path))
-                File.Delete(path);
-        }
+        using var ms = new MemoryStream();
+        WriteToStream(fuzzCase, ms);
+        ms.Position = 0;
+        AssertPlankCanRead(ms, fuzzCase);
+        ms.Position = 0;
+        AssertParquetSharpCanRead(ms, fuzzCase);
     }
 
-    static bool ShouldPreserveFailureFile()
-        => string.Equals(Environment.GetEnvironmentVariable("PLANK_FUZZ_PRESERVE_FAILURES"), "1",
-            StringComparison.Ordinal);
-
-    static void WriteFile(FuzzCase fuzzCase, string path)
+    static void WriteToStream(FuzzCase fuzzCase, Stream stream)
     {
-        using var stream = File.Create(path);
         var writer = fuzzCase.Schema.CreateWriter(stream, new ParquetWriterOptions
         {
             Compression = CompressionKind.None
@@ -142,9 +116,8 @@ public static class PlankWriterFuzzTarget
         }
     }
 
-    static void AssertPlankCanRead(string path, FuzzCase fuzzCase)
+    static void AssertPlankCanRead(Stream stream, FuzzCase fuzzCase)
     {
-        using var stream = File.OpenRead(path);
         using var reader = fuzzCase.Schema.CreateReader(stream);
         var rowGroupIndex = 0;
         foreach (var rowGroup in reader.RowGroups)
@@ -171,9 +144,9 @@ public static class PlankWriterFuzzTarget
         : spec.ClrType == typeof(double) ? ReadAllBuffers(rowGroup.Column<double>(column))
         : ReadAllBuffers(rowGroup.Column<byte[]>(column));
 
-    static void AssertParquetSharpCanRead(string path, FuzzCase fuzzCase)
+    static void AssertParquetSharpCanRead(Stream stream, FuzzCase fuzzCase)
     {
-        using var reader = new ParquetSharp.ParquetFileReader(path);
+        using var reader = new ParquetFileReader(stream, leaveOpen: true);
         var rowGroupCount = checked((int)reader.FileMetaData.NumRowGroups);
         if (rowGroupCount != fuzzCase.RowGroups.Count)
             throw new InvalidOperationException(

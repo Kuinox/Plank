@@ -19,7 +19,11 @@ internal sealed class GeneratedNestedRowE2ETests
             using (var writeStream = File.Create(path))
             {
                 var writer = GeneratedNestedRowSchema.CreateRowWriter(writeStream, maxParallelism: 1,
-                    new ParquetWriterOptions { Compression = CompressionKind.None });
+                    new ParquetWriterOptions
+                    {
+                        Compression = CompressionKind.None,
+                        TargetRowGroupSizeBytes = 32 * 1024
+                    });
                 for (var i = 0; i < MultiRowGroupRowCount; i++)
                 {
                     var row = writer.GetRow();
@@ -127,9 +131,9 @@ internal sealed class GeneratedNestedRowE2ETests
     }
 
     [Test]
-    [Arguments(ParquetDataPageVersion.V1)]
-    [Arguments(ParquetDataPageVersion.V2)]
-    public void GeneratedListReaderReadsParquetSharpPages(ParquetDataPageVersion pageVersion)
+    [Arguments(ParquetSharp.ParquetDataPageVersion.V1)]
+    [Arguments(ParquetSharp.ParquetDataPageVersion.V2)]
+    public void GeneratedListReaderReadsParquetSharpPages(ParquetSharp.ParquetDataPageVersion pageVersion)
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-generated-list-{pageVersion}-{Guid.NewGuid():N}.parquet");
         int?[]?[] rows = [[1, null, 2], null, [], [3]];

@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $DocsRoot = $PSScriptRoot
 $RepoRoot = Resolve-Path -LiteralPath (Join-Path $DocsRoot "..")
 $SitePath = Join-Path $DocsRoot "_site"
-$ProjectPath = Join-Path $RepoRoot "Plank/Plank.csproj"
+$ProjectPath = Join-Path $RepoRoot "Samples/Plank.Sample/Plank.Sample.csproj"
 $ReportPath = Join-Path $RepoRoot "artifacts/docs/semantic-highlight-report.json"
 
 function Invoke-DotNet {
@@ -65,7 +65,7 @@ try {
         dotnet run --project $ResolvedHighlighterProject -- html `
             --site $SitePath `
             --project $ProjectPath `
-            --css-mode external `
+            --css-mode inject `
             --theme auto `
             --report $ReportPath
 
@@ -82,7 +82,7 @@ try {
         & $HighlighterCommand.Source html `
             --site $SitePath `
             --project $ProjectPath `
-            --css-mode external `
+            --css-mode inject `
             --theme auto `
             --report $ReportPath
 

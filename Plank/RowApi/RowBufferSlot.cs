@@ -8,9 +8,10 @@ namespace Plank.RowApi;
 /// </remarks>
 public abstract class RowBufferSlot
 {
-    readonly int _rowCount;
+    int _rowCount;
     readonly RowApiColumnWriteState[] _columns;
     List<IDisposable>? _ownedBuffers;
+    ulong _bufferedSizeBytes;
 
     internal RowBufferSlot(RowApiColumnDescriptor[] columns, int rowCount)
     {
@@ -21,6 +22,7 @@ public abstract class RowBufferSlot
         _rowCount = rowCount;
         _columns = CreateColumnStates(columns, rowCount);
         Index = 0;
+        _bufferedSizeBytes = 0;
     }
 
     /// <summary>Initializes a generated buffer slot that writes directly to a row group.</summary>
@@ -37,6 +39,7 @@ public abstract class RowBufferSlot
         _rowCount = rowCount;
         _columns = CreateColumnStates(rowGroupWriter, columns, rowCount);
         Index = 0;
+        _bufferedSizeBytes = 0;
     }
 
     /// <summary>Initializes a generated buffer slot whose columns can be serialized in parallel.</summary>
@@ -53,6 +56,7 @@ public abstract class RowBufferSlot
         _rowCount = rowCount;
         _columns = CreateColumnStates(writer, columns, rowCount);
         Index = 0;
+        _bufferedSizeBytes = 0;
     }
 
     internal bool IsFull
@@ -63,6 +67,9 @@ public abstract class RowBufferSlot
 
     internal int Count
         => Index;
+
+    internal ulong BufferedSizeBytes
+        => _bufferedSizeBytes;
 
     internal void Bind(ParquetWriter writer)
     {
@@ -100,7 +107,21 @@ public abstract class RowBufferSlot
     {
         if (Index >= _rowCount)
             throw new InvalidOperationException("No more row slots are available.");
+        for (var i = 0; i < _columns.Length; i++)
+            _bufferedSizeBytes = checked(_bufferedSizeBytes + _columns[i].GetValueSize(Index));
         Index++;
+    }
+
+    internal bool Grow()
+    {
+        if (_rowCount == int.MaxValue)
+            return false;
+
+        var rowCount = _rowCount == 0 ? 1 : checked((int)Math.Min((long)_rowCount * 2, int.MaxValue));
+        for (var i = 0; i < _columns.Length; i++)
+            _columns[i].Resize(rowCount);
+        _rowCount = rowCount;
+        return true;
     }
 
     /// <summary>Registers a resource to dispose when this slot is reused.</summary>
@@ -137,6 +158,7 @@ public abstract class RowBufferSlot
         for (var i = 0; i < _columns.Length; i++)
             _columns[i].ResetForReuse(0, Index);
         Index = 0;
+        _bufferedSizeBytes = 0;
     }
 
     internal void ClearRow(int index)

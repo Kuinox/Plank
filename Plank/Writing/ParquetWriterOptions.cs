@@ -23,6 +23,12 @@ public sealed class ParquetWriterOptions
 
     public uint TargetDataPageSizeBytes { get; init; } = 1024 * 1024;
 
+    /// <summary>Gets or initializes the target uncompressed size of row groups produced by the row APIs.</summary>
+    public ulong TargetRowGroupSizeBytes { get; init; } = 128UL * 1024 * 1024;
+
+    /// <summary>Gets or initializes the target size at which rolling row writers start a new file.</summary>
+    public ulong TargetFileSizeBytes { get; init; } = 512UL * 1024 * 1024;
+
     public ParquetFileVersion FileVersion { get; init; } = ParquetFileVersion.V1;
 
     public ParquetDataPageVersion DataPageVersion { get; init; } = ParquetDataPageVersion.V2;
@@ -68,6 +74,12 @@ public sealed class ParquetWriterOptions
         if (TargetDataPageSizeBytes > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(TargetDataPageSizeBytes), TargetDataPageSizeBytes,
                 $"Target data page size must be <= {int.MaxValue}.");
+        if (TargetRowGroupSizeBytes == 0)
+            throw new ArgumentOutOfRangeException(nameof(TargetRowGroupSizeBytes), TargetRowGroupSizeBytes,
+                "Target row group size must be greater than zero.");
+        if (TargetFileSizeBytes == 0)
+            throw new ArgumentOutOfRangeException(nameof(TargetFileSizeBytes), TargetFileSizeBytes,
+                "Target file size must be greater than zero.");
         if (SortingColumns.IsDefault)
             throw new ArgumentException("Sorting columns must not be an uninitialized ImmutableArray.",
                 nameof(SortingColumns));

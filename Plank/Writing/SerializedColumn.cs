@@ -1,9 +1,12 @@
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Plank.Schema;
+using Plank.Writing.Compression;
 using Plank.Writing.Encoding;
 using Plank.Writing.PageStrategy;
+using Plank.Writing.Thrift;
 
 namespace Plank.Writing;
 
@@ -42,6 +45,10 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     ParquetBuffer _statisticsMinValueBuffer;
     ParquetBuffer _statisticsMaxValueBuffer;
     ParquetBuffer _bloomFilterBuffer;
+    BufferWriter _compressedContent;
+    BufferWriter _compressionInput;
+    BufferWriter _compressedValues;
+    readonly CompressionContext _compressionContext;
     int _bloomFilterByteLength;
     bool _bloomFilterRetained;
     internal RepeatedRowShape[]? MapRowShapes;
@@ -55,6 +62,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         _leafColumn = column;
         _column = column.Column;
         _retainedValues = retainedValues;
+        _compressionContext = new CompressionContext(owner.BufferWriters);
         Pages = new PageList(initialPageCapacity);
         ColumnOrdinal = 0;
         RowCount = 0;
@@ -86,6 +94,12 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     public void Serialize(ReadOnlySpan<T> values)
     {
+        SerializeValues(values);
+        PreparePages();
+    }
+
+    void SerializeValues(ReadOnlySpan<T> values)
+    {
         if (_bloomFilterRetained)
             throw new InvalidOperationException(
                 "SerializedColumn's Bloom filter is retained by an incomplete row group.");
@@ -96,7 +110,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var combined = new T[checked(retainedValues.Length + values.Length)];
             retainedValues.CopyTo(combined, 0);
             values.CopyTo(combined.AsSpan(retainedValues.Length));
-            Serialize(combined.AsSpan());
+            SerializeValues(combined.AsSpan());
             return;
         }
 
@@ -959,6 +973,169 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             AssignOptionalPageStatistics(values);
     }
 
+    void PreparePages()
+    {
+        var columnOrdinal = checked((int)ColumnOrdinal);
+        var compression = _owner.ColumnCompressionsByOrdinal[columnOrdinal];
+        var projectionInfo = _owner.ColumnProjectionInfosByOrdinal[columnOrdinal];
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var page = ref Pages[i];
+            switch (page.Kind)
+            {
+                case PageKind.Dictionary:
+                    PrepareDictionaryPage(ref page, compression);
+                    break;
+                case PageKind.DataV1:
+                case PageKind.DataV2:
+                    PrepareDataPage(ref page, compression, projectionInfo);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unknown page kind '{page.Kind}'.");
+            }
+        }
+    }
+
+    void PrepareDictionaryPage(ref Page page, ResolvedCompression compression)
+    {
+        var uncompressedContentSize = page.Content.WrittenLength;
+        if (compression.Kind != CompressionKind.None && uncompressedContentSize > 0)
+            CompressAndReplace(ref page.Content, compression);
+
+        page.UncompressedContentSize = uncompressedContentSize;
+        page.Header.Reset();
+        ParquetMetadataThriftWriter.WriteDictionaryPageHeader(ref page.Header, page.DictionaryValueCount,
+            uncompressedContentSize, page.Content.WrittenLength, GetPageCrc(ref page));
+    }
+
+    void PrepareDataPage(ref Page page, ResolvedCompression compression, LeafProjectionInfo projectionInfo)
+    {
+        var uncompressedContentSize = page.Content.WrittenLength;
+        var levelBytes = checked(page.RepetitionLevelsByteLength + page.DefinitionLevelsByteLength);
+        if (levelBytes > (uint)uncompressedContentSize)
+            throw new InvalidOperationException(
+                $"Invalid level byte lengths ({levelBytes}) for data page content size {uncompressedContentSize}.");
+
+        var compressed = _owner.DataPageVersion == ParquetDataPageVersion.V1
+            ? PrepareDataPageV1(ref page, compression, projectionInfo, ref uncompressedContentSize)
+            : PrepareDataPageV2(ref page, compression, levelBytes);
+
+        page.UncompressedContentSize = uncompressedContentSize;
+        page.Header.Reset();
+        if (_owner.DataPageVersion == ParquetDataPageVersion.V1)
+        {
+            ParquetMetadataThriftWriter.WriteDataPageHeaderV1(ref page.Header, page.ValueCount, page.Encoding,
+                uncompressedContentSize, page.Content.WrittenLength, GetPageCrc(ref page));
+            return;
+        }
+
+        ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, page.RowCount, page.ValueCount,
+            page.NullCount, page.RepetitionLevelsByteLength, page.DefinitionLevelsByteLength, page.Encoding,
+            uncompressedContentSize, page.Content.WrittenLength, compressed, GetPageCrc(ref page));
+    }
+
+    bool PrepareDataPageV1(ref Page page, ResolvedCompression compression, LeafProjectionInfo projectionInfo,
+        ref int uncompressedContentSize)
+    {
+        var hasRepetitionLevels = projectionInfo.MaxRepetitionLevel > 0;
+        var hasDefinitionLevels = projectionInfo.MaxDefinitionLevel > 0;
+        if (hasRepetitionLevels || hasDefinitionLevels)
+        {
+            EnsurePageBuffer(ref _compressionInput);
+            WriteDataPageV1Content(ref page.Content, page.RepetitionLevelsByteLength,
+                page.DefinitionLevelsByteLength, hasRepetitionLevels, hasDefinitionLevels,
+                _compressionContext, ref _compressionInput);
+            Swap(ref page.Content, ref _compressionInput);
+            uncompressedContentSize = page.Content.WrittenLength;
+        }
+
+        if (compression.Kind == CompressionKind.None || uncompressedContentSize == 0)
+            return false;
+
+        CompressAndReplace(ref page.Content, compression);
+        return true;
+    }
+
+    bool PrepareDataPageV2(ref Page page, ResolvedCompression compression, uint levelBytes)
+    {
+        var valueBytes = page.Content.WrittenLength - checked((int)levelBytes);
+        if (compression.Kind == CompressionKind.None || valueBytes == 0)
+            return false;
+
+        if (levelBytes == 0)
+        {
+            CompressAndReplace(ref page.Content, compression);
+            return true;
+        }
+
+        EnsurePageBuffer(ref _compressionInput);
+        EnsurePageBuffer(ref _compressedValues);
+        EnsurePageBuffer(ref _compressedContent);
+        _compressionInput.Reset();
+        _compressedContent.Reset();
+
+        var source = _compressionContext.GetContiguousSourceSpan(ref page.Content);
+        var levelBytesInt32 = checked((int)levelBytes);
+        _compressedContent.Write(source[..levelBytesInt32]);
+        _compressionInput.Write(source[levelBytesInt32..]);
+        Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
+            _compressionContext, ref _compressionInput, ref _compressedValues);
+        _compressedContent.CopyFrom(ref _compressedValues);
+        Swap(ref page.Content, ref _compressedContent);
+        return true;
+    }
+
+    void CompressAndReplace(ref BufferWriter content, ResolvedCompression compression)
+    {
+        EnsurePageBuffer(ref _compressedContent);
+        Plank.Writing.Compression.Compression.Compress(compression.Kind, compression.Level,
+            _compressionContext, ref content, ref _compressedContent);
+        Swap(ref content, ref _compressedContent);
+    }
+
+    void EnsurePageBuffer(ref BufferWriter buffer)
+    {
+        if (!buffer.IsInitialized)
+            buffer = _owner.BufferWriters.CreatePageBufferWriter();
+    }
+
+    uint? GetPageCrc(ref Page page)
+        => _owner.WritePageCrc ? page.Content.ComputeCrc32() : null;
+
+    static void WriteDataPageV1Content(ref BufferWriter source, uint repetitionLevelsByteLength,
+        uint definitionLevelsByteLength, bool hasRepetitionLevels, bool hasDefinitionLevels,
+        CompressionContext compressionContext, ref BufferWriter destination)
+    {
+        destination.Reset();
+        var sourceSpan = compressionContext.GetContiguousSourceSpan(ref source);
+        var offset = 0;
+        if (hasRepetitionLevels)
+        {
+            WriteLevelLength(repetitionLevelsByteLength, ref destination);
+            var length = checked((int)repetitionLevelsByteLength);
+            destination.Write(sourceSpan.Slice(offset, length));
+            offset += length;
+        }
+        if (hasDefinitionLevels)
+        {
+            WriteLevelLength(definitionLevelsByteLength, ref destination);
+            var length = checked((int)definitionLevelsByteLength);
+            destination.Write(sourceSpan.Slice(offset, length));
+            offset += length;
+        }
+        destination.Write(sourceSpan[offset..]);
+    }
+
+    static void WriteLevelLength(uint length, ref BufferWriter destination)
+    {
+        var prefix = destination.GetSpan(sizeof(uint));
+        BinaryPrimitives.WriteUInt32LittleEndian(prefix, length);
+        destination.Advance(sizeof(uint));
+    }
+
+    static void Swap(ref BufferWriter left, ref BufferWriter right)
+        => (left, right) = (right, left);
+
     void ISerializedColumn.Consume()
         => Consume();
 
@@ -978,6 +1155,10 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     internal void ReleaseBuffers()
     {
         Pages.ReleaseBuffers();
+        _compressedContent.Dispose();
+        _compressionInput.Dispose();
+        _compressedValues.Dispose();
+        _compressionContext.Dispose();
         _statisticsMinValueBuffer.Dispose();
         _statisticsMaxValueBuffer.Dispose();
         _bloomFilterBuffer.Dispose();

@@ -30,7 +30,8 @@ while (reader.MoveNext())
 }
 ```
 
-A row is a temporary view over the reader's current buffers. Read its properties before advancing the reader. Copy any reference-backed value that must outlive the current iteration.
+> [!NOTE]
+> A row is a temporary view over the reader's current buffers. Read its properties before advancing the reader. Copy any reference-backed value that must outlive the current iteration.
 
 ## Read selected properties
 

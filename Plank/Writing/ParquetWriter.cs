@@ -29,7 +29,6 @@ public sealed class ParquetWriter
     internal readonly bool WritePageIndexes;
     internal readonly ParquetSortingColumn[] SortingColumns;
     internal readonly bool WritePageCrc;
-    internal readonly CompressionContext CompressionContext;
     internal readonly ColumnChunkMetadata[] OpenRowGroupColumnMetadata;
     readonly RowGroupWriter _rowGroupWriter;
     readonly List<ISerializedColumn> _serializedColumns;
@@ -112,7 +111,6 @@ public sealed class ParquetWriter
         WritePageIndexes = _options.WritePageIndexes;
         SortingColumns = ValidateSortingColumns(_options.SortingColumns, ColumnCount);
         WritePageCrc = _options.WritePageCrc;
-        CompressionContext = new CompressionContext(BufferWriters);
         OpenRowGroupColumnMetadata = ColumnCount == 0 ? [] : new ColumnChunkMetadata[ColumnCount];
         _rowGroupWriter = new RowGroupWriter(this);
         _serializedColumns = [];
@@ -251,6 +249,12 @@ public sealed class ParquetWriter
 
     public void CloseFile()
     {
+        FinishFile();
+        ReleaseBuffers();
+    }
+
+    internal void FinishFile()
+    {
         ThrowIfFileClosed();
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot close the file while a row group is still open.");
@@ -259,7 +263,6 @@ public sealed class ParquetWriter
         WriteFileFooter();
         _destination.Flush();
         CloseCurrentFile();
-        ReleaseBuffers();
     }
 
     void ThrowIfFileClosed()
@@ -610,7 +613,6 @@ public sealed class ParquetWriter
         SerializedRowGroupsMetadata.Dispose();
         SerializedFileMetadata.Dispose();
         _rowGroupWriter.ReleaseBuffers();
-        CompressionContext.Dispose();
         for (var i = 0; i < _serializedColumns.Count; i++)
             _serializedColumns[i].ReleaseBuffers();
     }

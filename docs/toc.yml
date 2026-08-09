@@ -5,6 +5,6 @@
 - name: Reading
   href: articles/reading/index.md
 - name: Writing
-  href: articles/writing.md
+  href: articles/writing/index.md
 - name: API reference
   href: api/

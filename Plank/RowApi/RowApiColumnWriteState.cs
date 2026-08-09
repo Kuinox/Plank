@@ -14,5 +14,9 @@ abstract class RowApiColumnWriteState
 
     internal abstract void ResetForReuse(int start, int count);
 
+    internal abstract ulong GetValueSize(int index);
+
+    internal abstract void Resize(int rowCount);
+
     internal abstract void CopyValueTo(int sourceIndex, RowApiColumnWriteState destination, int destinationIndex);
 }

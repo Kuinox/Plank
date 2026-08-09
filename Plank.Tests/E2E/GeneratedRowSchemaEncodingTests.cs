@@ -6,7 +6,8 @@ namespace Plank.Tests.E2E;
 [ParquetSchema]
 public sealed partial class EncodedRowSchema
 {
-    [ParquetColumn("id", Encodings = [EncodingKind.DeltaBinaryPacked])]
+    [ParquetColumn("id", Encodings = [EncodingKind.DeltaBinaryPacked],
+        Compression = CompressionKind.Gzip, CompressionLevel = 6)]
     public ulong Id { get; set; }
 
     [ParquetColumn("tag", Encodings = [EncodingKind.RleDictionary])]
@@ -30,6 +31,10 @@ internal sealed class GeneratedRowSchemaEncodingTests
         AssertEncodingOptions(columns[1].Options.Encodings, [EncodingKind.RleDictionary]);
         AssertEncodingOptions(columns[2].Options.Encodings, [EncodingKind.Plain]);
         AssertEncodingOptions(columns[3].Options.Encodings, []);
+        if (columns[0].Options.Compression != CompressionKind.Gzip || columns[0].Options.CompressionLevel != 6)
+            throw new InvalidOperationException("Generated column did not preserve its compression options.");
+        if (columns[1].Options.Compression is not null || columns[1].Options.CompressionLevel is not null)
+            throw new InvalidOperationException("Unconfigured generated column unexpectedly overrides compression.");
     }
 
     [Test]
@@ -70,6 +75,8 @@ internal sealed class GeneratedRowSchemaEncodingTests
             AssertEncodings(rg, 1, Encoding.RleDictionary);
             AssertEncodings(rg, 2, Encoding.Plain);
             AssertEncodings(rg, 3, Encoding.Plain);
+            AssertCompression(rg, 0, Compression.Gzip);
+            AssertCompression(rg, 1, Compression.Uncompressed);
         }
         finally
         {
@@ -85,6 +92,14 @@ internal sealed class GeneratedRowSchemaEncodingTests
         if (!encodings.Contains(expected))
             throw new InvalidOperationException(
                 $"Column {columnIndex} did not contain expected encoding '{expected}'. Actual: {string.Join(", ", encodings)}");
+    }
+
+    static void AssertCompression(RowGroupReader rowGroup, int columnIndex, Compression expected)
+    {
+        using var column = rowGroup.MetaData.GetColumnChunkMetaData(columnIndex);
+        if (column.Compression != expected)
+            throw new InvalidOperationException(
+                $"Column {columnIndex} used compression '{column.Compression}' instead of '{expected}'.");
     }
 
     static void AssertEncodingOptions(IReadOnlyList<EncodingKind> actual, IReadOnlyList<EncodingKind> expected)

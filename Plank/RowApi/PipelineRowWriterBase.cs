@@ -12,6 +12,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
     where TSlot : RowBufferSlot
 {
     readonly Action<int>? _onFlush;
+    readonly ulong _targetRowGroupSizeBytes;
     TSlot _active;
     bool _completed;
 
@@ -33,6 +34,34 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
 
         RowBatchSize = rowBatchSize;
         _onFlush = onFlush;
+        _targetRowGroupSizeBytes = options.TargetRowGroupSizeBytes;
+        WorkerThreadNamePrefix = workerThreadNamePrefix;
+        InitializeSlots();
+        _active = TakeInitialSlot();
+        _completed = false;
+    }
+
+    /// <summary>Initializes a rolling generated pipeline row writer.</summary>
+    /// <param name="file">The reusable destination used for each produced file.</param>
+    /// <param name="filePath">Selects the path of each produced file.</param>
+    /// <param name="schema">The generated Parquet schema.</param>
+    /// <param name="maxParallelism">The maximum number of serialization workers.</param>
+    /// <param name="onFlush">An optional callback invoked with each flushed row count.</param>
+    /// <param name="options">The Parquet writer options.</param>
+    /// <param name="rowBatchSize">The initial row capacity of each generated buffer slot.</param>
+    /// <param name="workerThreadNamePrefix">The worker-thread name prefix.</param>
+    protected PipelineRowWriterBase(IParquetWriteSource file, ParquetFilePath filePath, ParquetSchema schema,
+        uint maxParallelism, Action<int>? onFlush, ParquetWriterOptions options, int rowBatchSize,
+        string workerThreadNamePrefix)
+        : base(file, filePath, schema, maxParallelism, options)
+    {
+        if (rowBatchSize < 0)
+            throw new ArgumentOutOfRangeException(nameof(rowBatchSize), rowBatchSize, "Row batch size must be non-negative.");
+        ArgumentException.ThrowIfNullOrEmpty(workerThreadNamePrefix);
+
+        RowBatchSize = rowBatchSize;
+        _onFlush = onFlush;
+        _targetRowGroupSizeBytes = options.TargetRowGroupSizeBytes;
         WorkerThreadNamePrefix = workerThreadNamePrefix;
         InitializeSlots();
         _active = TakeInitialSlot();
@@ -79,7 +108,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
             throw new InvalidOperationException("Pipeline writer is already completed.");
 
         _active.Next();
-        if (!_active.IsFull)
+        if (_active.BufferedSizeBytes < _targetRowGroupSizeBytes && (!_active.IsFull || _active.Grow()))
             return;
 
         _active = EnqueueAndTakeFree(_active);
