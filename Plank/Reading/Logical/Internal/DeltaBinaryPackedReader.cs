@@ -50,6 +50,20 @@ ref struct DeltaBinaryPackedReader
         return _buffer[_offset++];
     }
 
+    internal ReadOnlySpan<byte> ReadBytesWithLookahead(int count, int lookahead)
+    {
+        if (count < 0 || count > _buffer.Length - _offset)
+            throw new CorruptParquetException("Unexpected end of delta-binary-packed mini-block.");
+
+        // The returned lookahead is not consumed; it only permits safe unaligned word loads.
+        var available = Math.Min(_buffer.Length - _offset, checked(count + lookahead));
+        var bytes = _buffer.Slice(_offset, available);
+        _offset += count;
+        _bitBuffer = 0;
+        _bufferedBits = 0;
+        return bytes;
+    }
+
     internal ulong ReadPackedUnsigned(int bitWidth)
     {
         ulong value = 0;
