@@ -17,6 +17,17 @@ internal sealed class NegativePreEpochTimestampTests
             throw new InvalidOperationException(string.Join(Environment.NewLine, failures));
     }
 
+    [Test]
+    public void NullableTimestampsUseFloorForValuesAndStatistics()
+    {
+        VerifyNullableTimestamp(
+            new DateTime?[] { null, DateTime.UnixEpoch.AddTicks(-1), DateTime.UnixEpoch },
+            new DateTime?[] { null, DateTime.UnixEpoch.AddTicks(-10), DateTime.UnixEpoch });
+        VerifyNullableTimestamp(
+            new DateTimeOffset?[] { null, DateTimeOffset.UnixEpoch.AddTicks(-1), DateTimeOffset.UnixEpoch },
+            new DateTimeOffset?[] { null, DateTimeOffset.UnixEpoch.AddTicks(-10), DateTimeOffset.UnixEpoch });
+    }
+
     static void VerifyUnit(TimeUnit unit, long ticksPerUnit, List<string> failures)
     {
         var schema = new ParquetSchema([
@@ -49,5 +60,39 @@ internal sealed class NegativePreEpochTimestampTests
         var expected = DateTimeOffset.UnixEpoch.AddTicks(-ticksPerUnit);
         if (actual != expected)
             failures.Add($"{unit} value should decode as {expected:O}, but decoded as {actual:O}.");
+    }
+
+    static void VerifyNullableTimestamp<T>(T?[] input, T?[] expected)
+        where T : struct
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int64,
+                logicalType: new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            TargetDataPageSizeBytes = 16
+        });
+        var serialized = writer.CreateSerializedColumn<T?>(schema.LeafColumns[0]);
+        serialized.Serialize(input);
+
+        if (serialized.Statistics.MinBits != -1 || serialized.Statistics.MaxBits != 0
+            || serialized.Statistics.NullCount != 1)
+            throw new InvalidOperationException(
+                $"Nullable {typeof(T).Name} statistics should be -1/0 with one null, but were "
+                + $"{serialized.Statistics.MinBits}/{serialized.Statistics.MaxBits} with "
+                + $"{serialized.Statistics.NullCount} nulls.");
+
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+
+        using var reader = schema.CreateReader(new MemoryReadSource(stream.ToArray()));
+        var actual = new List<T?>();
+        foreach (var buffer in reader.RowGroups[0].Column<T?>(0))
+            actual.AddRange(buffer.Values);
+        if (!actual.SequenceEqual(expected))
+            throw new InvalidOperationException($"Nullable {typeof(T).Name} values did not round trip.");
     }
 }
