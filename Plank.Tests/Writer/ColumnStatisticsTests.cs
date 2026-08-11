@@ -125,6 +125,60 @@ internal sealed class ColumnStatisticsTests
     }
 
     [Test]
+    public void OptionalFloatingPointStatisticsCountNullsAndNaNsWithoutMinMaxValues()
+    {
+        var floatColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Float,
+            new ColumnOptions(ParquetRepetition.Optional));
+        var floatStatistics = ColumnStatistics.CreateOptional(floatColumn,
+            new float?[] { null, float.NaN, null, float.NaN });
+        if (floatStatistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
+            throw new InvalidOperationException($"Expected no float min/max, got {floatStatistics.ValueKind}.");
+        if (floatStatistics.NullCount != 2 || floatStatistics.NanCount != 2)
+            throw new InvalidOperationException(
+                $"Expected two float nulls and NaNs, got {floatStatistics.NullCount} and {floatStatistics.NanCount}.");
+
+        var doubleColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Double,
+            new ColumnOptions(ParquetRepetition.Optional));
+        var doubleStatistics = ColumnStatistics.CreateOptional(doubleColumn,
+            new double?[] { double.NaN, null, double.NaN, null });
+        if (doubleStatistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
+            throw new InvalidOperationException($"Expected no double min/max, got {doubleStatistics.ValueKind}.");
+        if (doubleStatistics.NullCount != 2 || doubleStatistics.NanCount != 2)
+            throw new InvalidOperationException(
+                $"Expected two double nulls and NaNs, got {doubleStatistics.NullCount} and {doubleStatistics.NanCount}.");
+    }
+
+    [Test]
+    public void OptionalFloatingPointStatisticsDoNotAllocateDenseArrays()
+    {
+        var floatColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Float,
+            new ColumnOptions(ParquetRepetition.Optional));
+        var doubleColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Double,
+            new ColumnOptions(ParquetRepetition.Optional));
+        var floatValues = new float?[1024];
+        var doubleValues = new double?[1024];
+        for (var i = 0; i < floatValues.Length; i++)
+        {
+            floatValues[i] = i % 7 == 0 ? null : i;
+            doubleValues[i] = i % 11 == 0 ? null : i;
+        }
+
+        _ = ColumnStatistics.CreateOptional(floatColumn, floatValues);
+        _ = ColumnStatistics.CreateOptional(doubleColumn, doubleValues);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var floatStatistics = ColumnStatistics.CreateOptional(floatColumn, floatValues);
+        var doubleStatistics = ColumnStatistics.CreateOptional(doubleColumn, doubleValues);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        if (allocated != 0)
+            throw new InvalidOperationException(
+                $"Expected optional floating-point statistics to allocate zero bytes, saw {allocated}.");
+        if (!floatStatistics.HasStatistics || !doubleStatistics.HasStatistics)
+            throw new InvalidOperationException("Expected optional floating-point statistics to be present.");
+    }
+
+    [Test]
     public void WriterEmitsColumnChunkStatistics()
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-statistics-{Guid.NewGuid():N}.parquet");
