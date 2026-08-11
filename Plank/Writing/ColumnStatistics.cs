@@ -665,21 +665,7 @@ internal readonly struct ColumnStatistics
 
     static ColumnStatistics CreateNullableFloat(ReadOnlySpan<float?> values)
     {
-        Span<float> denseValues = values.Length <= 256 ? stackalloc float[values.Length] : new float[values.Length];
-        var count = 0;
-        var nullCount = 0L;
-        for (var i = 0; i < values.Length; i++)
-        {
-            if (values[i] is { } value)
-            {
-                denseValues[count++] = value;
-                continue;
-            }
-
-            nullCount++;
-        }
-
-        return TryGetFloatMinMax(denseValues[..count], out var min, out var max, out var nanCount)
+        return TryGetNullableFloatMinMax(values, out var min, out var max, out var nullCount, out var nanCount)
             ? FromFloat(min, max, nullCount, nanCount)
             : EmptyFloating(nullCount, nanCount);
     }
@@ -694,21 +680,7 @@ internal readonly struct ColumnStatistics
 
     static ColumnStatistics CreateNullableDouble(ReadOnlySpan<double?> values)
     {
-        Span<double> denseValues = values.Length <= 256 ? stackalloc double[values.Length] : new double[values.Length];
-        var count = 0;
-        var nullCount = 0L;
-        for (var i = 0; i < values.Length; i++)
-        {
-            if (values[i] is { } value)
-            {
-                denseValues[count++] = value;
-                continue;
-            }
-
-            nullCount++;
-        }
-
-        return TryGetDoubleMinMax(denseValues[..count], out var min, out var max, out var nanCount)
+        return TryGetNullableDoubleMinMax(values, out var min, out var max, out var nullCount, out var nanCount)
             ? FromDouble(min, max, nullCount, nanCount)
             : EmptyFloating(nullCount, nanCount);
     }
@@ -1273,6 +1245,45 @@ internal readonly struct ColumnStatistics
         return hasValue;
     }
 
+    static bool TryGetNullableFloatMinMax(ReadOnlySpan<float?> values, out float min, out float max,
+        out long nullCount, out long nanCount)
+    {
+        min = 0;
+        max = 0;
+        nullCount = 0;
+        nanCount = 0;
+        var hasValue = false;
+        for (var i = 0; i < values.Length; i++)
+        {
+            if (values[i] is not { } value)
+            {
+                nullCount++;
+                continue;
+            }
+
+            if (float.IsNaN(value))
+            {
+                nanCount++;
+                continue;
+            }
+
+            if (!hasValue)
+            {
+                min = value;
+                max = value;
+                hasValue = true;
+                continue;
+            }
+
+            if (IsLessThan(value, min))
+                min = value;
+            if (IsGreaterThan(value, max))
+                max = value;
+        }
+
+        return hasValue;
+    }
+
     static bool IsLessThan(float value, float other)
         => value < other || value == 0 && other == 0 &&
             BitConverter.SingleToInt32Bits(value) < BitConverter.SingleToInt32Bits(other);
@@ -1381,6 +1392,45 @@ internal readonly struct ColumnStatistics
 
         if (hasValue)
             CanonicalizeSignedZeroBounds(values, ref min, ref max);
+        return hasValue;
+    }
+
+    static bool TryGetNullableDoubleMinMax(ReadOnlySpan<double?> values, out double min, out double max,
+        out long nullCount, out long nanCount)
+    {
+        min = 0;
+        max = 0;
+        nullCount = 0;
+        nanCount = 0;
+        var hasValue = false;
+        for (var i = 0; i < values.Length; i++)
+        {
+            if (values[i] is not { } value)
+            {
+                nullCount++;
+                continue;
+            }
+
+            if (double.IsNaN(value))
+            {
+                nanCount++;
+                continue;
+            }
+
+            if (!hasValue)
+            {
+                min = value;
+                max = value;
+                hasValue = true;
+                continue;
+            }
+
+            if (IsLessThan(value, min))
+                min = value;
+            if (IsGreaterThan(value, max))
+                max = value;
+        }
+
         return hasValue;
     }
 
