@@ -97,36 +97,41 @@ sealed class ReusableDictionaryState<T>
         if (!_mapEnabled)
             throw new InvalidOperationException("Dictionary map is not enabled.");
 
-        if (_count >= _threshold)
-            Resize();
-
-        var table = _table;
         var hash = HashKey(value);
         var tag = (uint)((hash >> 24) | 0x80);
-        var mask = table.Length - 1;
-        var slot = hash & mask;
-
         while (true)
         {
-            var entry = table[slot];
-            if (entry == 0)
+            var table = _table;
+            var mask = table.Length - 1;
+            var slot = hash & mask;
+            while (true)
             {
-                var index = _count;
-                _values[index] = value;
-                _count++;
-                table[slot] = (tag << 24) | (uint)(index + 1);
-                _touched[_touchedCount++] = slot;
-                return index;
+                var entry = table[slot];
+                if (entry == 0)
+                    break;
+
+                if (entry >> 24 == tag)
+                {
+                    var existingIndex = (int)(entry & 0x00FFFFFFu) - 1;
+                    if (KeysEqual(_values[existingIndex], value))
+                        return existingIndex;
+                }
+
+                slot = (slot + 1) & mask;
             }
 
-            if (entry >> 24 == tag)
+            if (_count >= _threshold)
             {
-                var existingIndex = (int)(entry & 0x00FFFFFFu) - 1;
-                if (KeysEqual(_values[existingIndex], value))
-                    return existingIndex;
+                Resize();
+                continue;
             }
 
-            slot = (slot + 1) & mask;
+            var index = _count;
+            _values[index] = value;
+            _count++;
+            table[slot] = (tag << 24) | (uint)(index + 1);
+            _touched[_touchedCount++] = slot;
+            return index;
         }
     }
 
@@ -162,9 +167,8 @@ sealed class ReusableDictionaryState<T>
     {
         var newSize = Math.Max(32, _table.Length << 1);
         var newTable = new uint[newSize];
-        var newTouched = new int[newSize];
-
         _threshold = checked((int)(newSize * 0.25f));
+        var newTouched = new int[_threshold];
         EnsureValueCapacity(_threshold);
         var mask = newSize - 1;
         var touchedCount = 0;
@@ -187,8 +191,8 @@ sealed class ReusableDictionaryState<T>
     void ResizeToEmpty(int slotLength)
     {
         _table = new uint[slotLength];
-        _touched = new int[slotLength];
         _threshold = checked((int)(slotLength * 0.25f));
+        _touched = new int[_threshold];
         EnsureValueCapacity(_threshold);
         _touchedCount = 0;
     }
