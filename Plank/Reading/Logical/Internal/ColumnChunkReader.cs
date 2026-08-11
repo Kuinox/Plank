@@ -313,6 +313,22 @@ static class ColumnChunkReader
         }
 
         var valueCount = checked((int)header.ValueCount);
+        var definitionLevelEncoding = header.Type == PageHeaderType.DataPage
+            ? header.DefinitionLevelEncoding
+            : EncodingKind.Rle;
+        if (converter is null && typeof(T) == typeof(DateTime?) && physicalType == typeof(DateTime) &&
+            column.PhysicalType == ParquetPhysicalType.Int64 && header.Encoding == EncodingKind.Plain &&
+            (definitionPayload.IsEmpty || definitionLevelEncoding == EncodingKind.Rle))
+        {
+            var timestampPhysicalCount = DecodeNullablePlainDateTimes(dataPayload, definitionPayload, valueCount,
+                definitionLevelEncoding, column.LogicalType, ref state, bufferPool);
+            if (header.Type == PageHeaderType.DataPageV2 && timestampPhysicalCount != expectedPhysicalCount)
+                throw new CorruptParquetException(
+                    $"Definition levels contain {timestampPhysicalCount} values, expected {expectedPhysicalCount}.");
+            buffer = state.CreateNativeBuffer(valueCount);
+            return true;
+        }
+
         var physicalCount = valueCount;
         if (!definitionPayload.IsEmpty)
         {
@@ -325,7 +341,7 @@ static class ColumnChunkReader
 
         var decoded = TryDecodeNullableValuesByPhysicalType(dataPayload, definitionPayload, valueCount,
             physicalCount, column, header.Encoding,
-            header.Type == PageHeaderType.DataPage ? header.DefinitionLevelEncoding : EncodingKind.Rle,
+            definitionLevelEncoding,
             physicalType, ref state, bufferPool);
         if (!decoded)
             return false;
@@ -387,6 +403,94 @@ static class ColumnChunkReader
         return false;
     }
 
+    static int DecodeNullablePlainDateTimes<T>(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<byte> definitionPayload, int valueCount, EncodingKind definitionLevelEncoding,
+        LogicalType? logicalType, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
+    {
+        if (logicalType is not LogicalType.Timestamp timestamp)
+            throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.");
+        var ticksPerUnit = timestamp.Unit switch
+        {
+            TimeUnit.Millis => TimeSpan.TicksPerMillisecond,
+            TimeUnit.Micros => 10,
+            TimeUnit.Nanos => 0,
+            _ => throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.")
+        };
+        var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+
+        var values = state.GetValues<T>(valueCount, bufferPool);
+        var destination = Unsafe.As<Span<T>, Span<DateTime?>>(ref values);
+        if (definitionPayload.IsEmpty)
+        {
+            for (var i = 0; i < destination.Length; i++)
+                destination[i] = DecodePlainDateTime(payload, i, ticksPerUnit, kind);
+            return valueCount;
+        }
+        if (definitionLevelEncoding != EncodingKind.Rle)
+            throw new NotSupportedException(
+                $"Definition level encoding '{definitionLevelEncoding}' is not supported by the timestamp fast path.");
+
+        var valueIndex = 0;
+        var physicalIndex = 0;
+        while (valueIndex < destination.Length)
+        {
+            var header = ReadUnsignedVarInt(ref definitionPayload);
+            if ((header & 1U) == 0)
+            {
+                var runLength = header >> 1;
+                if (runLength == 0)
+                    throw new CorruptParquetException("Definition levels contain an empty RLE run.");
+                var repeated = ReadLittleEndian(ref definitionPayload, byteWidth: 1);
+                var copyLength = (int)Math.Min(runLength,
+                    checked((uint)(destination.Length - valueIndex)));
+                if (repeated == 0)
+                    destination.Slice(valueIndex, copyLength).Clear();
+                else
+                    for (var i = 0; i < copyLength; i++)
+                        destination[valueIndex + i] = DecodePlainDateTime(
+                            payload, physicalIndex++, ticksPerUnit, kind);
+                valueIndex += copyLength;
+                continue;
+            }
+
+            var literalGroupCount = header >> 1;
+            if (literalGroupCount == 0)
+                throw new CorruptParquetException("Definition levels contain an empty bit-packed run.");
+            if (literalGroupCount > uint.MaxValue / 8)
+                throw new CorruptParquetException(
+                    $"Definition levels literal run group count {literalGroupCount} is too large.");
+            var literalCount = literalGroupCount * 8U;
+            for (var i = 0U; i < literalCount && valueIndex < destination.Length; i++)
+            {
+                if (ReadBitPackedValue(ref definitionPayload, bitWidth: 1, checked((int)i)) == 0)
+                    destination[valueIndex] = null;
+                else
+                    destination[valueIndex] = DecodePlainDateTime(payload, physicalIndex++, ticksPerUnit, kind);
+                valueIndex++;
+            }
+
+            var literalByteCount = (literalCount + 7U) >> 3;
+            if (literalByteCount > (uint)definitionPayload.Length)
+                throw new CorruptParquetException(
+                    $"Definition level literal group claims {literalByteCount} bytes but only {definitionPayload.Length} remain.");
+            definitionPayload = definitionPayload[checked((int)literalByteCount)..];
+        }
+        return physicalIndex;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static DateTime DecodePlainDateTime(ReadOnlySpan<byte> payload, int physicalIndex,
+        long ticksPerUnit, DateTimeKind kind)
+    {
+        var offset = checked(physicalIndex * sizeof(long));
+        if (payload.Length - offset < sizeof(long))
+            throw new CorruptParquetException(
+                $"Payload ({payload.Length} bytes) is too short to decode timestamp value {physicalIndex}.");
+        var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(offset, sizeof(long)));
+        var ticks = ticksPerUnit == 0 ? raw / 100 : checked(raw * ticksPerUnit);
+        return new DateTime(checked(DateTime.UnixEpoch.Ticks + ticks), kind);
+    }
+
     static bool TryDecodeNullableValues<T, TValue>(ReadOnlySpan<byte> payload,
         ReadOnlySpan<byte> definitionPayload, int valueCount, int physicalCount, Column column,
         EncodingKind encoding, EncodingKind definitionLevelEncoding, ref ColumnReadBuffers<T> state,
@@ -409,6 +513,7 @@ static class ColumnChunkReader
         else
             DecodeDefinitionLevels(definitionPayload, valueCount,
                 definitionLevelEncoding, definitions, out _);
+
         var physicalValues = MemoryMarshal.Cast<byte, TValue>(
             scratch.Slice(physicalOffset, physicalByteLength));
 
