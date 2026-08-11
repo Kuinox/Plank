@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -915,7 +914,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategyContext, Pages,
-            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+            _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
+            GetOrCreateDictionaryState<TValue>());
         _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && TryAssignInt32ColumnAndPageStatistics(values))
@@ -943,7 +943,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategyContext, Pages,
-            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+            _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
+            GetOrCreateDictionaryState<TValue>());
         _bloomFilterByteLength = BloomFilterBuilder.BuildOptional(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
@@ -966,7 +967,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategyContext, Pages,
-            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+            _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
+            GetOrCreateDictionaryState<TValue>());
         _bloomFilterByteLength = BloomFilterBuilder.BuildOptionalReferences(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
@@ -977,7 +979,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     {
         var columnOrdinal = checked((int)ColumnOrdinal);
         var compression = _owner.ColumnCompressionsByOrdinal[columnOrdinal];
-        var projectionInfo = _owner.ColumnProjectionInfosByOrdinal[columnOrdinal];
         for (var i = 0; i < Pages.Count; i++)
         {
             ref var page = ref Pages[i];
@@ -988,7 +989,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                     break;
                 case PageKind.DataV1:
                 case PageKind.DataV2:
-                    PrepareDataPage(ref page, compression, projectionInfo);
+                    PrepareDataPage(ref page, compression);
                     break;
                 default:
                     throw new InvalidOperationException($"Unknown page kind '{page.Kind}'.");
@@ -1008,7 +1009,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             uncompressedContentSize, page.Content.WrittenLength, GetPageCrc(ref page));
     }
 
-    void PrepareDataPage(ref Page page, ResolvedCompression compression, LeafProjectionInfo projectionInfo)
+    void PrepareDataPage(ref Page page, ResolvedCompression compression)
     {
         var uncompressedContentSize = page.Content.WrittenLength;
         var levelBytes = checked(page.RepetitionLevelsByteLength + page.DefinitionLevelsByteLength);
@@ -1017,7 +1018,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 $"Invalid level byte lengths ({levelBytes}) for data page content size {uncompressedContentSize}.");
 
         var compressed = _owner.DataPageVersion == ParquetDataPageVersion.V1
-            ? PrepareDataPageV1(ref page, compression, projectionInfo, ref uncompressedContentSize)
+            ? PrepareDataPageV1(ref page, compression, uncompressedContentSize)
             : PrepareDataPageV2(ref page, compression, levelBytes);
 
         page.UncompressedContentSize = uncompressedContentSize;
@@ -1034,31 +1035,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             uncompressedContentSize, page.Content.WrittenLength, compressed, GetPageCrc(ref page));
     }
 
-    bool PrepareDataPageV1(ref Page page, ResolvedCompression compression, LeafProjectionInfo projectionInfo,
-        ref int uncompressedContentSize)
+    bool PrepareDataPageV1(ref Page page, ResolvedCompression compression, int uncompressedContentSize)
     {
-        var hasRepetitionLevels = projectionInfo.MaxRepetitionLevel > 0;
-        var hasDefinitionLevels = projectionInfo.MaxDefinitionLevel > 0;
-        if (hasRepetitionLevels != hasDefinitionLevels)
-        {
-            Span<byte> levelLengthPrefix = stackalloc byte[sizeof(uint)];
-            var levelLength = hasRepetitionLevels
-                ? page.RepetitionLevelsByteLength
-                : page.DefinitionLevelsByteLength;
-            BinaryPrimitives.WriteUInt32LittleEndian(levelLengthPrefix, levelLength);
-            page.Content.Prepend(levelLengthPrefix);
-            uncompressedContentSize = page.Content.WrittenLength;
-        }
-        else if (hasRepetitionLevels)
-        {
-            EnsurePageBuffer(ref _compressionInput);
-            WriteDataPageV1Content(ref page.Content, page.RepetitionLevelsByteLength,
-                page.DefinitionLevelsByteLength, hasRepetitionLevels, hasDefinitionLevels,
-                _compressionContext, ref _compressionInput);
-            Swap(ref page.Content, ref _compressionInput);
-            uncompressedContentSize = page.Content.WrittenLength;
-        }
-
         if (compression.Kind == CompressionKind.None || uncompressedContentSize == 0)
             return false;
 
@@ -1111,37 +1089,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     uint? GetPageCrc(ref Page page)
         => _owner.WritePageCrc ? page.Content.ComputeCrc32() : null;
-
-    static void WriteDataPageV1Content(ref BufferWriter source, uint repetitionLevelsByteLength,
-        uint definitionLevelsByteLength, bool hasRepetitionLevels, bool hasDefinitionLevels,
-        CompressionContext compressionContext, ref BufferWriter destination)
-    {
-        destination.Reset();
-        var sourceSpan = compressionContext.GetContiguousSourceSpan(ref source);
-        var offset = 0;
-        if (hasRepetitionLevels)
-        {
-            WriteLevelLength(repetitionLevelsByteLength, ref destination);
-            var length = checked((int)repetitionLevelsByteLength);
-            destination.Write(sourceSpan.Slice(offset, length));
-            offset += length;
-        }
-        if (hasDefinitionLevels)
-        {
-            WriteLevelLength(definitionLevelsByteLength, ref destination);
-            var length = checked((int)definitionLevelsByteLength);
-            destination.Write(sourceSpan.Slice(offset, length));
-            offset += length;
-        }
-        destination.Write(sourceSpan[offset..]);
-    }
-
-    static void WriteLevelLength(uint length, ref BufferWriter destination)
-    {
-        var prefix = destination.GetSpan(sizeof(uint));
-        BinaryPrimitives.WriteUInt32LittleEndian(prefix, length);
-        destination.Advance(sizeof(uint));
-    }
 
     static void Swap(ref BufferWriter left, ref BufferWriter right)
         => (left, right) = (right, left);
