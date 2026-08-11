@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing;
@@ -28,6 +29,79 @@ internal sealed class EagerCompressionTests
         foreach (var dataPageVersion in DataPageVersions)
             foreach (var compression in CompressionKinds)
                 RoundTrip(dataPageVersion, compression);
+    }
+
+    [Test]
+    public void V1OptionalLevelLengthIsWrittenInPlace()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.Plain]))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = ParquetDataPageVersion.V1
+        });
+        var serialized = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
+
+        serialized.Serialize([1, null, 2, null, 3]);
+
+        ref var page = ref serialized.Pages[0];
+        var content = new byte[page.Content.WrittenLength];
+        page.Content.CopyTo(content);
+        var definitionLength = BinaryPrimitives.ReadUInt32LittleEndian(content);
+        if (definitionLength != page.DefinitionLevelsByteLength)
+            throw new InvalidOperationException(
+                $"Expected definition-level prefix {page.DefinitionLevelsByteLength}, got {definitionLength}.");
+        if (page.RepetitionLevelsByteLength != 0)
+            throw new InvalidOperationException("Flat optional data unexpectedly contained repetition levels.");
+        if (content.Length < sizeof(uint) + definitionLength)
+            throw new InvalidOperationException("Definition-level prefix exceeds the V1 page payload.");
+
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+    }
+
+    [Test]
+    public void V1RepeatedLevelLengthsAreWrittenInPlace()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.List("numbers",
+                ColumnDefinition.RequiredLeaf("element", ParquetPhysicalType.Int32,
+                    new ColumnOptions(encodings: [EncodingKind.Plain])),
+                repetition: ParquetRepetition.Required)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = ParquetDataPageVersion.V1
+        });
+        var serialized = writer.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
+        int[][] rows = [[1, 2], [], [3]];
+
+        serialized.Serialize(rows);
+
+        ref var page = ref serialized.Pages[0];
+        var content = new byte[page.Content.WrittenLength];
+        page.Content.CopyTo(content);
+        var repetitionLength = BinaryPrimitives.ReadUInt32LittleEndian(content);
+        if (repetitionLength != page.RepetitionLevelsByteLength)
+            throw new InvalidOperationException(
+                $"Expected repetition-level prefix {page.RepetitionLevelsByteLength}, got {repetitionLength}.");
+
+        var definitionPrefixOffset = checked(sizeof(uint) + (int)repetitionLength);
+        var definitionLength = BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(definitionPrefixOffset));
+        if (definitionLength != page.DefinitionLevelsByteLength)
+            throw new InvalidOperationException(
+                $"Expected definition-level prefix {page.DefinitionLevelsByteLength}, got {definitionLength}.");
+        if (content.Length < definitionPrefixOffset + sizeof(uint) + definitionLength)
+            throw new InvalidOperationException("Level prefixes exceed the V1 page payload.");
+
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
     }
 
     [Test]
