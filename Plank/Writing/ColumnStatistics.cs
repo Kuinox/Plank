@@ -42,7 +42,7 @@ internal readonly struct ColumnStatistics
         NullCount = nullCount;
         DistinctCount = minValue is null || maxValue is null
             ? 0
-            : CompareBytes(minValue.AsSpan(0, MinValueLength), maxValue.AsSpan(0, MaxValueLength)) == 0 ? 1 : -1;
+            : minValue.AsSpan(0, MinValueLength).SequenceCompareTo(maxValue.AsSpan(0, MaxValueLength)) == 0 ? 1 : -1;
         NanCount = -1;
         HasStatistics = hasStatistics;
     }
@@ -60,8 +60,8 @@ internal readonly struct ColumnStatistics
         MinBits = 0;
         MaxBits = 0;
         NullCount = nullCount;
-        DistinctCount = CompareBytes(GetValueSpan(minValue, minValueLength),
-            GetValueSpan(maxValue, maxValueLength)) == 0 ? 1 : -1;
+        DistinctCount = GetValueSpan(minValue, minValueLength)
+            .SequenceCompareTo(GetValueSpan(maxValue, maxValueLength)) == 0 ? 1 : -1;
         NanCount = -1;
         HasStatistics = hasStatistics;
     }
@@ -1454,23 +1454,10 @@ internal readonly struct ColumnStatistics
         => new(ColumnStatisticsValueKind.Double, BitConverter.DoubleToInt64Bits(min),
             BitConverter.DoubleToInt64Bits(max), nullCount, true, nanCount);
 
-    static int CompareBytes(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
-    {
-        var length = Math.Min(left.Length, right.Length);
-        for (var i = 0; i < length; i++)
-        {
-            var comparison = left[i].CompareTo(right[i]);
-            if (comparison != 0)
-                return comparison;
-        }
-
-        return left.Length.CompareTo(right.Length);
-    }
-
     static int CompareBinary(Column column, ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
         => column.LogicalType is LogicalType.Decimal
             ? CompareDecimalBytes(left, right)
-            : CompareBytes(left, right);
+            : left.SequenceCompareTo(right);
 
     static int CompareDecimalBytes(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
@@ -1490,7 +1477,7 @@ internal readonly struct ColumnStatistics
         if (lengthComparison != 0)
             return leftNegative ? -lengthComparison : lengthComparison;
 
-        return CompareBytes(left, right);
+        return left.SequenceCompareTo(right);
     }
 
     static int CompareZeroToDecimal(ReadOnlySpan<byte> value)

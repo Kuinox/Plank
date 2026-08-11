@@ -179,6 +179,34 @@ internal sealed class ColumnStatisticsTests
     }
 
     [Test]
+    public void BinaryStatisticsPreserveUnsignedLexicographicOrderingAcrossVectorBoundaries()
+    {
+        var requiredColumn = new Plank.Schema.Column("value", ParquetPhysicalType.ByteArray);
+        var commonPrefix = Enumerable.Repeat((byte)0x5a, 63).ToArray();
+        var low = commonPrefix.Concat([(byte)0x00, (byte)0xff]).ToArray();
+        var middle = commonPrefix.Concat([(byte)0x80]).ToArray();
+        var high = commonPrefix.Concat([(byte)0xff, (byte)0x00]).ToArray();
+        byte[][] values = [middle, high, commonPrefix, low];
+
+        var required = ColumnStatistics.Create(requiredColumn, values, 0);
+        if (!required.MinValue!.AsSpan().SequenceEqual(commonPrefix))
+            throw new InvalidOperationException("Required binary minimum statistic mismatch.");
+        if (!required.MaxValue!.AsSpan().SequenceEqual(high))
+            throw new InvalidOperationException("Required binary maximum statistic mismatch.");
+
+        var optionalColumn = new Plank.Schema.Column("value", ParquetPhysicalType.ByteArray,
+            new ColumnOptions(ParquetRepetition.Optional));
+        byte[][] optionalValues = [null!, middle, high, commonPrefix, low, null!];
+        var optional = ColumnStatistics.CreateOptional(optionalColumn, optionalValues);
+        if (!optional.MinValue!.AsSpan().SequenceEqual(commonPrefix))
+            throw new InvalidOperationException("Optional binary minimum statistic mismatch.");
+        if (!optional.MaxValue!.AsSpan().SequenceEqual(high))
+            throw new InvalidOperationException("Optional binary maximum statistic mismatch.");
+        if (optional.NullCount != 2)
+            throw new InvalidOperationException($"Expected two nulls, got {optional.NullCount}.");
+    }
+
+    [Test]
     public void WriterEmitsColumnChunkStatistics()
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-statistics-{Guid.NewGuid():N}.parquet");
