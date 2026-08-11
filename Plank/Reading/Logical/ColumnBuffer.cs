@@ -7,12 +7,14 @@ namespace Plank.Reading.Logical;
 public readonly struct ColumnBuffer<T>
 {
     readonly ParquetBuffer _nativeValues;
+    readonly nint _variableLengthPayloadAddress;
     readonly int _valueCount;
     readonly bool _isVariableLength;
 
     internal ColumnBuffer(ParquetBuffer values, int valueCount)
     {
         _nativeValues = values;
+        _variableLengthPayloadAddress = 0;
         _valueCount = valueCount;
         _isVariableLength = false;
     }
@@ -24,6 +26,9 @@ public readonly struct ColumnBuffer<T>
                 nameof(isVariableLength));
 
         _nativeValues = values;
+        _variableLengthPayloadAddress = valueCount == 0
+            ? 0
+            : values.DangerousGetAddress() + checked(valueCount * Unsafe.SizeOf<BinaryValueDescriptor>());
         _valueCount = valueCount;
         _isVariableLength = true;
     }
@@ -48,7 +53,7 @@ public readonly struct ColumnBuffer<T>
     {
         ValidateIndex(index);
         return _isVariableLength
-            ? ProjectBytes(GetVariableLengthDescriptor(index).Span)
+            ? ProjectBytes(GetVariableLengthValue(index))
             : Values.Slice(index, 1);
     }
 
@@ -80,6 +85,12 @@ public readonly struct ColumnBuffer<T>
 
     BinaryValueDescriptor GetVariableLengthDescriptor(int index)
         => ParquetBuffer.AsReadOnlySpan<BinaryValueDescriptor>(_nativeValues, _valueCount)[index];
+
+    ReadOnlySpan<byte> GetVariableLengthValue(int index)
+    {
+        var descriptor = GetVariableLengthDescriptor(index);
+        return descriptor.GetSpan(_variableLengthPayloadAddress);
+    }
 
     ReadOnlySpan<byte> GetVariableLengthPayload()
     {
