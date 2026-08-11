@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using Plank.Schema;
 
 namespace Plank.Reading.Logical.Internal;
@@ -2324,12 +2326,52 @@ static class ColumnChunkReader
         if ((long)count * 4 > payload.Length)
             throw new CorruptParquetException(
                 $"ByteStreamSplit payload ({payload.Length} bytes) is too short for {count} Int32 values.");
-        var lane1 = count;
-        var lane2 = count * 2;
-        var lane3 = count * 3;
-        for (var i = 0; i < count; i++)
-            destination[i] = payload[i] | (payload[lane1 + i] << 8) | (payload[lane2 + i] << 16) |
-                (payload[lane3 + i] << 24);
+
+        ref var lane0 = ref MemoryMarshal.GetReference(payload);
+        ref var lane1 = ref Unsafe.Add(ref lane0, count);
+        ref var lane2 = ref Unsafe.Add(ref lane1, count);
+        ref var lane3 = ref Unsafe.Add(ref lane2, count);
+        ref var values = ref Unsafe.As<int, uint>(ref MemoryMarshal.GetReference(destination));
+        var length = (nuint)(uint)count;
+        nuint i = 0;
+
+        if (Avx512F.IsSupported)
+        {
+            var vectorCount = (nuint)Vector128<byte>.Count;
+            for (; length - i >= vectorCount; i += vectorCount)
+            {
+                var decoded = Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref lane0, i)).AsUInt32();
+                decoded |= Vector512.ShiftLeft(
+                    Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref lane1, i)).AsUInt32(), 8);
+                decoded |= Vector512.ShiftLeft(
+                    Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref lane2, i)).AsUInt32(), 16);
+                decoded |= Vector512.ShiftLeft(
+                    Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref lane3, i)).AsUInt32(), 24);
+                decoded.StoreUnsafe(ref values, i);
+            }
+        }
+        else if (Avx2.IsSupported)
+        {
+            var vectorCount = (nuint)Vector256<uint>.Count;
+            for (; length - i >= vectorCount; i += vectorCount)
+            {
+                var decoded = Avx2.ConvertToVector256Int32(LoadLowerUInt64(ref lane0, i)).AsUInt32();
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int32(LoadLowerUInt64(ref lane1, i))
+                    .AsUInt32(), 8);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int32(LoadLowerUInt64(ref lane2, i))
+                    .AsUInt32(), 16);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int32(LoadLowerUInt64(ref lane3, i))
+                    .AsUInt32(), 24);
+                decoded.StoreUnsafe(ref values, i);
+            }
+        }
+
+        for (; i < length; i++)
+            Unsafe.Add(ref values, i) =
+                Unsafe.Add(ref lane0, i) |
+                ((uint)Unsafe.Add(ref lane1, i) << 8) |
+                ((uint)Unsafe.Add(ref lane2, i) << 16) |
+                ((uint)Unsafe.Add(ref lane3, i) << 24);
     }
 
     static void DecodeByteStreamSplitInt64(ReadOnlySpan<byte> payload, Span<long> destination)
@@ -2344,24 +2386,85 @@ static class ColumnChunkReader
         if ((long)count * 8 > payload.Length)
             throw new CorruptParquetException(
                 $"ByteStreamSplit payload ({payload.Length} bytes) is too short for {count} 8-byte values.");
-        var lane1 = count;
-        var lane2 = count * 2;
-        var lane3 = count * 3;
-        var lane4 = count * 4;
-        var lane5 = count * 5;
-        var lane6 = count * 6;
-        var lane7 = count * 7;
-        for (var i = 0; i < count; i++)
-            destination[i] =
-                (ulong)payload[i] |
-                ((ulong)payload[lane1 + i] << 8) |
-                ((ulong)payload[lane2 + i] << 16) |
-                ((ulong)payload[lane3 + i] << 24) |
-                ((ulong)payload[lane4 + i] << 32) |
-                ((ulong)payload[lane5 + i] << 40) |
-                ((ulong)payload[lane6 + i] << 48) |
-                ((ulong)payload[lane7 + i] << 56);
+
+        ref var lane0 = ref MemoryMarshal.GetReference(payload);
+        ref var lane1 = ref Unsafe.Add(ref lane0, count);
+        ref var lane2 = ref Unsafe.Add(ref lane1, count);
+        ref var lane3 = ref Unsafe.Add(ref lane2, count);
+        ref var lane4 = ref Unsafe.Add(ref lane3, count);
+        ref var lane5 = ref Unsafe.Add(ref lane4, count);
+        ref var lane6 = ref Unsafe.Add(ref lane5, count);
+        ref var lane7 = ref Unsafe.Add(ref lane6, count);
+        ref var values = ref MemoryMarshal.GetReference(destination);
+        var length = (nuint)(uint)count;
+        nuint i = 0;
+
+        if (Avx512F.IsSupported)
+        {
+            var vectorCount = (nuint)Vector512<ulong>.Count;
+            for (; length - i >= vectorCount; i += vectorCount)
+            {
+                var decoded = Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane0, i)).AsUInt64();
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane1, i))
+                    .AsUInt64(), 8);
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane2, i))
+                    .AsUInt64(), 16);
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane3, i))
+                    .AsUInt64(), 24);
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane4, i))
+                    .AsUInt64(), 32);
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane5, i))
+                    .AsUInt64(), 40);
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane6, i))
+                    .AsUInt64(), 48);
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane7, i))
+                    .AsUInt64(), 56);
+                decoded.StoreUnsafe(ref values, i);
+            }
+        }
+        else if (Avx2.IsSupported)
+        {
+            var vectorCount = (nuint)Vector256<ulong>.Count;
+            for (; length - i >= vectorCount; i += vectorCount)
+            {
+                var decoded = Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane0, i)).AsUInt64();
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane1, i))
+                    .AsUInt64(), 8);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane2, i))
+                    .AsUInt64(), 16);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane3, i))
+                    .AsUInt64(), 24);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane4, i))
+                    .AsUInt64(), 32);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane5, i))
+                    .AsUInt64(), 40);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane6, i))
+                    .AsUInt64(), 48);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane7, i))
+                    .AsUInt64(), 56);
+                decoded.StoreUnsafe(ref values, i);
+            }
+        }
+
+        for (; i < length; i++)
+            Unsafe.Add(ref values, i) =
+                Unsafe.Add(ref lane0, i) |
+                ((ulong)Unsafe.Add(ref lane1, i) << 8) |
+                ((ulong)Unsafe.Add(ref lane2, i) << 16) |
+                ((ulong)Unsafe.Add(ref lane3, i) << 24) |
+                ((ulong)Unsafe.Add(ref lane4, i) << 32) |
+                ((ulong)Unsafe.Add(ref lane5, i) << 40) |
+                ((ulong)Unsafe.Add(ref lane6, i) << 48) |
+                ((ulong)Unsafe.Add(ref lane7, i) << 56);
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static Vector128<byte> LoadLowerUInt64(ref byte source, nuint offset)
+        => Vector128.CreateScalarUnsafe(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, offset))).AsByte();
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static Vector128<byte> LoadLowerUInt32(ref byte source, nuint offset)
+        => Vector128.CreateScalarUnsafe(Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref source, offset))).AsByte();
 
     static void DecodeByteStreamSplitFloat(ReadOnlySpan<byte> payload, Span<float> destination)
     {
