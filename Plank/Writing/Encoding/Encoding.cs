@@ -53,7 +53,7 @@ static class Encoding
 
             if (TryWriteFixedWidthDataPages(bufferWriters, column, values, dataEncoding, strategy, pages))
                 return false;
-            if (TryWritePlainSizeDataPages(bufferWriters, column, values, dataEncoding, strategy, pages))
+            if (TryWriteSizeBoundedDataPages(bufferWriters, column, values, dataEncoding, strategy, pages))
                 return false;
 
             WriteStrategyDataPages(bufferWriters, column, values, dataEncoding, strategy, pages);
@@ -107,12 +107,25 @@ static class Encoding
         return true;
     }
 
-    static bool TryWritePlainSizeDataPages<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
+    static bool TryWriteSizeBoundedDataPages<T>(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<T> values,
         EncodingKind dataEncoding, IPageStrategy strategy, PageList pages)
         where T : notnull
     {
         if (!strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytes))
             return false;
+
+        if (dataEncoding is EncodingKind.DeltaByteArray or EncodingKind.DeltaLengthByteArray)
+        {
+            if (column.PhysicalType != ParquetPhysicalType.ByteArray
+                || typeof(T) != typeof(byte[]) && typeof(T) != typeof(ReadOnlyMemory<byte>))
+                return false;
+
+            WriteVariableByteArrayDataPages(bufferWriters, column, values, dataEncoding, pages,
+                checked((int)targetPageBytes));
+            return true;
+        }
+
         if (dataEncoding != EncodingKind.Plain)
             return false;
         if (!TryGetPlainEncodedValueSize(column, typeof(T), out var fixedValueBytes))
@@ -125,7 +138,8 @@ static class Encoding
             return true;
         }
 
-        WriteVariablePlainDataPages(bufferWriters, column, values, dataEncoding, pages, checked((int)targetPageBytes));
+        WriteVariableByteArrayDataPages(bufferWriters, column, values, dataEncoding, pages,
+            checked((int)targetPageBytes));
         return true;
     }
 
@@ -140,8 +154,8 @@ static class Encoding
         }
     }
 
-    static void WriteVariablePlainDataPages<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
-        EncodingKind dataEncoding, PageList pages, int targetPageBytes)
+    static void WriteVariableByteArrayDataPages<T>(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<T> values, EncodingKind dataEncoding, PageList pages, int targetPageBytes)
         where T : notnull
     {
         var rowsWritten = 0;
@@ -920,6 +934,10 @@ static class Encoding
             && TryGetPlainEncodedValueSize(column, column.PhysicalType == ParquetPhysicalType.ByteArray
                 ? typeof(byte[])
                 : typeof(int), out presentValueBytes))
+            return true;
+
+        if (!useDictionary && column.PhysicalType == ParquetPhysicalType.ByteArray
+            && dataEncoding is EncodingKind.DeltaByteArray or EncodingKind.DeltaLengthByteArray)
             return true;
 
         if (!useDictionary)

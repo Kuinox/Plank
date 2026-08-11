@@ -92,6 +92,40 @@ internal sealed class PageSizeTests
     }
 
     [Test]
+    [Arguments(EncodingKind.DeltaByteArray)]
+    [Arguments(EncodingKind.DeltaLengthByteArray)]
+    public void DeltaByteArrayColumnsSplitByTargetPageSize(EncodingKind encoding)
+    {
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.RequiredLeaf("required", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(encodings: [encoding])),
+            ColumnDefinition.OptionalLeaf("optional", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(encodings: [encoding]))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 32
+        });
+        var requiredColumn = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+        var optionalColumn = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[1]);
+        byte[][] values =
+        [
+            "abcdefghij"u8.ToArray(),
+            "klmnopqrst"u8.ToArray(),
+            "uvwxyzabcd"u8.ToArray(),
+            "efghijklmn"u8.ToArray(),
+            "opqrstuvwx"u8.ToArray()
+        ];
+
+        requiredColumn.Serialize(values);
+        optionalColumn.Serialize(values);
+
+        AssertDataPageRows(requiredColumn.Pages, [2, 2, 1]);
+        AssertDataPageRows(optionalColumn.Pages, [2, 2, 1]);
+    }
+
+    [Test]
     public void NestedLeafUsesStrategyFromDefinition()
     {
         var strategy = new FixedRowsPageStrategy(2);

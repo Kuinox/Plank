@@ -271,11 +271,5 @@ static class DeltaByteArrayEncoding
     }
 
     static int SharedPrefixLength(ReadOnlySpan<byte> previous, ReadOnlySpan<byte> current)
-    {
-        var maxLength = Math.Min(previous.Length, current.Length);
-        var index = 0;
-        while (index < maxLength && previous[index] == current[index])
-            index++;
-        return index;
-    }
+        => previous.CommonPrefixLength(current);
 }
