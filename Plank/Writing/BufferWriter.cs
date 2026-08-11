@@ -6,6 +6,7 @@ struct BufferWriter : IDisposable
     readonly IParquetBufferPool? _pool;
     readonly int _chunkSizeBytes;
     int _segmentCount;
+    int _leadingPrefixSegmentCount;
     int _currentSegmentIndex;
     int _currentSegmentWritten;
 
@@ -29,6 +30,7 @@ struct BufferWriter : IDisposable
         _chunkSizeBytes = checked((int)chunkSizeBytes);
         _segments = new Segment[GetInitialSegmentCapacity(initialBufferBytes, chunkSizeBytes)];
         _segmentCount = 0;
+        _leadingPrefixSegmentCount = 0;
         _currentSegmentIndex = 0;
         _currentSegmentWritten = 0;
         WrittenLength = 0;
@@ -101,7 +103,7 @@ struct BufferWriter : IDisposable
         for (var i = 0; i < _segmentCount; i++)
             _segments[i].Written = 0;
 
-        _currentSegmentIndex = 0;
+        _currentSegmentIndex = _leadingPrefixSegmentCount;
         _currentSegmentWritten = 0;
         WrittenLength = 0;
     }
@@ -131,7 +133,7 @@ struct BufferWriter : IDisposable
         }
         if (length == 0)
         {
-            currentSegment = 0;
+            currentSegment = _leadingPrefixSegmentCount;
             currentWritten = 0;
         }
 
@@ -202,6 +204,47 @@ struct BufferWriter : IDisposable
         }
     }
 
+    internal void Prepend(ReadOnlySpan<byte> prefix)
+    {
+        if (prefix.IsEmpty)
+            return;
+        if (_segments is null || _pool is null)
+            throw new InvalidOperationException("BufferWriter is not initialized.");
+
+        var firstWrittenSegment = -1;
+        for (var i = 0; i < _segmentCount; i++)
+            if (_segments[i].Written != 0)
+            {
+                firstWrittenSegment = i;
+                break;
+            }
+
+        if (firstWrittenSegment < 0)
+        {
+            Write(prefix);
+            return;
+        }
+
+        if (firstWrittenSegment > 0 && _segments[firstWrittenSegment - 1].Buffer.Length >= prefix.Length)
+        {
+            ref var reusableSegment = ref _segments[firstWrittenSegment - 1];
+            prefix.CopyTo(reusableSegment.Buffer.Span);
+            reusableSegment.Written = prefix.Length;
+            WrittenLength = checked(WrittenLength + prefix.Length);
+            return;
+        }
+
+        EnsureSegmentCapacity(_segmentCount + 1);
+        Array.Copy(_segments, 0, _segments, 1, _segmentCount);
+        var prefixBuffer = _pool.Rent(checked((uint)prefix.Length));
+        prefix.CopyTo(prefixBuffer.Span);
+        _segments[0] = new Segment(prefixBuffer) { Written = prefix.Length };
+        _segmentCount++;
+        _leadingPrefixSegmentCount++;
+        _currentSegmentIndex++;
+        WrittenLength = checked(WrittenLength + prefix.Length);
+    }
+
     internal void CopyFrom(ref BufferWriter source)
     {
         if (source._segments is null || source.WrittenLength == 0)
@@ -229,6 +272,7 @@ struct BufferWriter : IDisposable
 
         _segments = null;
         _segmentCount = 0;
+        _leadingPrefixSegmentCount = 0;
         _currentSegmentIndex = 0;
         _currentSegmentWritten = 0;
         WrittenLength = 0;
@@ -244,7 +288,7 @@ struct BufferWriter : IDisposable
         if (sizeHint == 0)
             sizeHint = 1;
 
-        if (_segmentCount == 0)
+        if (_segmentCount == 0 || _currentSegmentIndex >= _segmentCount)
         {
             EnsureCurrentSegment(sizeHint);
             return;

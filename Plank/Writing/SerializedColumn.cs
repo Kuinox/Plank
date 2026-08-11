@@ -1039,7 +1039,17 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     {
         var hasRepetitionLevels = projectionInfo.MaxRepetitionLevel > 0;
         var hasDefinitionLevels = projectionInfo.MaxDefinitionLevel > 0;
-        if (hasRepetitionLevels || hasDefinitionLevels)
+        if (hasRepetitionLevels != hasDefinitionLevels)
+        {
+            Span<byte> levelLengthPrefix = stackalloc byte[sizeof(uint)];
+            var levelLength = hasRepetitionLevels
+                ? page.RepetitionLevelsByteLength
+                : page.DefinitionLevelsByteLength;
+            BinaryPrimitives.WriteUInt32LittleEndian(levelLengthPrefix, levelLength);
+            page.Content.Prepend(levelLengthPrefix);
+            uncompressedContentSize = page.Content.WrittenLength;
+        }
+        else if (hasRepetitionLevels)
         {
             EnsurePageBuffer(ref _compressionInput);
             WriteDataPageV1Content(ref page.Content, page.RepetitionLevelsByteLength,
