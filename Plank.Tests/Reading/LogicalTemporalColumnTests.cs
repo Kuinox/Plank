@@ -113,6 +113,43 @@ internal sealed class LogicalTemporalColumnTests
         }
     }
 
+    [Test]
+    public void NullablePlainTimestampsPreserveUnitsKindsAndNullsAcrossPageVersions()
+    {
+        TimeUnit[] units = [TimeUnit.Millis, TimeUnit.Micros, TimeUnit.Nanos];
+        ParquetDataPageVersion[] pageVersions =
+            [ParquetDataPageVersion.V1, ParquetDataPageVersion.V2];
+        foreach (var pageVersion in pageVersions)
+        foreach (var unit in units)
+        foreach (var adjustedToUtc in new[] { false, true })
+        {
+            var kind = adjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+            var ticksPerValue = unit switch
+            {
+                TimeUnit.Millis => TimeSpan.TicksPerMillisecond,
+                TimeUnit.Micros => 10,
+                TimeUnit.Nanos => 1,
+                _ => throw new ArgumentOutOfRangeException(nameof(unit))
+            };
+            var expected = new DateTime?[257];
+            for (var i = 0; i < expected.Length; i++)
+            {
+                if (i < 17 || i > 239 || i % 19 == 0)
+                    continue;
+                var ticks = checked(DateTime.UnixEpoch.Ticks + (i - 128L) * ticksPerValue);
+                expected[i] = new DateTime(ticks, kind);
+            }
+
+            var schema = CreateSchema(ParquetPhysicalType.Int64,
+                new LogicalType.Timestamp(unit, adjustedToUtc), EncodingKind.Plain, optional: true);
+            var actual = RoundTrip(schema, expected, pageVersion);
+            AssertSequenceEqual(expected, actual, EncodingKind.Plain);
+            if (actual.Any(value => value.HasValue && value.Value.Kind != kind))
+                throw new InvalidOperationException(
+                    $"{pageVersion}/{unit}: expected DateTime kind {kind}.");
+        }
+    }
+
     static ParquetSchema CreateSchema(ParquetPhysicalType physicalType, LogicalType logicalType,
         EncodingKind encoding, bool optional = false)
     {
@@ -126,12 +163,14 @@ internal sealed class LogicalTemporalColumnTests
         return new([column]);
     }
 
-    static T[] RoundTrip<T>(ParquetSchema schema, T[] values)
+    static T[] RoundTrip<T>(ParquetSchema schema, T[] values,
+        ParquetDataPageVersion pageVersion = ParquetDataPageVersion.V1)
     {
         using var stream = new MemoryStream();
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
-            Compression = CompressionKind.None
+            Compression = CompressionKind.None,
+            DataPageVersion = pageVersion
         });
         var serialized = writer.CreateSerializedColumn<T>(schema.LeafColumns[0]);
         serialized.Serialize(values);
