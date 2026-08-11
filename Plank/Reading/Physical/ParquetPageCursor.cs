@@ -14,6 +14,7 @@ public struct ParquetPageCursor : IDisposable
     readonly PageMetadataHandle _pageMetadata;
     readonly ParquetPagePruner? _pruner;
     ParquetBuffer _payloadBuffer;
+    ReadOnlyMemory<byte> _borrowedPayload;
     int _chunkLength;
     int _offset;
     int _payloadLength;
@@ -29,6 +30,7 @@ public struct ParquetPageCursor : IDisposable
         _pageMetadata = default;
         _pruner = null;
         _payloadBuffer = default;
+        _borrowedPayload = default;
         _chunkLength = 0;
         _offset = 0;
         _payloadLength = 0;
@@ -67,7 +69,9 @@ public struct ParquetPageCursor : IDisposable
         get
         {
             ValidateCurrent();
-            return _payloadBuffer.Span[.._payloadLength];
+            return _borrowedPayload.IsEmpty
+                ? _payloadBuffer.Span[.._payloadLength]
+                : _borrowedPayload.Span;
         }
     }
 
@@ -83,6 +87,7 @@ public struct ParquetPageCursor : IDisposable
         {
             CurrentHeader = default;
             _payloadLength = 0;
+            _borrowedPayload = default;
             ReturnPayloadBuffer();
             return false;
         }
@@ -112,6 +117,7 @@ public struct ParquetPageCursor : IDisposable
         {
             CurrentHeader = default;
             _payloadLength = 0;
+            _borrowedPayload = default;
             ReturnPayloadBuffer();
             return false;
         }
@@ -142,10 +148,13 @@ public struct ParquetPageCursor : IDisposable
         {
             CurrentHeader = default;
             _payloadLength = 0;
+            _borrowedPayload = default;
             ReturnPayloadBuffer();
             return false;
         }
 
+        _payloadLength = 0;
+        _borrowedPayload = default;
         _offset = pageOffset;
         var pageFileOffset = _chunk.ChunkOffset + (ulong)pageOffset;
         var remainingChunkLength = _chunkLength - _offset;
@@ -157,9 +166,17 @@ public struct ParquetPageCursor : IDisposable
                     $"Indexed page size {boundedPageLength.Value} is outside its column chunk.");
             headerProbeLength = Math.Min(headerProbeLength, boundedPageLength.Value);
         }
-        EnsurePayloadBuffer(owner, headerProbeLength);
-        var headerBytes = _payloadBuffer.Span[..headerProbeLength];
-        owner.Source.ReadExactly(_chunk.ChunkOffset + (ulong)_offset, headerBytes);
+        ReadOnlySpan<byte> headerBytes;
+        if (owner.TryBorrowSource(_chunk.ChunkOffset + (ulong)_offset, headerProbeLength,
+                out var borrowedHeader))
+            headerBytes = borrowedHeader.Span;
+        else
+        {
+            EnsurePayloadBuffer(owner, headerProbeLength);
+            var headerDestination = _payloadBuffer.Span[..headerProbeLength];
+            owner.Source.ReadExactly(_chunk.ChunkOffset + (ulong)_offset, headerDestination);
+            headerBytes = headerDestination;
+        }
         var maxUncompressedPageSize = (uint)Math.Min(_chunk.TotalUncompressedSize, uint.MaxValue);
         var header = PageHeaderReader.Read(headerBytes, maxUncompressedPageSize);
         var totalPageLength = checked(header.HeaderLength + (int)header.CompressedPageSize);
@@ -180,11 +197,21 @@ public struct ParquetPageCursor : IDisposable
                 throw new CorruptParquetException(
                     $"Uncompressed page size ({header.UncompressedPageSize}) does not match its payload size ({header.CompressedPageSize}).");
 
-            EnsurePayloadBuffer(owner, compressedLength);
-            if (compressedLength > 0)
-                owner.Source.ReadExactly(sourceOffset, _payloadBuffer.Span[..compressedLength]);
+            ReadOnlySpan<byte> payload;
+            if (owner.TryBorrowSource(sourceOffset, compressedLength, out var borrowedPayload))
+            {
+                _borrowedPayload = borrowedPayload;
+                payload = borrowedPayload.Span;
+            }
+            else
+            {
+                EnsurePayloadBuffer(owner, compressedLength);
+                if (compressedLength > 0)
+                    owner.Source.ReadExactly(sourceOffset, _payloadBuffer.Span[..compressedLength]);
+                payload = _payloadBuffer.Span[..compressedLength];
+            }
             if (owner.VerifyPageCrc && header.Crc.HasValue)
-                VerifyPageCrc(header, ParquetCrc32.Compute(_payloadBuffer.Span[..compressedLength]), pageFileOffset);
+                VerifyPageCrc(header, ParquetCrc32.Compute(payload), pageFileOffset);
             _payloadLength = compressedLength;
             CurrentHeader = header;
             return true;
@@ -252,6 +279,8 @@ public struct ParquetPageCursor : IDisposable
         ReturnPayloadBuffer();
 
         _owner = null;
+        _borrowedPayload = default;
+        _payloadLength = 0;
         CurrentHeader = default;
     }
 
