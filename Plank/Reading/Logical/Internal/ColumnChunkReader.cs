@@ -1623,10 +1623,18 @@ static class ColumnChunkReader
 
     static DateTime DecodeDateTime(long raw, LogicalType? logicalType)
     {
-        var value = DecodeTimestampValue(raw, logicalType).UtcDateTime;
-        return logicalType is LogicalType.Timestamp { IsAdjustedToUtc: false }
-            ? DateTime.SpecifyKind(value, DateTimeKind.Unspecified)
-            : value;
+        if (logicalType is not LogicalType.Timestamp timestamp)
+            throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.");
+
+        var ticks = timestamp.Unit switch
+        {
+            TimeUnit.Millis => checked(raw * TimeSpan.TicksPerMillisecond),
+            TimeUnit.Micros => checked(raw * 10),
+            TimeUnit.Nanos => raw / 100,
+            _ => throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.")
+        };
+        return new DateTime(checked(DateTime.UnixEpoch.Ticks + ticks),
+            timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified);
     }
 
     internal static bool TryDecodePage<T>(PageHeader header, ReadOnlySpan<byte> payload, Column column,
