@@ -346,6 +346,31 @@ static class Encoding
         }
     }
 
+    internal static void EncodeOptionalConverted<TSource, TPhysical>(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<TSource?> values, ReadOnlySpan<TPhysical> densePresentValues,
+        PageStrategyContext strategyContext, PageList pages, LeafProjectionInfo leafProjectionInfo,
+        ReusableDictionaryState<TPhysical> dictionaryState)
+        where TSource : struct
+        where TPhysical : struct
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        ArgumentNullException.ThrowIfNull(strategyContext);
+        ArgumentNullException.ThrowIfNull(pages);
+        if (column.Options.Repetition != ParquetRepetition.Optional)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' does not support null values.");
+        if (leafProjectionInfo.MaxDefinitionLevel != 1 || leafProjectionInfo.MaxRepetitionLevel != 0)
+            throw new NotSupportedException(
+                $"Column '{column.Name}' optional flat encoding requires a single optional leaf.");
+
+        pages.Clear();
+        if (values.Length == 0)
+            return;
+
+        EncodeOptionalFlatValues(bufferWriters, column, values, strategyContext, pages, densePresentValues,
+            dictionaryState);
+    }
+
     internal static void EncodeOptional<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         PageStrategyContext strategyContext, PageList pages, LeafProjectionInfo leafProjectionInfo,
         ReusableDictionaryState<T> dictionaryState)
@@ -509,10 +534,12 @@ static class Encoding
         }
     }
 
-    static void EncodeOptionalFlatValues<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T?> values,
+    static void EncodeOptionalFlatValues<T, TSource>(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<TSource?> values,
         PageStrategyContext strategyContext, PageList pages, ReadOnlySpan<T> denseValues,
         ReusableDictionaryState<T> dictionaryState)
         where T : struct
+        where TSource : struct
     {
         var strategy = strategyContext.Strategy;
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
