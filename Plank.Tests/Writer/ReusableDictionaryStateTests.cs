@@ -76,6 +76,24 @@ internal sealed class ReusableDictionaryStateTests
     }
 
     [Test]
+    public void ExistingLookupAtThresholdDoesNotGrowTheTable()
+    {
+        var state = new ReusableDictionaryState<int>();
+        state.Reset(0, useMap: true, EqualityComparer<int>.Default);
+        for (var i = 0; i < 4; i++)
+            state.GetOrAddIndex(i);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var index = state.GetOrAddIndex(2);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        if (index != 2)
+            throw new InvalidOperationException($"Expected index 2, got {index}.");
+        if (allocated != 0)
+            throw new InvalidOperationException($"Existing lookup at the growth threshold allocated {allocated} bytes.");
+    }
+
+    [Test]
     public void ZeroCapacityCanGrowAcrossMultipleTableSizes()
     {
         var state = new ReusableDictionaryState<int>();

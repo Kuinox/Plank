@@ -9,7 +9,9 @@ namespace Plank.Writing.Encoding;
 static class Encoding
 {
     const int DictionaryDropCheckPeriodRows = 2048;
-    internal static void Encode<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
+    const int MaximumInitialForcedDictionaryCapacity = 2048;
+
+    internal static bool Encode<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         PageStrategyContext strategyContext, PageList pages, LeafProjectionInfo leafProjectionInfo,
         ReusableDictionaryState<T> dictionaryState)
         where T : notnull
@@ -21,12 +23,12 @@ static class Encoding
 
         pages.Clear();
         if (values.Length == 0)
-            return;
+            return false;
 
         if (column.Options.Repetition == ParquetRepetition.Repeated)
         {
             EncodeRepeatedRows(bufferWriters, column, values, pages, leafProjectionInfo);
-            return;
+            return false;
         }
 
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
@@ -46,15 +48,16 @@ static class Encoding
             {
                 WriteDictionaryDataPages(bufferWriters, values.Length, dictionaryEncoding, pages, dictionaryIndexes,
                     dictionaryBitWidth, strategy);
-                return;
+                return typeof(T) != typeof(bool);
             }
 
             if (TryWriteFixedWidthDataPages(bufferWriters, column, values, dataEncoding, strategy, pages))
-                return;
+                return false;
             if (TryWritePlainSizeDataPages(bufferWriters, column, values, dataEncoding, strategy, pages))
-                return;
+                return false;
 
             WriteStrategyDataPages(bufferWriters, column, values, dataEncoding, strategy, pages);
+            return false;
         }
         finally
         {
@@ -1735,7 +1738,7 @@ static class Encoding
     }
 
     static int GetInitialForcedDictionaryCapacity(int rowCount)
-        => Math.Max(256, Math.Min(rowCount, 65_536));
+        => Math.Max(256, Math.Min(rowCount, MaximumInitialForcedDictionaryCapacity));
 
     static bool TryCompareForSort<T>(T left, T right, out int comparison)
     {

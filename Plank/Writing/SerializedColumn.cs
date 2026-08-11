@@ -914,14 +914,19 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         RowCount = checked((uint)values.Length);
         HasPendingData = true;
 
-        Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategyContext, Pages,
-            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+        var dictionaryState = GetOrCreateDictionaryState<TValue>();
+        var hasDictionaryStatistics = Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values,
+            strategyContext, Pages, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], dictionaryState);
         _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && TryAssignInt32ColumnAndPageStatistics(values))
             return;
 
-        Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, values, 0,
+        var statisticsValues = hasDictionaryStatistics && typeof(TValue) != typeof(float)
+            && typeof(TValue) != typeof(double)
+            ? dictionaryState.AsSpan()
+            : values;
+        Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, statisticsValues, 0,
             ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
             AssignPageStatistics(values);
