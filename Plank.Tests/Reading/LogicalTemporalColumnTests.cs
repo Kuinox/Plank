@@ -90,6 +90,23 @@ internal sealed class LogicalTemporalColumnTests
     }
 
     [Test]
+    public void RequiredPlainDateTimeValuesPreserveUnitsKindsAndEpochBoundaries()
+    {
+        ParquetDataPageVersion[] pageVersions =
+            [ParquetDataPageVersion.V1, ParquetDataPageVersion.V2];
+        foreach (var pageVersion in pageVersions)
+            foreach (var unit in Enum.GetValues<TimeUnit>())
+                foreach (var isAdjustedToUtc in new[] { false, true })
+                {
+                    var expected = CreateRequiredTimestampValues(unit, isAdjustedToUtc);
+                    var schema = CreateSchema(ParquetPhysicalType.Int64,
+                        new LogicalType.Timestamp(unit, isAdjustedToUtc), EncodingKind.Plain);
+                    var actual = RoundTrip(schema, expected, pageVersion);
+                    AssertDateTimesEqual(expected, actual, unit, isAdjustedToUtc, pageVersion);
+                }
+    }
+
+    [Test]
     public void NullableTemporalValuesRoundTrip()
     {
         DateOnly?[] expectedDates = [new DateOnly(1969, 12, 31), null, new DateOnly(2026, 7, 27)];
@@ -182,6 +199,55 @@ internal sealed class LogicalTemporalColumnTests
         foreach (var buffer in reader.RowGroups[0].Column<T>(0))
             actual.AddRange(buffer.Values);
         return actual.ToArray();
+    }
+
+    static DateTime[] CreateRequiredTimestampValues(TimeUnit unit, bool isAdjustedToUtc)
+    {
+        var kind = isAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+        var epoch = DateTime.SpecifyKind(DateTime.UnixEpoch, kind);
+        return unit switch
+        {
+            TimeUnit.Millis =>
+            [
+                DateTime.SpecifyKind(DateTime.MinValue, kind),
+                epoch.AddMilliseconds(-1),
+                epoch,
+                epoch.AddMilliseconds(1),
+                new DateTime(DateTime.MaxValue.Ticks - TimeSpan.TicksPerMillisecond + 1, kind)
+            ],
+            TimeUnit.Micros =>
+            [
+                DateTime.SpecifyKind(DateTime.MinValue, kind),
+                epoch.AddTicks(-10),
+                epoch,
+                epoch.AddTicks(10),
+                new DateTime(DateTime.MaxValue.Ticks - 9, kind)
+            ],
+            TimeUnit.Nanos =>
+            [
+                epoch.AddTicks(long.MinValue / 100),
+                epoch.AddTicks(-1),
+                epoch,
+                epoch.AddTicks(1),
+                epoch.AddTicks(long.MaxValue / 100)
+            ],
+            _ => throw new ArgumentOutOfRangeException(nameof(unit), unit,
+                "Time unit must be a defined TimeUnit value.")
+        };
+    }
+
+    static void AssertDateTimesEqual(ReadOnlySpan<DateTime> expected, ReadOnlySpan<DateTime> actual,
+        TimeUnit unit, bool isAdjustedToUtc, ParquetDataPageVersion pageVersion)
+    {
+        if (actual.Length != expected.Length)
+            throw new InvalidOperationException(
+                $"{pageVersion}/{unit}/adjusted={isAdjustedToUtc}: expected {expected.Length} values, got {actual.Length}.");
+        for (var i = 0; i < expected.Length; i++)
+            if (actual[i].Ticks != expected[i].Ticks || actual[i].Kind != expected[i].Kind)
+                throw new InvalidOperationException(
+                    $"{pageVersion}/{unit}/adjusted={isAdjustedToUtc}: value {i} expected " +
+                    $"ticks={expected[i].Ticks}, kind={expected[i].Kind}; got " +
+                    $"ticks={actual[i].Ticks}, kind={actual[i].Kind}.");
     }
 
     static void AssertSequenceEqual<T>(ReadOnlySpan<T> expected, ReadOnlySpan<T> actual,
