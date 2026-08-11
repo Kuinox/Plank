@@ -707,12 +707,8 @@ static class ColumnChunkReader
         var destination = state.GetBinaryDictionary(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
         destination.Clear();
-        var payloadAddress = valueCount == 0
-            ? 0
-            : state.Dictionary.DangerousGetAddress() +
-              checked(valueCount * Unsafe.SizeOf<BinaryValueDescriptor>());
         FillPlainBinaryValues(payload, column, valueCount, lengths, [], destination,
-            destinationPayload, payloadAddress);
+            destinationPayload);
         return true;
     }
 
@@ -837,9 +833,8 @@ static class ColumnChunkReader
         var destination = state.GetBinaryValues(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
         destination.Clear();
-        var payloadAddress = GetBinaryPayloadAddress(state.Values, valueCount);
         FillPlainBinaryValues(payload, column, physicalCount, lengths, definitions, destination,
-            destinationPayload, payloadAddress);
+            destinationPayload);
     }
 
     static void DecodeByteStreamSplitBinaryValues<T>(ReadOnlySpan<byte> payload,
@@ -851,7 +846,6 @@ static class ColumnChunkReader
         var destination = state.GetBinaryValues(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
         destination.Clear();
-        var payloadAddress = GetBinaryPayloadAddress(state.Values, valueCount);
         var logicalIndex = 0;
         var destinationOffset = 0;
         for (var physicalIndex = 0; physicalIndex < physicalCount; physicalIndex++)
@@ -860,7 +854,7 @@ static class ColumnChunkReader
             var valueDestination = destinationPayload.Slice(destinationOffset, valueLength);
             for (var lane = 0; lane < valueLength; lane++)
                 valueDestination[lane] = payload[(lane * physicalCount) + physicalIndex];
-            destination[targetIndex] = new BinaryValueDescriptor(payloadAddress + destinationOffset, valueLength);
+            destination[targetIndex] = new BinaryValueDescriptor(destinationOffset, valueLength);
             destinationOffset += valueLength;
         }
     }
@@ -877,7 +871,6 @@ static class ColumnChunkReader
         var destination = state.GetBinaryValues(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
         destination.Clear();
-        var payloadAddress = GetBinaryPayloadAddress(state.Values, valueCount);
         var logicalIndex = 0;
         var destinationOffset = 0;
         for (var physicalIndex = 0; physicalIndex < physicalCount; physicalIndex++)
@@ -885,7 +878,7 @@ static class ColumnChunkReader
             var length = lengths[physicalIndex];
             var targetIndex = GetBinaryLogicalIndex(definitions, ref logicalIndex, physicalIndex);
             remaining[..length].CopyTo(destinationPayload[destinationOffset..]);
-            destination[targetIndex] = new BinaryValueDescriptor(payloadAddress + destinationOffset, length);
+            destination[targetIndex] = new BinaryValueDescriptor(destinationOffset, length);
             remaining = remaining[length..];
             destinationOffset += length;
         }
@@ -941,10 +934,10 @@ static class ColumnChunkReader
             var targetIndex = GetBinaryLogicalIndex(definitions, ref logicalIndex, physicalIndex);
             var valueDestination = destinationPayload.Slice(destinationOffset, length);
             if (prefixLength > 0)
-                destination[previousLogicalIndex].Span[..prefixLength].CopyTo(valueDestination);
+                destination[previousLogicalIndex].GetSpan(payloadAddress)[..prefixLength].CopyTo(valueDestination);
             suffixRemaining[..suffixLength].CopyTo(valueDestination[prefixLength..]);
             suffixRemaining = suffixRemaining[suffixLength..];
-            destination[targetIndex] = new BinaryValueDescriptor(payloadAddress + destinationOffset, length);
+            destination[targetIndex] = new BinaryValueDescriptor(destinationOffset, length);
             previousLogicalIndex = targetIndex;
             destinationOffset += length;
         }
@@ -955,6 +948,7 @@ static class ColumnChunkReader
         ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
         var dictionary = state.GetDictionary<BinaryValueDescriptor>();
+        var dictionaryPayloadAddress = GetBinaryPayloadAddress(state.Dictionary, dictionary.Length);
         DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount), dictionary.Length, indexes);
         var payloadByteLength = 0;
         for (var i = 0; i < indexes.Length; i++)
@@ -963,15 +957,14 @@ static class ColumnChunkReader
         var destination = state.GetBinaryValues(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
         destination.Clear();
-        var payloadAddress = GetBinaryPayloadAddress(state.Values, valueCount);
         var logicalIndex = 0;
         var destinationOffset = 0;
         for (var physicalIndex = 0; physicalIndex < physicalCount; physicalIndex++)
         {
             var value = dictionary[indexes[physicalIndex]];
             var targetIndex = GetBinaryLogicalIndex(definitions, ref logicalIndex, physicalIndex);
-            value.Span.CopyTo(destinationPayload[destinationOffset..]);
-            destination[targetIndex] = new BinaryValueDescriptor(payloadAddress + destinationOffset, value.Length);
+            value.GetSpan(dictionaryPayloadAddress).CopyTo(destinationPayload[destinationOffset..]);
+            destination[targetIndex] = new BinaryValueDescriptor(destinationOffset, value.Length);
             destinationOffset += value.Length;
         }
     }
@@ -1012,7 +1005,7 @@ static class ColumnChunkReader
     static void FillPlainBinaryValues(ReadOnlySpan<byte> payload, Column column, int physicalCount,
         ReadOnlySpan<int> lengths, ReadOnlySpan<int> definitions,
         Span<BinaryValueDescriptor> destination,
-        Span<byte> destinationPayload, nint payloadAddress)
+        Span<byte> destinationPayload)
     {
         var remaining = payload;
         var logicalIndex = 0;
@@ -1024,7 +1017,7 @@ static class ColumnChunkReader
                 remaining = remaining[sizeof(int)..];
             var targetIndex = GetBinaryLogicalIndex(definitions, ref logicalIndex, physicalIndex);
             remaining[..length].CopyTo(destinationPayload[destinationOffset..]);
-            destination[targetIndex] = new BinaryValueDescriptor(payloadAddress + destinationOffset, length);
+            destination[targetIndex] = new BinaryValueDescriptor(destinationOffset, length);
             remaining = remaining[length..];
             destinationOffset += length;
         }

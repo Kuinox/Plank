@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using Plank.Reading.Logical;
+using Plank.Reading.Logical.Internal;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
@@ -9,6 +11,26 @@ namespace Plank.Tests.Reading;
 [NotInParallel]
 internal sealed class PackedBinaryColumnTests
 {
+    [Test]
+    public void BinaryValueDescriptorsUseCompactRelativeOffsets()
+    {
+        if (Unsafe.SizeOf<BinaryValueDescriptor>() != sizeof(long))
+            throw new InvalidOperationException("Binary value descriptors must remain eight bytes.");
+
+        using var payload = DefaultParquetBufferPool.Shared.Rent(4);
+        new byte[] { 10, 20, 30, 40 }.CopyTo(payload.Span);
+        var nullValue = default(BinaryValueDescriptor);
+        var emptyValue = new BinaryValueDescriptor(0, 0);
+        var value = new BinaryValueDescriptor(1, 2);
+
+        if (!nullValue.IsNull)
+            throw new InvalidOperationException("A default descriptor must represent null.");
+        if (emptyValue.IsNull || !emptyValue.GetSpan(payload.DangerousGetAddress()).IsEmpty)
+            throw new InvalidOperationException("An empty value must remain distinct from null.");
+        if (!value.GetSpan(payload.DangerousGetAddress()).SequenceEqual(new byte[] { 20, 30 }))
+            throw new InvalidOperationException("A relative descriptor did not resolve its payload.");
+    }
+
     [Test]
     public void BinaryValuesRoundTripFromPooledPageStorage()
     {
