@@ -161,6 +161,16 @@ public sealed class ParquetFileReader : IDisposable
         }
     }
 
+    internal bool TryBorrowSource(ulong offset, int length, out ReadOnlyMemory<byte> bytes)
+    {
+        ThrowIfDisposed();
+        if (_source is MemoryReadSource source)
+            return source.TryBorrow(offset, length, out bytes);
+
+        bytes = default;
+        return false;
+    }
+
     ParquetBuffer Rent(uint count)
         => _options.BufferPool.Rent(count);
 
