@@ -498,6 +498,15 @@ static class ColumnChunkReader
             DecodeDictionaryIndexesIntoBuffer(dataPayload, header.ValueCount,
                 state.GetDictionary<T>(), destination);
         }
+        else if (typeof(T) == typeof(DateTime) &&
+            column.Options.Repetition == ParquetRepetition.Required &&
+            column.PhysicalType == ParquetPhysicalType.Int64 &&
+            header.Encoding == EncodingKind.Plain)
+        {
+            ValidatePlainPayload(dataPayload, header.ValueCount, sizeof(long));
+            DecodeRequiredPlainDateTimes(dataPayload,
+                Unsafe.As<Span<T>, Span<DateTime>>(ref destination), column.LogicalType);
+        }
         else if (!TryDecodeValuesIntoNative(dataPayload, column, header.ValueCount, header.Encoding, destination))
         {
             return false;
@@ -505,6 +514,44 @@ static class ColumnChunkReader
 
         buffer = state.CreateNativeBuffer(valueCount);
         return true;
+    }
+
+    static void DecodeRequiredPlainDateTimes(ReadOnlySpan<byte> payload, Span<DateTime> destination,
+        LogicalType? logicalType)
+    {
+        if (logicalType is not LogicalType.Timestamp timestamp)
+            throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.");
+
+        var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+        switch (timestamp.Unit)
+        {
+            case TimeUnit.Millis:
+                for (var i = 0; i < destination.Length; i++)
+                {
+                    var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long)));
+                    destination[i] = DateTime.SpecifyKind(
+                        DateTimeOffset.FromUnixTimeMilliseconds(raw).UtcDateTime, kind);
+                }
+                break;
+            case TimeUnit.Micros:
+                for (var i = 0; i < destination.Length; i++)
+                {
+                    var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long)));
+                    destination[i] = DateTime.SpecifyKind(
+                        DateTimeOffset.UnixEpoch.AddTicks(checked(raw * 10)).UtcDateTime, kind);
+                }
+                break;
+            case TimeUnit.Nanos:
+                for (var i = 0; i < destination.Length; i++)
+                {
+                    var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long)));
+                    destination[i] = DateTime.SpecifyKind(
+                        DateTimeOffset.UnixEpoch.AddTicks(raw / 100).UtcDateTime, kind);
+                }
+                break;
+            default:
+                throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.");
+        }
     }
 
     static bool TryDecodeConvertedRequiredByPhysicalType<T>(ReadOnlySpan<byte> payload, int valueCount,
