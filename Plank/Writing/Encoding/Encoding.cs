@@ -9,7 +9,9 @@ namespace Plank.Writing.Encoding;
 static class Encoding
 {
     const int DictionaryDropCheckPeriodRows = 2048;
-    internal static void Encode<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
+    const int MaximumInitialForcedDictionaryCapacity = 2048;
+
+    internal static bool Encode<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         PageStrategyContext strategyContext, PageList pages, LeafProjectionInfo leafProjectionInfo,
         ReusableDictionaryState<T> dictionaryState)
         where T : notnull
@@ -21,12 +23,12 @@ static class Encoding
 
         pages.Clear();
         if (values.Length == 0)
-            return;
+            return false;
 
         if (column.Options.Repetition == ParquetRepetition.Repeated)
         {
             EncodeRepeatedRows(bufferWriters, column, values, pages, leafProjectionInfo);
-            return;
+            return false;
         }
 
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
@@ -46,15 +48,16 @@ static class Encoding
             {
                 WriteDictionaryDataPages(bufferWriters, values.Length, dictionaryEncoding, pages, dictionaryIndexes,
                     dictionaryBitWidth, strategy);
-                return;
+                return typeof(T) != typeof(bool);
             }
 
             if (TryWriteFixedWidthDataPages(bufferWriters, column, values, dataEncoding, strategy, pages))
-                return;
+                return false;
             if (TryWriteSizeBoundedDataPages(bufferWriters, column, values, dataEncoding, strategy, pages))
-                return;
+                return false;
 
             WriteStrategyDataPages(bufferWriters, column, values, dataEncoding, strategy, pages);
+            return false;
         }
         finally
         {
@@ -360,6 +363,31 @@ static class Encoding
         }
     }
 
+    internal static void EncodeOptionalConverted<TSource, TPhysical>(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<TSource?> values, ReadOnlySpan<TPhysical> densePresentValues,
+        PageStrategyContext strategyContext, PageList pages, LeafProjectionInfo leafProjectionInfo,
+        ReusableDictionaryState<TPhysical> dictionaryState)
+        where TSource : struct
+        where TPhysical : struct
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        ArgumentNullException.ThrowIfNull(strategyContext);
+        ArgumentNullException.ThrowIfNull(pages);
+        if (column.Options.Repetition != ParquetRepetition.Optional)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' does not support null values.");
+        if (leafProjectionInfo.MaxDefinitionLevel != 1 || leafProjectionInfo.MaxRepetitionLevel != 0)
+            throw new NotSupportedException(
+                $"Column '{column.Name}' optional flat encoding requires a single optional leaf.");
+
+        pages.Clear();
+        if (values.Length == 0)
+            return;
+
+        EncodeOptionalFlatValues(bufferWriters, column, values, strategyContext, pages, densePresentValues,
+            dictionaryState);
+    }
+
     internal static void EncodeOptional<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         PageStrategyContext strategyContext, PageList pages, LeafProjectionInfo leafProjectionInfo,
         ReusableDictionaryState<T> dictionaryState)
@@ -523,10 +551,12 @@ static class Encoding
         }
     }
 
-    static void EncodeOptionalFlatValues<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T?> values,
+    static void EncodeOptionalFlatValues<T, TSource>(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<TSource?> values,
         PageStrategyContext strategyContext, PageList pages, ReadOnlySpan<T> denseValues,
         ReusableDictionaryState<T> dictionaryState)
         where T : struct
+        where TSource : struct
     {
         var strategy = strategyContext.Strategy;
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
@@ -1753,7 +1783,7 @@ static class Encoding
     }
 
     static int GetInitialForcedDictionaryCapacity(int rowCount)
-        => Math.Max(256, Math.Min(rowCount, 65_536));
+        => Math.Max(256, Math.Min(rowCount, MaximumInitialForcedDictionaryCapacity));
 
     static bool TryCompareForSort<T>(T left, T right, out int comparison)
     {

@@ -661,13 +661,12 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeNullableDateTime(ReadOnlySpan<DateTime?> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
-        var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
+        var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
-            var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
-            for (var i = 0; i < values.Length; i++)
-                converted[i] = values[i] is { } value ? ToUnixTime(value, timestamp) : null;
-            SerializeOptionalTyped(converted);
+            var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
+            var presentCount = ConvertNullableDateTimes(values, converted, timestamp);
+            SerializeOptionalConverted(values, converted[..presentCount], values.Length - presentCount);
         }
         finally
         {
@@ -731,13 +730,12 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeNullableDateTimeOffset(ReadOnlySpan<DateTimeOffset?> values)
     {
         var timestamp = RequireAdjustedTimestampLogicalType(_column);
-        var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
+        var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
-            var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
-            for (var i = 0; i < values.Length; i++)
-                converted[i] = values[i] is { } value ? ToUnixTime(value, timestamp.Unit) : null;
-            SerializeOptionalTyped(converted);
+            var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
+            var presentCount = ConvertNullableDateTimeOffsets(values, converted, timestamp.Unit);
+            SerializeOptionalConverted(values, converted[..presentCount], values.Length - presentCount);
         }
         finally
         {
@@ -829,6 +827,32 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         SerializeOptionalCore(values, columnOrdinal, _owner.GetPageStrategyContext(columnOrdinal));
     }
 
+    void SerializeOptionalConverted<TSource, TValue>(ReadOnlySpan<TSource?> values,
+        ReadOnlySpan<TValue> densePresentValues, long nullCount)
+        where TSource : struct
+        where TValue : struct
+    {
+        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        var strategyContext = _owner.GetPageStrategyContext(columnOrdinal);
+        ArgumentNullException.ThrowIfNull(strategyContext);
+        if (HasPendingData)
+            throw new InvalidOperationException(
+                "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
+        Pages.Clear();
+        ColumnOrdinal = columnOrdinal;
+        RowCount = checked((uint)values.Length);
+        Statistics = ColumnStatistics.Create(_column, densePresentValues, nullCount);
+        HasPendingData = true;
+
+        Plank.Writing.Encoding.Encoding.EncodeOptionalConverted(_owner.BufferWriters, _column, values,
+            densePresentValues, strategyContext, Pages, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
+            GetOrCreateDictionaryState<TValue>());
+        _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, densePresentValues,
+            ref _bloomFilterBuffer);
+        if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
+            AssignOptionalDensePageStatistics(densePresentValues);
+    }
+
     void SerializeOptionalReference<TValue>(ReadOnlySpan<TValue> values)
         where TValue : class
     {
@@ -914,14 +938,19 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         RowCount = checked((uint)values.Length);
         HasPendingData = true;
 
-        Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values, strategyContext, Pages,
-            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
+        var dictionaryState = GetOrCreateDictionaryState<TValue>();
+        var hasDictionaryStatistics = Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values,
+            strategyContext, Pages, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], dictionaryState);
         _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && TryAssignInt32ColumnAndPageStatistics(values))
             return;
 
-        Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, values, 0,
+        var statisticsValues = hasDictionaryStatistics && typeof(TValue) != typeof(float)
+            && typeof(TValue) != typeof(double)
+            ? dictionaryState.AsSpan()
+            : values;
+        Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, statisticsValues, 0,
             ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
             AssignPageStatistics(values);
@@ -1312,6 +1341,26 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
     }
 
+    void AssignOptionalDensePageStatistics<TValue>(ReadOnlySpan<TValue> values)
+        where TValue : struct
+    {
+        var valueOffset = 0;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var page = ref Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            var pageValueCount = checked((int)(page.RowCount - page.NullCount));
+            var pageValues = values.Slice(valueOffset, pageValueCount);
+            page.Statistics = ColumnStatistics.Create(_column, pageValues, page.NullCount);
+            valueOffset += pageValueCount;
+        }
+
+        if (valueOffset != values.Length)
+            throw new InvalidOperationException(
+                $"Optional page statistics covered {valueOffset} values, but the column contains {values.Length} present values.");
+    }
+
     void AssignBytePageStatistics(ReadOnlySpan<byte> values)
         => AssignConvertedPageStatistics(values, static (pageValues, nullCount) =>
             ColumnStatistics.CreateByte(pageValues, nullCount));
@@ -1411,6 +1460,88 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     static long ToUnixTime(DateTimeOffset value, TimeUnit unit)
         => ToUnixTimeFromTicks(value.UtcDateTime.Ticks, unit);
+
+    static int ConvertNullableDateTimes(ReadOnlySpan<DateTime?> values, Span<long> destination,
+        LogicalType.Timestamp timestamp)
+    {
+        var expectedKind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+        return timestamp.Unit switch
+        {
+            TimeUnit.Millis => ConvertNullableDateTimesDivided(values, destination, expectedKind,
+                TimeSpan.TicksPerMillisecond),
+            TimeUnit.Micros => ConvertNullableDateTimesDivided(values, destination, expectedKind, 10),
+            TimeUnit.Nanos => ConvertNullableDateTimesNanos(values, destination, expectedKind),
+            _ => throw new ArgumentOutOfRangeException(nameof(timestamp), timestamp.Unit,
+                "Time unit must be a defined TimeUnit value.")
+        };
+    }
+
+    static int ConvertNullableDateTimesDivided(ReadOnlySpan<DateTime?> values, Span<long> destination,
+        DateTimeKind expectedKind, long divisor)
+    {
+        var count = 0;
+        for (var i = 0; i < values.Length; i++)
+        {
+            if (values[i] is not { } value)
+                continue;
+            if (value.Kind != expectedKind)
+                throw new InvalidOperationException(
+                    $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
+
+            destination[count++] = TimestampConversion.DivideFloor(value.Ticks - DateTime.UnixEpoch.Ticks, divisor);
+        }
+
+        return count;
+    }
+
+    static int ConvertNullableDateTimesNanos(ReadOnlySpan<DateTime?> values, Span<long> destination,
+        DateTimeKind expectedKind)
+    {
+        var count = 0;
+        for (var i = 0; i < values.Length; i++)
+        {
+            if (values[i] is not { } value)
+                continue;
+            if (value.Kind != expectedKind)
+                throw new InvalidOperationException(
+                    $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
+
+            destination[count++] = checked((value.Ticks - DateTime.UnixEpoch.Ticks) * 100);
+        }
+
+        return count;
+    }
+
+    static int ConvertNullableDateTimeOffsets(ReadOnlySpan<DateTimeOffset?> values, Span<long> destination,
+        TimeUnit unit)
+        => unit switch
+        {
+            TimeUnit.Millis => ConvertNullableDateTimeOffsetsDivided(values, destination,
+                TimeSpan.TicksPerMillisecond),
+            TimeUnit.Micros => ConvertNullableDateTimeOffsetsDivided(values, destination, 10),
+            TimeUnit.Nanos => ConvertNullableDateTimeOffsetsNanos(values, destination),
+            _ => throw new ArgumentOutOfRangeException(nameof(unit), unit, "Time unit must be a defined TimeUnit value.")
+        };
+
+    static int ConvertNullableDateTimeOffsetsDivided(ReadOnlySpan<DateTimeOffset?> values, Span<long> destination,
+        long divisor)
+    {
+        var count = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i] is { } value)
+                destination[count++] = TimestampConversion.DivideFloor(
+                    value.UtcDateTime.Ticks - DateTime.UnixEpoch.Ticks, divisor);
+        return count;
+    }
+
+    static int ConvertNullableDateTimeOffsetsNanos(ReadOnlySpan<DateTimeOffset?> values, Span<long> destination)
+    {
+        var count = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i] is { } value)
+                destination[count++] = checked((value.UtcDateTime.Ticks - DateTime.UnixEpoch.Ticks) * 100);
+        return count;
+    }
 
     static long ToUnixTimeFromTicks(long ticks, TimeUnit unit)
     {
