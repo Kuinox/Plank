@@ -965,6 +965,54 @@ static class ColumnChunkReader
         int valueCount, int physicalCount, Column column, Span<int> lengths,
         ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
+        if (column.PhysicalType == ParquetPhysicalType.ByteArray)
+        {
+            var prefixByteLength = checked(physicalCount * sizeof(int));
+            if (prefixByteLength > payload.Length)
+                throw new CorruptParquetException(
+                    $"Payload ({payload.Length} bytes) is too short to decode {physicalCount} byte array length prefixes.");
+            var byteArrayPayloadLength = payload.Length - prefixByteLength;
+            var byteArrayDestination = state.GetBinaryValues(valueCount, byteArrayPayloadLength, bufferPool,
+                out var byteArrayPayload);
+            byteArrayDestination.Clear();
+
+            var remaining = payload;
+            var logicalIndex = 0;
+            var destinationOffset = 0;
+            for (var physicalIndex = 0; physicalIndex < physicalCount; physicalIndex++)
+            {
+                if (remaining.Length < sizeof(int))
+                    throw new CorruptParquetException("Payload too short to read byte array length prefix.");
+                var unsignedLength = BinaryPrimitives.ReadUInt32LittleEndian(remaining);
+                remaining = remaining[sizeof(int)..];
+                if (unsignedLength > int.MaxValue)
+                    throw new CorruptParquetException(
+                        $"Byte array length {unsignedLength} exceeds the supported maximum of {int.MaxValue}.");
+                var length = checked((int)unsignedLength);
+                if (length > remaining.Length)
+                    throw new CorruptParquetException(
+                        $"Byte array length {length} exceeds remaining payload ({remaining.Length} bytes).");
+                if (length > byteArrayPayload.Length - destinationOffset)
+                    throw new CorruptParquetException(
+                        $"Byte array length {length} exceeds remaining decoded payload " +
+                        $"({byteArrayPayload.Length - destinationOffset} bytes).");
+
+                var targetIndex = GetBinaryLogicalIndex(definitions, ref logicalIndex, physicalIndex);
+                remaining[..length].CopyTo(byteArrayPayload[destinationOffset..]);
+                byteArrayDestination[targetIndex] = new BinaryValueDescriptor(destinationOffset, length);
+                remaining = remaining[length..];
+                destinationOffset += length;
+            }
+            if (!remaining.IsEmpty)
+                throw new CorruptParquetException(
+                    $"Plain byte array payload contains {remaining.Length} trailing bytes.");
+            if (destinationOffset != byteArrayPayload.Length)
+                throw new CorruptParquetException(
+                    $"Plain byte array lengths consume {destinationOffset} bytes, expected " +
+                    $"{byteArrayPayload.Length} bytes.");
+            return;
+        }
+
         var payloadByteLength = ReadPlainBinaryLengths(payload, column, physicalCount, lengths);
         var destination = state.GetBinaryValues(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
