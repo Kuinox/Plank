@@ -201,9 +201,11 @@ internal sealed class DeltaBinaryPackedDecoderTests
     [Test]
     public void ReadInt32IntoSpanRoundTripsEveryValidPackedWidth()
     {
+        int[] counts = [5, 8, 9, 31, 32, 33, 129];
         for (var bitWidth = 0; bitWidth <= 33; bitWidth++)
+        foreach (var count in counts)
         {
-            var values = CreateValuesForBitWidth(bitWidth);
+            var values = CreateValuesForBitWidth(bitWidth, count);
             var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 4096, 4096);
             try
             {
@@ -216,15 +218,74 @@ internal sealed class DeltaBinaryPackedDecoderTests
 
                 if (!decoded.SequenceEqual(values))
                     throw new InvalidOperationException(
-                        $"Span decode did not round-trip bit width {bitWidth}.");
+                        $"Span decode did not round-trip bit width {bitWidth} with {count} values.");
                 if (consumed != payload.Length)
                     throw new InvalidOperationException(
-                        $"Bit width {bitWidth} consumed {consumed} bytes instead of {payload.Length}.");
+                        $"Bit width {bitWidth} with {count} values consumed {consumed} bytes " +
+                        $"instead of {payload.Length}.");
             }
             finally
             {
                 writer.Dispose();
             }
+        }
+    }
+
+    [Test]
+    public void ReadInt32RejectsTransientOverflowInEveryVectorLaneAndTail()
+    {
+        int[] overflowIndexes = [0, 3, 4, 7, 8, 15, 16, 23, 24, 30, 31];
+        foreach (var overflowIndex in overflowIndexes)
+        {
+            var payload = new List<byte>();
+            WriteUnsignedVarIntReference(128, payload);
+            WriteUnsignedVarIntReference(4, payload);
+            WriteUnsignedVarIntReference(33, payload);
+            WriteUnsignedVarIntReference(uint.MaxValue - 1, payload);
+
+            var deltas = new long[128];
+            deltas[overflowIndex] = 1;
+            if (overflowIndex + 1 < 32)
+                deltas[overflowIndex + 1] = -1;
+            Array.Fill(deltas, -1, 32, deltas.Length - 32);
+            WriteDeltaBlockReference(deltas, -1, payload);
+
+            try
+            {
+                DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), new int[33]);
+                throw new InvalidOperationException(
+                    $"Expected the transient Int32 overflow at delta {overflowIndex} to be rejected.");
+            }
+            catch (CorruptParquetException)
+            {
+            }
+        }
+    }
+
+    [Test]
+    public void ReadInt32RejectsTransientInt64WrapInVectorPrefix()
+    {
+        var payload = new List<byte>();
+        WriteUnsignedVarIntReference(128, payload);
+        WriteUnsignedVarIntReference(4, payload);
+        WriteUnsignedVarIntReference(5, payload);
+        WriteUnsignedVarIntReference(0, payload);
+
+        var deltas = new long[128];
+        deltas[0] = long.MinValue;
+        deltas[1] = long.MaxValue;
+        deltas[2] = long.MinValue;
+        deltas[3] = long.MaxValue;
+        Array.Fill(deltas, long.MaxValue, 4, deltas.Length - 4);
+        WriteDeltaBlockReference(deltas, long.MaxValue, payload);
+
+        try
+        {
+            DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), new int[5]);
+            throw new InvalidOperationException("Expected the transient Int64 wrap to be rejected.");
+        }
+        catch (CorruptParquetException)
+        {
         }
     }
 
@@ -292,9 +353,8 @@ internal sealed class DeltaBinaryPackedDecoderTests
         return values;
     }
 
-    static int[] CreateValuesForBitWidth(int bitWidth)
+    static int[] CreateValuesForBitWidth(int bitWidth, int count)
     {
-        const int count = 129;
         var values = new int[count];
         if (bitWidth == 0)
         {
