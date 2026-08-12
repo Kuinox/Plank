@@ -647,8 +647,45 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         try
         {
             var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
-            for (var i = 0; i < values.Length; i++)
-                converted[i] = ToUnixTime(values[i], timestamp);
+            var expectedKind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+            switch (timestamp.Unit)
+            {
+                case TimeUnit.Millis:
+                    for (var i = 0; i < values.Length; i++)
+                    {
+                        var value = values[i];
+                        if (value.Kind != expectedKind)
+                            throw new InvalidOperationException(
+                                $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
+                        converted[i] = TimestampConversion.DivideFloor(
+                            value.Ticks - DateTime.UnixEpoch.Ticks, TimeSpan.TicksPerMillisecond);
+                    }
+                    break;
+                case TimeUnit.Micros:
+                    for (var i = 0; i < values.Length; i++)
+                    {
+                        var value = values[i];
+                        if (value.Kind != expectedKind)
+                            throw new InvalidOperationException(
+                                $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
+                        converted[i] = TimestampConversion.DivideFloor(
+                            value.Ticks - DateTime.UnixEpoch.Ticks, 10);
+                    }
+                    break;
+                case TimeUnit.Nanos:
+                    for (var i = 0; i < values.Length; i++)
+                    {
+                        var value = values[i];
+                        if (value.Kind != expectedKind)
+                            throw new InvalidOperationException(
+                                $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
+                        converted[i] = checked((value.Ticks - DateTime.UnixEpoch.Ticks) * 100);
+                    }
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(timestamp), timestamp.Unit,
+                        "Time unit must be a defined TimeUnit value.");
+            }
             SerializeTyped(converted);
         }
         finally
@@ -1426,16 +1463,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return [];
         ref var first = ref Unsafe.As<TFrom, TTo>(ref MemoryMarshal.GetReference(values));
         return MemoryMarshal.CreateReadOnlySpan(ref first, values.Length);
-    }
-
-    static long ToUnixTime(DateTime value, LogicalType.Timestamp timestamp)
-    {
-        var expectedKind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
-        if (value.Kind != expectedKind)
-            throw new InvalidOperationException(
-                $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
-
-        return ToUnixTimeFromTicks(value.Ticks, timestamp.Unit);
     }
 
     static long ToUnixTime(DateTimeOffset value, TimeUnit unit)
