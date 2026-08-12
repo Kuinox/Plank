@@ -28,6 +28,68 @@ internal sealed class NullableNumericEncodingTests
             [EncodingKind.Plain, EncodingKind.RleDictionary, EncodingKind.ByteStreamSplit], dataPageVersion);
     }
 
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void ForcedNullablePrimitiveDictionaryUsesOneDataPageAndPreservesStatistics(
+        ParquetDataPageVersion dataPageVersion)
+    {
+        AssertForcedNullableDictionary(CreateInt64Values(), ParquetPhysicalType.Int64, dataPageVersion);
+
+        var doubles = CreateDoubleValues();
+        doubles[42] = doubles[2];
+        doubles[43] = doubles[2];
+        doubles[100] = doubles[3];
+        AssertForcedNullableDictionary(doubles, ParquetPhysicalType.Double, dataPageVersion);
+    }
+
+    static void AssertForcedNullableDictionary<TValue>(TValue[] requiredValues,
+        ParquetPhysicalType physicalType, ParquetDataPageVersion dataPageVersion)
+        where TValue : struct
+    {
+        var values = CreateOptionalValues(requiredValues);
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("optional", physicalType,
+                new ColumnOptions(encodings: [EncodingKind.RleDictionary]),
+                pageStrategy: ForceDictionaryPageStrategy.Shared)
+        ]);
+        var expectedStatistics = ColumnStatistics.CreateOptional(schema.LeafColumns[0].Column, values);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions { DataPageVersion = dataPageVersion });
+        var serialized = writer.CreateSerializedColumn<TValue?>(schema.LeafColumns[0]);
+
+        serialized.Serialize(values);
+
+        AssertStatistics(serialized.Statistics, expectedStatistics, EncodingKind.RleDictionary, "optional");
+        var dictionaryPages = 0;
+        var dataPages = 0;
+        for (var pageIndex = 0; pageIndex < serialized.Pages.Count; pageIndex++)
+        {
+            ref var page = ref serialized.Pages[pageIndex];
+            if (page.Kind == PageKind.Dictionary)
+            {
+                dictionaryPages++;
+                continue;
+            }
+
+            dataPages++;
+            if (page.RowCount != (uint)values.Length)
+                throw new InvalidOperationException(
+                    $"Forced dictionary data page row count mismatch. Expected {values.Length}, got {page.RowCount}.");
+        }
+        if (dictionaryPages != 1 || dataPages != 1)
+            throw new InvalidOperationException(
+                $"Expected one dictionary and one data page, got {dictionaryPages} dictionary and {dataPages} data pages.");
+
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        using var readStream = new MemoryStream(stream.ToArray(), writable: false);
+        using var reader = new ParquetFileReader(readStream, leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var column = rowGroup.Column(0).LogicalReader<TValue?>();
+        AssertColumn(column.ReadAll(values.Length), values, EncodingKind.RleDictionary, "optional");
+    }
+
     static void AssertRoundTrip<TValue>(TValue[] requiredValues, ParquetPhysicalType physicalType,
         ReadOnlySpan<EncodingKind> encodings, ParquetDataPageVersion dataPageVersion)
         where TValue : struct
