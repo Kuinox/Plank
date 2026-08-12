@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -9,7 +10,10 @@ namespace Plank.Reading.Logical.Internal;
 
 static class ColumnChunkReader
 {
+    const int NonTemporalNullableScatterMinimumValues = 65_536;
+
     static readonly DateOnly UnixEpochDate = new(1970, 1, 1);
+    static int s_activeLargeNullableNumericDecodes;
 
     internal static bool TryDecodeDictionaryPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
@@ -419,28 +423,132 @@ static class ColumnChunkReader
         var physicalByteLength = checked(physicalCount * Unsafe.SizeOf<TValue>());
         var physicalValues = MemoryMarshal.Cast<byte, TValue>(
             state.GetScratch(physicalByteLength, bufferPool));
-        if (encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
+        // Streaming stores lose on serial pages, but avoid write allocation once large
+        // 16-byte nullable scatters compete for cache and memory bandwidth.
+        var trackParallelDecode = valueCount >= NonTemporalNullableScatterMinimumValues &&
+                                  Unsafe.SizeOf<TValue>() == sizeof(ulong) &&
+                                  Unsafe.SizeOf<TValue?>() == 2 * sizeof(ulong) &&
+                                  (Avx512F.IsSupported || Avx2.IsSupported);
+        var parallelDecodeCount = trackParallelDecode
+            ? Interlocked.Increment(ref s_activeLargeNullableNumericDecodes)
+            : 0;
+        try
         {
-            if (!state.HasDictionary)
+            if (encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
+            {
+                if (!state.HasDictionary)
+                    return false;
+                DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount),
+                    state.GetDictionary<TValue>(), physicalValues);
+            }
+            else if (!TryDecodeValuesIntoNative(payload, column, checked((uint)physicalCount), encoding,
+                         physicalValues))
+            {
                 return false;
-            DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount),
-                state.GetDictionary<TValue>(), physicalValues);
+            }
         }
-        else if (!TryDecodeValuesIntoNative(payload, column, checked((uint)physicalCount), encoding,
-                     physicalValues))
+        finally
         {
-            return false;
+            if (trackParallelDecode)
+                Interlocked.Decrement(ref s_activeLargeNullableNumericDecodes);
+        }
+
+        if (parallelDecodeCount > 1)
+        {
+            var streamingPhysicalIndex = physicalCount;
+            if (TryScatterNullableNumericValuesNonTemporal(definitions, physicalValues, destination,
+                    ref streamingPhysicalIndex))
+            {
+                if (streamingPhysicalIndex != 0)
+                    ThrowDefinitionLevelPhysicalCountMismatch(physicalCount, streamingPhysicalIndex);
+                return true;
+            }
         }
 
         var physicalIndex = physicalCount;
         for (var i = definitions.Length - 1; i >= 0; i--)
             destination[i] = definitions[i] == 0 ? null : physicalValues[--physicalIndex];
         if (physicalIndex != 0)
-            throw new CorruptParquetException(
-                $"Definition levels consumed {physicalCount - physicalIndex} physical values, " +
-                $"expected {physicalCount}.");
+            ThrowDefinitionLevelPhysicalCountMismatch(physicalCount, physicalIndex);
         return true;
     }
+
+    static unsafe bool TryScatterNullableNumericValuesNonTemporal<TValue>(ReadOnlySpan<byte> definitions,
+        ReadOnlySpan<TValue> physicalValues, Span<TValue?> destination, ref int physicalIndex)
+        where TValue : struct
+    {
+        ref var destinationBytes = ref MemoryMarshal.GetReference(AsBytes(destination));
+        var destinationAddress = (nuint)Unsafe.AsPointer(ref destinationBytes);
+        if ((destinationAddress & 15) != 0)
+            return false;
+
+        var alignment = Avx512F.IsSupported ? 64 : 32;
+        var alignmentMask = checked((nuint)(alignment - 1));
+        var prefixCount = checked((int)(((nuint)alignment - (destinationAddress & alignmentMask)) & alignmentMask) /
+                                      (2 * sizeof(ulong)));
+        if (definitions.Length - prefixCount < 4)
+            return false;
+
+        var blockEnd = definitions.Length - (definitions.Length - prefixCount) % 4;
+        for (var i = definitions.Length - 1; i >= blockEnd; i--)
+            destination[i] = definitions[i] == 0 ? null : physicalValues[--physicalIndex];
+
+        ref var physicalValuesReference = ref MemoryMarshal.GetReference(physicalValues);
+        var blockIndex = blockEnd;
+        while (blockIndex - prefixCount >= 4)
+        {
+            blockIndex -= 4;
+            var definition0 = definitions[blockIndex];
+            var definition1 = definitions[blockIndex + 1];
+            var definition2 = definitions[blockIndex + 2];
+            var definition3 = definitions[blockIndex + 3];
+            var value3 = TakeNullablePhysicalBits(definition3, ref physicalValuesReference, ref physicalIndex);
+            var value2 = TakeNullablePhysicalBits(definition2, ref physicalValuesReference, ref physicalIndex);
+            var value1 = TakeNullablePhysicalBits(definition1, ref physicalValuesReference, ref physicalIndex);
+            var value0 = TakeNullablePhysicalBits(definition0, ref physicalValuesReference, ref physicalIndex);
+            var output = (ulong*)((byte*)Unsafe.AsPointer(ref destinationBytes) +
+                                  blockIndex * 2 * sizeof(ulong));
+            if (Avx512F.IsSupported)
+            {
+                var cacheLine = Vector512.Create(
+                    (ulong)(definition0 & 1), value0,
+                    (ulong)(definition1 & 1), value1,
+                    (ulong)(definition2 & 1), value2,
+                    (ulong)(definition3 & 1), value3);
+                Avx512F.StoreAlignedNonTemporal(output, cacheLine);
+            }
+            else
+            {
+                var lower = Vector256.Create(
+                    (ulong)(definition0 & 1), value0,
+                    (ulong)(definition1 & 1), value1);
+                var upper = Vector256.Create(
+                    (ulong)(definition2 & 1), value2,
+                    (ulong)(definition3 & 1), value3);
+                Avx.StoreAlignedNonTemporal(output, lower);
+                Avx.StoreAlignedNonTemporal(output + Vector256<ulong>.Count, upper);
+            }
+        }
+
+        for (var i = prefixCount - 1; i >= 0; i--)
+            destination[i] = definitions[i] == 0 ? null : physicalValues[--physicalIndex];
+        Sse.StoreFence(); // Publish every streaming store before exposing the page buffer.
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static ulong TakeNullablePhysicalBits<TValue>(byte definition, ref TValue physicalValues,
+        ref int physicalIndex)
+        where TValue : struct
+        => definition == 0
+            ? 0
+            : Unsafe.As<TValue, ulong>(ref Unsafe.Add(ref physicalValues, --physicalIndex));
+
+    [DoesNotReturn]
+    static void ThrowDefinitionLevelPhysicalCountMismatch(int physicalCount, int remainingPhysicalCount)
+        => throw new CorruptParquetException(
+            $"Definition levels consumed {physicalCount - remainingPhysicalCount} physical values, " +
+            $"expected {physicalCount}.");
 
     static bool TryDecodeNullableValuesByPhysicalType<T>(ReadOnlySpan<byte> payload,
         ReadOnlySpan<byte> definitionPayload, int valueCount, int physicalCount, Column column,

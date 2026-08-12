@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using Plank.Reading;
+using Plank.Reading.Logical;
 using Plank.Reading.Logical.Internal;
 using Plank.Schema;
 using Plank.Writing;
@@ -132,6 +134,86 @@ internal sealed class NullableNumericDecodingTests
         }
     }
 
+    [Test]
+    public async Task LargeNullableLongAndDoublePagesPreserveBitsOnWorkerThreads()
+    {
+        const int count = 65_539;
+        var longs = CreateLargeValues<long>(count, index => unchecked((long)((ulong)index *
+            0x9E37_79B9_7F4A_7C15UL)));
+        var noNullLongs = CreateLargeValues<long>(count, index => unchecked((long)((ulong)index *
+            0xD6E8_FEB8_6659_FD93UL)), includeNulls: false);
+        var allNullLongs = new long?[count];
+        var doubles = CreateLargeValues<double>(count, index => BitConverter.Int64BitsToDouble(index switch
+        {
+            1 => unchecked((long)0x8000_0000_0000_0000UL),
+            2 => 0x7FF8_0000_0000_0001L,
+            3 => 0x7FF8_0000_0000_0002L,
+            4 => 0x7FF0_0000_0000_0000L,
+            5 => unchecked((long)0xFFF0_0000_0000_0000UL),
+            _ => unchecked((long)(0x3FF0_0000_0000_0000UL ^
+                                  ((ulong)index * 0x0000_0001_0001_0001UL)))
+        }));
+
+        foreach (var encoding in Encodings)
+        {
+            var actualLongs = await Task.Run(() => RoundTripSinglePage(
+                ParquetPhysicalType.Int64, longs, encoding)).ConfigureAwait(false);
+            AssertEqual(longs, actualLongs,
+                encoding, ParquetDataPageVersion.V2, NullPattern.Mixed);
+            var actualDoubles = await Task.Run(() => RoundTripSinglePage(
+                ParquetPhysicalType.Double, doubles, encoding)).ConfigureAwait(false);
+            AssertEqual(doubles, actualDoubles,
+                encoding, ParquetDataPageVersion.V2, NullPattern.Mixed);
+            var actualNoNullLongs = await Task.Run(() => RoundTripSinglePage(
+                ParquetPhysicalType.Int64, noNullLongs, encoding)).ConfigureAwait(false);
+            AssertEqual(noNullLongs, actualNoNullLongs,
+                encoding, ParquetDataPageVersion.V2, NullPattern.NoNulls);
+            var actualAllNullLongs = await Task.Run(() => RoundTripSinglePage(
+                ParquetPhysicalType.Int64, allNullLongs, encoding)).ConfigureAwait(false);
+            AssertEqual(allNullLongs, actualAllNullLongs,
+                encoding, ParquetDataPageVersion.V2, NullPattern.AllNull);
+        }
+    }
+
+    [Test]
+    public async Task ConcurrentLargeNullablePagesAreVisibleAfterDecodeAndRetention()
+    {
+        const int count = 524_291;
+        const int readerCount = 8;
+        var expected = CreateLargeValues<double>(count, index => BitConverter.Int64BitsToDouble(index switch
+        {
+            1 => unchecked((long)0x8000_0000_0000_0000UL),
+            2 => 0x7FF8_0000_0000_0001L,
+            3 => 0x7FF8_0000_0000_0002L,
+            _ => unchecked((long)((ulong)index * 0xD6E8_FEB8_6659_FD93UL))
+        }));
+        var (schema, bytes) = WriteSinglePage(ParquetPhysicalType.Double, expected,
+            EncodingKind.ByteStreamSplit);
+        var pool = new OffsetBufferPool();
+        using var start = new ManualResetEventSlim();
+        var reads = new Task<ParquetBuffer>[readerCount];
+        for (var i = 0; i < reads.Length; i++)
+            reads[i] = Task.Run(() =>
+            {
+                start.Wait();
+                return ReadRetainedSinglePage<double>(schema, bytes, pool);
+            });
+        start.Set();
+
+        var retained = await Task.WhenAll(reads).ConfigureAwait(false);
+        try
+        {
+            foreach (var buffer in retained)
+                AssertEqual(expected, buffer.AsSpan<double?>(), EncodingKind.ByteStreamSplit,
+                    ParquetDataPageVersion.V2, NullPattern.Mixed);
+        }
+        finally
+        {
+            foreach (var buffer in retained)
+                buffer.Dispose();
+        }
+    }
+
     static void AssertCorrupt(Column column, byte[] definitionPayload, uint valueCount, uint nullCount,
         byte[]? physicalPayload = null)
     {
@@ -164,6 +246,75 @@ internal sealed class NullableNumericDecodingTests
                 pageStrategy: new FixedRowsPageStrategy(rowsPerPage: 31,
                     dictionary: encoding == EncodingKind.RleDictionary))
         ]);
+    }
+
+    static ParquetSchema CreateSinglePageSchema(ParquetPhysicalType physicalType, EncodingKind encoding)
+        => new([
+            ColumnDefinition.OptionalLeaf("value", physicalType,
+                new ColumnOptions(ParquetRepetition.Optional, ImmutableArray.Create(encoding)),
+                pageStrategy: encoding == EncodingKind.RleDictionary
+                    ? ForceDictionaryPageStrategy.Shared
+                    : new FixedRowsPageStrategy(uint.MaxValue, dictionary: false))
+        ]);
+
+    static T?[] RoundTripSinglePage<T>(ParquetPhysicalType physicalType, T?[] values,
+        EncodingKind encoding)
+        where T : struct
+    {
+        var (schema, bytes) = WriteSinglePage(physicalType, values, encoding);
+        using var reader = schema.CreateReader(new MemoryReadSource(bytes));
+        var actual = new List<T?>(values.Length);
+        foreach (var buffer in reader.RowGroups[0].Column<T?>(0))
+            actual.AddRange(buffer.Values);
+        return actual.ToArray();
+    }
+
+    static (ParquetSchema Schema, byte[] Bytes) WriteSinglePage<T>(ParquetPhysicalType physicalType,
+        T?[] values, EncodingKind encoding)
+        where T : struct
+    {
+        var schema = CreateSinglePageSchema(physicalType, encoding);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = ParquetDataPageVersion.V2
+        });
+        var serialized = writer.CreateSerializedColumn<T?>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return (schema, stream.ToArray());
+    }
+
+    static ParquetBuffer ReadRetainedSinglePage<T>(ParquetSchema schema, byte[] bytes,
+        IParquetBufferPool? bufferPool = null)
+        where T : struct
+    {
+        var options = bufferPool is null ? null : new ParquetReaderOptions { BufferPool = bufferPool };
+        using var reader = schema.CreateReader(new MemoryReadSource(bytes), options);
+        var buffers = reader.RowGroups[0].Column<T?>(0).GetEnumerator();
+        try
+        {
+            if (!buffers.MoveNext())
+                throw new InvalidOperationException("Expected one nullable numeric page.");
+            return buffers.Current.Retain();
+        }
+        finally
+        {
+            buffers.Dispose();
+        }
+    }
+
+    static T?[] CreateLargeValues<T>(int count, Func<int, T> factory, bool includeNulls = true)
+        where T : struct
+    {
+        var values = new T?[count];
+        for (var i = 0; i < values.Length; i++)
+            if (!includeNulls ||
+                i % 31 != 0 && i is not 1_023 and not 32_768 && i != values.Length - 1)
+                values[i] = factory(i);
+        return values;
     }
 
     static T?[] RoundTrip<T>(ParquetPhysicalType physicalType, T?[] values, EncodingKind encoding,
@@ -274,5 +425,18 @@ internal sealed class NullableNumericDecodingTests
 
         public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
             => currentPageRowCount >= rowsPerPage;
+    }
+
+    sealed class OffsetBufferPool : IParquetBufferPool
+    {
+        public ParquetBuffer Rent(uint minimumByteLength)
+        {
+            var allocationByteLength = checked((int)minimumByteLength + 128);
+            var allocation = Marshal.AllocHGlobal(allocationByteLength);
+            var allocationOffset = (int)((long)allocation & 63);
+            var payloadOffset = 64 + ((16 - allocationOffset) & 63);
+            return ParquetBuffer.Create(allocation, allocationByteLength, payloadOffset,
+                checked((int)minimumByteLength), Marshal.FreeHGlobal);
+        }
     }
 }
