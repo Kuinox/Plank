@@ -964,6 +964,29 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         if (HasPendingData)
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
+
+        if (typeof(TValue) == typeof(bool) || typeof(TValue) == typeof(int) || typeof(TValue) == typeof(long)
+            || typeof(TValue) == typeof(float) || typeof(TValue) == typeof(double))
+        {
+            var firstPresentIndex = IndexOfFirstPresent(values);
+            if (firstPresentIndex >= 0)
+            {
+                var remainingValues = values[firstPresentIndex..];
+                var rented = _owner.BufferWriters.RentScratch<TValue>(checked((uint)remainingValues.Length));
+                try
+                {
+                    var denseValues = ParquetBuffer.AsSpan<TValue>(rented, remainingValues.Length);
+                    var presentCount = CompactPresentValues(remainingValues, denseValues);
+                    SerializeOptionalConverted(values, denseValues[..presentCount], values.Length - presentCount);
+                }
+                finally
+                {
+                    _owner.BufferWriters.ReturnScratch(rented);
+                }
+                return;
+            }
+        }
+
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = checked((uint)values.Length);
@@ -1431,6 +1454,25 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             _ => throw new ArgumentOutOfRangeException(nameof(timestamp), timestamp.Unit,
                 "Time unit must be a defined TimeUnit value.")
         };
+    }
+
+    static int CompactPresentValues<TValue>(ReadOnlySpan<TValue?> values, Span<TValue> destination)
+        where TValue : struct
+    {
+        var count = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i] is { } value)
+                destination[count++] = value;
+        return count;
+    }
+
+    static int IndexOfFirstPresent<TValue>(ReadOnlySpan<TValue?> values)
+        where TValue : struct
+    {
+        for (var i = 0; i < values.Length; i++)
+            if (values[i].HasValue)
+                return i;
+        return -1;
     }
 
     static int ConvertNullableDateTimesDivided(ReadOnlySpan<DateTime?> values, Span<long> destination,
