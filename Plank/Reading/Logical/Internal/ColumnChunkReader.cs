@@ -331,6 +331,17 @@ static class ColumnChunkReader
             return true;
         }
 
+        if (converter is null && TryDecodeNullableNumericValuesByPhysicalType(dataPayload,
+                definitionPayload, valueCount, column, header.Encoding, definitionLevelEncoding,
+                physicalType, ref state, bufferPool, out var numericPhysicalCount))
+        {
+            if (header.Type == PageHeaderType.DataPageV2 && numericPhysicalCount != expectedPhysicalCount)
+                throw new CorruptParquetException(
+                    $"Definition levels contain {numericPhysicalCount} values, expected {expectedPhysicalCount}.");
+            buffer = state.CreateNativeBuffer(valueCount);
+            return true;
+        }
+
         var physicalCount = valueCount;
         if (!definitionPayload.IsEmpty)
         {
@@ -349,6 +360,85 @@ static class ColumnChunkReader
             return false;
 
         buffer = state.CreateNativeBuffer(valueCount);
+        return true;
+    }
+
+    static bool TryDecodeNullableNumericValuesByPhysicalType<T>(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<byte> definitionPayload, int valueCount, Column column, EncodingKind encoding,
+        EncodingKind definitionLevelEncoding, Type physicalType, ref ColumnReadBuffers<T> state,
+        IParquetBufferPool bufferPool, out int physicalCount)
+    {
+        if (typeof(T) == typeof(int?) && physicalType == typeof(int))
+            return TryDecodeNullableNumericValues<T, int>(payload, definitionPayload, valueCount,
+                column, encoding, definitionLevelEncoding, ref state, bufferPool, out physicalCount);
+        if (typeof(T) == typeof(long?) && physicalType == typeof(long))
+            return TryDecodeNullableNumericValues<T, long>(payload, definitionPayload, valueCount,
+                column, encoding, definitionLevelEncoding, ref state, bufferPool, out physicalCount);
+        if (typeof(T) == typeof(float?) && physicalType == typeof(float))
+            return TryDecodeNullableNumericValues<T, float>(payload, definitionPayload, valueCount,
+                column, encoding, definitionLevelEncoding, ref state, bufferPool, out physicalCount);
+        if (typeof(T) == typeof(double?) && physicalType == typeof(double))
+            return TryDecodeNullableNumericValues<T, double>(payload, definitionPayload, valueCount,
+                column, encoding, definitionLevelEncoding, ref state, bufferPool, out physicalCount);
+
+        physicalCount = 0;
+        return false;
+    }
+
+    static bool TryDecodeNullableNumericValues<T, TValue>(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<byte> definitionPayload, int valueCount, Column column, EncodingKind encoding,
+        EncodingKind definitionLevelEncoding, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool,
+        out int physicalCount)
+        where TValue : struct
+    {
+        if (encoding is not (EncodingKind.Plain or EncodingKind.ByteStreamSplit or
+                EncodingKind.RleDictionary or EncodingKind.PlainDictionary))
+        {
+            physicalCount = 0;
+            return false;
+        }
+
+        var values = state.GetValues<T>(valueCount, bufferPool);
+        var destination = Unsafe.As<Span<T>, Span<TValue?>>(ref values);
+        var definitions = AsBytes(destination)[..valueCount];
+        if (definitionPayload.IsEmpty)
+        {
+            definitions.Fill(1);
+            physicalCount = valueCount;
+        }
+        else
+            DecodeCompactDefinitionLevels(definitionPayload, definitionLevelEncoding,
+                definitions, out physicalCount);
+
+        if (physicalCount == 0)
+        {
+            destination.Clear();
+            return true;
+        }
+
+        var physicalByteLength = checked(physicalCount * Unsafe.SizeOf<TValue>());
+        var physicalValues = MemoryMarshal.Cast<byte, TValue>(
+            state.GetScratch(physicalByteLength, bufferPool));
+        if (encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
+        {
+            if (!state.HasDictionary)
+                return false;
+            DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount),
+                state.GetDictionary<TValue>(), physicalValues);
+        }
+        else if (!TryDecodeValuesIntoNative(payload, column, checked((uint)physicalCount), encoding,
+                     physicalValues))
+        {
+            return false;
+        }
+
+        var physicalIndex = physicalCount;
+        for (var i = definitions.Length - 1; i >= 0; i--)
+            destination[i] = definitions[i] == 0 ? null : physicalValues[--physicalIndex];
+        if (physicalIndex != 0)
+            throw new CorruptParquetException(
+                $"Definition levels consumed {physicalCount - physicalIndex} physical values, " +
+                $"expected {physicalCount}.");
         return true;
     }
 
@@ -3598,6 +3688,78 @@ static class ColumnChunkReader
         }
 
         nonNullCount = count;
+    }
+
+    static void DecodeCompactDefinitionLevels(ReadOnlySpan<byte> payload, EncodingKind encoding,
+        Span<byte> destination, out int nonNullCount)
+    {
+        if (encoding == EncodingKind.BitPacked)
+        {
+            var byteCount = LegacyBitPackedDecoder.GetByteCount(destination.Length, bitWidth: 1);
+            if (payload.Length < byteCount)
+                throw new CorruptParquetException(
+                    $"Legacy bit-packed payload ({payload.Length} bytes) is too short to decode " +
+                    $"{destination.Length} values.");
+
+            var count = 0;
+            for (var i = 0; i < destination.Length; i++)
+            {
+                var value = (byte)((payload[i >> 3] >> (7 - (i & 7))) & 1);
+                destination[i] = value;
+                count += value;
+            }
+            nonNullCount = count;
+            return;
+        }
+        if (encoding != EncodingKind.Rle)
+            throw new NotSupportedException($"Definition level encoding '{encoding}' is not supported.");
+
+        var valueIndex = 0;
+        var nonNulls = 0;
+        while (valueIndex < destination.Length)
+        {
+            var header = ReadUnsignedVarInt(ref payload);
+            if ((header & 1U) == 0)
+            {
+                var runLength = header >> 1;
+                if (runLength == 0)
+                    throw new CorruptParquetException("Definition levels contain an empty RLE run.");
+                var repeated = ReadLittleEndian(ref payload, byteWidth: 1);
+                if ((uint)repeated > 1)
+                    throw new CorruptParquetException(
+                        $"Definition level {repeated} exceeds the schema maximum of 1.");
+                var runCopyLength = (int)Math.Min(runLength,
+                    checked((uint)(destination.Length - valueIndex)));
+                destination.Slice(valueIndex, runCopyLength).Fill((byte)repeated);
+                if (repeated != 0)
+                    nonNulls += runCopyLength;
+                valueIndex += runCopyLength;
+                continue;
+            }
+
+            var literalGroupCount = header >> 1;
+            if (literalGroupCount == 0 || literalGroupCount > uint.MaxValue / 8)
+                throw new CorruptParquetException(
+                    $"Definition levels literal run group count {literalGroupCount} is invalid.");
+            var literalCount = literalGroupCount * 8U;
+            var literalByteCount = (literalCount + 7U) >> 3;
+            if (literalByteCount > (uint)payload.Length)
+                throw new CorruptParquetException(
+                    $"Definition level literal group claims {literalByteCount} bytes but only " +
+                    $"{payload.Length} remain.");
+
+            var copyLength = Math.Min(literalCount,
+                checked((uint)(destination.Length - valueIndex)));
+            for (var i = 0U; i < copyLength; i++)
+            {
+                var value = (byte)((payload[(int)(i >> 3)] >> ((int)i & 7)) & 1);
+                destination[valueIndex++] = value;
+                nonNulls += value;
+            }
+            payload = payload[checked((int)literalByteCount)..];
+        }
+
+        nonNullCount = nonNulls;
     }
 
     static int[] ReadDefinitionLevels(ReadOnlySpan<byte> payload, uint valueCount, EncodingKind encoding,
