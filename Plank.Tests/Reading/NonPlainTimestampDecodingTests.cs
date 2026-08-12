@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
 using Plank.Reading;
+using Plank.Reading.Logical.Internal;
 using Plank.Schema;
 using Plank.Writing;
+using Plank.Writing.Encoding;
 using Plank.Writing.PageStrategy;
 
 namespace Plank.Tests.Reading;
@@ -28,6 +30,52 @@ internal sealed class NonPlainTimestampDecodingTests
             var expected = CreateValues(unit, isAdjustedToUtc);
             var actual = RoundTrip(expected, unit, isAdjustedToUtc, encoding, pageVersion);
             AssertEqual(expected, actual, unit, isAdjustedToUtc, encoding, pageVersion);
+        }
+    }
+
+    [Test]
+    public void RequiredDateTimesRejectOutOfRangeNonPlainValues()
+    {
+        EncodingKind[] encodings = [EncodingKind.DeltaBinaryPacked, EncodingKind.ByteStreamSplit];
+        TimeUnit[] units = [TimeUnit.Millis, TimeUnit.Micros];
+        foreach (var encoding in encodings)
+        foreach (var unit in units)
+        {
+            var schema = new ParquetSchema([
+                ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int64,
+                    logicalType: new LogicalType.Timestamp(unit, IsAdjustedToUtc: true))
+            ]);
+            var column = schema.LeafColumns[0].Column;
+            var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 1024, 1024);
+            var buffers = default(ColumnReadBuffers<DateTime>);
+            try
+            {
+                long[] raw = [long.MaxValue];
+                if (encoding == EncodingKind.DeltaBinaryPacked)
+                    DeltaBinaryPackedEncoding.WriteInt64(raw, ref writer);
+                else
+                    ByteStreamSplitEncoding.WriteValues(column, raw, ref writer);
+
+                var payload = new byte[writer.WrittenLength];
+                writer.CopyTo(payload);
+                var header = new PageHeader(PageHeaderType.DataPage,
+                    UncompressedPageSize: checked((uint)payload.Length),
+                    CompressedPageSize: checked((uint)payload.Length), ValueCount: 1, Encoding: encoding,
+                    HeaderLength: 1, RepetitionLevelsByteLength: 0,
+                    DefinitionLevelsByteLength: 0, NullCount: 0, IsCompressed: false,
+                    RepetitionLevelEncoding: EncodingKind.Rle,
+                    DefinitionLevelEncoding: EncodingKind.Rle, RowCount: 1);
+
+                Assert.Throws<OverflowException>(() =>
+                    ColumnChunkReader.TryDecodeRequiredPageIntoNative(
+                        header, payload, column, rowCount: 1, ref buffers,
+                        DefaultParquetBufferPool.Shared, out _));
+            }
+            finally
+            {
+                buffers.Dispose();
+                writer.Dispose();
+            }
         }
     }
 

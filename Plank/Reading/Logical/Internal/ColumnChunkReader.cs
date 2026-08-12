@@ -1387,8 +1387,31 @@ static class ColumnChunkReader
                 var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
                 DecodeByteStreamSplitInt64(payload, raw);
                 var typed = Unsafe.As<Span<T>, Span<DateTime>>(ref destination);
-                for (var i = 0; i < typed.Length; i++)
-                    typed[i] = DecodeDateTime(raw[i], column.LogicalType);
+                if (column.LogicalType is not LogicalType.Timestamp timestamp)
+                    throw new CorruptParquetException(
+                        "Timestamp projection requires a timestamp logical type.");
+
+                var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+                var epochTicks = DateTime.UnixEpoch.Ticks;
+                switch (timestamp.Unit)
+                {
+                    case TimeUnit.Millis:
+                        for (var i = 0; i < typed.Length; i++)
+                            typed[i] = new DateTime(
+                                checked(epochTicks + checked(raw[i] * TimeSpan.TicksPerMillisecond)), kind);
+                        break;
+                    case TimeUnit.Micros:
+                        for (var i = 0; i < typed.Length; i++)
+                            typed[i] = new DateTime(checked(epochTicks + checked(raw[i] * 10)), kind);
+                        break;
+                    case TimeUnit.Nanos:
+                        for (var i = 0; i < typed.Length; i++)
+                            typed[i] = new DateTime(checked(epochTicks + raw[i] / 100), kind);
+                        break;
+                    default:
+                        throw new CorruptParquetException(
+                            "Timestamp projection requires a timestamp logical type.");
+                }
                 return true;
             }
             case ParquetPhysicalType.Int64 when typeof(T) == typeof(DateTimeOffset):
@@ -1575,8 +1598,31 @@ static class ColumnChunkReader
             var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
             DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
             var typed = Unsafe.As<Span<T>, Span<DateTime>>(ref destination);
-            for (var i = 0; i < typed.Length; i++)
-                typed[i] = DecodeDateTime(raw[i], column.LogicalType);
+            if (column.LogicalType is not LogicalType.Timestamp timestamp)
+                throw new CorruptParquetException(
+                    "Timestamp projection requires a timestamp logical type.");
+
+            var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+            var epochTicks = DateTime.UnixEpoch.Ticks;
+            switch (timestamp.Unit)
+            {
+                case TimeUnit.Millis:
+                    for (var i = 0; i < typed.Length; i++)
+                        typed[i] = new DateTime(
+                            checked(epochTicks + checked(raw[i] * TimeSpan.TicksPerMillisecond)), kind);
+                    break;
+                case TimeUnit.Micros:
+                    for (var i = 0; i < typed.Length; i++)
+                        typed[i] = new DateTime(checked(epochTicks + checked(raw[i] * 10)), kind);
+                    break;
+                case TimeUnit.Nanos:
+                    for (var i = 0; i < typed.Length; i++)
+                        typed[i] = new DateTime(checked(epochTicks + raw[i] / 100), kind);
+                    break;
+                default:
+                    throw new CorruptParquetException(
+                        "Timestamp projection requires a timestamp logical type.");
+            }
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTimeOffset))
