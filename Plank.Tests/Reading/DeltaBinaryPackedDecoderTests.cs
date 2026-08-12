@@ -123,6 +123,27 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
+    public void WriteInt64MatchesReferenceAcrossBlockBoundaries()
+    {
+        int[] counts = [0, 1, 2, 7, 8, 9, 31, 32, 33, 127, 128, 129, 257];
+        foreach (var count in counts)
+        {
+            var values = new long[count];
+            for (var i = 0; i < values.Length; i++)
+                values[i] = (i % 5) switch
+                {
+                    0 => long.MinValue,
+                    1 => long.MaxValue,
+                    2 => i * 17L,
+                    3 => -i * 31L,
+                    _ => unchecked((long)((ulong)i * 0x9E3779B97F4A7C15UL))
+                };
+
+            AssertEncodedBytes(values, EncodeInt64Reference(values), chunkSize: 7);
+        }
+    }
+
+    [Test]
     public void WriteInt32PreservesKnownPayload()
     {
         int[] values = [4, 11, 3, 18, 2];
