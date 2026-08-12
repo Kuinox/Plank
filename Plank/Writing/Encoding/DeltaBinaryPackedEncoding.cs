@@ -2,6 +2,8 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using Plank.Schema;
 
 namespace Plank.Writing.Encoding;
@@ -54,25 +56,11 @@ static class DeltaBinaryPackedEncoding
 
         Span<long> deltas = stackalloc long[BlockSize];
         ref var deltaBuffer = ref MemoryMarshal.GetReference(deltas);
-        var previous = input;
         var index = 1;
         while (index < values.Length)
         {
             var count = Math.Min(BlockSize, values.Length - index);
-            var minDelta = long.MaxValue;
-            for (var i = 0; i < count; i++)
-            {
-                var current = Unsafe.Add(ref input, index + i);
-                var delta = (long)current - previous;
-                previous = current;
-                Unsafe.Add(ref deltaBuffer, i) = delta;
-                if (delta < minDelta)
-                    minDelta = delta;
-            }
-
-            for (var i = count; i < BlockSize; i++)
-                Unsafe.Add(ref deltaBuffer, i) = minDelta;
-
+            var minDelta = PrepareInt32Block(ref input, index, count, ref deltaBuffer);
             WriteDeltaBlock(ref deltaBuffer, minDelta, ref writer);
             index += count;
         }
@@ -101,28 +89,104 @@ static class DeltaBinaryPackedEncoding
 
         Span<long> deltas = stackalloc long[BlockSize];
         ref var deltaBuffer = ref MemoryMarshal.GetReference(deltas);
-        var previous = input;
         var index = 1;
         while (index < values.Length)
         {
             var count = Math.Min(BlockSize, values.Length - index);
-            var minDelta = long.MaxValue;
-            for (var i = 0; i < count; i++)
-            {
-                var current = Unsafe.Add(ref input, index + i);
-                var delta = current - previous;
-                previous = current;
-                Unsafe.Add(ref deltaBuffer, i) = delta;
-                if (delta < minDelta)
-                    minDelta = delta;
-            }
-
-            for (var i = count; i < BlockSize; i++)
-                Unsafe.Add(ref deltaBuffer, i) = minDelta;
-
+            var minDelta = PrepareInt64Block(ref input, index, count, ref deltaBuffer);
             WriteDeltaBlock(ref deltaBuffer, minDelta, ref writer);
             index += count;
         }
+    }
+
+    static long PrepareInt32Block(ref int input, int inputOffset, int count, ref long deltas)
+    {
+        var minDelta = long.MaxValue;
+        var i = 0;
+        if (Avx512F.IsSupported)
+        {
+            var vectorMin = Vector512.Create(long.MaxValue);
+            for (; i <= count - Vector512<long>.Count; i += Vector512<long>.Count)
+            {
+                var current = Avx512F.ConvertToVector512Int64(
+                    Vector256.LoadUnsafe(ref input, (nuint)(inputOffset + i)));
+                var previous = Avx512F.ConvertToVector512Int64(
+                    Vector256.LoadUnsafe(ref input, (nuint)(inputOffset + i - 1)));
+                var delta = Vector512.Subtract(current, previous);
+                delta.StoreUnsafe(ref deltas, (nuint)i);
+                vectorMin = Vector512.Min(vectorMin, delta);
+            }
+
+            minDelta = GetMinimum(vectorMin);
+        }
+
+        for (; i < count; i++)
+        {
+            var current = Unsafe.Add(ref input, inputOffset + i);
+            var previous = Unsafe.Add(ref input, inputOffset + i - 1);
+            var delta = (long)current - previous;
+            Unsafe.Add(ref deltas, i) = delta;
+            if (delta < minDelta)
+                minDelta = delta;
+        }
+
+        FillPaddedDeltas(ref deltas, count, minDelta);
+        return minDelta;
+    }
+
+    static long PrepareInt64Block(ref long input, int inputOffset, int count, ref long deltas)
+    {
+        var minDelta = long.MaxValue;
+        var i = 0;
+        if (Avx512F.IsSupported)
+        {
+            var vectorMin = Vector512.Create(long.MaxValue);
+            for (; i <= count - Vector512<long>.Count; i += Vector512<long>.Count)
+            {
+                var current = Vector512.LoadUnsafe(ref input, (nuint)(inputOffset + i));
+                var previous = Vector512.LoadUnsafe(ref input, (nuint)(inputOffset + i - 1));
+                var delta = Vector512.Subtract(current, previous);
+                delta.StoreUnsafe(ref deltas, (nuint)i);
+                vectorMin = Vector512.Min(vectorMin, delta);
+            }
+
+            minDelta = GetMinimum(vectorMin);
+        }
+
+        for (; i < count; i++)
+        {
+            var current = Unsafe.Add(ref input, inputOffset + i);
+            var previous = Unsafe.Add(ref input, inputOffset + i - 1);
+            var delta = current - previous;
+            Unsafe.Add(ref deltas, i) = delta;
+            if (delta < minDelta)
+                minDelta = delta;
+        }
+
+        FillPaddedDeltas(ref deltas, count, minDelta);
+        return minDelta;
+    }
+
+    static void FillPaddedDeltas(ref long deltas, int count, long minDelta)
+    {
+        var i = count;
+        if (Avx512F.IsSupported)
+        {
+            var fill = Vector512.Create(minDelta);
+            for (; i <= BlockSize - Vector512<long>.Count; i += Vector512<long>.Count)
+                fill.StoreUnsafe(ref deltas, (nuint)i);
+        }
+
+        for (; i < BlockSize; i++)
+            Unsafe.Add(ref deltas, i) = minDelta;
+    }
+
+    static long GetMinimum(Vector512<long> values)
+    {
+        var result = values.GetElement(0);
+        for (var i = 1; i < Vector512<long>.Count; i++)
+            result = Math.Min(result, values.GetElement(i));
+        return result;
     }
 
     static void WriteInt32Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
@@ -211,25 +275,9 @@ static class DeltaBinaryPackedEncoding
 
     static void WriteDeltaBlock(ref long deltas, long minDelta, ref BufferWriter writer)
     {
-        uint bitWidths = 0;
-        var packedByteCount = 0;
-        for (var block = 0; block < MiniBlockCount; block++)
-        {
-            var start = block * MiniBlockSize;
-            ulong max = 0;
-            for (var i = 0; i < MiniBlockSize; i++)
-            {
-                ref var delta = ref Unsafe.Add(ref deltas, start + i);
-                var normalized = (ulong)(delta - minDelta);
-                if (normalized > max)
-                    max = normalized;
-                delta = (long)normalized;
-            }
-
-            var width = GetBitWidth(max);
-            bitWidths |= (uint)width << (block * 8);
-            packedByteCount += width * 4;
-        }
+        var bitWidths = Avx512F.IsSupported
+            ? NormalizeDeltasVectorized(ref deltas, minDelta, out var packedByteCount)
+            : NormalizeDeltasScalar(ref deltas, minDelta, out packedByteCount);
 
         var encodedMinDelta = ZigZag64(minDelta);
         var outputLength = GetUnsignedVarIntByteCount(encodedMinDelta) + MiniBlockCount + packedByteCount;
@@ -255,6 +303,64 @@ static class DeltaBinaryPackedEncoding
         }
 
         writer.Advance(outputLength);
+    }
+
+    static uint NormalizeDeltasVectorized(ref long deltas, long minDelta, out int packedByteCount)
+    {
+        uint bitWidths = 0;
+        packedByteCount = 0;
+        var vectorMinDelta = Vector512.Create(minDelta);
+        for (var block = 0; block < MiniBlockCount; block++)
+        {
+            var start = block * MiniBlockSize;
+            var vectorMax = Vector512<ulong>.Zero;
+            for (var i = 0; i < MiniBlockSize; i += Vector512<long>.Count)
+            {
+                var delta = Vector512.LoadUnsafe(ref deltas, (nuint)(start + i));
+                var normalized = Vector512.Subtract(delta, vectorMinDelta).AsUInt64();
+                normalized.AsInt64().StoreUnsafe(ref deltas, (nuint)(start + i));
+                vectorMax = Vector512.Max(vectorMax, normalized);
+            }
+
+            var width = GetBitWidth(GetMaximum(vectorMax));
+            bitWidths |= (uint)width << (block * 8);
+            packedByteCount += width * 4;
+        }
+
+        return bitWidths;
+    }
+
+    static uint NormalizeDeltasScalar(ref long deltas, long minDelta, out int packedByteCount)
+    {
+        uint bitWidths = 0;
+        packedByteCount = 0;
+        for (var block = 0; block < MiniBlockCount; block++)
+        {
+            var start = block * MiniBlockSize;
+            ulong max = 0;
+            for (var i = 0; i < MiniBlockSize; i++)
+            {
+                ref var delta = ref Unsafe.Add(ref deltas, start + i);
+                var normalized = (ulong)(delta - minDelta);
+                if (normalized > max)
+                    max = normalized;
+                delta = (long)normalized;
+            }
+
+            var width = GetBitWidth(max);
+            bitWidths |= (uint)width << (block * 8);
+            packedByteCount += width * 4;
+        }
+
+        return bitWidths;
+    }
+
+    static ulong GetMaximum(Vector512<ulong> values)
+    {
+        var result = values.GetElement(0);
+        for (var i = 1; i < Vector512<ulong>.Count; i++)
+            result = Math.Max(result, values.GetElement(i));
+        return result;
     }
 
     internal static void WritePackedUnsignedValues(ReadOnlySpan<long> values, int bitWidth, ref BufferWriter writer)
