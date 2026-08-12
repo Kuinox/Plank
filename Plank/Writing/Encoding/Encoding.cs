@@ -583,25 +583,33 @@ static class Encoding
                 var pageStart = rowsWritten;
                 var pageRowCount = 0;
                 var pageBytes = 0;
-                while (rowsWritten < values.Length)
+                if (!useTargetPageBytes && strategy is ForceDictionaryPageStrategy)
                 {
-                    var rowBytes = 0;
-                    if (useTargetPageBytes)
+                    pageRowCount = values.Length - rowsWritten;
+                    rowsWritten = values.Length;
+                }
+                else
+                {
+                    while (rowsWritten < values.Length)
                     {
-                        rowBytes = GetOptionalRowBytes(column, values[rowsWritten], presentValueBytes);
-                        if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
+                        var rowBytes = 0;
+                        if (useTargetPageBytes)
+                        {
+                            rowBytes = GetOptionalRowBytes(column, values[rowsWritten], presentValueBytes);
+                            if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
+                                break;
+                        }
+
+                        rowsWritten++;
+                        pageRowCount++;
+                        if (useTargetPageBytes)
+                            pageBytes = checked(pageBytes + rowBytes);
+                        if (rowsWritten == values.Length)
+                            break;
+                        if (!useTargetPageBytes && strategy.ShouldStartNewDataPage(checked((uint)values.Length),
+                                checked((uint)rowsWritten), checked((uint)pageRowCount)))
                             break;
                     }
-
-                    rowsWritten++;
-                    pageRowCount++;
-                    if (useTargetPageBytes)
-                        pageBytes = checked(pageBytes + rowBytes);
-                    if (rowsWritten == values.Length)
-                        break;
-                    if (!useTargetPageBytes && strategy.ShouldStartNewDataPage(checked((uint)values.Length),
-                            checked((uint)rowsWritten), checked((uint)pageRowCount)))
-                        break;
                 }
 
                 var pageIndex = AddNewDataPage(bufferWriters, pages);
