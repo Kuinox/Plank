@@ -138,7 +138,11 @@ static class DeltaBinaryPackedDecoder
                 {
                     var packed = reader.ReadBytesWithLookahead(
                         bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
-                    if (Avx2.IsSupported && bitWidth <= 16)
+                    if (Avx2.IsSupported && Bmi2.X64.IsSupported && bitWidth is > 0 and <= 16 &&
+                        count == MiniBlockSize)
+                        DecodeInt32MiniBlockBmi2(packed, bitWidth, minDelta, ref previous,
+                            destination.Slice(index, count));
+                    else if (Avx2.IsSupported && bitWidth <= 16)
                         DecodeInt32MiniBlockVectorized(packed, bitWidth, minDelta, ref previous,
                             adjustedDeltas, destination.Slice(index, count));
                     else
@@ -158,6 +162,77 @@ static class DeltaBinaryPackedDecoder
                 }
             }
         }
+    }
+
+    static void DecodeInt32MiniBlockBmi2(ReadOnlySpan<byte> packed, int bitWidth, long minDelta,
+        ref long previous, Span<int> destination)
+    {
+        ref var destinationStart = ref destination[0];
+        long overflow = 0;
+
+        if (bitWidth <= 8)
+        {
+            var laneMask = 0x0101010101010101UL * ((1UL << bitWidth) - 1);
+            for (var index = 0; index < MiniBlockSize; index += Vector256<int>.Count)
+            {
+                // Eight packed fields occupy exactly bitWidth bytes. PDEP places each field in
+                // the low bits of a byte so two widening loads produce the Int64 delta lanes.
+                var packedWord = ReadPackedWord(packed, index * bitWidth / 8);
+                var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
+                var unpackedBytes = Vector128.CreateScalar(unpacked).AsByte();
+                var lower = Avx2.ConvertToVector256Int64(unpackedBytes);
+                var upper = Avx2.ConvertToVector256Int64(
+                    Sse2.ShiftRightLogical128BitLane(unpackedBytes, sizeof(uint)));
+                ReconstructEightInt32(lower, upper, minDelta, ref previous,
+                    ref destinationStart, index, ref overflow);
+            }
+        }
+        else
+        {
+            var laneMask = 0x0001000100010001UL * ((1UL << bitWidth) - 1);
+            for (var index = 0; index < MiniBlockSize; index += Vector256<long>.Count)
+            {
+                // Four fields may start on a half-byte boundary. Shift the packed word to the
+                // first field, then deposit the fields into four UInt16 lanes before widening.
+                var bitOffset = index * bitWidth;
+                var packedWord = ReadPackedWord(packed, bitOffset / 8) >> (bitOffset & 7);
+                var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
+                var residuals = Avx2.ConvertToVector256Int64(
+                    Vector128.CreateScalar(unpacked).AsUInt16());
+                ReconstructFourInt32(residuals, minDelta, ref previous,
+                    ref destinationStart, index, ref overflow);
+            }
+        }
+
+        ThrowIfInt32Overflow(overflow);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void ReconstructEightInt32(Vector256<long> lower, Vector256<long> upper, long minDelta,
+        ref long previous, ref int destination, int index, ref long overflow)
+    {
+        lower = PrefixSum(lower + Vector256.Create(minDelta));
+        upper = PrefixSum(upper + Vector256.Create(minDelta));
+        lower += Vector256.Create(previous);
+        upper += Vector256.Create(lower.GetElement(Vector256<long>.Count - 1));
+
+        if (ContainsInt32Overflow(lower) || ContainsInt32Overflow(upper))
+            overflow = -1;
+        Vector256.Narrow(lower, upper).StoreUnsafe(ref destination, (nuint)index);
+        previous = upper.GetElement(Vector256<long>.Count - 1);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void ReconstructFourInt32(Vector256<long> residuals, long minDelta,
+        ref long previous, ref int destination, int index, ref long overflow)
+    {
+        var values = PrefixSum(residuals + Vector256.Create(minDelta));
+        values += Vector256.Create(previous);
+        if (ContainsInt32Overflow(values))
+            overflow = -1;
+        Vector256.Narrow(values, Vector256<long>.Zero).GetLower()
+            .StoreUnsafe(ref destination, (nuint)index);
+        previous = values.GetElement(Vector256<long>.Count - 1);
     }
 
     static void DecodeInt32MiniBlockVectorized(ReadOnlySpan<byte> packed, int bitWidth, long minDelta,

@@ -253,6 +253,60 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
+    public void ReadInt32AcceptsDeclaredPackedWidthsZeroThrough64()
+    {
+        for (var bitWidth = 0; bitWidth <= 64; bitWidth++)
+        {
+            var payload = CreateDeclaredWidthPayload(bitWidth, valueCount: 33);
+            var decoded = new int[33];
+
+            var consumed = DeltaBinaryPackedDecoder.ReadInt32(payload, decoded);
+
+            if (decoded.Any(static value => value != 0))
+                throw new InvalidOperationException(
+                    $"Declared bit width {bitWidth} did not decode its zero residuals.");
+            if (consumed != payload.Length)
+                throw new InvalidOperationException(
+                    $"Declared bit width {bitWidth} consumed {consumed} bytes instead of {payload.Length}.");
+        }
+    }
+
+    [Test]
+    public void ReadInt32RejectsTruncatedFullMiniBlocksOnFastUnpackWidths()
+    {
+        int[] bitWidths = [1, 3, 8, 9, 15, 16];
+        foreach (var bitWidth in bitWidths)
+        {
+            var payload = CreateDeclaredWidthPayload(bitWidth, valueCount: 33);
+            Array.Resize(ref payload, payload.Length - 1);
+
+            try
+            {
+                DeltaBinaryPackedDecoder.ReadInt32(payload, new int[33]);
+                throw new InvalidOperationException(
+                    $"Expected truncated bit width {bitWidth} payload to be rejected.");
+            }
+            catch (CorruptParquetException)
+            {
+            }
+        }
+    }
+
+    [Test]
+    public void ReadInt32RejectsBitWidthAbove64BeforeReadingPackedData()
+    {
+        var payload = CreateDeclaredWidthPayload(bitWidth: 65, valueCount: 33);
+        try
+        {
+            DeltaBinaryPackedDecoder.ReadInt32(payload, new int[33]);
+            throw new InvalidOperationException("Expected bit width 65 to be rejected.");
+        }
+        catch (CorruptParquetException)
+        {
+        }
+    }
+
+    [Test]
     public void ReadInt32RejectsTransientOverflowInEveryVectorLaneAndTail()
     {
         int[] overflowIndexes = [0, 3, 4, 7, 8, 15, 16, 23, 24, 30, 31];
@@ -351,6 +405,22 @@ internal sealed class DeltaBinaryPackedDecoderTests
         }
 
         return values;
+    }
+
+    static byte[] CreateDeclaredWidthPayload(int bitWidth, int valueCount)
+    {
+        var payload = new List<byte>();
+        WriteUnsignedVarIntReference(128, payload);
+        WriteUnsignedVarIntReference(4, payload);
+        WriteUnsignedVarIntReference((ulong)valueCount, payload);
+        WriteUnsignedVarIntReference(0, payload);
+        WriteUnsignedVarIntReference(0, payload);
+        payload.Add(checked((byte)bitWidth));
+        payload.Add(0);
+        payload.Add(0);
+        payload.Add(0);
+        payload.AddRange(new byte[checked(bitWidth * 4)]);
+        return payload.ToArray();
     }
 
     static int[] CreateDecodeValues(int count, int distribution)
