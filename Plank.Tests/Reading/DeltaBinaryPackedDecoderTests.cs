@@ -166,6 +166,93 @@ internal sealed class DeltaBinaryPackedDecoderTests
         }
     }
 
+    [Test]
+    public void ReadInt32IntoSpanRoundTripsPackedWidthsAndPartialMiniBlocks()
+    {
+        int[] counts = [2, 31, 32, 33, 127, 128, 129, 257, 4097];
+        foreach (var count in counts)
+            for (var distribution = 0; distribution < 3; distribution++)
+            {
+                var values = CreateDecodeValues(count, distribution);
+                var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 4096, 4096);
+                try
+                {
+                    DeltaBinaryPackedEncoding.WriteInt32(values, ref writer);
+                    var payload = new byte[writer.WrittenLength];
+                    writer.CopyTo(payload);
+                    var decoded = new int[values.Length];
+
+                    var consumed = DeltaBinaryPackedDecoder.ReadInt32(payload, decoded);
+
+                    if (!decoded.SequenceEqual(values))
+                        throw new InvalidOperationException(
+                            $"Span decode did not round-trip {count} values for distribution {distribution}.");
+                    if (consumed != payload.Length)
+                        throw new InvalidOperationException(
+                            $"Span decode consumed {consumed} bytes instead of {payload.Length}.");
+                }
+                finally
+                {
+                    writer.Dispose();
+                }
+            }
+    }
+
+    [Test]
+    public void ReadInt32IntoSpanRoundTripsEveryValidPackedWidth()
+    {
+        for (var bitWidth = 0; bitWidth <= 33; bitWidth++)
+        {
+            var values = CreateValuesForBitWidth(bitWidth);
+            var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 4096, 4096);
+            try
+            {
+                DeltaBinaryPackedEncoding.WriteInt32(values, ref writer);
+                var payload = new byte[writer.WrittenLength];
+                writer.CopyTo(payload);
+                var decoded = new int[values.Length];
+
+                var consumed = DeltaBinaryPackedDecoder.ReadInt32(payload, decoded);
+
+                if (!decoded.SequenceEqual(values))
+                    throw new InvalidOperationException(
+                        $"Span decode did not round-trip bit width {bitWidth}.");
+                if (consumed != payload.Length)
+                    throw new InvalidOperationException(
+                        $"Bit width {bitWidth} consumed {consumed} bytes instead of {payload.Length}.");
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+        }
+    }
+
+    [Test]
+    public void ReadInt32RejectsTransientOverflowWithinMiniBlock()
+    {
+        var payload = new List<byte>();
+        WriteUnsignedVarIntReference(128, payload);
+        WriteUnsignedVarIntReference(4, payload);
+        WriteUnsignedVarIntReference(3, payload);
+        WriteUnsignedVarIntReference(0, payload);
+
+        var deltas = new long[128];
+        deltas[0] = (long)int.MaxValue + 1;
+        deltas[1] = int.MinValue;
+        Array.Fill(deltas, (long)int.MinValue, 2, deltas.Length - 2);
+        WriteDeltaBlockReference(deltas, int.MinValue, payload);
+
+        try
+        {
+            DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), new int[3]);
+            throw new InvalidOperationException("Expected the transient Int32 overflow to be rejected.");
+        }
+        catch (CorruptParquetException)
+        {
+        }
+    }
+
     static long[] CreatePackedValues(int bitWidth)
     {
         var values = new long[32];
@@ -181,6 +268,61 @@ internal sealed class DeltaBinaryPackedDecoderTests
             values[i] = unchecked((long)(mixed & mask));
         }
 
+        return values;
+    }
+
+    static int[] CreateDecodeValues(int count, int distribution)
+    {
+        var values = new int[count];
+        switch (distribution)
+        {
+            case 0:
+                for (var i = 0; i < values.Length; i++)
+                    values[i] = i * 3;
+                break;
+            case 1:
+                for (var i = 1; i < values.Length; i++)
+                    values[i] = values[i - 1] + (i % 7 == 0 ? -3 : 4);
+                break;
+            default:
+                new Random(42 + count).NextBytes(
+                    System.Runtime.InteropServices.MemoryMarshal.AsBytes(values.AsSpan()));
+                break;
+        }
+        return values;
+    }
+
+    static int[] CreateValuesForBitWidth(int bitWidth)
+    {
+        const int count = 129;
+        var values = new int[count];
+        if (bitWidth == 0)
+        {
+            for (var i = 1; i < values.Length; i++)
+                values[i] = values[i - 1] + 3;
+            return values;
+        }
+
+        if (bitWidth <= 31)
+        {
+            var lowDelta = -(1L << (bitWidth - 1));
+            var highDelta = (1L << (bitWidth - 1)) - 1;
+            for (var i = 1; i < values.Length; i++)
+                values[i] = checked((int)(values[i - 1] + (i % 2 == 0 ? highDelta : lowDelta)));
+            return values;
+        }
+
+        if (bitWidth == 32)
+        {
+            values[0] = int.MaxValue;
+            for (var i = 1; i < values.Length; i++)
+                values[i] = checked((int)(values[i - 1] +
+                    (i % 2 == 0 ? (long)int.MaxValue : int.MinValue)));
+            return values;
+        }
+
+        for (var i = 0; i < values.Length; i++)
+            values[i] = i % 2 == 0 ? int.MinValue : int.MaxValue;
         return values;
     }
 

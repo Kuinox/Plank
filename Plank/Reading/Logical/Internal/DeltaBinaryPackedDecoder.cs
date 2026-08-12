@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 
 namespace Plank.Reading.Logical.Internal;
@@ -6,6 +7,9 @@ static class DeltaBinaryPackedDecoder
 {
     const uint BlockSize = 128;
     const uint MiniBlockCount = 4;
+    const int MiniBlockSize = 32;
+    const int PackedBytesPerBitWidth = MiniBlockSize / 8;
+    const int PackedWordLookahead = sizeof(ulong) - 1;
 
     internal static int[] ReadInt32(ReadOnlySpan<byte> payload)
     {
@@ -76,33 +80,7 @@ static class DeltaBinaryPackedDecoder
         }
 
         var values = new int[checked((int)valueCount)];
-        // Int32 deltas can be wider than Int32, so reconstruct in Int64 and narrow only when storing.
-        var previous = reader.ReadZigZagInt64();
-        values[0] = NarrowInt32(previous);
-        var index = 1U;
-        var miniBlockSize = blockSize / miniBlockCount;
-        Span<byte> bitWidths = stackalloc byte[checked((int)MiniBlockCount)];
-
-        while (index < valueCount)
-        {
-            var minDelta = reader.ReadZigZagInt64();
-            for (var i = 0U; i < MiniBlockCount; i++)
-                bitWidths[checked((int)i)] = reader.ReadByte();
-
-            for (var miniBlock = 0U; miniBlock < MiniBlockCount; miniBlock++)
-            {
-                var bitWidth = bitWidths[checked((int)miniBlock)];
-                for (var i = 0U; i < miniBlockSize; i++)
-                {
-                    var delta = bitWidth == 0 ? 0UL : reader.ReadPackedUnsigned(bitWidth);
-                    if (index < valueCount)
-                    {
-                        previous = unchecked(previous + minDelta + (long)delta);
-                        values[checked((int)index++)] = NarrowInt32(previous);
-                    }
-                }
-            }
-        }
+        ReadInt32Values(ref reader, values);
 
         return (values, reader.Offset);
     }
@@ -126,34 +104,118 @@ static class DeltaBinaryPackedDecoder
             return reader.Offset;
         }
 
+        ReadInt32Values(ref reader, destination);
+
+        return reader.Offset;
+    }
+
+    static void ReadInt32Values(ref DeltaBinaryPackedReader reader, Span<int> destination)
+    {
+        // Int32 deltas can be wider than Int32, so reconstruct in Int64 and narrow only when storing.
         var previous = reader.ReadZigZagInt64();
         destination[0] = NarrowInt32(previous);
-        var index = 1U;
-        var miniBlockSize = blockSize / miniBlockCount;
+        var index = 1;
         Span<byte> bitWidths = stackalloc byte[checked((int)MiniBlockCount)];
 
-        while (index < valueCount)
+        while (index < destination.Length)
         {
             var minDelta = reader.ReadZigZagInt64();
-            for (var i = 0U; i < MiniBlockCount; i++)
-                bitWidths[checked((int)i)] = reader.ReadByte();
+            for (var i = 0; i < bitWidths.Length; i++)
+                bitWidths[i] = reader.ReadByte();
 
-            for (var miniBlock = 0U; miniBlock < MiniBlockCount; miniBlock++)
+            for (var miniBlock = 0; miniBlock < bitWidths.Length; miniBlock++)
             {
-                var bitWidth = bitWidths[checked((int)miniBlock)];
-                for (var i = 0U; i < miniBlockSize; i++)
+                var bitWidth = bitWidths[miniBlock];
+                if (bitWidth > 64)
+                    throw new CorruptParquetException(
+                        $"Delta binary packed mini-block bit width {bitWidth} exceeds 64.");
+
+                var count = Math.Min(MiniBlockSize, destination.Length - index);
+                if (bitWidth <= 56)
                 {
-                    var delta = bitWidth == 0 ? 0UL : reader.ReadPackedUnsigned(bitWidth);
-                    if (index < valueCount)
-                    {
-                        previous = unchecked(previous + minDelta + (long)delta);
-                        destination[checked((int)index++)] = NarrowInt32(previous);
-                    }
+                    var packed = reader.ReadBytesWithLookahead(
+                        bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
+                    DecodeInt32MiniBlock(packed, bitWidth, minDelta, ref previous,
+                        destination.Slice(index, count));
+                    index += count;
+                    continue;
+                }
+
+                for (var i = 0; i < MiniBlockSize; i++)
+                {
+                    var delta = reader.ReadPackedUnsigned(bitWidth);
+                    if (i >= count)
+                        continue;
+                    previous = unchecked(previous + minDelta + (long)delta);
+                    destination[index++] = NarrowInt32(previous);
                 }
             }
         }
+    }
 
-        return reader.Offset;
+    static void DecodeInt32MiniBlock(ReadOnlySpan<byte> packed, int bitWidth, long minDelta,
+        ref long previous, Span<int> destination)
+    {
+        long overflow = 0;
+        if (bitWidth == 0)
+        {
+            for (var i = 0; i < destination.Length; i++)
+            {
+                previous = unchecked(previous + minDelta);
+                overflow |= previous ^ (long)(int)previous;
+                destination[i] = unchecked((int)previous);
+            }
+            ThrowIfInt32Overflow(overflow);
+            return;
+        }
+
+        var mask = (1UL << bitWidth) - 1;
+        var packedByteCount = bitWidth * PackedBytesPerBitWidth;
+        var byteOffset = 0;
+        ulong bitBuffer = 0;
+        var bufferedBits = 0;
+        for (var i = 0; i < destination.Length; i++)
+        {
+            if (bufferedBits < bitWidth)
+            {
+                var bytesToLoad = Math.Min((64 - bufferedBits) / 8,
+                    packedByteCount - byteOffset);
+                var loaded = ReadPackedWord(packed, byteOffset);
+                if (bytesToLoad < sizeof(ulong))
+                    loaded &= (1UL << (bytesToLoad * 8)) - 1;
+                bitBuffer |= loaded << bufferedBits;
+                byteOffset += bytesToLoad;
+                bufferedBits += bytesToLoad * 8;
+            }
+
+            var delta = bitBuffer & mask;
+            bitBuffer >>= bitWidth;
+            bufferedBits -= bitWidth;
+            previous = unchecked(previous + minDelta + (long)delta);
+            overflow |= previous ^ (long)(int)previous;
+            destination[i] = unchecked((int)previous);
+        }
+        ThrowIfInt32Overflow(overflow);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static ulong ReadPackedWord(ReadOnlySpan<byte> packed, int byteOffset)
+    {
+        if (byteOffset <= packed.Length - sizeof(ulong))
+            return BinaryPrimitives.ReadUInt64LittleEndian(packed.Slice(byteOffset, sizeof(ulong)));
+
+        ulong value = 0;
+        for (var i = byteOffset; i < packed.Length; i++)
+            value |= (ulong)packed[i] << ((i - byteOffset) * 8);
+        return value;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void ThrowIfInt32Overflow(long overflow)
+    {
+        if (overflow != 0)
+            throw new CorruptParquetException(
+                "Delta binary packed mini-block contains a value outside the Int32 range.");
     }
 
     static int ReadNarrowInt32Core<T>(ReadOnlySpan<byte> payload, Span<T> destination)
