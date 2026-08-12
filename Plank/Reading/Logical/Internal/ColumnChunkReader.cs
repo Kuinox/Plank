@@ -630,30 +630,29 @@ static class ColumnChunkReader
             throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.");
 
         var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+        var epochTicks = DateTime.UnixEpoch.Ticks;
         switch (timestamp.Unit)
         {
             case TimeUnit.Millis:
                 for (var i = 0; i < destination.Length; i++)
                 {
                     var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long)));
-                    destination[i] = DateTime.SpecifyKind(
-                        DateTimeOffset.FromUnixTimeMilliseconds(raw).UtcDateTime, kind);
+                    destination[i] = new DateTime(
+                        checked(epochTicks + checked(raw * TimeSpan.TicksPerMillisecond)), kind);
                 }
                 break;
             case TimeUnit.Micros:
                 for (var i = 0; i < destination.Length; i++)
                 {
                     var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long)));
-                    destination[i] = DateTime.SpecifyKind(
-                        DateTimeOffset.UnixEpoch.AddTicks(checked(raw * 10)).UtcDateTime, kind);
+                    destination[i] = new DateTime(checked(epochTicks + checked(raw * 10)), kind);
                 }
                 break;
             case TimeUnit.Nanos:
                 for (var i = 0; i < destination.Length; i++)
                 {
                     var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long)));
-                    destination[i] = DateTime.SpecifyKind(
-                        DateTimeOffset.UnixEpoch.AddTicks(raw / 100).UtcDateTime, kind);
+                    destination[i] = new DateTime(checked(epochTicks + (raw / 100)), kind);
                 }
                 break;
             default:
