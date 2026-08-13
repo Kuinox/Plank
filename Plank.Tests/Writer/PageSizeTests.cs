@@ -69,6 +69,47 @@ internal sealed class PageSizeTests
     }
 
     [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void OptionalInt32ByteStreamSplitUsesFixedTargetPages(ParquetDataPageVersion dataPageVersion)
+    {
+        int?[][] valuePatterns =
+        [
+            [int.MinValue, -100, -1, 0, 1, 17, 100, int.MaxValue],
+            [null, int.MinValue, -1, null, 0, 17, null, int.MaxValue],
+            [null, null, null, null, null, null, null, null]
+        ];
+        uint[] targetPageBytes = [1, 4, 5, 6, 10, 1024 * 1024];
+
+        foreach (var targetBytes in targetPageBytes)
+        foreach (var values in valuePatterns)
+            AssertOptionalInt32ByteStreamSplitPages(values, dataPageVersion, targetBytes);
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void OptionalInt32ByteStreamSplitPreservesCustomPageStrategy(ParquetDataPageVersion dataPageVersion)
+    {
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.OptionalLeaf("id", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.ByteStreamSplit]),
+                pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = 1
+        });
+        var column = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
+
+        column.Serialize([1, null, 3, 4, null]);
+
+        AssertDataPageRows(column.Pages, [2, 2, 1]);
+    }
+
+    [Test]
     public void DictionaryColumnSplitsDataPagesByTargetPageSize()
     {
         var schema = new PlankParquetSchema([
@@ -164,6 +205,107 @@ internal sealed class PageSizeTests
         if (dataPageIndex != expectedRows.Length)
             throw new InvalidOperationException(
                 $"Data page count mismatch. Expected {expectedRows.Length}, got {dataPageIndex}.");
+    }
+
+    static void AssertOptionalInt32ByteStreamSplitPages(int?[] values,
+        ParquetDataPageVersion dataPageVersion, uint targetPageBytes)
+    {
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.OptionalLeaf("id", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.ByteStreamSplit]))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = targetPageBytes,
+            WritePageIndexes = true
+        });
+        var column = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
+
+        column.Serialize(values);
+
+        var rowsPerPage = Math.Max(1, checked((int)targetPageBytes) / (sizeof(int) + 1));
+        var rowOffset = 0;
+        var pageCount = 0;
+        for (var pageIndex = 0; pageIndex < column.Pages.Count; pageIndex++)
+        {
+            ref var page = ref column.Pages[pageIndex];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+
+            var expectedRows = Math.Min(rowsPerPage, values.Length - rowOffset);
+            if (page.RowCount != (uint)expectedRows)
+                throw new InvalidOperationException(
+                    $"Target {targetPageBytes} page {pageCount} row count mismatch. Expected {expectedRows}, got {page.RowCount}.");
+            var pageValues = values.AsSpan(rowOffset, expectedRows);
+            var presentCount = 0;
+            for (var valueIndex = 0; valueIndex < pageValues.Length; valueIndex++)
+                if (pageValues[valueIndex].HasValue)
+                    presentCount++;
+            var expectedContentBytes = checked((int)page.DefinitionLevelsByteLength + presentCount * sizeof(int)
+                + (dataPageVersion == ParquetDataPageVersion.V1 ? sizeof(uint) : 0));
+            if (page.UncompressedContentSize != expectedContentBytes || page.Content.WrittenLength != expectedContentBytes)
+                throw new InvalidOperationException(
+                    $"Target {targetPageBytes} page {pageCount} encoded byte count mismatch. Expected {expectedContentBytes}, got {page.Content.WrittenLength}.");
+            if (page.Encoding != EncodingKind.ByteStreamSplit)
+                throw new InvalidOperationException(
+                    $"Target {targetPageBytes} page {pageCount} encoding mismatch. Expected ByteStreamSplit, got {page.Encoding}.");
+            AssertStatistics(page.Statistics,
+                ColumnStatistics.CreateOptional(schema.LeafColumns[0].Column, pageValues),
+                $"target {targetPageBytes} page {pageCount}");
+            rowOffset += expectedRows;
+            pageCount++;
+        }
+
+        if (rowOffset != values.Length)
+            throw new InvalidOperationException(
+                $"Target {targetPageBytes} pages covered {rowOffset} rows, but the column contains {values.Length}.");
+        var expectedPageCount = (values.Length + rowsPerPage - 1) / rowsPerPage;
+        if (pageCount != expectedPageCount)
+            throw new InvalidOperationException(
+                $"Target {targetPageBytes} page count mismatch. Expected {expectedPageCount}, got {pageCount}.");
+        AssertStatistics(column.Statistics,
+            ColumnStatistics.CreateOptional(schema.LeafColumns[0].Column, values),
+            $"target {targetPageBytes} column");
+
+        writer.StartRowGroup().Write(column);
+        writer.CloseFile();
+        var fileBytes = stream.ToArray();
+        AssertPageIndexMetadata(fileBytes);
+        using var readStream = new MemoryStream(fileBytes, writable: false);
+        using var reader = new ParquetSharp.ParquetFileReader(readStream, leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var logicalReader = rowGroup.Column(0).LogicalReader<int?>();
+        var actual = logicalReader.ReadAll(values.Length);
+        if (!actual.AsSpan().SequenceEqual(values))
+            throw new InvalidOperationException($"Target {targetPageBytes} round-trip mismatch.");
+    }
+
+    static void AssertStatistics(ColumnStatistics actual, ColumnStatistics expected, string context)
+    {
+        if (actual.ValueKind != expected.ValueKind || actual.MinBits != expected.MinBits
+            || actual.MaxBits != expected.MaxBits || actual.NullCount != expected.NullCount
+            || actual.DistinctCount != expected.DistinctCount || actual.NanCount != expected.NanCount
+            || actual.HasStatistics != expected.HasStatistics)
+            throw new InvalidOperationException($"Statistics mismatch for {context}.");
+    }
+
+    static void AssertPageIndexMetadata(byte[] fileBytes)
+    {
+        using var stream = new MemoryStream(fileBytes, writable: false);
+        using var reader = new Plank.Reading.Logical.ParquetReader();
+        reader.Reset(stream);
+        foreach (var rowGroup in reader.RowGroups)
+        {
+            var column = rowGroup.PreviousColumns[0];
+            if (column.ColumnIndexOffset == 0 || column.ColumnIndexLength == 0
+                || column.OffsetIndexOffset == 0 || column.OffsetIndexLength == 0)
+                throw new InvalidOperationException("Page index metadata was not written.");
+            return;
+        }
+
+        throw new InvalidOperationException("Expected one row group.");
     }
 
     static void AssertDictionaryPageCount(PageList pages, int expectedCount)
