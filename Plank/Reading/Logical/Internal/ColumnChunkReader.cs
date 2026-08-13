@@ -331,6 +331,25 @@ static class ColumnChunkReader
             return true;
         }
 
+        // Timestamp dictionary entries are converted from their physical Int64 values once, while
+        // decoding the dictionary page. Keep the existing dictionary index gather over those 8-byte
+        // DateTime values, but use the compact nullable materializer for every data page instead of
+        // decoding definitions into 4-byte integers and expanding them with a forward scalar loop.
+        if (converter is null && typeof(T) == typeof(DateTime?) && physicalType == typeof(DateTime) &&
+            column.PhysicalType == ParquetPhysicalType.Int64 &&
+            header.Encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary &&
+            TryDecodeNullableNumericValues<T, DateTime>(dataPayload, definitionPayload, valueCount,
+                column, header.Encoding, definitionLevelEncoding, ref state, bufferPool,
+                out var timestampDictionaryPhysicalCount))
+        {
+            if (header.Type == PageHeaderType.DataPageV2 &&
+                timestampDictionaryPhysicalCount != expectedPhysicalCount)
+                throw new CorruptParquetException(
+                    $"Definition levels contain {timestampDictionaryPhysicalCount} values, expected {expectedPhysicalCount}.");
+            buffer = state.CreateNativeBuffer(valueCount);
+            return true;
+        }
+
         if (converter is null && TryDecodeNullableNumericValuesByPhysicalType(dataPayload,
                 definitionPayload, valueCount, column, header.Encoding, definitionLevelEncoding,
                 physicalType, ref state, bufferPool, out var numericPhysicalCount))
@@ -3047,7 +3066,7 @@ static class ColumnChunkReader
                     Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref dictionary),
                     Unsafe.As<Span<T>, Span<int>>(ref destination)[..vectorizedLength]);
             }
-            else if (typeof(T) == typeof(long))
+            else if (typeof(T) == typeof(long) || typeof(T) == typeof(DateTime))
             {
                 DecodeDictionaryLiteralInt64Indexes11Bit(payload,
                     Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref dictionary),
