@@ -10,7 +10,7 @@ sealed class ParquetNetInteropReader : IParquetInteropReader
     public async Task<ParquetFileReadResult> ReadExpectedSchemaAsync(string path)
     {
         using var stream = File.OpenRead(path);
-        using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
+        await using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
         var fields = reader.Schema.GetDataFields();
         var int32Field = GetField(fields, WriterInteropSchema.Int32ColumnName);
         var int64Field = GetField(fields, WriterInteropSchema.Int64ColumnName);
@@ -21,17 +21,23 @@ sealed class ParquetNetInteropReader : IParquetInteropReader
         for (var rowGroupIndex = 0; rowGroupIndex < reader.RowGroupCount; rowGroupIndex++)
         {
             using var rowGroup = reader.OpenRowGroupReader(rowGroupIndex);
-            var int32Column = await rowGroup.ReadColumnAsync(int32Field).ConfigureAwait(false);
-            var int64Column = await rowGroup.ReadColumnAsync(int64Field).ConfigureAwait(false);
-            var doubleColumn = await rowGroup.ReadColumnAsync(doubleField).ConfigureAwait(false);
-            var binaryColumn = await rowGroup.ReadColumnAsync(binaryField).ConfigureAwait(false);
+            var rowCount = checked((int)rowGroup.RowCount);
+            var int32Values = new int[rowCount];
+            var int64Values = new long[rowCount];
+            var doubleValues = new double[rowCount];
+            var binaryValues = new byte[rowCount][];
+
+            await rowGroup.ReadAsync<int>(int32Field, int32Values, null, default).ConfigureAwait(false);
+            await rowGroup.ReadAsync<long>(int64Field, int64Values, null, default).ConfigureAwait(false);
+            await rowGroup.ReadAsync<double>(doubleField, doubleValues, null, default).ConfigureAwait(false);
+            await rowGroup.ReadAsync(binaryField, binaryValues, null, default).ConfigureAwait(false);
 
             rowGroups.Add(new ParquetRowGroupReadResult
             {
-                Int32Values = RequireArray<int[]>(int32Column.Data, WriterInteropSchema.Int32ColumnName),
-                Int64Values = RequireArray<long[]>(int64Column.Data, WriterInteropSchema.Int64ColumnName),
-                DoubleValues = RequireArray<double[]>(doubleColumn.Data, WriterInteropSchema.DoubleColumnName),
-                BinaryValues = RequireArray<byte[][]>(binaryColumn.Data, WriterInteropSchema.BinaryColumnName)
+                Int32Values = int32Values,
+                Int64Values = int64Values,
+                DoubleValues = doubleValues,
+                BinaryValues = binaryValues
             });
         }
 
@@ -48,15 +54,5 @@ sealed class ParquetNetInteropReader : IParquetInteropReader
                 return fields[i];
 
         throw new InvalidOperationException($"Could not find Parquet field '{name}'.");
-    }
-
-    static T RequireArray<T>(Array values, string fieldName)
-        where T : class
-    {
-        if (values is T typed)
-            return typed;
-
-        throw new InvalidOperationException(
-            $"Parquet.Net returned unexpected value array type '{values.GetType()}' for field '{fieldName}'.");
     }
 }

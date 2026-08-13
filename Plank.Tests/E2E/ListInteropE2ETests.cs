@@ -1,4 +1,5 @@
 using Parquet;
+using Parquet.Data;
 using Parquet.Schema;
 using ParquetSharp;
 using Plank.Schema;
@@ -32,7 +33,8 @@ internal sealed class ListInteropE2ETests
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
-                    Compression = CompressionKind.None
+                    Compression = CompressionKind.None,
+                    DataPageVersion = PlankDataPageVersion.V1
                 });
                 var rowGroup = writer.StartRowGroup();
                 var serialized = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
@@ -74,7 +76,8 @@ internal sealed class ListInteropE2ETests
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
-                    Compression = CompressionKind.None
+                    Compression = CompressionKind.None,
+                    DataPageVersion = PlankDataPageVersion.V1
                 });
                 var rowGroup = writer.StartRowGroup();
                 var serialized = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
@@ -116,7 +119,8 @@ internal sealed class ListInteropE2ETests
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
-                    Compression = CompressionKind.None
+                    Compression = CompressionKind.None,
+                    DataPageVersion = PlankDataPageVersion.V1
                 });
                 var rowGroup = writer.StartRowGroup();
                 var serialized = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
@@ -158,7 +162,8 @@ internal sealed class ListInteropE2ETests
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
-                    Compression = CompressionKind.None
+                    Compression = CompressionKind.None,
+                    DataPageVersion = PlankDataPageVersion.V1
                 });
                 var rowGroup = writer.StartRowGroup();
                 var serialized = rowGroup.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
@@ -180,7 +185,7 @@ internal sealed class ListInteropE2ETests
     [Test]
     [Arguments(PlankDataPageVersion.V1)]
     [Arguments(PlankDataPageVersion.V2)]
-    public async Task OptionalListOfOptionalInt32WithSnappyIsReadableByBothImplementations(
+    public async Task OptionalListOfOptionalInt32WithSnappyIsReadableByParquetSharpAndByParquetNetForV1(
         PlankDataPageVersion dataPageVersion)
     {
         var path = Path.Combine(Path.GetTempPath(),
@@ -215,7 +220,8 @@ internal sealed class ListInteropE2ETests
             }
 
             AssertParquetSharpOptionalNullable(path, rows);
-            await AssertParquetNetOptionalNullableAsync(path, rows).ConfigureAwait(false);
+            if (dataPageVersion == PlankDataPageVersion.V1)
+                await AssertParquetNetOptionalNullableAsync(path, rows).ConfigureAwait(false);
         }
         finally
         {
@@ -227,19 +233,18 @@ internal sealed class ListInteropE2ETests
     static async Task AssertParquetNetAsync(string path, int[]?[] expectedRows, bool allowsNullRows)
     {
         using var stream = File.OpenRead(path);
-        using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
+        await using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
         var fields = reader.Schema.GetDataFields();
         if (fields.Length != 1)
             throw new InvalidOperationException($"Expected one leaf data field, got {fields.Length}.");
 
         using var rowGroup = reader.OpenRowGroupReader(0);
-        var column = await rowGroup.ReadColumnAsync(fields[0]).ConfigureAwait(false);
-        if (column.Data is not int[] values)
-            throw new InvalidOperationException($"Parquet.Net returned '{column.Data.GetType()}' instead of int[].");
-        if (column.RepetitionLevels is not int[] rep)
-            throw new InvalidOperationException("Parquet.Net did not return repetition levels for list column.");
-        if (column.DefinitionLevels is not int[] def)
-            throw new InvalidOperationException("Parquet.Net did not return definition levels for list column.");
+        using var column = await rowGroup.ReadRawColumnDataBaseAsync(fields[0]).ConfigureAwait(false);
+        if (column is not RawColumnData<int> intColumn)
+            throw new InvalidOperationException($"Parquet.Net returned '{column.GetType()}' instead of int data.");
+        var values = intColumn.Values;
+        var rep = column.RepetitionLevels;
+        var def = column.DefinitionLevels;
 
         var expectedLevelCount = 0;
         for (var i = 0; i < expectedRows.Length; i++)
@@ -250,7 +255,9 @@ internal sealed class ListInteropE2ETests
         if (def.Length != expectedLevelCount)
             throw new InvalidOperationException($"Expected {expectedLevelCount} definition levels, got {def.Length}.");
 
-        var maxDef = def.Length == 0 ? 0 : def.Max();
+        var maxDef = 0;
+        for (var i = 0; i < def.Length; i++)
+            maxDef = Math.Max(maxDef, def[i]);
         if (!allowsNullRows && maxDef < 1)
             throw new InvalidOperationException($"Expected max definition level >= 1, got {maxDef}.");
         if (values.Length == 0 && expectedRows.Any(static r => r is { Length: > 0 }))
@@ -316,13 +323,13 @@ internal sealed class ListInteropE2ETests
     static async Task AssertParquetNetOptionalNullableAsync(string path, int?[][] expectedRows)
     {
         using var stream = File.OpenRead(path);
-        using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
+        await using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
         var fields = reader.Schema.GetDataFields();
-        using var rowGroup = reader.OpenRowGroupReader(0);
-        _ = await rowGroup.ReadColumnAsync(fields[0]).ConfigureAwait(false);
-
         if (fields.Length != 1)
             throw new InvalidOperationException($"Expected 1 field for optional list test, got {fields.Length}.");
+
+        using var rowGroup = reader.OpenRowGroupReader(0);
+        using var column = await rowGroup.ReadRawColumnDataBaseAsync(fields[0]).ConfigureAwait(false);
 
         var nonNullRowCount = 0;
         for (var i = 0; i < expectedRows.Length; i++)

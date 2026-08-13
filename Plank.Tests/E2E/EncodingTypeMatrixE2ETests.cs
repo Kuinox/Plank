@@ -82,7 +82,8 @@ internal sealed class EncodingTypeMatrixE2ETests
             EncodingKind.DeltaLengthByteArray => physicalType == ParquetPhysicalType.ByteArray,
             EncodingKind.DeltaByteArray => physicalType == ParquetPhysicalType.ByteArray,
             EncodingKind.ByteStreamSplit =>
-                physicalType is ParquetPhysicalType.Float or ParquetPhysicalType.Double,
+                physicalType is ParquetPhysicalType.Int32 or ParquetPhysicalType.Int64
+                    or ParquetPhysicalType.Float or ParquetPhysicalType.Double,
             _ => false
         };
 
@@ -189,7 +190,7 @@ internal sealed class EncodingTypeMatrixE2ETests
     static async Task AssertParquetNetCanReadAsync(string path, int expectedRowCount)
     {
         using var stream = File.OpenRead(path);
-        using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
+        await using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
         if (reader.RowGroupCount != 1)
             throw new InvalidOperationException(
                 $"Parquet.Net row-group count mismatch. Expected 1, got {reader.RowGroupCount}.");
@@ -200,13 +201,21 @@ internal sealed class EncodingTypeMatrixE2ETests
                 $"Parquet.Net field count mismatch. Expected 1, got {fields.Length}.");
 
         using var rowGroup = reader.OpenRowGroupReader(0);
-        var dataColumn = await rowGroup.ReadColumnAsync(fields[0]).ConfigureAwait(false);
-        if (dataColumn.Data.Length != expectedRowCount)
+        var rowCount = checked((int)rowGroup.RowCount);
+        if (rowCount != expectedRowCount)
             throw new InvalidOperationException(
-                $"Parquet.Net row count mismatch. Expected {expectedRowCount}, got {dataColumn.Data.Length}.");
-        if (dataColumn.Data is bool[] booleanValues &&
-            !booleanValues.AsSpan().SequenceEqual(CreateBooleanValues(expectedRowCount)))
-            throw new InvalidOperationException("Parquet.Net Boolean values mismatch.");
+                $"Parquet.Net row count mismatch. Expected {expectedRowCount}, got {rowCount}.");
+
+        if (fields[0].ClrType == typeof(bool))
+        {
+            var booleanValues = new bool[rowCount];
+            await rowGroup.ReadAsync<bool>(fields[0], booleanValues, null, default).ConfigureAwait(false);
+            if (!booleanValues.AsSpan().SequenceEqual(CreateBooleanValues(expectedRowCount)))
+                throw new InvalidOperationException("Parquet.Net Boolean values mismatch.");
+            return;
+        }
+
+        using var rawColumn = await rowGroup.ReadRawColumnDataBaseAsync(fields[0]).ConfigureAwait(false);
     }
 
     static void AssertParquetSharpCanRead(string path, ParquetPhysicalType physicalType, int expectedRowCount)

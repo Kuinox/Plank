@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using Parquet;
-using Parquet.Data;
 using Parquet.Schema;
 using ParquetSharp;
 using Plank.Schema;
@@ -223,7 +222,7 @@ internal sealed class BenchmarkEncodingCompatibilityTests
                     .ConfigureAwait(false);
                 break;
             case "string":
-                await WriteParquetNetColumnAsync(new DataField<string>("value"), CreateStringValues(RowCount))
+                await WriteParquetNetStringColumnAsync(new DataField<string>("value"), CreateStringValues(RowCount))
                     .ConfigureAwait(false);
                 break;
             default:
@@ -231,13 +230,22 @@ internal sealed class BenchmarkEncodingCompatibilityTests
         }
 
         async Task WriteParquetNetColumnAsync<T>(DataField<T> field, T[] values)
+            where T : struct
         {
             var schema = new Parquet.Schema.ParquetSchema(field);
             await using var writer = await Parquet.ParquetWriter.CreateAsync(schema, stream, options, false)
                 .ConfigureAwait(false);
-            writer.CompressionMethod = CompressionMethod.None;
             using var rowGroup = writer.CreateRowGroup();
-            await rowGroup.WriteColumnAsync(new DataColumn(field, values)).ConfigureAwait(false);
+            await rowGroup.WriteAsync<T>(field, values.AsMemory(), null, null, default).ConfigureAwait(false);
+        }
+
+        async Task WriteParquetNetStringColumnAsync(DataField<string> field, string[] values)
+        {
+            var schema = new Parquet.Schema.ParquetSchema(field);
+            await using var writer = await Parquet.ParquetWriter.CreateAsync(schema, stream, options, false)
+                .ConfigureAwait(false);
+            using var rowGroup = writer.CreateRowGroup();
+            await rowGroup.WriteAsync(field, values).ConfigureAwait(false);
         }
     }
 
@@ -265,19 +273,21 @@ internal sealed class BenchmarkEncodingCompatibilityTests
         {
             "plain" => new ParquetOptions
             {
-                UseDictionaryEncoding = false,
-                UseDeltaBinaryPackedEncoding = false
+                CompressionMethod = CompressionMethod.None,
+                DictionaryEncodingThreshold = 0,
+                ColumnEncodingHints = { ["value"] = EncodingHint.Default }
             },
             "dictionary" => new ParquetOptions
             {
-                UseDictionaryEncoding = true,
+                CompressionMethod = CompressionMethod.None,
                 DictionaryEncodingThreshold = 1.0,
-                UseDeltaBinaryPackedEncoding = false
+                ColumnEncodingHints = { ["value"] = EncodingHint.Dictionary }
             },
             "delta_binary_packed" => new ParquetOptions
             {
-                UseDictionaryEncoding = false,
-                UseDeltaBinaryPackedEncoding = true
+                CompressionMethod = CompressionMethod.None,
+                DictionaryEncodingThreshold = 0,
+                ColumnEncodingHints = { ["value"] = EncodingHint.DeltaBinaryPacked }
             },
             _ => throw new NotSupportedException(
                 $"Parquet.Net benchmark path does not support encoding '{encoding}'.")

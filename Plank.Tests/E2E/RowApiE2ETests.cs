@@ -205,7 +205,7 @@ internal sealed class RowApiE2ETests
     static async Task AssertParquetNetAsync(string path, int[] expected)
     {
         using var stream = File.OpenRead(path);
-        using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
+        await using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
         var fields = reader.Schema.GetDataFields();
         if (fields.Length != 1)
             throw new InvalidOperationException($"Expected 1 column, got {fields.Length}.");
@@ -215,9 +215,8 @@ internal sealed class RowApiE2ETests
         for (var rowGroupIndex = 0; rowGroupIndex < reader.RowGroupCount; rowGroupIndex++)
         {
             using var rowGroup = reader.OpenRowGroupReader(rowGroupIndex);
-            var column = await rowGroup.ReadColumnAsync(field).ConfigureAwait(false);
-            if (column.Data is not int[] groupValues)
-                throw new InvalidOperationException($"Unexpected Parquet.Net payload type '{column.Data.GetType()}'.");
+            var groupValues = new int[checked((int)rowGroup.RowCount)];
+            await rowGroup.ReadAsync<int>(field, groupValues).ConfigureAwait(false);
             values.AddRange(groupValues);
         }
 
@@ -601,7 +600,7 @@ internal sealed class RowApiE2ETests
     static async Task AssertFiveColumnParquetNetAsync(string path, int[][] expectedRows)
     {
         using var stream = File.OpenRead(path);
-        using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
+        await using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
         var fields = reader.Schema.GetDataFields();
         if (fields.Length != 5)
             throw new InvalidOperationException($"Expected 5 fields, got {fields.Length}.");
@@ -615,9 +614,8 @@ internal sealed class RowApiE2ETests
             using var rowGroup = reader.OpenRowGroupReader(rg);
             for (var i = 0; i < 5; i++)
             {
-                var column = await rowGroup.ReadColumnAsync(GetField(fields, $"c{i}")).ConfigureAwait(false);
-                if (column.Data is not int[] values)
-                    throw new InvalidOperationException($"Unexpected payload type '{column.Data.GetType()}' for c{i}.");
+                var values = new int[checked((int)rowGroup.RowCount)];
+                await rowGroup.ReadAsync<int>(GetField(fields, $"c{i}"), values).ConfigureAwait(false);
                 columns[i] = columns[i].Concat(values).ToArray();
             }
         }

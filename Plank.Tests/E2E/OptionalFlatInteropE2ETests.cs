@@ -111,16 +111,15 @@ internal sealed class OptionalFlatInteropE2ETests
     static async Task AssertParquetNetAsync(string path, IReadOnlyList<int?> expectedIds, IReadOnlyList<string> expectedNames)
     {
         using var stream = File.OpenRead(path);
-        using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
+        await using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
         var fields = reader.Schema.GetDataFields();
         using var rowGroup = reader.OpenRowGroupReader(0);
-        var idColumn = await rowGroup.ReadColumnAsync(GetField(fields, "id")).ConfigureAwait(false);
-        var nameColumn = await rowGroup.ReadColumnAsync(GetField(fields, "name")).ConfigureAwait(false);
+        var rowCount = checked((int)rowGroup.RowCount);
+        var actualIds = new int?[rowCount];
+        var actualNames = new string?[rowCount];
 
-        var actualIds = idColumn.Data is int?[] nullableIds
-            ? nullableIds
-            : idColumn.Data.Cast<int>().Select(static value => (int?)value).ToArray();
-        var actualNames = nameColumn.Data.Cast<string>().ToArray();
+        await rowGroup.ReadAsync<int>(GetField(fields, "id"), actualIds, null, default).ConfigureAwait(false);
+        await rowGroup.ReadAsync(GetField(fields, "name"), actualNames, null, default).ConfigureAwait(false);
 
         AssertNullableValues(actualIds, expectedIds, "Parquet.Net id");
         AssertValues(actualNames, expectedNames, "Parquet.Net name");
