@@ -94,9 +94,20 @@ static class RleBitPackingHybridEncoding
 
             var literalStart = index;
             index += runLength;
+            var previousRunWasSingle = runLength == 1;
 
             while (index < values.Length)
             {
+                if (previousRunWasSingle)
+                {
+                    var skipped = SkipDistinctAdjacentBooleanValues(values, index);
+                    if (skipped != 0)
+                    {
+                        index += skipped;
+                        continue;
+                    }
+                }
+
                 runLength = CountBooleanRunLength(values, index);
                 if (runLength >= 8)
                 {
@@ -109,8 +120,10 @@ static class RleBitPackingHybridEncoding
                     index += take;
                     if (take < runLength)
                         break;
+                    previousRunWasSingle = false;
                     continue;
                 }
+                previousRunWasSingle = runLength == 1;
                 index += runLength;
             }
 
@@ -252,13 +265,78 @@ static class RleBitPackingHybridEncoding
         return index - start;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static int CountBooleanRunLength(ReadOnlySpan<bool> values, int start)
     {
-        var value = values[start];
-        var length = 1;
-        while (start + length < values.Length && values[start + length] == value)
-            length++;
-        return length;
+        ref var input = ref Unsafe.As<bool, byte>(ref MemoryMarshal.GetReference(values));
+        var expectedValue = Unsafe.Add(ref input, start);
+        var index = start + 1;
+
+        if (Vector512.IsHardwareAccelerated && Vector512<byte>.IsSupported)
+        {
+            var expected = Vector512.Create(expectedValue);
+            var lastVectorStart = values.Length - Vector512<byte>.Count;
+            while (index <= lastVectorStart)
+            {
+                var current = Vector512.LoadUnsafe(ref input, (nuint)index);
+                var differentBits = ~Vector512.Equals(current, expected).ExtractMostSignificantBits();
+                if (differentBits != 0)
+                    return index - start + BitOperations.TrailingZeroCount(differentBits);
+                index += Vector512<byte>.Count;
+            }
+        }
+        if (Vector256.IsHardwareAccelerated && Vector256<byte>.IsSupported)
+        {
+            var expected = Vector256.Create(expectedValue);
+            var lastVectorStart = values.Length - Vector256<byte>.Count;
+            while (index <= lastVectorStart)
+            {
+                var current = Vector256.LoadUnsafe(ref input, (nuint)index);
+                var differentBits = ~Vector256.Equals(current, expected).ExtractMostSignificantBits();
+                if (differentBits != 0)
+                    return index - start + BitOperations.TrailingZeroCount(differentBits);
+                index += Vector256<byte>.Count;
+            }
+        }
+
+        while (index < values.Length && Unsafe.Add(ref input, index) == expectedValue)
+            index++;
+        return index - start;
+    }
+
+    static int SkipDistinctAdjacentBooleanValues(ReadOnlySpan<bool> values, int start)
+    {
+        ref var input = ref Unsafe.As<bool, byte>(ref MemoryMarshal.GetReference(values));
+        var index = start;
+
+        if (Vector512.IsHardwareAccelerated && Vector512<byte>.IsSupported)
+        {
+            var lastVectorStart = values.Length - Vector512<byte>.Count - 1;
+            while (index <= lastVectorStart)
+            {
+                var current = Vector512.LoadUnsafe(ref input, (nuint)index);
+                var next = Vector512.LoadUnsafe(ref input, (nuint)(index + 1));
+                var equalBits = Vector512.Equals(current, next).ExtractMostSignificantBits();
+                if (equalBits != 0)
+                    return index - start + BitOperations.TrailingZeroCount(equalBits);
+                index += Vector512<byte>.Count;
+            }
+        }
+        if (Vector256.IsHardwareAccelerated && Vector256<byte>.IsSupported)
+        {
+            var lastVectorStart = values.Length - Vector256<byte>.Count - 1;
+            while (index <= lastVectorStart)
+            {
+                var current = Vector256.LoadUnsafe(ref input, (nuint)index);
+                var next = Vector256.LoadUnsafe(ref input, (nuint)(index + 1));
+                var equalBits = Vector256.Equals(current, next).ExtractMostSignificantBits();
+                if (equalBits != 0)
+                    return index - start + BitOperations.TrailingZeroCount(equalBits);
+                index += Vector256<byte>.Count;
+            }
+        }
+
+        return index - start;
     }
 
     static int SkipDistinctAdjacentValues(ReadOnlySpan<int> values, int start)
