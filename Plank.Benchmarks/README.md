@@ -25,5 +25,9 @@ dotnet run -c Release --project Plank.Benchmarks -- --published-read
 ```
 
 It generates one audited in-memory file per case, then writes `docs/benchmarks/read-v1.json`.
+Every timed reader traverses every decoded logical value (and every byte of binary values) into a
+deterministic fingerprint. The fingerprint is validated after the timer, so the JIT cannot discard
+decoded buffers that a real consumer would observe. Multithreaded readers consume independent columns
+in parallel and combine their fingerprints in schema order.
 
 Use `--data-dir`, `--output`, `--warmups`, `--iterations`, `--workers`, `--synthetic-rows`, or `--synthetic-width` to override the defaults.
