@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Immutable;
 using Plank.Reading;
 using Plank.Reading.Logical.Internal;
@@ -79,6 +80,78 @@ internal sealed class NonPlainTimestampDecodingTests
         }
     }
 
+    [Test]
+    public void OptionalDictionaryDateTimesPreserveUnitsKindsNullsAndElevenBitIndexes()
+    {
+        foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        foreach (var unit in Enum.GetValues<TimeUnit>())
+        foreach (var isAdjustedToUtc in new[] { false, true })
+        {
+            var kind = isAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+            var epoch = DateTime.SpecifyKind(DateTime.UnixEpoch, kind);
+            var ticksPerValue = unit switch
+            {
+                TimeUnit.Millis => TimeSpan.TicksPerMillisecond,
+                TimeUnit.Micros => 10,
+                TimeUnit.Nanos => 1,
+                _ => throw new ArgumentOutOfRangeException(nameof(unit))
+            };
+            var expected = Enumerable.Range(0, 4_113)
+                .Select(index => index % 7 == 0
+                    ? null
+                    : (DateTime?)epoch.AddTicks((index & 2_047) * ticksPerValue))
+                .ToArray();
+
+            var actual = RoundTripOptional(expected, unit, isAdjustedToUtc, pageVersion);
+            if (!actual.SequenceEqual(expected))
+                throw new InvalidOperationException(
+                    $"{pageVersion}/{unit}/adjusted={isAdjustedToUtc}: optional dictionary timestamps differ.");
+        }
+    }
+
+    [Test]
+    public void OptionalDictionaryDateTimesRejectOutOfRangeDictionaryIndex()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int64,
+                new ColumnOptions(ParquetRepetition.Optional,
+                    ImmutableArray.Create(EncodingKind.RleDictionary)),
+                new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true),
+                ForceDictionaryPageStrategy.Shared)
+        ]);
+        var column = schema.LeafColumns[0].Column;
+        var buffers = default(ColumnReadBuffers<DateTime?>);
+        try
+        {
+            var dictionaryPayload = new byte[2 * sizeof(long)];
+            BinaryPrimitives.WriteInt64LittleEndian(dictionaryPayload, 0);
+            BinaryPrimitives.WriteInt64LittleEndian(dictionaryPayload.AsSpan(sizeof(long)), 1);
+            var dictionaryHeader = new PageHeader(PageHeaderType.DictionaryPage,
+                (uint)dictionaryPayload.Length, (uint)dictionaryPayload.Length, 2,
+                EncodingKind.Plain, 1, 0, 0, 0, false, EncodingKind.Rle,
+                EncodingKind.Rle, 2);
+            if (!ColumnChunkReader.TryDecodeDictionaryPageIntoNative(dictionaryHeader,
+                    dictionaryPayload, column, ref buffers, DefaultParquetBufferPool.Shared))
+                throw new InvalidOperationException("Timestamp dictionary page did not use the native path.");
+
+            byte[] definitionPayload = [0x10, 0x01];
+            byte[] invalidIndexes = [0x02, 0x10, 0x02];
+            var payload = definitionPayload.Concat(invalidIndexes).ToArray();
+            var dataHeader = new PageHeader(PageHeaderType.DataPageV2,
+                (uint)payload.Length, (uint)payload.Length, 8, EncodingKind.RleDictionary,
+                1, 0, (uint)definitionPayload.Length, 0, false, EncodingKind.Rle,
+                EncodingKind.Rle, 8);
+
+            Assert.Throws<CorruptParquetException>(() =>
+                ColumnChunkReader.TryDecodeNullablePageIntoNative(dataHeader, payload, column,
+                    rowCount: 8, ref buffers, DefaultParquetBufferPool.Shared, out _));
+        }
+        finally
+        {
+            buffers.Dispose();
+        }
+    }
+
     static DateTime[] RoundTrip(DateTime[] values, TimeUnit unit, bool isAdjustedToUtc,
         EncodingKind encoding, ParquetDataPageVersion pageVersion)
     {
@@ -104,6 +177,33 @@ internal sealed class NonPlainTimestampDecodingTests
         using var reader = schema.CreateReader(new MemoryReadSource(stream.ToArray()));
         var actual = new List<DateTime>();
         foreach (var buffer in reader.RowGroups[0].Column<DateTime>(0))
+            actual.AddRange(buffer.Values);
+        return actual.ToArray();
+    }
+
+    static DateTime?[] RoundTripOptional(DateTime?[] values, TimeUnit unit, bool isAdjustedToUtc,
+        ParquetDataPageVersion pageVersion)
+    {
+        var options = new ColumnOptions(ParquetRepetition.Optional,
+            ImmutableArray.Create(EncodingKind.RleDictionary));
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int64, options,
+                new LogicalType.Timestamp(unit, isAdjustedToUtc), ForceDictionaryPageStrategy.Shared)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = pageVersion
+        });
+        var serialized = writer.CreateSerializedColumn<DateTime?>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+
+        using var reader = schema.CreateReader(new MemoryReadSource(stream.ToArray()));
+        var actual = new List<DateTime?>(values.Length);
+        foreach (var buffer in reader.RowGroups[0].Column<DateTime?>(0))
             actual.AddRange(buffer.Values);
         return actual.ToArray();
     }
