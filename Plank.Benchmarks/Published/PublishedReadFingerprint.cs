@@ -149,8 +149,7 @@ static class PublishedReadFingerprint
         => value.HasValue ? AddValue(hash, value.Value) : AddNull(hash);
 
     public static ulong AddValue(ulong hash, DateTime value)
-        => AddUInt64(AddPresent(hash),
-            unchecked((ulong)new DateTimeOffset(DateTime.SpecifyKind(value, DateTimeKind.Utc)).UtcTicks));
+        => AddUInt64(AddPresent(hash), unchecked((ulong)value.Ticks));
 
     public static ulong AddValue(ulong hash, DateTime? value)
         => value.HasValue ? AddValue(hash, value.Value) : AddNull(hash);
