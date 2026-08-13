@@ -64,12 +64,23 @@ sealed class ParquetSharpPublishedBenchmarkReader : IPublishedBenchmarkReader
             if (batch.ColumnCount != _dataSet.Columns.Count)
                 throw new InvalidDataException(
                     $"ParquetSharp decoded {batch.ColumnCount} columns instead of {_dataSet.Columns.Count}.");
-            for (var columnIndex = 0; columnIndex < batch.ColumnCount; columnIndex++)
+            var pieces = new PublishedReadResult[batch.ColumnCount];
+            if (_useThreads)
+                Parallel.For(0, batch.ColumnCount, new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = _workerCount,
+                    CancellationToken = cancellationToken
+                }, columnIndex => pieces[columnIndex] = ReadColumn(batch.Column(columnIndex),
+                    _dataSet.Columns[columnIndex].Kind, columnIndex, rowGroupIndex, batch.Length));
+            else
+                for (var columnIndex = 0; columnIndex < batch.ColumnCount; columnIndex++)
+                    pieces[columnIndex] = ReadColumn(batch.Column(columnIndex),
+                        _dataSet.Columns[columnIndex].Kind, columnIndex, rowGroupIndex, batch.Length);
+
+            for (var columnIndex = 0; columnIndex < pieces.Length; columnIndex++)
             {
-                var piece = ReadColumn(batch.Column(columnIndex), _dataSet.Columns[columnIndex].Kind,
-                    columnIndex, rowGroupIndex, batch.Length);
-                aggregate = PublishedReadFingerprint.Combine(aggregate, piece);
-                valueCount = checked(valueCount + piece.ValueCount);
+                aggregate = PublishedReadFingerprint.Combine(aggregate, pieces[columnIndex]);
+                valueCount = checked(valueCount + pieces[columnIndex].ValueCount);
             }
             using var extraBatch = await batches.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
             if (extraBatch is not null)
@@ -93,24 +104,53 @@ sealed class ParquetSharpPublishedBenchmarkReader : IPublishedBenchmarkReader
         if (array.Length != rowCount)
             throw new InvalidDataException(
                 $"ParquetSharp decoded {array.Length} values instead of {rowCount} for column {columnIndex}.");
-        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, rowCount);
-        for (var sampleIndex = 0; sampleIndex < 3 && rowCount != 0; sampleIndex++)
+        return kind switch
         {
-            var position = PublishedReadFingerprint.SamplePosition(sampleIndex, rowCount);
-            fingerprint = PublishedReadFingerprint.AddValue(fingerprint, ReadValue(array, kind, position));
-        }
-        return new PublishedReadResult(rowCount, fingerprint);
-    }
-
-    static object? ReadValue(IArrowArray array, BenchmarkColumnKind kind, int index)
-        => kind switch
-        {
-            BenchmarkColumnKind.Boolean => ((BooleanArray)array).GetValue(index),
-            BenchmarkColumnKind.Int32 => ((Int32Array)array).GetValue(index),
-            BenchmarkColumnKind.Int64 => ((Int64Array)array).GetValue(index),
-            BenchmarkColumnKind.Timestamp => ((TimestampArray)array).GetTimestamp(index),
-            BenchmarkColumnKind.Double => ((DoubleArray)array).GetValue(index),
-            BenchmarkColumnKind.String => ((StringArray)array).GetString(index),
+            BenchmarkColumnKind.Boolean => Consume((BooleanArray)array, columnIndex, rowGroupIndex),
+            BenchmarkColumnKind.Int32 => Consume((Int32Array)array, columnIndex, rowGroupIndex),
+            BenchmarkColumnKind.Int64 => Consume((Int64Array)array, columnIndex, rowGroupIndex),
+            BenchmarkColumnKind.Timestamp => Consume((TimestampArray)array, columnIndex, rowGroupIndex),
+            BenchmarkColumnKind.Double => Consume((DoubleArray)array, columnIndex, rowGroupIndex),
+            BenchmarkColumnKind.String => Consume((StringArray)array, columnIndex, rowGroupIndex),
             _ => throw new NotSupportedException($"Unsupported column kind '{kind}'.")
         };
+    }
+
+    static PublishedReadResult Consume<T>(PrimitiveArray<T> array, int columnIndex, int rowGroupIndex)
+        where T : struct, IEquatable<T>
+    {
+        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, array.Length);
+        for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
+            fingerprint = PublishedReadFingerprint.AddValue(fingerprint, array.GetValue(valueIndex));
+        return new PublishedReadResult(array.Length, fingerprint);
+    }
+
+    static PublishedReadResult Consume(BooleanArray array, int columnIndex, int rowGroupIndex)
+    {
+        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, array.Length);
+        for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
+            fingerprint = PublishedReadFingerprint.AddValue(fingerprint, array.GetValue(valueIndex));
+        return new PublishedReadResult(array.Length, fingerprint);
+    }
+
+    static PublishedReadResult Consume(TimestampArray array, int columnIndex, int rowGroupIndex)
+    {
+        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, array.Length);
+        for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
+            fingerprint = PublishedReadFingerprint.AddValue(fingerprint, array.GetTimestamp(valueIndex));
+        return new PublishedReadResult(array.Length, fingerprint);
+    }
+
+    static PublishedReadResult Consume(StringArray array, int columnIndex, int rowGroupIndex)
+    {
+        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, array.Length);
+        for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
+        {
+            var bytes = array.GetBytes(valueIndex, out var isNull);
+            fingerprint = isNull
+                ? PublishedReadFingerprint.AddNull(fingerprint)
+                : PublishedReadFingerprint.AddBytes(fingerprint, bytes);
+        }
+        return new PublishedReadResult(array.Length, fingerprint);
+    }
 }

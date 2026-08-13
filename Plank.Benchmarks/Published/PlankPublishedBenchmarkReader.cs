@@ -87,18 +87,11 @@ sealed class PlankPublishedBenchmarkReader : IPublishedBenchmarkReader
     {
         var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroup.Index, rowCount);
         var offset = 0;
-        var sampleIndex = 0;
         foreach (var buffer in rowGroup.Column<T>(columnIndex))
         {
             var values = buffer.Values;
-            while (sampleIndex < 3 && rowCount != 0)
-            {
-                var position = PublishedReadFingerprint.SamplePosition(sampleIndex, rowCount);
-                if (position >= offset + buffer.Count)
-                    break;
-                fingerprint = PublishedReadFingerprint.AddValue(fingerprint, values[position - offset]);
-                sampleIndex++;
-            }
+            for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
+                fingerprint = PublishedReadFingerprint.AddValue(fingerprint, values[valueIndex]);
             offset = checked(offset + buffer.Count);
         }
         ValidateCount(columnIndex, rowCount, offset);
@@ -109,20 +102,12 @@ sealed class PlankPublishedBenchmarkReader : IPublishedBenchmarkReader
     {
         var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroup.Index, rowCount);
         var offset = 0;
-        var sampleIndex = 0;
         foreach (var buffer in rowGroup.Column<byte>(columnIndex))
         {
-            while (sampleIndex < 3 && rowCount != 0)
-            {
-                var position = PublishedReadFingerprint.SamplePosition(sampleIndex, rowCount);
-                if (position >= offset + buffer.Count)
-                    break;
-                var localIndex = position - offset;
+            for (var localIndex = 0; localIndex < buffer.Count; localIndex++)
                 fingerprint = buffer.IsNull(localIndex)
-                    ? PublishedReadFingerprint.AddValue(fingerprint, null)
+                    ? PublishedReadFingerprint.AddNull(fingerprint)
                     : PublishedReadFingerprint.AddBytes(fingerprint, buffer.GetValue(localIndex));
-                sampleIndex++;
-            }
             offset = checked(offset + buffer.Count);
         }
         ValidateCount(columnIndex, rowCount, offset);

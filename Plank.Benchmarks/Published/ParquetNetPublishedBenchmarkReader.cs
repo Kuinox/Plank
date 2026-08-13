@@ -93,20 +93,16 @@ sealed class ParquetNetPublishedBenchmarkReader : IPublishedBenchmarkReader
         CancellationToken cancellationToken)
         where T : struct
     {
-        Array values;
         if (nullable)
         {
             var typed = new T?[rowCount];
             await rowGroup.ReadAsync<T>(field, typed, null, cancellationToken).ConfigureAwait(false);
-            values = typed;
+            return Consume(typed, columnIndex, rowGroupIndex);
         }
-        else
-        {
-            var typed = new T[rowCount];
-            await rowGroup.ReadAsync<T>(field, typed, null, cancellationToken).ConfigureAwait(false);
-            values = typed;
-        }
-        return Sample(values, columnIndex, rowGroupIndex);
+
+        var values = new T[rowCount];
+        await rowGroup.ReadAsync<T>(field, values, null, cancellationToken).ConfigureAwait(false);
+        return Consume(values, columnIndex, rowGroupIndex);
     }
 
     static async ValueTask<PublishedReadResult> ReadStringsAsync(Parquet.ParquetRowGroupReader rowGroup,
@@ -114,15 +110,19 @@ sealed class ParquetNetPublishedBenchmarkReader : IPublishedBenchmarkReader
     {
         var values = new string?[rowCount];
         await rowGroup.ReadAsync(field, values, null, cancellationToken).ConfigureAwait(false);
-        return Sample(values, columnIndex, rowGroupIndex);
+        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, values.Length);
+        for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
+            fingerprint = values[valueIndex] is { } value
+                ? PublishedReadFingerprint.AddString(fingerprint, value)
+                : PublishedReadFingerprint.AddNull(fingerprint);
+        return new PublishedReadResult(values.Length, fingerprint);
     }
 
-    static PublishedReadResult Sample(Array values, int columnIndex, int rowGroupIndex)
+    static PublishedReadResult Consume<T>(ReadOnlySpan<T> values, int columnIndex, int rowGroupIndex)
     {
         var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, values.Length);
-        for (var sampleIndex = 0; sampleIndex < 3 && values.Length != 0; sampleIndex++)
-            fingerprint = PublishedReadFingerprint.AddValue(fingerprint,
-                values.GetValue(PublishedReadFingerprint.SamplePosition(sampleIndex, values.Length)));
+        for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
+            fingerprint = PublishedReadFingerprint.AddValue(fingerprint, values[valueIndex]);
         return new PublishedReadResult(values.Length, fingerprint);
     }
 }

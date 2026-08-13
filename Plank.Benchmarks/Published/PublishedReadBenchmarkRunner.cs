@@ -31,7 +31,8 @@ public static class PublishedReadBenchmarkRunner
                 PageIndexes = false,
                 BloomFilters = false,
                 RowGroupBoundaries = "Every reader uses the same in-memory file for each case.",
-                TimingBoundary = "Reader creation through footer parsing and decoding every value. Input file generation is excluded.",
+                TimingBoundary = "Reader creation through footer parsing, decoding, and deterministic consumption " +
+                    "of every logical value and every binary payload byte. Input file generation is excluded.",
                 Quick = options.Quick
             },
             Suites = suites
