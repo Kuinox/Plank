@@ -3924,7 +3924,7 @@ static class ColumnChunkReader
                     Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref dictionary),
                     Unsafe.As<Span<T>, Span<int>>(ref destination)[..vectorizedLength]);
             }
-            else if (typeof(T) == typeof(long) || typeof(T) == typeof(DateTime))
+            else if (typeof(T) == typeof(long) || typeof(T) == typeof(DateTime) || typeof(T) == typeof(double))
             {
                 DecodeDictionaryLiteralInt64Indexes11Bit(payload,
                     Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref dictionary),
