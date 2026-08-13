@@ -288,18 +288,29 @@ static class DeltaBinaryPackedEncoding
         Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, outputOffset), bitWidthBytes);
         outputOffset += MiniBlockCount;
 
-        for (var block = 0; block < MiniBlockCount; block++)
+        if (bitWidths != 0)
         {
-            var width = (int)(byte)(bitWidths >> (block * 8));
-            if (width == 0)
-                continue;
+            var containsWidthAboveFour = ((bitWidths | 0x80808080U) - 0x05050505U) & 0x80808080U;
+            if (containsWidthAboveFour == 0)
+            {
+                PackNarrowDeltaBlock(ref deltas, bitWidths, ref Unsafe.Add(ref output, outputOffset));
+            }
+            else
+            {
+                for (var block = 0; block < MiniBlockCount; block++)
+                {
+                    var width = (int)(byte)(bitWidths >> (block * 8));
+                    if (width == 0)
+                        continue;
 
-            var byteCount = width * 4;
-            PackUnsignedValues(
-                ref Unsafe.Add(ref deltas, block * MiniBlockSize),
-                width,
-                ref Unsafe.Add(ref output, outputOffset));
-            outputOffset += byteCount;
+                    var byteCount = width * 4;
+                    PackUnsignedValues(
+                        ref Unsafe.Add(ref deltas, block * MiniBlockSize),
+                        width,
+                        ref Unsafe.Add(ref output, outputOffset));
+                    outputOffset += byteCount;
+                }
+            }
         }
 
         writer.Advance(outputLength);
@@ -322,7 +333,7 @@ static class DeltaBinaryPackedEncoding
 
         var containsWidthAboveFour = ((bitWidths | 0x80808080U) - 0x05050505U) & 0x80808080U;
         if (containsWidthAboveFour == 0)
-            PackNarrowInt64Block(ref deltas, bitWidths, ref Unsafe.Add(ref output, outputOffset));
+            PackNarrowDeltaBlock(ref deltas, bitWidths, ref Unsafe.Add(ref output, outputOffset));
         else
             PackGenericDeltaBlock(ref deltas, bitWidths, ref Unsafe.Add(ref output, outputOffset));
 
@@ -349,7 +360,7 @@ static class DeltaBinaryPackedEncoding
     }
 
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
-    static void PackNarrowInt64Block(ref long input, uint bitWidths, ref byte output)
+    static void PackNarrowDeltaBlock(ref long input, uint bitWidths, ref byte output)
     {
         var outputOffset = 0;
         for (var block = 0; block < MiniBlockCount; block++)

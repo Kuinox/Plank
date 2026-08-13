@@ -14,7 +14,7 @@ public class DeltaBinaryPackedEncodingBenchmark
     [Params(4_096, 65_536)]
     public int Rows { get; set; }
 
-    [Params("constant-delta", "small-random-delta", "random")]
+    [Params("constant-delta", "narrow-delta", "small-random-delta", "random")]
     public string Distribution { get; set; } = "constant-delta";
 
     [GlobalSetup]
@@ -59,6 +59,10 @@ public class DeltaBinaryPackedEncodingBenchmark
                 for (var i = 0; i < values.Length; i++)
                     values[i] = i * 7;
                 return values;
+            case "narrow-delta":
+                for (var i = 0; i < values.Length; i++)
+                    values[i] = i * 3 + i % 7;
+                return values;
             case "small-random-delta":
             {
                 var current = 0;
@@ -88,6 +92,10 @@ public class DeltaBinaryPackedEncodingBenchmark
             case "constant-delta":
                 for (var i = 0; i < values.Length; i++)
                     values[i] = i * 7L;
+                return values;
+            case "narrow-delta":
+                for (var i = 0; i < values.Length; i++)
+                    values[i] = i * 3L + i % 7;
                 return values;
             case "small-random-delta":
             {
