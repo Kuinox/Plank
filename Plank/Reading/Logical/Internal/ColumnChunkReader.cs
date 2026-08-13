@@ -9,7 +9,7 @@ namespace Plank.Reading.Logical.Internal;
 
 static class ColumnChunkReader
 {
-    internal const int NullableNumericBatchSizeBytes = 256 * 1024;
+    internal const int DecodeBatchSizeBytes = 256 * 1024;
 
     static readonly DateOnly UnixEpochDate = new(1970, 1, 1);
     static readonly ulong[] ExpandedDefinitionBytes = CreateExpandedDefinitionBytes();
@@ -264,7 +264,7 @@ static class ColumnChunkReader
         return bitWidth;
     }
 
-    internal enum NullableNumericDecoderKind : byte
+    internal enum FixedWidthDecoderKind : byte
     {
         None,
         Plain,
@@ -272,7 +272,7 @@ static class ColumnChunkReader
         Dictionary
     }
 
-    internal struct NullableNumericPageState
+    internal struct FixedWidthPageState
     {
         internal int ValueCount;
         internal int ValueOffset;
@@ -281,24 +281,49 @@ static class ColumnChunkReader
         internal int DataOffset;
         internal int DataLength;
         internal int DefinitionBitsetLength;
-        internal NullableNumericDecoderKind DecoderKind;
+        internal int BatchElementSize;
+        internal FixedWidthDecoderKind DecoderKind;
+        internal bool IsNullable;
 
         internal readonly bool Active
             => ValueOffset < ValueCount;
     }
 
-    internal static bool TryStartNullableNumericPageBatches<T>(PageHeader header, ReadOnlySpan<byte> payload,
+    internal static bool CanBatchDictionaryPages<T>(Column column)
+    {
+        var converter = column.Converter;
+        return converter is null
+            ? GetPhysicalDecodeType<T>(column) != typeof(T)
+            : converter.IsNullableValueType(typeof(T));
+    }
+
+    internal static bool TryStartFixedWidthPageBatches<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ulong rowCount, ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool,
-        ref NullableNumericPageState page, out ColumnBuffer<T> buffer)
+        ref FixedWidthPageState page, out ColumnBuffer<T> buffer)
     {
         buffer = default;
         page = default;
         var physicalType = GetPhysicalDecodeType<T>(column);
-        if (column.Converter is not null ||
-            header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2) ||
+        var converter = column.Converter;
+        var isNullable = converter is null
+            ? physicalType != typeof(T)
+            : converter.IsNullableValueType(typeof(T));
+        var isRequired = converter is null
+            ? physicalType == typeof(T)
+            : converter.SupportsValueType(typeof(T)) && !isNullable;
+        if (header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2) ||
             header.Encoding is not (EncodingKind.Plain or EncodingKind.ByteStreamSplit or
                 EncodingKind.RleDictionary or EncodingKind.PlainDictionary) ||
-            !IsNullableNumericProjection<T>(physicalType))
+            column.Options.Repetition == ParquetRepetition.Repeated ||
+            RuntimeHelpers.IsReferenceOrContainsReferences<T>() ||
+            (!isNullable && !isRequired) ||
+            (column.Options.Repetition == ParquetRepetition.Optional && !isNullable) ||
+            !CanBatchFixedWidthProjection(column, physicalType, header.Encoding))
+            return false;
+        // The required dictionary decoder maps indexes directly into the caller's output. Materializing
+        // dictionary values for resumable batches measured slower in both single- and multi-threaded reads.
+        if (isRequired && header.Encoding is
+            (EncodingKind.RleDictionary or EncodingKind.PlainDictionary))
             return false;
         if (header.ValueCount == 0)
             return false;
@@ -307,10 +332,10 @@ static class ColumnChunkReader
                 $"Page value count ({header.ValueCount}) exceeds row group row count ({rowCount}).");
         var decoderKind = header.Encoding switch
         {
-            EncodingKind.Plain => NullableNumericDecoderKind.Plain,
-            EncodingKind.ByteStreamSplit => NullableNumericDecoderKind.ByteStreamSplit,
-            EncodingKind.RleDictionary or EncodingKind.PlainDictionary => NullableNumericDecoderKind.Dictionary,
-            _ => NullableNumericDecoderKind.None
+            EncodingKind.Plain => FixedWidthDecoderKind.Plain,
+            EncodingKind.ByteStreamSplit => FixedWidthDecoderKind.ByteStreamSplit,
+            EncodingKind.RleDictionary or EncodingKind.PlainDictionary => FixedWidthDecoderKind.Dictionary,
+            _ => FixedWidthDecoderKind.None
         };
 
         var definitionOffset = 0;
@@ -359,9 +384,9 @@ static class ColumnChunkReader
                 $"Definition levels contain {physicalCount} values, expected {expectedPhysicalCount}.");
 
         var dataPayload = payload[dataOffset..];
-        var physicalSize = GetNullableNumericPhysicalSize(physicalType);
+        var physicalSize = GetEncodedFixedWidth(column);
         if (header.Encoding == EncodingKind.Plain)
-            ValidatePlainPayload(dataPayload, checked((uint)physicalCount), checked((uint)physicalSize));
+            ValidateFixedWidthPlainPayload(dataPayload, column, physicalCount, physicalSize);
         else if (header.Encoding == EncodingKind.ByteStreamSplit &&
                  (long)physicalCount * physicalSize > dataPayload.Length)
             throw new CorruptParquetException(
@@ -371,51 +396,82 @@ static class ColumnChunkReader
         {
             if (!buffers.HasDictionary)
                 return false;
-            MaterializeNullableNumericDictionaryValues(dataPayload, physicalType, physicalCount,
+            if (physicalCount != 0 && dataPayload.IsEmpty)
+                throw new CorruptParquetException(
+                    "Dictionary payload is empty but value count is non-zero.");
+            if (!dataPayload.IsEmpty && dataPayload[0] > 32)
+                throw new CorruptParquetException(
+                    $"Dictionary bit width {dataPayload[0]} exceeds the maximum of 32.");
+            MaterializeFixedWidthDictionaryValues(dataPayload, physicalType, physicalCount,
                 ref buffers, bufferPool);
         }
 
-        page = new NullableNumericPageState
+        page = new FixedWidthPageState
         {
             ValueCount = valueCount,
             PhysicalCount = physicalCount,
             DataOffset = dataOffset,
             DataLength = payload.Length - dataOffset,
             DefinitionBitsetLength = definitionBitsetLength,
-            DecoderKind = decoderKind
+            BatchElementSize = Math.Max(
+                Math.Max(Unsafe.SizeOf<T>(), GetDecodedFixedWidthSize(physicalType)),
+                Math.Max(GetEncodedFixedWidth(column),
+                    isNullable && converter is not null ? sizeof(int) : 1)),
+            DecoderKind = decoderKind,
+            IsNullable = isNullable
         };
-        buffer = DecodeNextNullableNumericBatch(payload, column, ref buffers, bufferPool, ref page);
+        buffer = DecodeNextFixedWidthBatch(payload, column, ref buffers, bufferPool, ref page);
         return true;
     }
 
-    internal static ColumnBuffer<T> DecodeNextNullableNumericBatch<T>(ReadOnlySpan<byte> payload, Column column,
-        ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool, ref NullableNumericPageState page)
+    internal static ColumnBuffer<T> DecodeNextFixedWidthBatch<T>(ReadOnlySpan<byte> payload, Column column,
+        ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool, ref FixedWidthPageState page)
     {
         System.Diagnostics.Debug.Assert(page.Active);
-        System.Diagnostics.Debug.Assert(page.DecoderKind != NullableNumericDecoderKind.None);
+        System.Diagnostics.Debug.Assert(page.DecoderKind != FixedWidthDecoderKind.None);
         System.Diagnostics.Debug.Assert(page.DataOffset >= 0 && page.DataLength >= 0 &&
             page.DataOffset <= payload.Length - page.DataLength);
 
-        var batchCapacity = Math.Max(1, NullableNumericBatchSizeBytes / Unsafe.SizeOf<T>());
+        var batchCapacity = Math.Max(1, DecodeBatchSizeBytes / page.BatchElementSize);
         var batchCount = Math.Min(batchCapacity, page.ValueCount - page.ValueOffset);
         var values = buffers.GetValues<T>(batchCount, bufferPool);
-        var definitions = AsBytes(values)[..batchCount];
         int physicalBatchCount;
-        if (page.DefinitionBitsetLength == 0)
-        {
-            definitions.Fill(1);
+        ReadOnlySpan<byte> byteDefinitions = [];
+        ReadOnlySpan<int> intDefinitions = [];
+        if (!page.IsNullable)
             physicalBatchCount = batchCount;
+        else if (column.Converter is not null)
+        {
+            var definitions = buffers.GetExpandedDefinitions(batchCount, bufferPool);
+            if (page.DefinitionBitsetLength == 0)
+            {
+                definitions.Fill(1);
+                physicalBatchCount = batchCount;
+            }
+            else
+                ExpandDefinitionBitset(buffers.GetCompactDefinitions(page.DefinitionBitsetLength),
+                    page.ValueOffset, definitions, out physicalBatchCount);
+            intDefinitions = definitions;
         }
         else
-            ExpandDefinitionBitset(buffers.GetCompactDefinitions(page.DefinitionBitsetLength),
-                page.ValueOffset, definitions, out physicalBatchCount);
+        {
+            var definitions = AsBytes(values)[..batchCount];
+            if (page.DefinitionBitsetLength == 0)
+            {
+                definitions.Fill(1);
+                physicalBatchCount = batchCount;
+            }
+            else
+                ExpandDefinitionBitset(buffers.GetCompactDefinitions(page.DefinitionBitsetLength),
+                    page.ValueOffset, definitions, out physicalBatchCount);
+            byteDefinitions = definitions;
+        }
         if (physicalBatchCount > page.PhysicalCount - page.PhysicalOffset)
             throw new CorruptParquetException(
                 $"Definition levels contain more than the expected {page.PhysicalCount} physical values.");
         var dataPayload = payload.Slice(page.DataOffset, page.DataLength);
-        DecodeNullableNumericBatch(dataPayload, column, definitions,
-            page.PhysicalCount, page.PhysicalOffset, physicalBatchCount, page.DecoderKind,
-            values, ref buffers, bufferPool);
+        DecodeFixedWidthBatch(dataPayload, column, byteDefinitions, intDefinitions,
+            physicalBatchCount, values, ref page, ref buffers, bufferPool);
 
         page.ValueOffset += batchCount;
         page.PhysicalOffset += physicalBatchCount;
@@ -426,118 +482,292 @@ static class ColumnChunkReader
         return buffers.CreateNativeBuffer(batchCount);
     }
 
-    static bool IsNullableNumericProjection<T>(Type physicalType)
-        => typeof(T) == typeof(int?) && physicalType == typeof(int) ||
-           typeof(T) == typeof(long?) && physicalType == typeof(long) ||
-           typeof(T) == typeof(float?) && physicalType == typeof(float) ||
-           typeof(T) == typeof(double?) && physicalType == typeof(double);
+    static bool CanBatchFixedWidthProjection(Column column, Type physicalType, EncodingKind encoding)
+    {
+        if (physicalType != typeof(int) && physicalType != typeof(long) && physicalType != typeof(bool) &&
+            physicalType != typeof(float) && physicalType != typeof(double) && physicalType != typeof(decimal) &&
+            physicalType != typeof(byte) && physicalType != typeof(ushort) && physicalType != typeof(uint) &&
+            physicalType != typeof(ulong) && physicalType != typeof(DateOnly) &&
+            physicalType != typeof(DateTime) && physicalType != typeof(DateTimeOffset) &&
+            physicalType != typeof(TimeOnly) && physicalType != typeof(Guid))
+            return false;
+        if (encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
+            return true;
 
-    static int GetNullableNumericPhysicalSize(Type physicalType)
-        => physicalType == typeof(int) || physicalType == typeof(float)
-            ? sizeof(int)
-            : physicalType == typeof(long) || physicalType == typeof(double)
-                ? sizeof(long)
-                : throw new InvalidOperationException($"Unsupported nullable numeric physical type '{physicalType}'.");
+        return column.PhysicalType switch
+        {
+            ParquetPhysicalType.Boolean => physicalType == typeof(bool) && encoding == EncodingKind.Plain,
+            ParquetPhysicalType.Int32 => physicalType == typeof(int) || physicalType == typeof(byte) ||
+                physicalType == typeof(ushort) || physicalType == typeof(uint) || physicalType == typeof(decimal) ||
+                physicalType == typeof(DateOnly) || physicalType == typeof(TimeOnly),
+            ParquetPhysicalType.Int64 => physicalType == typeof(long) || physicalType == typeof(ulong) ||
+                physicalType == typeof(decimal) || physicalType == typeof(TimeOnly) ||
+                physicalType == typeof(DateTime) || physicalType == typeof(DateTimeOffset),
+            ParquetPhysicalType.Float => physicalType == typeof(float),
+            ParquetPhysicalType.Double => physicalType == typeof(double),
+            ParquetPhysicalType.FixedLenByteArray => physicalType == typeof(Guid) || physicalType == typeof(decimal),
+            _ => false
+        };
+    }
 
-    static void MaterializeNullableNumericDictionaryValues<T>(ReadOnlySpan<byte> payload, Type physicalType,
+    static int GetEncodedFixedWidth(Column column)
+        => column.PhysicalType switch
+        {
+            ParquetPhysicalType.Boolean => 1,
+            ParquetPhysicalType.Int32 or ParquetPhysicalType.Float => sizeof(int),
+            ParquetPhysicalType.Int64 or ParquetPhysicalType.Double => sizeof(long),
+            ParquetPhysicalType.FixedLenByteArray => GetFixedBinaryLength(column),
+            _ => throw new InvalidOperationException(
+                $"Physical type '{column.PhysicalType}' is not fixed-width for batched decoding.")
+        };
+
+    static int GetDecodedFixedWidthSize(Type type)
+        => type == typeof(bool) || type == typeof(byte)
+            ? sizeof(byte)
+            : type == typeof(ushort)
+                ? sizeof(ushort)
+                : type == typeof(int) || type == typeof(float) || type == typeof(uint) ||
+                  type == typeof(DateOnly)
+                    ? sizeof(int)
+                    : type == typeof(long) || type == typeof(double) || type == typeof(ulong) ||
+                      type == typeof(DateTime) || type == typeof(TimeOnly)
+                        ? sizeof(long)
+                        : type == typeof(decimal) || type == typeof(DateTimeOffset) || type == typeof(Guid)
+                            ? 16
+                            : throw new InvalidOperationException(
+                                $"Unsupported fixed-width decoded type '{type}'.");
+
+    static void ValidateFixedWidthPlainPayload(ReadOnlySpan<byte> payload, Column column,
+        int physicalCount, int physicalSize)
+    {
+        if (column.PhysicalType == ParquetPhysicalType.Boolean)
+        {
+            var byteCount = checked((physicalCount + 7) / 8);
+            if (payload.Length < byteCount)
+                throw new CorruptParquetException(
+                    $"Payload ({payload.Length} bytes) is too short to decode {physicalCount} plain boolean values.");
+            return;
+        }
+        ValidatePlainPayload(payload, checked((uint)physicalCount), checked((uint)physicalSize));
+    }
+
+    static void MaterializeFixedWidthDictionaryValues<T>(ReadOnlySpan<byte> payload, Type physicalType,
         int physicalCount, ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool)
     {
-        var physicalBytes = buffers.GetScratch(
-            checked(physicalCount * GetNullableNumericPhysicalSize(physicalType)), bufferPool);
         if (physicalType == typeof(int))
-            DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount), buffers.GetDictionary<int>(),
-                MemoryMarshal.Cast<byte, int>(physicalBytes));
+            MaterializeFixedWidthDictionaryValues<T, int>(payload, physicalCount, ref buffers, bufferPool);
         else if (physicalType == typeof(long))
-            DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount), buffers.GetDictionary<long>(),
-                MemoryMarshal.Cast<byte, long>(physicalBytes));
+            MaterializeFixedWidthDictionaryValues<T, long>(payload, physicalCount, ref buffers, bufferPool);
+        else if (physicalType == typeof(bool))
+            MaterializeFixedWidthDictionaryValues<T, bool>(payload, physicalCount, ref buffers, bufferPool);
         else if (physicalType == typeof(float))
-            DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount), buffers.GetDictionary<float>(),
-                MemoryMarshal.Cast<byte, float>(physicalBytes));
+            MaterializeFixedWidthDictionaryValues<T, float>(payload, physicalCount, ref buffers, bufferPool);
         else if (physicalType == typeof(double))
-            DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount), buffers.GetDictionary<double>(),
-                MemoryMarshal.Cast<byte, double>(physicalBytes));
+            MaterializeFixedWidthDictionaryValues<T, double>(payload, physicalCount, ref buffers, bufferPool);
+        else if (physicalType == typeof(decimal))
+            MaterializeFixedWidthDictionaryValues<T, decimal>(payload, physicalCount, ref buffers, bufferPool);
+        else if (physicalType == typeof(byte))
+            MaterializeFixedWidthDictionaryValues<T, byte>(payload, physicalCount, ref buffers, bufferPool);
+        else if (physicalType == typeof(ushort))
+            MaterializeFixedWidthDictionaryValues<T, ushort>(payload, physicalCount, ref buffers, bufferPool);
+        else if (physicalType == typeof(uint))
+            MaterializeFixedWidthDictionaryValues<T, uint>(payload, physicalCount, ref buffers, bufferPool);
+        else if (physicalType == typeof(ulong))
+            MaterializeFixedWidthDictionaryValues<T, ulong>(payload, physicalCount, ref buffers, bufferPool);
+        else if (physicalType == typeof(DateOnly))
+            MaterializeFixedWidthDictionaryValues<T, DateOnly>(payload, physicalCount, ref buffers, bufferPool);
+        else if (physicalType == typeof(DateTime))
+            MaterializeFixedWidthDictionaryValues<T, DateTime>(payload, physicalCount, ref buffers, bufferPool);
+        else if (physicalType == typeof(DateTimeOffset))
+            MaterializeFixedWidthDictionaryValues<T, DateTimeOffset>(payload, physicalCount, ref buffers, bufferPool);
+        else if (physicalType == typeof(TimeOnly))
+            MaterializeFixedWidthDictionaryValues<T, TimeOnly>(payload, physicalCount, ref buffers, bufferPool);
+        else if (physicalType == typeof(Guid))
+            MaterializeFixedWidthDictionaryValues<T, Guid>(payload, physicalCount, ref buffers, bufferPool);
         else
-            throw new InvalidOperationException($"Unsupported nullable numeric physical type '{physicalType}'.");
+            throw new InvalidOperationException($"Unsupported fixed-width physical type '{physicalType}'.");
     }
 
-    static void DecodeNullableNumericBatch<T>(ReadOnlySpan<byte> payload, Column column,
-        ReadOnlySpan<byte> definitions, int totalPhysicalCount, int physicalOffset,
-        int physicalBatchCount, NullableNumericDecoderKind decoderKind, Span<T> values,
-        ref ColumnReadBuffers<T> buffers,
-        IParquetBufferPool bufferPool)
-    {
-        if (typeof(T) == typeof(int?))
-        {
-            DecodeNullableNumericBatch<T, int>(payload, column, definitions, totalPhysicalCount,
-                physicalOffset, physicalBatchCount, decoderKind, values, ref buffers, bufferPool);
-            return;
-        }
-        if (typeof(T) == typeof(long?))
-        {
-            DecodeNullableNumericBatch<T, long>(payload, column, definitions, totalPhysicalCount,
-                physicalOffset, physicalBatchCount, decoderKind, values, ref buffers, bufferPool);
-            return;
-        }
-        if (typeof(T) == typeof(float?))
-        {
-            DecodeNullableNumericBatch<T, float>(payload, column, definitions, totalPhysicalCount,
-                physicalOffset, physicalBatchCount, decoderKind, values, ref buffers, bufferPool);
-            return;
-        }
-        if (typeof(T) == typeof(double?))
-        {
-            DecodeNullableNumericBatch<T, double>(payload, column, definitions, totalPhysicalCount,
-                physicalOffset, physicalBatchCount, decoderKind, values, ref buffers, bufferPool);
-            return;
-        }
-        throw new InvalidOperationException($"Unsupported nullable numeric projection '{typeof(T)}'.");
-    }
-
-    static void DecodeNullableNumericBatch<T, TValue>(ReadOnlySpan<byte> payload, Column column,
-        ReadOnlySpan<byte> definitions, int totalPhysicalCount, int physicalOffset,
-        int physicalBatchCount, NullableNumericDecoderKind decoderKind, Span<T> values,
-        ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool)
+    static void MaterializeFixedWidthDictionaryValues<T, TValue>(ReadOnlySpan<byte> payload,
+        int physicalCount, ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool)
         where TValue : struct
     {
-        var destination = Unsafe.As<Span<T>, Span<TValue?>>(ref values);
-        var physical = GetNullableNumericBatchValues<T, TValue>(payload, column, totalPhysicalCount,
-            physicalOffset, physicalBatchCount, decoderKind, ref buffers, bufferPool);
-        ScatterNullableNumericBatch(definitions, physical, destination);
+        var physical = MemoryMarshal.Cast<byte, TValue>(buffers.GetScratch(
+            checked(physicalCount * Unsafe.SizeOf<TValue>()), bufferPool));
+        DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount),
+            buffers.GetDictionary<TValue>(), physical);
     }
 
-    static ReadOnlySpan<TValue> GetNullableNumericBatchValues<T, TValue>(ReadOnlySpan<byte> payload,
+    static void DecodeFixedWidthBatch<T>(ReadOnlySpan<byte> payload, Column column,
+        ReadOnlySpan<byte> byteDefinitions, ReadOnlySpan<int> intDefinitions,
+        int physicalBatchCount, Span<T> values, ref FixedWidthPageState page, ref ColumnReadBuffers<T> buffers,
+        IParquetBufferPool bufferPool)
+    {
+        var physicalType = GetPhysicalDecodeType<T>(column);
+        var totalPhysicalCount = page.PhysicalCount;
+        var physicalOffset = page.PhysicalOffset;
+        var decoderKind = page.DecoderKind;
+        if (physicalType == typeof(int))
+            DecodeFixedWidthBatch<T, int>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(long))
+            DecodeFixedWidthBatch<T, long>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(bool))
+            DecodeFixedWidthBatch<T, bool>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(float))
+            DecodeFixedWidthBatch<T, float>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(double))
+            DecodeFixedWidthBatch<T, double>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(decimal))
+            DecodeFixedWidthBatch<T, decimal>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(byte))
+            DecodeFixedWidthBatch<T, byte>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(ushort))
+            DecodeFixedWidthBatch<T, ushort>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(uint))
+            DecodeFixedWidthBatch<T, uint>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(ulong))
+            DecodeFixedWidthBatch<T, ulong>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(DateOnly))
+            DecodeFixedWidthBatch<T, DateOnly>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(DateTime))
+            DecodeFixedWidthBatch<T, DateTime>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(DateTimeOffset))
+            DecodeFixedWidthBatch<T, DateTimeOffset>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(TimeOnly))
+            DecodeFixedWidthBatch<T, TimeOnly>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else if (physicalType == typeof(Guid))
+            DecodeFixedWidthBatch<T, Guid>(payload, column, byteDefinitions, intDefinitions,
+                totalPhysicalCount, physicalOffset, physicalBatchCount, decoderKind, values,
+                ref buffers, bufferPool);
+        else
+            throw new InvalidOperationException($"Unsupported fixed-width projection '{typeof(T)}'.");
+    }
+
+    static void DecodeFixedWidthBatch<T, TValue>(ReadOnlySpan<byte> payload, Column column,
+        ReadOnlySpan<byte> byteDefinitions, ReadOnlySpan<int> intDefinitions,
+        int totalPhysicalCount, int physicalOffset, int physicalBatchCount,
+        FixedWidthDecoderKind decoderKind, Span<T> values, ref ColumnReadBuffers<T> buffers,
+        IParquetBufferPool bufferPool)
+        where TValue : struct
+    {
+        var converter = column.Converter;
+        if (converter is null && typeof(T) == typeof(TValue))
+        {
+            DecodeFixedWidthValuesInto(payload, column, totalPhysicalCount, physicalOffset,
+                decoderKind, Unsafe.As<Span<T>, Span<TValue>>(ref values), ref buffers);
+            return;
+        }
+
+        var physical = GetFixedWidthBatchValues<T, TValue>(payload, column, totalPhysicalCount,
+            physicalOffset, physicalBatchCount, decoderKind, ref buffers, bufferPool);
+        if (converter is not null)
+        {
+            if (intDefinitions.IsEmpty)
+                converter.ConvertFromPhysical(MemoryMarshal.AsBytes(physical), AsBytes(values), physicalBatchCount);
+            else
+                converter.ConvertNullableFromPhysical(MemoryMarshal.AsBytes(physical), intDefinitions,
+                    AsBytes(values), physicalBatchCount);
+            return;
+        }
+
+        var destination = Unsafe.As<Span<T>, Span<TValue?>>(ref values);
+        ScatterNullableFixedWidthBatch(byteDefinitions, physical, destination);
+    }
+
+    static ReadOnlySpan<TValue> GetFixedWidthBatchValues<T, TValue>(ReadOnlySpan<byte> payload,
         Column column, int totalPhysicalCount, int physicalOffset, int physicalBatchCount,
-        NullableNumericDecoderKind decoderKind, ref ColumnReadBuffers<T> buffers,
+        FixedWidthDecoderKind decoderKind, ref ColumnReadBuffers<T> buffers,
         IParquetBufferPool bufferPool)
         where TValue : struct
     {
         if (physicalBatchCount == 0)
             return [];
-        if (decoderKind == NullableNumericDecoderKind.Dictionary)
+        if (decoderKind == FixedWidthDecoderKind.Dictionary)
             return MemoryMarshal.Cast<byte, TValue>(buffers.GetScratch(
                     checked(totalPhysicalCount * Unsafe.SizeOf<TValue>()), bufferPool))
                 .Slice(physicalOffset, physicalBatchCount);
 
-        var physical = MemoryMarshal.Cast<byte, TValue>(buffers.GetScratch(
-            checked(physicalBatchCount * Unsafe.SizeOf<TValue>()), bufferPool));
-        if (decoderKind == NullableNumericDecoderKind.Plain)
-        {
-            var offset = checked(physicalOffset * Unsafe.SizeOf<TValue>());
-            if (!TryDecodePlainIntoNative(payload[offset..], column, checked((uint)physicalBatchCount), physical))
-                throw new InvalidOperationException(
-                    $"Plain decoding declined nullable numeric type '{typeof(TValue)}'.");
-        }
-        else if (decoderKind == NullableNumericDecoderKind.ByteStreamSplit)
-        {
-            DecodeByteStreamSplitNumericSlice(payload, totalPhysicalCount, physicalOffset, physical);
-        }
-        else
-            throw new InvalidOperationException($"Unsupported nullable numeric decoder kind '{decoderKind}'.");
+        var physicalByteLength = checked(physicalBatchCount * Unsafe.SizeOf<TValue>());
+        var scratch = buffers.GetScratch(physicalByteLength, bufferPool);
+        var physical = MemoryMarshal.Cast<byte, TValue>(scratch[..physicalByteLength]);
+        DecodeFixedWidthValuesInto(payload, column, totalPhysicalCount, physicalOffset,
+            decoderKind, physical, ref buffers);
         return physical;
     }
 
+    static void DecodeFixedWidthValuesInto<T, TValue>(ReadOnlySpan<byte> payload, Column column,
+        int totalPhysicalCount, int physicalOffset, FixedWidthDecoderKind decoderKind,
+        Span<TValue> destination, ref ColumnReadBuffers<T> buffers)
+        where TValue : struct
+    {
+        if (destination.IsEmpty)
+            return;
+        if (decoderKind == FixedWidthDecoderKind.Dictionary)
+        {
+            MemoryMarshal.Cast<byte, TValue>(buffers.Scratch.Span)
+                .Slice(physicalOffset, destination.Length).CopyTo(destination);
+            return;
+        }
+        if (decoderKind == FixedWidthDecoderKind.Plain)
+        {
+            if (column.PhysicalType == ParquetPhysicalType.Boolean)
+            {
+                var booleans = Unsafe.As<Span<TValue>, Span<bool>>(ref destination);
+                for (var i = 0; i < booleans.Length; i++)
+                {
+                    var bitIndex = checked(physicalOffset + i);
+                    booleans[i] = ((payload[bitIndex >> 3] >> (bitIndex & 7)) & 1) != 0;
+                }
+                return;
+            }
+            var offset = checked(physicalOffset * GetEncodedFixedWidth(column));
+            if (!TryDecodePlainIntoNative(payload[offset..], column,
+                    checked((uint)destination.Length), destination))
+                throw new InvalidOperationException(
+                    $"Plain decoding declined fixed-width type '{typeof(TValue)}'.");
+            return;
+        }
+        if (decoderKind == FixedWidthDecoderKind.ByteStreamSplit)
+        {
+            if (!TryDecodeByteStreamSplitSliceIntoNative(payload, column, totalPhysicalCount,
+                    physicalOffset, destination))
+                throw new InvalidOperationException(
+                    $"ByteStreamSplit decoding declined fixed-width type '{typeof(TValue)}'.");
+            return;
+        }
+        throw new InvalidOperationException($"Unsupported fixed-width decoder kind '{decoderKind}'.");
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    static void ScatterNullableNumericBatch<TValue>(ReadOnlySpan<byte> definitions,
+    static void ScatterNullableFixedWidthBatch<TValue>(ReadOnlySpan<byte> definitions,
         ReadOnlySpan<TValue> physical, Span<TValue?> destination)
         where TValue : struct
     {
@@ -677,6 +907,19 @@ static class ColumnChunkReader
         {
             var value = (byte)((source[valueOffset >> 3] >> (valueOffset & 7)) & 1);
             destination[destinationOffset] = value;
+            count += value;
+        }
+        nonNullCount = count;
+    }
+
+    static void ExpandDefinitionBitset(ReadOnlySpan<byte> source, int valueOffset, Span<int> destination,
+        out int nonNullCount)
+    {
+        var count = 0;
+        for (var i = 0; i < destination.Length; i++, valueOffset++)
+        {
+            var value = (source[valueOffset >> 3] >> (valueOffset & 7)) & 1;
+            destination[i] = value;
             count += value;
         }
         nonNullCount = count;
@@ -3252,6 +3495,154 @@ static class ColumnChunkReader
                 ((ulong)Unsafe.Add(ref lane5, sourceOffset + i) << 40) |
                 ((ulong)Unsafe.Add(ref lane6, sourceOffset + i) << 48) |
                 ((ulong)Unsafe.Add(ref lane7, sourceOffset + i) << 56);
+    }
+
+    static bool TryDecodeByteStreamSplitSliceIntoNative<T>(ReadOnlySpan<byte> payload, Column column,
+        int totalCount, int valueOffset, Span<T> destination)
+        where T : struct
+    {
+        if (typeof(T) == typeof(int) || typeof(T) == typeof(long) ||
+            typeof(T) == typeof(float) || typeof(T) == typeof(double))
+        {
+            DecodeByteStreamSplitNumericSlice(payload, totalCount, valueOffset, destination);
+            return true;
+        }
+
+        switch (column.PhysicalType)
+        {
+            case ParquetPhysicalType.Int64 when typeof(T) == typeof(ulong):
+                DecodeByteStreamSplitUInt64Slice(payload, totalCount, valueOffset,
+                    Unsafe.As<Span<T>, Span<ulong>>(ref destination));
+                return true;
+            case ParquetPhysicalType.Int32 when typeof(T) == typeof(DateOnly):
+            {
+                var raw = Unsafe.As<Span<T>, Span<int>>(ref destination);
+                DecodeByteStreamSplitInt32Slice(payload, totalCount, valueOffset, raw);
+                var typed = Unsafe.As<Span<T>, Span<DateOnly>>(ref destination);
+                for (var i = 0; i < typed.Length; i++)
+                    typed[i] = DecodeDate(raw[i]);
+                return true;
+            }
+            case ParquetPhysicalType.Int64 when typeof(T) == typeof(TimeOnly):
+            {
+                var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
+                DecodeByteStreamSplitUInt64Slice(payload, totalCount, valueOffset,
+                    MemoryMarshal.Cast<long, ulong>(raw));
+                var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+                for (var i = 0; i < typed.Length; i++)
+                    typed[i] = DecodeTime(raw[i], column.LogicalType);
+                return true;
+            }
+            case ParquetPhysicalType.Int32 when typeof(T) == typeof(TimeOnly):
+            {
+                var typed = Unsafe.As<Span<T>, Span<TimeOnly>>(ref destination);
+                var raw = MemoryMarshal.Cast<TimeOnly, int>(typed)[..typed.Length];
+                DecodeByteStreamSplitInt32Slice(payload, totalCount, valueOffset, raw);
+                for (var i = typed.Length - 1; i >= 0; i--)
+                    typed[i] = DecodeTime(raw[i], column.LogicalType);
+                return true;
+            }
+            case ParquetPhysicalType.Int64 when typeof(T) == typeof(DateTime):
+            {
+                var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
+                DecodeByteStreamSplitUInt64Slice(payload, totalCount, valueOffset,
+                    MemoryMarshal.Cast<long, ulong>(raw));
+                var typed = Unsafe.As<Span<T>, Span<DateTime>>(ref destination);
+                for (var i = 0; i < typed.Length; i++)
+                    typed[i] = DecodeDateTime(raw[i], column.LogicalType);
+                return true;
+            }
+            case ParquetPhysicalType.Int64 when typeof(T) == typeof(DateTimeOffset):
+            {
+                var typed = Unsafe.As<Span<T>, Span<DateTimeOffset>>(ref destination);
+                var raw = MemoryMarshal.Cast<DateTimeOffset, long>(typed)[..typed.Length];
+                DecodeByteStreamSplitUInt64Slice(payload, totalCount, valueOffset,
+                    MemoryMarshal.Cast<long, ulong>(raw));
+                for (var i = typed.Length - 1; i >= 0; i--)
+                    typed[i] = DecodeTimestamp(raw[i], column.LogicalType);
+                return true;
+            }
+            case ParquetPhysicalType.FixedLenByteArray when typeof(T) == typeof(Guid):
+            {
+                var valueLength = GetFixedBinaryLength(column);
+                if (valueLength != 16)
+                    return false;
+                var typed = Unsafe.As<Span<T>, Span<Guid>>(ref destination);
+                Span<byte> guidBytes = stackalloc byte[16];
+                for (var i = 0; i < typed.Length; i++)
+                {
+                    for (var lane = 0; lane < guidBytes.Length; lane++)
+                        guidBytes[lane] = payload[checked(lane * totalCount + valueOffset + i)];
+                    typed[i] = new Guid(guidBytes, bigEndian: true);
+                }
+                return true;
+            }
+            case ParquetPhysicalType.Int32 when typeof(T) == typeof(byte):
+            {
+                var typed = Unsafe.As<Span<T>, Span<byte>>(ref destination);
+                for (var i = 0; i < typed.Length; i++)
+                {
+                    var offset = valueOffset + i;
+                    typed[i] = (byte)(payload[offset] | (payload[totalCount + offset] << 8) |
+                        (payload[totalCount * 2 + offset] << 16) |
+                        (payload[totalCount * 3 + offset] << 24));
+                }
+                return true;
+            }
+            case ParquetPhysicalType.Int32 when typeof(T) == typeof(ushort):
+            {
+                var typed = Unsafe.As<Span<T>, Span<ushort>>(ref destination);
+                for (var i = 0; i < typed.Length; i++)
+                {
+                    var offset = valueOffset + i;
+                    typed[i] = unchecked((ushort)(payload[offset] | (payload[totalCount + offset] << 8) |
+                        (payload[totalCount * 2 + offset] << 16) |
+                        (payload[totalCount * 3 + offset] << 24)));
+                }
+                return true;
+            }
+            case ParquetPhysicalType.Int32 when typeof(T) == typeof(uint):
+            {
+                var typed = Unsafe.As<Span<T>, Span<uint>>(ref destination);
+                DecodeByteStreamSplitInt32Slice(payload, totalCount, valueOffset,
+                    MemoryMarshal.Cast<uint, int>(typed));
+                return true;
+            }
+            case ParquetPhysicalType.Int32 when typeof(T) == typeof(decimal):
+            {
+                var typed = Unsafe.As<Span<T>, Span<decimal>>(ref destination);
+                var raw = MemoryMarshal.Cast<decimal, int>(typed)[..typed.Length];
+                DecodeByteStreamSplitInt32Slice(payload, totalCount, valueOffset, raw);
+                for (var i = typed.Length - 1; i >= 0; i--)
+                    typed[i] = ParquetDecimalConverter.FromInt32(raw[i], column);
+                return true;
+            }
+            case ParquetPhysicalType.Int64 when typeof(T) == typeof(decimal):
+            {
+                var typed = Unsafe.As<Span<T>, Span<decimal>>(ref destination);
+                var raw = MemoryMarshal.Cast<decimal, long>(typed)[..typed.Length];
+                DecodeByteStreamSplitUInt64Slice(payload, totalCount, valueOffset,
+                    MemoryMarshal.Cast<long, ulong>(raw));
+                for (var i = typed.Length - 1; i >= 0; i--)
+                    typed[i] = ParquetDecimalConverter.FromInt64(raw[i], column);
+                return true;
+            }
+            case ParquetPhysicalType.FixedLenByteArray when typeof(T) == typeof(decimal):
+            {
+                var valueLength = GetFixedBinaryLength(column);
+                var typed = Unsafe.As<Span<T>, Span<decimal>>(ref destination);
+                Span<byte> encoded = valueLength <= 256 ? stackalloc byte[valueLength] : new byte[valueLength];
+                for (var i = 0; i < typed.Length; i++)
+                {
+                    for (var lane = 0; lane < valueLength; lane++)
+                        encoded[lane] = payload[checked(lane * totalCount + valueOffset + i)];
+                    typed[i] = ParquetDecimalConverter.ReadBigEndian(encoded, column);
+                }
+                return true;
+            }
+            default:
+                return false;
+        }
     }
 
     static void DecodeByteStreamSplitNumericSlice<T>(ReadOnlySpan<byte> payload, int totalCount,

@@ -50,7 +50,7 @@ internal sealed class NullableNumericDecodingTests
         CompressionKind[] compressions =
             [CompressionKind.None, CompressionKind.Snappy, CompressionKind.Zstd];
         var expected = CreateLargeDoubleValues(65_539);
-        var maximumBufferCount = ColumnChunkReader.NullableNumericBatchSizeBytes / Unsafe.SizeOf<double?>();
+        var maximumBufferCount = ColumnChunkReader.DecodeBatchSizeBytes / Unsafe.SizeOf<double?>();
 
         foreach (var pageVersion in pageVersions)
         foreach (var encoding in Encodings)
@@ -97,6 +97,158 @@ internal sealed class NullableNumericDecodingTests
     }
 
     [Test]
+    public void LargeRequiredNumericPageIsSplitAcrossEncodingsPagesAndCompression()
+    {
+        ParquetDataPageVersion[] pageVersions =
+            [ParquetDataPageVersion.V1, ParquetDataPageVersion.V2];
+        CompressionKind[] compressions =
+            [CompressionKind.None, CompressionKind.Snappy, CompressionKind.Zstd];
+        var expected = new double[70_003];
+        for (var i = 0; i < expected.Length; i++)
+            expected[i] = CreateDouble(i % 2_048);
+
+        foreach (var pageVersion in pageVersions)
+        foreach (var encoding in new[] { EncodingKind.Plain, EncodingKind.ByteStreamSplit })
+        foreach (var compression in compressions)
+        {
+            var schema = CreateSinglePageSchema(ParquetPhysicalType.Double, encoding, optional: false);
+            AssertLargeRequired(schema, expected, encoding, pageVersion, compression);
+        }
+    }
+
+    [Test]
+    public void LargeFixedWidthLogicalAndConvertedValuesAreSplitIntoBoundedBuffers()
+    {
+        foreach (var encoding in Encodings)
+        {
+            var timestamps = new DateTime[40_003];
+            var optionalTimestamps = new DateTime?[20_003];
+            for (var i = 0; i < timestamps.Length; i++)
+                timestamps[i] = DateTime.UnixEpoch.AddTicks(i * 10L);
+            for (var i = 0; i < optionalTimestamps.Length; i++)
+                if (i % 11 != 0)
+                    optionalTimestamps[i] = DateTime.UnixEpoch.AddTicks(i * 10L);
+            var timestampType = new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true);
+            if (encoding != EncodingKind.RleDictionary)
+                AssertLargeRequired(CreateSinglePageSchema(ParquetPhysicalType.Int64, encoding,
+                        optional: false, logicalType: timestampType), timestamps, encoding);
+            AssertLargeOptional(CreateSinglePageSchema(ParquetPhysicalType.Int64, encoding,
+                    optional: true, logicalType: timestampType), optionalTimestamps, encoding);
+
+            var converted = new ScaledValue[20_003];
+            var optionalConverted = new ScaledValue?[20_003];
+            for (var i = 0; i < converted.Length; i++)
+            {
+                converted[i] = new ScaledValue(i / 100m);
+                if (i % 17 != 0)
+                    optionalConverted[i] = converted[i];
+            }
+            var converter = new ScaledValueConverter();
+            if (encoding != EncodingKind.RleDictionary)
+                AssertLargeRequired(CreateSinglePageSchema(ParquetPhysicalType.Int64, encoding,
+                        optional: false, converter: converter), converted, encoding);
+            AssertLargeOptional(CreateSinglePageSchema(ParquetPhysicalType.Int64, encoding,
+                    optional: true, converter: converter), optionalConverted, encoding);
+
+            var guids = new GuidValue[20_003];
+            var optionalGuids = new GuidValue?[20_003];
+            for (var i = 0; i < guids.Length; i++)
+            {
+                guids[i] = new GuidValue(new Guid(i, 0, 0, new byte[8]));
+                if (i % 13 != 0)
+                    optionalGuids[i] = guids[i];
+            }
+            var guidConverter = new GuidValueConverter();
+            var uuidType = new LogicalType.Uuid();
+            if (encoding != EncodingKind.RleDictionary)
+                AssertLargeRequired(CreateSinglePageSchema(ParquetPhysicalType.FixedLenByteArray, encoding,
+                        optional: false, logicalType: uuidType, typeLength: 16, converter: guidConverter),
+                    guids, encoding);
+            AssertLargeOptional(CreateSinglePageSchema(ParquetPhysicalType.FixedLenByteArray, encoding,
+                    optional: true, logicalType: uuidType, typeLength: 16, converter: guidConverter),
+                optionalGuids, encoding);
+        }
+
+        var booleans = new bool[300_003];
+        var optionalBooleans = new bool?[140_003];
+        for (var i = 0; i < booleans.Length; i++)
+            booleans[i] = (i & 3) != 0;
+        for (var i = 0; i < optionalBooleans.Length; i++)
+            if (i % 17 != 0)
+                optionalBooleans[i] = (i & 3) != 0;
+        AssertLargeRequired(CreateSinglePageSchema(ParquetPhysicalType.Boolean, EncodingKind.Plain,
+                optional: false), booleans, EncodingKind.Plain);
+        AssertLargeOptional(CreateSinglePageSchema(ParquetPhysicalType.Boolean, EncodingKind.Plain,
+                optional: true), optionalBooleans, EncodingKind.Plain);
+    }
+
+    [Test]
+    public void LargeByteStreamSplitPagesBatchEveryRemainingFixedWidthProjection()
+    {
+        const EncodingKind encoding = EncodingKind.ByteStreamSplit;
+
+        var bytes = new byte[70_003];
+        var unsigned16 = new ushort[70_003];
+        var unsigned32 = new uint[70_003];
+        var unsigned64 = new ulong[40_003];
+        for (var i = 0; i < bytes.Length; i++)
+        {
+            bytes[i] = (byte)i;
+            unsigned16[i] = (ushort)(i * 17);
+            unsigned32[i] = unchecked((uint)i * 0x9E37_79B9U);
+        }
+        for (var i = 0; i < unsigned64.Length; i++)
+            unsigned64[i] = unchecked((ulong)i * 0x9E37_79B9_7F4A_7C15UL);
+
+        AssertLargeRequired(CreateSinglePageSchema(ParquetPhysicalType.Int32, encoding,
+                optional: false, logicalType: new LogicalType.Int(8, isSigned: false)), bytes, encoding);
+        AssertLargeOptional(CreateSinglePageSchema(ParquetPhysicalType.Int32, encoding,
+                optional: true, logicalType: new LogicalType.Int(8, isSigned: false)),
+            CreateOptional(bytes, 17), encoding);
+        AssertLargeRequired(CreateSinglePageSchema(ParquetPhysicalType.Int32, encoding,
+                optional: false, logicalType: new LogicalType.Int(16, isSigned: false)), unsigned16, encoding);
+        AssertLargeOptional(CreateSinglePageSchema(ParquetPhysicalType.Int32, encoding,
+                optional: true, logicalType: new LogicalType.Int(16, isSigned: false)),
+            CreateOptional(unsigned16, 17), encoding);
+        AssertLargeRequired(CreateSinglePageSchema(ParquetPhysicalType.Int32, encoding,
+                optional: false, logicalType: new LogicalType.Int(32, isSigned: false)), unsigned32, encoding);
+        AssertLargeOptional(CreateSinglePageSchema(ParquetPhysicalType.Int32, encoding,
+                optional: true, logicalType: new LogicalType.Int(32, isSigned: false)),
+            CreateOptional(unsigned32, 17), encoding);
+        AssertLargeRequired(CreateSinglePageSchema(ParquetPhysicalType.Int64, encoding,
+                optional: false, logicalType: new LogicalType.Int(64, isSigned: false)), unsigned64, encoding);
+        AssertLargeOptional(CreateSinglePageSchema(ParquetPhysicalType.Int64, encoding,
+                optional: true, logicalType: new LogicalType.Int(64, isSigned: false)),
+            CreateOptional(unsigned64, 17), encoding);
+
+        var dates = new DateOnly[70_003];
+        var times = new TimeOnly[40_003];
+        for (var i = 0; i < dates.Length; i++)
+            dates[i] = DateOnly.FromDateTime(DateTime.UnixEpoch).AddDays(i % 10_000);
+        for (var i = 0; i < times.Length; i++)
+            times[i] = TimeOnly.MinValue.Add(TimeSpan.FromTicks(i * 10L));
+        AssertLargeRequired(CreateSinglePageSchema(ParquetPhysicalType.Int32, encoding,
+                optional: false, logicalType: new LogicalType.Date()), dates, encoding);
+        AssertLargeOptional(CreateSinglePageSchema(ParquetPhysicalType.Int32, encoding,
+                optional: true, logicalType: new LogicalType.Date()), CreateOptional(dates, 17), encoding);
+        AssertLargeRequired(CreateSinglePageSchema(ParquetPhysicalType.Int64, encoding,
+                optional: false, logicalType: new LogicalType.Time(TimeUnit.Micros, false)), times, encoding);
+        AssertLargeOptional(CreateSinglePageSchema(ParquetPhysicalType.Int64, encoding,
+                optional: true, logicalType: new LogicalType.Time(TimeUnit.Micros, false)),
+            CreateOptional(times, 17), encoding);
+
+        var timestamps = new DateTimeOffset[20_003];
+        for (var i = 0; i < timestamps.Length; i++)
+            timestamps[i] = DateTimeOffset.UnixEpoch.AddTicks(i * 10L);
+        AssertLargeRequired(CreateSinglePageSchema(ParquetPhysicalType.Int64, encoding,
+                optional: false, logicalType: new LogicalType.Timestamp(TimeUnit.Micros, true)),
+            timestamps, encoding);
+        AssertLargeOptional(CreateSinglePageSchema(ParquetPhysicalType.Int64, encoding,
+                optional: true, logicalType: new LogicalType.Timestamp(TimeUnit.Micros, true)),
+            CreateOptional(timestamps, 17), encoding);
+    }
+
+    [Test]
     public void LargeNullableNumericPagesSplitForEverySupportedProjectionAndNullExtreme()
     {
         var intValues = new int?[32_771];
@@ -137,6 +289,63 @@ internal sealed class NullableNumericDecodingTests
         finally
         {
             buffers.Dispose();
+        }
+    }
+
+    [Test]
+    public void RetainedRequiredFixedWidthBatchSurvivesAdvancementAndReaderDisposal()
+    {
+        var schema = CreateSinglePageSchema(ParquetPhysicalType.Double, EncodingKind.Plain,
+            optional: false);
+        var expected = new double[70_003];
+        for (var i = 0; i < expected.Length; i++)
+            expected[i] = CreateDouble(i % 2_048);
+
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = ParquetDataPageVersion.V2,
+            WritePageIndexes = false,
+            WritePageCrc = false
+        });
+        var serialized = writer.CreateSerializedColumn<double>(schema.LeafColumns[0]);
+        serialized.Serialize(expected);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+
+        ParquetBuffer retained = default;
+        double[] firstBatch;
+        try
+        {
+            using (var reader = schema.CreateReader(new MemoryReadSource(stream.ToArray())))
+            {
+                var buffers = reader.RowGroups[0].Column<double>(0).GetEnumerator();
+                try
+                {
+                    if (!buffers.MoveNext())
+                        throw new InvalidOperationException("Expected a required fixed-width batch.");
+                    firstBatch = buffers.Current.Values.ToArray();
+                    retained = buffers.Current.Retain();
+                    if (!buffers.MoveNext())
+                        throw new InvalidOperationException("Expected a second required fixed-width batch.");
+                    if (buffers.Current.NativeValues.DangerousGetAddress() == retained.DangerousGetAddress())
+                        throw new InvalidOperationException(
+                            "Advancing overwrote the storage held by the retained batch.");
+                }
+                finally
+                {
+                    buffers.Dispose();
+                }
+            }
+
+            if (!retained.AsSpan<double>().SequenceEqual(firstBatch))
+                throw new InvalidOperationException(
+                    "Retained required fixed-width batch changed after advancing and disposing the reader.");
+        }
+        finally
+        {
+            retained.Dispose();
         }
     }
 
@@ -244,9 +453,9 @@ internal sealed class NullableNumericDecodingTests
         var buffers = default(ColumnReadBuffers<int?>);
         try
         {
-            var page = default(ColumnChunkReader.NullableNumericPageState);
+            var page = default(ColumnChunkReader.FixedWidthPageState);
             Assert.Throws<CorruptParquetException>(() =>
-                ColumnChunkReader.TryStartNullableNumericPageBatches(header, payload, column,
+                ColumnChunkReader.TryStartFixedWidthPageBatches(header, payload, column,
                     rowCount: valueCount, ref buffers, DefaultParquetBufferPool.Shared, ref page, out _));
             Assert.Throws<CorruptParquetException>(() =>
                 ColumnChunkReader.TryDecodeNullablePageIntoNative(header, payload, column,
@@ -269,14 +478,17 @@ internal sealed class NullableNumericDecodingTests
         ]);
     }
 
-    static ParquetSchema CreateSinglePageSchema(ParquetPhysicalType physicalType, EncodingKind encoding)
+    static ParquetSchema CreateSinglePageSchema(ParquetPhysicalType physicalType, EncodingKind encoding,
+        bool optional = true, LogicalType? logicalType = null, uint typeLength = 0,
+        ParquetValueConverter? converter = null)
     {
-        var options = new ColumnOptions(ParquetRepetition.Optional,
-            ImmutableArray.Create(encoding));
-        return new([
-            ColumnDefinition.OptionalLeaf("value", physicalType, options,
-                pageStrategy: new SinglePageStrategy(encoding == EncodingKind.RleDictionary))
-        ]);
+        var options = new ColumnOptions(optional ? ParquetRepetition.Optional : ParquetRepetition.Required,
+            ImmutableArray.Create(encoding), typeLength);
+        var pageStrategy = new SinglePageStrategy(encoding == EncodingKind.RleDictionary);
+        var definition = optional
+            ? ColumnDefinition.OptionalLeaf("value", physicalType, options, logicalType, pageStrategy, converter)
+            : ColumnDefinition.RequiredLeaf("value", physicalType, options, logicalType, pageStrategy, converter);
+        return new([definition]);
     }
 
     static byte[] WriteSinglePage<T>(ParquetSchema schema, T?[] values,
@@ -304,7 +516,7 @@ internal sealed class NullableNumericDecodingTests
         var schema = CreateSinglePageSchema(physicalType, EncodingKind.Plain);
         var file = WriteSinglePage(schema, expected, ParquetDataPageVersion.V2, CompressionKind.None);
         using var reader = schema.CreateReader(new MemoryReadSource(file));
-        var maximumBufferCount = ColumnChunkReader.NullableNumericBatchSizeBytes / Unsafe.SizeOf<T?>();
+        var maximumBufferCount = ColumnChunkReader.DecodeBatchSizeBytes / Unsafe.SizeOf<T?>();
         var offset = 0;
         var bufferCount = 0;
         foreach (var buffer in reader.RowGroups[0].Column<T?>(0))
@@ -321,6 +533,82 @@ internal sealed class NullableNumericDecodingTests
             throw new InvalidOperationException(
                 $"{typeof(T).Name}: expected a split page with {expected.Length} values, got " +
                 $"{bufferCount} buffers and {offset} values.");
+    }
+
+    static void AssertLargeRequired<T>(ParquetSchema schema, T[] expected, EncodingKind encoding,
+        ParquetDataPageVersion pageVersion = ParquetDataPageVersion.V2,
+        CompressionKind compression = CompressionKind.None)
+        where T : struct
+    {
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = compression,
+            DataPageVersion = pageVersion,
+            WritePageIndexes = false,
+            WritePageCrc = false
+        });
+        var serialized = writer.CreateSerializedColumn<T>(schema.LeafColumns[0]);
+        serialized.Serialize(expected);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+
+        using var reader = schema.CreateReader(new MemoryReadSource(stream.ToArray()));
+        var maximumBufferCount = ColumnChunkReader.DecodeBatchSizeBytes / Unsafe.SizeOf<T>();
+        var offset = 0;
+        var bufferCount = 0;
+        foreach (var buffer in reader.RowGroups[0].Column<T>(0))
+        {
+            bufferCount++;
+            if (buffer.Count > maximumBufferCount)
+                throw new InvalidOperationException(
+                    $"{typeof(T).Name}/{encoding}: buffer contains {buffer.Count} values, " +
+                    $"maximum is {maximumBufferCount}.");
+            if (!buffer.Values.SequenceEqual(expected.AsSpan(offset, buffer.Count)))
+                throw new InvalidOperationException(
+                    $"{typeof(T).Name}/{encoding}: values differ in batch {bufferCount}.");
+            offset += buffer.Count;
+        }
+        if (bufferCount <= 1 || offset != expected.Length)
+            throw new InvalidOperationException(
+                $"{typeof(T).Name}/{encoding}: expected a split page with {expected.Length} values, got " +
+                $"{bufferCount} buffers and {offset} values.");
+    }
+
+    static void AssertLargeOptional<T>(ParquetSchema schema, T?[] expected, EncodingKind encoding)
+        where T : struct
+    {
+        var file = WriteSinglePage(schema, expected, ParquetDataPageVersion.V2, CompressionKind.None);
+        using var reader = schema.CreateReader(new MemoryReadSource(file));
+        var maximumBufferCount = ColumnChunkReader.DecodeBatchSizeBytes / Unsafe.SizeOf<T?>();
+        var offset = 0;
+        var bufferCount = 0;
+        foreach (var buffer in reader.RowGroups[0].Column<T?>(0))
+        {
+            bufferCount++;
+            if (buffer.Count > maximumBufferCount)
+                throw new InvalidOperationException(
+                    $"{typeof(T).Name}?/{encoding}: buffer contains {buffer.Count} values, " +
+                    $"maximum is {maximumBufferCount}.");
+            if (!buffer.Values.SequenceEqual(expected.AsSpan(offset, buffer.Count)))
+                throw new InvalidOperationException(
+                    $"{typeof(T).Name}?/{encoding}: values differ in batch {bufferCount}.");
+            offset += buffer.Count;
+        }
+        if (bufferCount <= 1 || offset != expected.Length)
+            throw new InvalidOperationException(
+                $"{typeof(T).Name}?/{encoding}: expected a split page with {expected.Length} values, got " +
+                $"{bufferCount} buffers and {offset} values.");
+    }
+
+    static T?[] CreateOptional<T>(T[] values, int nullInterval)
+        where T : struct
+    {
+        var optional = new T?[values.Length];
+        for (var i = 0; i < values.Length; i++)
+            if (i % nullInterval != 0)
+                optional[i] = values[i];
+        return optional;
     }
 
     static T?[] RoundTrip<T>(ParquetPhysicalType physicalType, T?[] values, EncodingKind encoding,
@@ -428,6 +716,28 @@ internal sealed class NullableNumericDecodingTests
         NoNulls,
         AllNull,
         Mixed
+    }
+
+    readonly record struct ScaledValue(decimal Value);
+
+    sealed class ScaledValueConverter : ParquetValueConverter<ScaledValue, long>
+    {
+        public override long ConvertToPhysical(ScaledValue value)
+            => decimal.ToInt64(value.Value * 100m);
+
+        public override ScaledValue ConvertFromPhysical(long value)
+            => new(value / 100m);
+    }
+
+    readonly record struct GuidValue(Guid Value);
+
+    sealed class GuidValueConverter : ParquetValueConverter<GuidValue, Guid>
+    {
+        public override Guid ConvertToPhysical(GuidValue value)
+            => value.Value;
+
+        public override GuidValue ConvertFromPhysical(Guid value)
+            => new(value);
     }
 
     sealed class FixedRowsPageStrategy(uint rowsPerPage, bool dictionary) : IPageStrategy
