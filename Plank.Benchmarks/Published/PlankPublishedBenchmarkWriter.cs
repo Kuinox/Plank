@@ -8,12 +8,25 @@ namespace Plank.Benchmarks.Published;
 sealed class PlankPublishedBenchmarkWriter : IPublishedBenchmarkWriter
 {
     readonly PublishedBenchmarkDataSet _dataSet;
+    readonly Array[][] _preparedValues;
     readonly ParquetSchema _schema;
     readonly int _workerCount;
 
     public PlankPublishedBenchmarkWriter(PublishedBenchmarkDataSet dataSet, int workerCount)
+        : this(dataSet, workerCount, PrepareValues(dataSet))
     {
+    }
+
+    internal PlankPublishedBenchmarkWriter(PublishedBenchmarkDataSet dataSet, int workerCount,
+        Array[][] preparedValues)
+    {
+        ArgumentNullException.ThrowIfNull(dataSet);
+        ArgumentNullException.ThrowIfNull(preparedValues);
+        if (preparedValues.Length != dataSet.Columns.Count)
+            throw new ArgumentException("Prepared values must match the benchmark column count.",
+                nameof(preparedValues));
         _dataSet = dataSet;
+        _preparedValues = preparedValues;
         _workerCount = workerCount;
         _schema = new ParquetSchema(dataSet.Columns.Select(CreateDefinition).ToImmutableArray());
     }
@@ -62,10 +75,10 @@ sealed class PlankPublishedBenchmarkWriter : IPublishedBenchmarkWriter
         {
             if (_workerCount == 1)
                 for (var columnIndex = 0; columnIndex < serialized.Length; columnIndex++)
-                    Serialize(serialized[columnIndex], GetPlankValues(_dataSet.Columns[columnIndex], rowGroupIndex));
+                    Serialize(serialized[columnIndex], _preparedValues[columnIndex][rowGroupIndex]);
             else
                 Parallel.For(0, serialized.Length, parallelOptions,
-                    columnIndex => Serialize(serialized[columnIndex], GetPlankValues(_dataSet.Columns[columnIndex], rowGroupIndex)));
+                    columnIndex => Serialize(serialized[columnIndex], _preparedValues[columnIndex][rowGroupIndex]));
 
             var rowGroup = writer.StartRowGroup();
             for (var columnIndex = 0; columnIndex < serialized.Length; columnIndex++)
@@ -102,19 +115,61 @@ sealed class PlankPublishedBenchmarkWriter : IPublishedBenchmarkWriter
             (BenchmarkColumnKind.Int32, false) => writer.CreateSerializedColumn<int>(leaf),
             (BenchmarkColumnKind.Int64, true) => writer.CreateSerializedColumn<long?>(leaf),
             (BenchmarkColumnKind.Int64, false) => writer.CreateSerializedColumn<long>(leaf),
-            (BenchmarkColumnKind.Timestamp, true) => writer.CreateSerializedColumn<DateTime?>(leaf),
-            (BenchmarkColumnKind.Timestamp, false) => writer.CreateSerializedColumn<DateTime>(leaf),
+            (BenchmarkColumnKind.Timestamp, true) => writer.CreateSerializedColumn<long?>(leaf),
+            (BenchmarkColumnKind.Timestamp, false) => writer.CreateSerializedColumn<long>(leaf),
             (BenchmarkColumnKind.Double, true) => writer.CreateSerializedColumn<double?>(leaf),
             (BenchmarkColumnKind.Double, false) => writer.CreateSerializedColumn<double>(leaf),
             (BenchmarkColumnKind.String, _) => writer.CreateSerializedColumn<byte[]?>(leaf),
             _ => throw new NotSupportedException($"Unsupported column kind '{column.Kind}'.")
         };
 
-    static Array GetPlankValues(PublishedBenchmarkDataSet.Column column, int rowGroupIndex)
-        => column.Kind == BenchmarkColumnKind.String
-            ? column.Utf8Values?[rowGroupIndex]
-              ?? throw new InvalidOperationException($"Column '{column.Name}' has no prepared UTF-8 values.")
-            : column.Values[rowGroupIndex];
+    internal static Array[][] PrepareValues(PublishedBenchmarkDataSet dataSet)
+    {
+        var prepared = new Array[dataSet.Columns.Count][];
+        for (var columnIndex = 0; columnIndex < prepared.Length; columnIndex++)
+        {
+            var column = dataSet.Columns[columnIndex];
+            prepared[columnIndex] = new Array[column.Values.Count];
+            for (var rowGroupIndex = 0; rowGroupIndex < column.Values.Count; rowGroupIndex++)
+                prepared[columnIndex][rowGroupIndex] = PrepareValues(column, rowGroupIndex);
+        }
+        return prepared;
+    }
+
+    static Array PrepareValues(PublishedBenchmarkDataSet.Column column, int rowGroupIndex)
+        => (column.Kind, column.Nullable) switch
+        {
+            (BenchmarkColumnKind.Timestamp, true) => ConvertTimestamps((DateTime?[])column.Values[rowGroupIndex]),
+            (BenchmarkColumnKind.Timestamp, false) => ConvertTimestamps((DateTime[])column.Values[rowGroupIndex]),
+            (BenchmarkColumnKind.String, _) => column.Utf8Values?[rowGroupIndex]
+                ?? throw new InvalidOperationException($"Column '{column.Name}' has no prepared UTF-8 values."),
+            _ => column.Values[rowGroupIndex]
+        };
+
+    static long[] ConvertTimestamps(ReadOnlySpan<DateTime> values)
+    {
+        var converted = new long[values.Length];
+        for (var i = 0; i < values.Length; i++)
+            converted[i] = ConvertTimestamp(values[i]);
+        return converted;
+    }
+
+    static long?[] ConvertTimestamps(ReadOnlySpan<DateTime?> values)
+    {
+        var converted = new long?[values.Length];
+        for (var i = 0; i < values.Length; i++)
+            if (values[i] is { } value)
+                converted[i] = ConvertTimestamp(value);
+        return converted;
+    }
+
+    static long ConvertTimestamp(DateTime value)
+    {
+        if (value.Kind != DateTimeKind.Unspecified)
+            throw new InvalidOperationException(
+                $"Published timestamp values must have kind '{DateTimeKind.Unspecified}', got '{value.Kind}'.");
+        return TimestampConversion.DivideFloor(value.Ticks - DateTime.UnixEpoch.Ticks, 10);
+    }
 
     static void Serialize(object serialized, Array values)
     {
