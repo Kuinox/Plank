@@ -38,10 +38,14 @@ static class NestedParquetRowEmitter
     static bool RequiresNestedEmitter(INamedTypeSymbol schemaType)
     {
         foreach (var property in GetProperties(schemaType))
-            if (!IsFlatScalar(property.Type))
+            if (!IsFlatScalar(property.Type) && !DeclaresConverter(property))
                 return true;
         return false;
     }
+
+    static bool DeclaresConverter(IPropertySymbol property)
+        => GetColumnAttribute(property)?.NamedArguments.Any(static argument =>
+            argument.Key == "Converter" && argument.Value.Value is ITypeSymbol) == true;
 
     static bool TryCreateModel(INamedTypeSymbol schemaType, out Model model, out string error)
     {
