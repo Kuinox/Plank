@@ -144,6 +144,23 @@ internal sealed class PageSizeTests
     }
 
     [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void AllPresentOptionalNumericPlainUsesExactFixedRowsAndInteroperates(
+        ParquetDataPageVersion dataPageVersion)
+    {
+        AssertAllPresentOptionalPlainPages<float>(
+            [float.MinValue, -1f, 0f, 1f, float.MaxValue],
+            ParquetPhysicalType.Float, 10, dataPageVersion);
+        AssertAllPresentOptionalPlainPages<long>(
+            [long.MinValue, -1L, 0L, 1L, long.MaxValue],
+            ParquetPhysicalType.Int64, 18, dataPageVersion);
+        AssertAllPresentOptionalPlainPages<double>(
+            [double.MinValue, -1d, 0d, 1d, double.MaxValue],
+            ParquetPhysicalType.Double, 18, dataPageVersion);
+    }
+
+    [Test]
     public void AllNullOptionalInt32PlainKeepsDensityAwarePageSizing()
     {
         var schema = new PlankParquetSchema([
@@ -160,6 +177,14 @@ internal sealed class PageSizeTests
         idColumn.Serialize(new int?[20]);
 
         AssertDataPageRows(idColumn.Pages, [9, 9, 2]);
+    }
+
+    [Test]
+    public void AllNullOptionalNumericPlainKeepsDensityAwarePageSizing()
+    {
+        AssertAllNullOptionalPlainPages<float>(ParquetPhysicalType.Float);
+        AssertAllNullOptionalPlainPages<long>(ParquetPhysicalType.Int64);
+        AssertAllNullOptionalPlainPages<double>(ParquetPhysicalType.Double);
     }
 
     [Test]
@@ -258,6 +283,57 @@ internal sealed class PageSizeTests
         if (dataPageIndex != expectedRows.Length)
             throw new InvalidOperationException(
                 $"Data page count mismatch. Expected {expectedRows.Length}, got {dataPageIndex}.");
+    }
+
+    static void AssertAllPresentOptionalPlainPages<T>(T?[] values, ParquetPhysicalType physicalType,
+        uint targetPageBytes, ParquetDataPageVersion dataPageVersion)
+        where T : struct
+    {
+        var strategy = new TargetBytesPageStrategy(targetPageBytes);
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.OptionalLeaf("value", physicalType,
+                new ColumnOptions(encodings: [EncodingKind.Plain]), pageStrategy: strategy)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            DataPageVersion = dataPageVersion,
+            WritePageIndexes = false
+        });
+        var column = writer.CreateSerializedColumn<T?>(schema.LeafColumns[0]);
+
+        column.Serialize(values);
+
+        AssertDataPageRows(column.Pages, [2, 2, 1]);
+        writer.StartRowGroup().Write(column);
+        writer.CloseFile();
+        using var readStream = new MemoryStream(stream.ToArray(), writable: false);
+        using var reader = new ParquetSharp.ParquetFileReader(readStream, leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var logical = rowGroup.Column(0).LogicalReader<T?>();
+        var actual = logical.ReadAll(values.Length);
+        if (!actual.AsSpan().SequenceEqual(values))
+            throw new InvalidOperationException(
+                $"ParquetSharp did not preserve all-present optional {physicalType} values.");
+    }
+
+    static void AssertAllNullOptionalPlainPages<T>(ParquetPhysicalType physicalType)
+        where T : struct
+    {
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.OptionalLeaf("value", physicalType,
+                new ColumnOptions(encodings: [EncodingKind.Plain]))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 9
+        });
+        var column = writer.CreateSerializedColumn<T?>(schema.LeafColumns[0]);
+
+        column.Serialize(new T?[20]);
+
+        AssertDataPageRows(column.Pages, [9, 9, 2]);
     }
 
     static void AssertOptionalInt32ByteStreamSplitPages(int?[] values,
