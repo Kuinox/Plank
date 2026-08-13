@@ -60,18 +60,19 @@ internal sealed class RleBitPackingHybridEncodingTests
             [true, false, true, false, true, false, true, false],
             [true, true, true, true, true, true, true, true],
             [true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false],
-            CreateBooleanMixedValues()
+            CreateBooleanMixedValues(),
+            CreateBooleanBoundaryValues()
         ];
 
         foreach (var input in inputs)
-        {
-            var actual = EncodeBooleans(input);
-            var integerValues = Array.ConvertAll(input, static value => value ? 1 : 0);
-            var expected = EncodeReference(integerValues, 1, includeBitWidthPrefix: false);
-            if (!actual.SequenceEqual(expected))
-                throw new InvalidOperationException(
-                    $"Boolean RLE/bit-packed output differs from the reference for {input.Length} values.");
-        }
+            VerifyBooleans(input);
+    }
+
+    [Test]
+    public void BooleansMatchReferenceAcrossRandomMixedRunAlignments()
+    {
+        for (var alignment = 0; alignment < 64; alignment++)
+            VerifyBooleans(CreateRandomBooleanMixedValues(4_096, alignment));
     }
 
     static void VerifyDictionaryIndexes(int[] values, int bitWidth)
@@ -135,6 +136,16 @@ internal sealed class RleBitPackingHybridEncodingTests
         {
             writer.Dispose();
         }
+    }
+
+    static void VerifyBooleans(bool[] values)
+    {
+        var actual = EncodeBooleans(values);
+        var integerValues = Array.ConvertAll(values, static value => value ? 1 : 0);
+        var expected = EncodeReference(integerValues, 1, includeBitWidthPrefix: false);
+        if (!actual.SequenceEqual(expected))
+            throw new InvalidOperationException(
+                $"Boolean RLE/bit-packed output differs from the reference for {values.Length} values.");
     }
 
     static byte[] EncodeReference(ReadOnlySpan<int> values, int bitWidth, bool includeBitWidthPrefix)
@@ -336,6 +347,51 @@ internal sealed class RleBitPackingHybridEncodingTests
         {
             values.AsSpan(offset, runLengths[run]).Fill((run & 1) == 0);
             offset += runLengths[run];
+        }
+
+        return values;
+    }
+
+    static bool[] CreateBooleanBoundaryValues()
+    {
+        int[] runLengths = [1, 7, 8, 9, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255];
+        var values = new bool[runLengths.Sum()];
+        var offset = 0;
+        for (var run = 0; run < runLengths.Length; run++)
+        {
+            values.AsSpan(offset, runLengths[run]).Fill((run & 1) != 0);
+            offset += runLengths[run];
+        }
+        return values;
+    }
+
+    static bool[] CreateRandomBooleanMixedValues(int length, int alignment)
+    {
+        var values = new bool[length];
+        var state = unchecked(0x9E3779B9u + (uint)alignment * 7919u);
+        var offset = 0;
+        var value = false;
+
+        if (alignment != 0)
+        {
+            values.AsSpan(0, alignment).Fill(value);
+            offset = alignment;
+            value = !value;
+        }
+
+        while (offset < values.Length)
+        {
+            var selector = NextRandom(ref state) % 100;
+            var runLength = selector switch
+            {
+                < 35 => 1,
+                < 60 => 2 + (int)(NextRandom(ref state) % 6),
+                < 80 => 8 + (int)(NextRandom(ref state) % 25),
+                _ => 33 + (int)(NextRandom(ref state) % 224)
+            };
+            values.AsSpan(offset, Math.Min(runLength, values.Length - offset)).Fill(value);
+            offset += runLength;
+            value = !value;
         }
 
         return values;
