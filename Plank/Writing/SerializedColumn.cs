@@ -643,6 +643,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeDateTime(ReadOnlySpan<DateTime> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
+        if (TrySerializeRequiredDateTimeDictionary(values, timestamp))
+            return;
+
         var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
@@ -692,6 +695,68 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         {
             _owner.BufferWriters.ReturnScratch(rented);
         }
+    }
+
+    bool TrySerializeRequiredDateTimeDictionary(ReadOnlySpan<DateTime> values,
+        LogicalType.Timestamp timestamp)
+    {
+        if (typeof(T) != typeof(DateTime) || _column.Converter is not null
+            || _column.Options.Repetition != ParquetRepetition.Required
+            || _owner.WritePageIndexes || _column.Options.BloomFilter is not null)
+            return false;
+
+        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        var projection = _owner.ColumnProjectionInfosByOrdinal[columnOrdinal];
+        if (projection.MaxDefinitionLevel != 0 || projection.MaxRepetitionLevel != 0)
+            return false;
+        var strategyContext = _owner.GetPageStrategyContext(columnOrdinal);
+        if (strategyContext.Strategy.GetDictionaryMode() != DictionaryMode.Forced)
+            return false;
+        if (HasPendingData)
+            throw new InvalidOperationException(
+                "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
+
+        var statistics = CreateRequiredDateTimeStatistics(values, timestamp);
+        Pages.Clear();
+        ColumnOrdinal = columnOrdinal;
+        RowCount = checked((uint)values.Length);
+        Statistics = statistics;
+        HasPendingData = true;
+        Plank.Writing.Encoding.Encoding.EncodeRequiredDateTimeDictionary(_owner.BufferWriters, _column, values,
+            timestamp, strategyContext, Pages, GetOrCreateDictionaryState<DateTime>());
+        _bloomFilterByteLength = 0;
+        return true;
+    }
+
+    static ColumnStatistics CreateRequiredDateTimeStatistics(ReadOnlySpan<DateTime> values,
+        LogicalType.Timestamp timestamp)
+    {
+        if (values.IsEmpty)
+            return ColumnStatistics.Empty(0);
+
+        var expectedKind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+        var first = values[0];
+        if (first.Kind != expectedKind)
+            throw new InvalidOperationException(
+                $"DateTime values must have kind '{expectedKind}', got '{first.Kind}'.");
+        var minTicks = first.Ticks;
+        var maxTicks = minTicks;
+        for (var i = 1; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (value.Kind != expectedKind)
+                throw new InvalidOperationException(
+                    $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
+            var ticks = value.Ticks;
+            if (ticks < minTicks)
+                minTicks = ticks;
+            if (ticks > maxTicks)
+                maxTicks = ticks;
+        }
+
+        return ColumnStatistics.FromInt64(
+            TimestampConversion.FromDateTimeTicks(minTicks, timestamp.Unit),
+            TimestampConversion.FromDateTimeTicks(maxTicks, timestamp.Unit), 0);
     }
 
     void SerializeNullableDateTime(ReadOnlySpan<DateTime?> values)
@@ -1570,16 +1635,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     }
 
     static long ToUnixTimeFromTicks(long ticks, TimeUnit unit)
-    {
-        var deltaTicks = ticks - DateTime.UnixEpoch.Ticks;
-        return unit switch
-        {
-            TimeUnit.Millis => TimestampConversion.DivideFloor(deltaTicks, TimeSpan.TicksPerMillisecond),
-            TimeUnit.Micros => TimestampConversion.DivideFloor(deltaTicks, 10),
-            TimeUnit.Nanos => checked(deltaTicks * 100),
-            _ => throw new ArgumentOutOfRangeException(nameof(unit), unit, "Time unit must be a defined TimeUnit value.")
-        };
-    }
+        => TimestampConversion.FromDateTimeTicks(ticks, unit);
 
     static long ToTimeValue(TimeOnly value, TimeUnit unit)
         => unit switch

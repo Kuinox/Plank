@@ -66,6 +66,46 @@ static class Encoding
         }
     }
 
+    internal static void EncodeRequiredDateTimeDictionary(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<DateTime> values, LogicalType.Timestamp timestamp, PageStrategyContext strategyContext,
+        PageList pages, ReusableDictionaryState<DateTime> dictionaryState)
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        ArgumentNullException.ThrowIfNull(strategyContext);
+        ArgumentNullException.ThrowIfNull(pages);
+        if (column.Options.Repetition != ParquetRepetition.Required
+            || column.PhysicalType != ParquetPhysicalType.Int64)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' must be a required INT64 column for direct timestamp dictionary encoding.");
+        if (strategyContext.Strategy.GetDictionaryMode() != DictionaryMode.Forced)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' must force dictionary encoding for the direct timestamp path.");
+
+        pages.Clear();
+        if (values.IsEmpty)
+            return;
+
+        var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
+        if (!TryWriteDictionaryPage(bufferWriters, column, values, strategyContext, pages, dictionaryState,
+                out var dictionaryValueCount, out var dictionaryIndexesBuffer, timestamp))
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' did not produce a required timestamp dictionary page.");
+
+        try
+        {
+            var dictionaryIndexes = MemoryMarshal.Cast<byte, int>(
+                dictionaryIndexesBuffer.Span[..checked(values.Length * sizeof(int))]);
+            var dictionaryBitWidth = RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(
+                dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1);
+            WriteDictionaryDataPages(bufferWriters, values.Length, dictionaryEncoding, pages, dictionaryIndexes,
+                dictionaryBitWidth, strategyContext.Strategy);
+        }
+        finally
+        {
+            dictionaryIndexesBuffer.Dispose();
+        }
+    }
+
     static void WriteStrategyDataPages<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         EncodingKind dataEncoding, IPageStrategy strategy, PageList pages)
         where T : notnull
@@ -419,7 +459,8 @@ static class Encoding
 
     static bool TryWriteDictionaryPage<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         PageStrategyContext strategyContext, PageList pages, ReusableDictionaryState<T> dictionaryState,
-        out int dictionaryValueCount, out ParquetBuffer dictionaryIndexesBuffer)
+        out int dictionaryValueCount, out ParquetBuffer dictionaryIndexesBuffer,
+        LogicalType.Timestamp? timestamp = null)
         where T : notnull
     {
         dictionaryValueCount = 0;
@@ -538,7 +579,20 @@ static class Encoding
                     Volatile.Write(ref strategyContext.DictionarySortOrder, (int)discoveredSortOrder);
             }
 
-            PlainEncoding.WriteValues(column, dictionaryState.AsSpan(), ref dictionaryPage.Content);
+            if (timestamp is null)
+            {
+                PlainEncoding.WriteValues(column, dictionaryState.AsSpan(), ref dictionaryPage.Content);
+            }
+            else
+            {
+                if (typeof(T) != typeof(DateTime))
+                    throw new InvalidOperationException(
+                        $"Column '{column.Name}' direct timestamp dictionary values must be DateTime values.");
+                var dictionaryValues = dictionaryState.AsSpan();
+                var dateTimes = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref dictionaryValues);
+                WriteDateTimeDictionaryValues(bufferWriters, column, dateTimes, timestamp,
+                    ref dictionaryPage.Content);
+            }
 
             dictionaryPage.SetDictionaryPageMetadata(checked((uint)dictionaryState.Count));
             dictionaryValueCount = dictionaryState.Count;
@@ -1144,6 +1198,23 @@ static class Encoding
 
         dictionaryPage.SetDictionaryPageMetadata(2U);
         dictionaryValueCount = 2;
+    }
+
+    static void WriteDateTimeDictionaryValues(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<DateTime> values, LogicalType.Timestamp timestamp, ref BufferWriter destination)
+    {
+        var rented = bufferWriters.RentScratch<long>(checked((uint)values.Length));
+        try
+        {
+            var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
+            for (var i = 0; i < values.Length; i++)
+                converted[i] = TimestampConversion.FromDateTimeTicks(values[i].Ticks, timestamp.Unit);
+            PlainEncoding.WriteValues(column, converted, ref destination);
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rented);
+        }
     }
 
     static bool IsSortedStep(int comparison, ref int sortedDirection)
@@ -1932,6 +2003,11 @@ static class Encoding
         if (typeof(T) == typeof(double))
         {
             comparison = Unsafe.As<T, double>(ref left).CompareTo(Unsafe.As<T, double>(ref right));
+            return true;
+        }
+        if (typeof(T) == typeof(DateTime))
+        {
+            comparison = Unsafe.As<T, DateTime>(ref left).Ticks.CompareTo(Unsafe.As<T, DateTime>(ref right).Ticks);
             return true;
         }
         if (typeof(T) == typeof(byte[]))
