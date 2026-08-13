@@ -110,6 +110,59 @@ internal sealed class PageSizeTests
     }
 
     [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void AllPresentOptionalInt32PlainUsesExactFixedRowsAndInteroperates(
+        ParquetDataPageVersion dataPageVersion)
+    {
+        var strategy = new TargetBytesPageStrategy(10);
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.OptionalLeaf("id", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.Plain]), pageStrategy: strategy)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            DataPageVersion = dataPageVersion,
+            WritePageIndexes = false
+        });
+        var idColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
+        int?[] values = [int.MinValue, -1, 0, 1, int.MaxValue];
+
+        idColumn.Serialize(values);
+
+        AssertDataPageRows(idColumn.Pages, [2, 2, 1]);
+        writer.StartRowGroup().Write(idColumn);
+        writer.CloseFile();
+        using var readStream = new MemoryStream(stream.ToArray(), writable: false);
+        using var reader = new ParquetSharp.ParquetFileReader(readStream, leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var logical = rowGroup.Column(0).LogicalReader<int?>();
+        var actual = logical.ReadAll(values.Length);
+        if (!actual.AsSpan().SequenceEqual(values))
+            throw new InvalidOperationException("ParquetSharp did not preserve all-present optional Int32 values.");
+    }
+
+    [Test]
+    public void AllNullOptionalInt32PlainKeepsDensityAwarePageSizing()
+    {
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.OptionalLeaf("id", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.Plain]))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 9
+        });
+        var idColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
+
+        idColumn.Serialize(new int?[20]);
+
+        AssertDataPageRows(idColumn.Pages, [9, 9, 2]);
+    }
+
+    [Test]
     public void DictionaryColumnSplitsDataPagesByTargetPageSize()
     {
         var schema = new PlankParquetSchema([
@@ -345,5 +398,23 @@ internal sealed class PageSizeTests
 
         public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
             => currentPageRowCount >= _rowsPerPage;
+    }
+
+    sealed class TargetBytesPageStrategy(uint targetBytes) : IPageStrategy
+    {
+        public DictionaryMode GetDictionaryMode()
+            => DictionaryMode.Disabled;
+
+        public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
+            => false;
+
+        public bool TryGetTargetDataPageSizeBytes(out uint sizeBytes)
+        {
+            sizeBytes = targetBytes;
+            return true;
+        }
+
+        public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
+            => throw new InvalidOperationException("Target-byte strategies must not use row callbacks.");
     }
 }
