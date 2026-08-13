@@ -581,11 +581,10 @@ static class Encoding
             const int estimatedEncodedBytesPerRow = sizeof(int) + 1;
             fixedRowsPerPage = Math.Max(1, checked((int)fixedTargetPageBytes) / estimatedEncodedBytesPerRow);
         }
-        else if (useTargetPageBytes && !useDictionary && column.PhysicalType == ParquetPhysicalType.Int32
-                 && dataEncoding == EncodingKind.Plain && typeof(T) == typeof(int) && typeof(TSource) == typeof(int)
-                 && denseValues.Length == values.Length)
+        else if (useTargetPageBytes && !useDictionary && dataEncoding == EncodingKind.Plain
+                 && denseValues.Length == values.Length
+                 && TryGetDirectOptionalPlainNumericRowBytes<T, TSource>(column, out var encodedBytesPerRow))
         {
-            const int encodedBytesPerRow = sizeof(int) + 1;
             fixedRowsPerPage = Math.Max(1, targetPageBytes / encodedBytesPerRow);
         }
 
@@ -981,6 +980,25 @@ static class Encoding
             ? 0
             : Math.Max(1, (dictionaryBitWidth + 7) / 8);
         return true;
+    }
+
+    static bool TryGetDirectOptionalPlainNumericRowBytes<T, TSource>(Column column, out int rowBytes)
+        where T : struct
+        where TSource : struct
+    {
+        rowBytes = column.PhysicalType switch
+        {
+            ParquetPhysicalType.Int32 when typeof(T) == typeof(int) && typeof(TSource) == typeof(int)
+                => sizeof(int) + 1,
+            ParquetPhysicalType.Int64 when typeof(T) == typeof(long) && typeof(TSource) == typeof(long)
+                => sizeof(long) + 1,
+            ParquetPhysicalType.Float when typeof(T) == typeof(float) && typeof(TSource) == typeof(float)
+                => sizeof(float) + 1,
+            ParquetPhysicalType.Double when typeof(T) == typeof(double) && typeof(TSource) == typeof(double)
+                => sizeof(double) + 1,
+            _ => 0
+        };
+        return rowBytes > 0;
     }
 
     static int GetOptionalRowBytes<T>(Column column, T? value, int presentValueBytes)
