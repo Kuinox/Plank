@@ -47,7 +47,8 @@ readonly struct ColumnBufferEnumerable<T>
         ParquetPageCursor _cursor;
         PageMetadataHandle _pageMetadata;
         ColumnReadBuffers<T> _buffers;
-        ColumnChunkReader.NullableNumericPageState _nullableNumericPage;
+        ColumnChunkReader.FixedWidthPageState _fixedWidthPage;
+        readonly bool _batchDictionaryPages;
         bool _openedCursor;
 
         internal Enumerator(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
@@ -69,7 +70,8 @@ readonly struct ColumnBufferEnumerable<T>
             _cursor = default;
             _pageMetadata = default;
             _buffers = default;
-            _nullableNumericPage = default;
+            _fixedWidthPage = default;
+            _batchDictionaryPages = ColumnChunkReader.CanBatchDictionaryPages<T>(definition.Column);
             _openedCursor = false;
             Current = default;
         }
@@ -91,11 +93,11 @@ readonly struct ColumnBufferEnumerable<T>
                 _openedCursor = true;
             }
 
-            if (_nullableNumericPage.Active)
+            if (_fixedWidthPage.Active)
             {
-                Current = ColumnChunkReader.DecodeNextNullableNumericBatch(
+                Current = ColumnChunkReader.DecodeNextFixedWidthBatch(
                     _cursor.CurrentPayloadUnchecked, _column, ref _buffers, _bufferPool,
-                    ref _nullableNumericPage);
+                    ref _fixedWidthPage);
                 return true;
             }
 
@@ -105,11 +107,13 @@ readonly struct ColumnBufferEnumerable<T>
                         _cursor.CurrentPayload, _column, ref _buffers, _bufferPool))
                     continue;
 
-                if (ColumnChunkReader.TryStartNullableNumericPageBatches(_cursor.CurrentHeader,
+                if ((_batchDictionaryPages || _cursor.CurrentHeader.Encoding is not
+                        (EncodingKind.RleDictionary or EncodingKind.PlainDictionary)) &&
+                    ColumnChunkReader.TryStartFixedWidthPageBatches(_cursor.CurrentHeader,
                         _cursor.CurrentPayload, _column, _rowCount, ref _buffers, _bufferPool,
-                        ref _nullableNumericPage, out var batchedNullableBuffer))
+                        ref _fixedWidthPage, out var batchedFixedWidthBuffer))
                 {
-                    Current = batchedNullableBuffer;
+                    Current = batchedFixedWidthBuffer;
                     return true;
                 }
 
@@ -144,7 +148,7 @@ readonly struct ColumnBufferEnumerable<T>
             _pageMetadata.Dispose();
             _pageMetadata = default;
             _buffers.Dispose();
-            _nullableNumericPage = default;
+            _fixedWidthPage = default;
             _openedCursor = false;
             Current = default;
         }

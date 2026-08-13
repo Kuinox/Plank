@@ -9,6 +9,7 @@ struct ColumnReadBuffers<T>
     internal ParquetBuffer Scratch;
     internal ParquetBuffer Levels;
     internal ParquetBuffer CompactDefinitions;
+    internal ParquetBuffer ExpandedDefinitions;
     internal int DictionaryCount;
     internal bool HasDictionary;
 
@@ -84,6 +85,17 @@ struct ColumnReadBuffers<T>
     internal ReadOnlySpan<byte> GetCompactDefinitions(int byteLength)
         => byteLength == 0 ? [] : CompactDefinitions.Span[..byteLength];
 
+    internal Span<int> GetExpandedDefinitions(int valueCount, IParquetBufferPool bufferPool)
+    {
+        var byteLength = checked(valueCount * sizeof(int));
+        if (ExpandedDefinitions.Length < byteLength)
+        {
+            ExpandedDefinitions.Dispose();
+            ExpandedDefinitions = byteLength == 0 ? default : bufferPool.Rent(checked((uint)byteLength));
+        }
+        return valueCount == 0 ? [] : ParquetBuffer.AsSpan<int>(ExpandedDefinitions, valueCount);
+    }
+
     internal void GetLevels(int levelCount, IParquetBufferPool bufferPool,
         out Span<int> repetitionLevels, out Span<int> definitionLevels)
     {
@@ -102,6 +114,7 @@ struct ColumnReadBuffers<T>
         Scratch.Dispose();
         Levels.Dispose();
         CompactDefinitions.Dispose();
+        ExpandedDefinitions.Dispose();
         this = default;
     }
 
