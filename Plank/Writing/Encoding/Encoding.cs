@@ -573,6 +573,14 @@ static class Encoding
             : 0;
         var useTargetPageBytes = TryGetOptionalPageSizer(column, dataEncoding, useDictionary, dictionaryBitWidth,
             strategy, out var targetPageBytes, out var presentValueBytes);
+        var fixedRowsPerPage = 0;
+        if (!useDictionary && dataEncoding == EncodingKind.ByteStreamSplit &&
+            column.PhysicalType == ParquetPhysicalType.Int32 && strategy is DefaultStrategy &&
+            strategy.TryGetTargetDataPageSizeBytes(out var fixedTargetPageBytes))
+        {
+            const int estimatedEncodedBytesPerRow = sizeof(int) + 1;
+            fixedRowsPerPage = Math.Max(1, checked((int)fixedTargetPageBytes) / estimatedEncodedBytesPerRow);
+        }
 
         var rowsWritten = 0;
         var denseOffset = 0;
@@ -583,7 +591,12 @@ static class Encoding
                 var pageStart = rowsWritten;
                 var pageRowCount = 0;
                 var pageBytes = 0;
-                if (!useTargetPageBytes && strategy is ForceDictionaryPageStrategy)
+                if (fixedRowsPerPage > 0)
+                {
+                    pageRowCount = Math.Min(fixedRowsPerPage, values.Length - rowsWritten);
+                    rowsWritten += pageRowCount;
+                }
+                else if (!useTargetPageBytes && strategy is ForceDictionaryPageStrategy)
                 {
                     pageRowCount = values.Length - rowsWritten;
                     rowsWritten = values.Length;
