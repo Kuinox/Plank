@@ -141,6 +141,9 @@ public sealed class ParquetWriter
     public uint RowApiMaxParallelism
         => _options.RowApiMaxParallelism;
 
+    internal int WorkerCount
+        => _options.Execution.WorkerCount;
+
     public SerializedColumn<T> CreateSerializedColumn<T>(LeafColumn column)
     {
         var ordinal = GetColumnOrdinal(column);

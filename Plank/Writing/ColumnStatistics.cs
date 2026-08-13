@@ -293,6 +293,36 @@ internal readonly struct ColumnStatistics
         return FromUInt64(min, max, nullCount);
     }
 
+    internal static ColumnStatistics CreateDateTimes(ReadOnlySpan<DateTime> values,
+        LogicalType.Timestamp timestamp)
+    {
+        if (values.IsEmpty)
+            return Empty(0);
+
+        var expectedKind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+        if (values[0].Kind != expectedKind)
+            throw new InvalidOperationException(
+                $"DateTime values must have kind '{expectedKind}', got '{values[0].Kind}'.");
+        var minTicks = values[0].Ticks;
+        var maxTicks = minTicks;
+        for (var i = 1; i < values.Length; i++)
+        {
+            if (values[i].Kind != expectedKind)
+                throw new InvalidOperationException(
+                    $"DateTime values must have kind '{expectedKind}', got '{values[i].Kind}'.");
+            var ticks = values[i].Ticks;
+            if (ticks < minTicks)
+                minTicks = ticks;
+            if (ticks > maxTicks)
+                maxTicks = ticks;
+        }
+
+        return FromInt64(
+            TimestampConversion.FromDateTimeTicks(minTicks, timestamp.Unit),
+            TimestampConversion.FromDateTimeTicks(maxTicks, timestamp.Unit),
+            nullCount: 0);
+    }
+
     internal static ColumnStatistics CreateNullableByte(ReadOnlySpan<byte?> values)
     {
         byte min = 0;

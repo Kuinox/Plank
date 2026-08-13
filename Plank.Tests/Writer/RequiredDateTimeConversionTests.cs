@@ -66,6 +66,65 @@ internal sealed class RequiredDateTimeConversionTests
     }
 
     [Test]
+    public void NanosecondDeltaTimestampsRejectOverflowingAdjacentPhysicalValues()
+    {
+        var epochTicks = DateTime.UnixEpoch.Ticks;
+        var values = new[]
+        {
+            new DateTime(checked(epochTicks + long.MinValue / 100), DateTimeKind.Unspecified),
+            new DateTime(checked(epochTicks + long.MaxValue / 100), DateTimeKind.Unspecified)
+        };
+        var logicalType = new LogicalType.Timestamp(TimeUnit.Nanos, IsAdjustedToUtc: false);
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("timestamp", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.DeltaBinaryPacked)), logicalType)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            WritePageIndexes = false,
+            Compression = CompressionKind.None,
+            Execution = new ParquetExecutionOptions { WorkerCount = 2 }
+        });
+        var serialized = writer.CreateSerializedColumn<DateTime>(schema.LeafColumns[0]);
+
+        Assert.Throws<OverflowException>(() => serialized.Serialize(values));
+    }
+
+    [Test]
+    public void DirectRequiredDeltaTimestampsPreserveUnitsKindsBoundariesAndPages()
+    {
+        foreach (var pageVersion in Enum.GetValues<ParquetDataPageVersion>())
+        foreach (var unit in Enum.GetValues<TimeUnit>())
+        foreach (var adjustedToUtc in new[] { false, true })
+        {
+            var values = CreateValues(unit, adjustedToUtc);
+            var logicalType = new LogicalType.Timestamp(unit, adjustedToUtc);
+            var schema = new ParquetSchema([
+                ColumnDefinition.RequiredLeaf("timestamp", ParquetPhysicalType.Int64,
+                    new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.DeltaBinaryPacked)),
+                    logicalType, new FixedRowsPageStrategy(33, DictionaryMode.Disabled))
+            ]);
+            using var stream = new MemoryStream();
+            var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+            {
+                Compression = CompressionKind.None,
+                DataPageVersion = pageVersion,
+                WritePageIndexes = false,
+                Execution = new ParquetExecutionOptions { WorkerCount = 2 }
+            });
+            var serialized = writer.CreateSerializedColumn<DateTime>(schema.LeafColumns[0]);
+            serialized.Serialize(values);
+            writer.StartRowGroup().Write(serialized);
+            writer.CloseFile();
+
+            using var reader = schema.CreateReader(new MemoryReadSource(stream.ToArray()));
+            AssertSequence(values, Read<DateTime>(reader, 0), pageVersion, EncodingKind.DeltaBinaryPacked,
+                unit, adjustedToUtc, "required/direct");
+        }
+    }
+
+    [Test]
     public void DateTimesRejectKindsThatDoNotMatchTimestampAdjustment()
     {
         AssertKindRejected(new DateTime(DateTime.UnixEpoch.Ticks, DateTimeKind.Unspecified), adjustedToUtc: true);
@@ -137,6 +196,46 @@ internal sealed class RequiredDateTimeConversionTests
             new DateTime(DateTime.UnixEpoch.Ticks, DateTimeKind.Utc), TimeUnit.Micros, adjustedToUtc: false);
         AssertDirectDictionaryRejected<OverflowException>(
             DateTime.UnixEpoch.AddTicks(long.MaxValue / 100 + 1), TimeUnit.Nanos, adjustedToUtc: true);
+    }
+
+    [Test]
+    public void RequiredDeltaTimestampsAvoidFullColumnScratchBuffersWhenAuxiliaryMetadataIsDisabled()
+    {
+        const int valueCount = 16_384;
+        var values = new DateTime[valueCount];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = new DateTime(DateTime.UnixEpoch.Ticks + (i * 37L + i % 11) * 10,
+                DateTimeKind.Unspecified);
+
+        var logicalType = new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: false);
+        var options = new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.DeltaBinaryPacked));
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("required", ParquetPhysicalType.Int64, options, logicalType,
+                new FixedRowsPageStrategy(257, DictionaryMode.Disabled))
+        ]);
+        using var stream = new MemoryStream();
+        var pool = new MaximumRentTrackingBufferPool();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            BufferPool = pool,
+            Compression = CompressionKind.None,
+            WritePageIndexes = false,
+            InitialColumnBufferBytes = 16 * 1024,
+            InitialPageBufferBytes = 16 * 1024,
+            Execution = new ParquetExecutionOptions { WorkerCount = 2 }
+        });
+        var requiredColumn = writer.CreateSerializedColumn<DateTime>(schema.LeafColumns[0]);
+        requiredColumn.Serialize(values);
+        writer.StartRowGroup().Write(requiredColumn);
+        writer.CloseFile();
+
+        if (pool.MaximumRent >= valueCount * sizeof(long))
+            throw new InvalidOperationException(
+                $"Direct timestamp encoding unexpectedly rented a {pool.MaximumRent}-byte full-column buffer.");
+
+        using var reader = schema.CreateReader(new MemoryReadSource(stream.ToArray()));
+        AssertSequence(values, Read<DateTime>(reader, 0), ParquetDataPageVersion.V2,
+            EncodingKind.DeltaBinaryPacked, TimeUnit.Micros, adjustedToUtc: false, "required");
     }
 
     static ParquetSchema CreateSchema(TimeUnit unit, bool adjustedToUtc, EncodingKind encoding)
@@ -266,5 +365,16 @@ internal sealed class RequiredDateTimeConversionTests
 
         public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
             => currentPageRowCount >= rowsPerPage;
+    }
+
+    sealed class MaximumRentTrackingBufferPool : IParquetBufferPool
+    {
+        internal uint MaximumRent;
+
+        public ParquetBuffer Rent(uint minimumByteLength)
+        {
+            MaximumRent = Math.Max(MaximumRent, minimumByteLength);
+            return DefaultParquetBufferPool.Shared.Rent(minimumByteLength);
+        }
     }
 }
