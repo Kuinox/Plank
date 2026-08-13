@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Immutable;
 using Plank.Reading;
 using Plank.Reading.Logical.Internal;
@@ -122,6 +123,47 @@ internal sealed class NonPlainTimestampDecodingTests
                 EncodingKind.RleDictionary, pageVersion);
             AssertEqual(expected, actual, unit, isAdjustedToUtc,
                 EncodingKind.RleDictionary, pageVersion);
+        }
+    }
+
+    [Test]
+    public void RequiredDictionaryDateTimesRejectOutOfRangeVectorizedIndex()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.RleDictionary)),
+                new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true))
+        ]);
+        var column = schema.LeafColumns[0].Column;
+        var buffers = default(ColumnReadBuffers<DateTime>);
+        try
+        {
+            const int dictionaryLength = 2_047;
+            var dictionaryPayload = new byte[dictionaryLength * sizeof(long)];
+            for (var i = 0; i < dictionaryLength; i++)
+                BinaryPrimitives.WriteInt64LittleEndian(
+                    dictionaryPayload.AsSpan(i * sizeof(long)), i);
+            var dictionaryHeader = new PageHeader(PageHeaderType.DictionaryPage,
+                (uint)dictionaryPayload.Length, (uint)dictionaryPayload.Length, dictionaryLength,
+                EncodingKind.Plain, 1, 0, 0, 0, false, EncodingKind.Rle,
+                EncodingKind.Rle, dictionaryLength);
+            if (!ColumnChunkReader.TryDecodeDictionaryPageIntoNative(dictionaryHeader,
+                    dictionaryPayload, column, ref buffers, DefaultParquetBufferPool.Shared))
+                throw new InvalidOperationException("Timestamp dictionary page did not use the native path.");
+
+            var invalidIndexes = EncodeDictionaryLiteral(
+                [0, 1, 2, 3, 4, 5, 6, dictionaryLength], bitWidth: 11);
+            var dataHeader = new PageHeader(PageHeaderType.DataPage,
+                (uint)invalidIndexes.Length, (uint)invalidIndexes.Length, 8,
+                EncodingKind.RleDictionary, 1, 0, 0, 0, false, EncodingKind.Rle,
+                EncodingKind.Rle, 8);
+            Assert.Throws<CorruptParquetException>(() =>
+                ColumnChunkReader.TryDecodeRequiredPageIntoNative(dataHeader, invalidIndexes, column,
+                    rowCount: 8, ref buffers, DefaultParquetBufferPool.Shared, out _));
+        }
+        finally
+        {
+            buffers.Dispose();
         }
     }
 
@@ -263,6 +305,33 @@ internal sealed class NonPlainTimestampDecodingTests
             _ => throw new ArgumentOutOfRangeException(nameof(unit), unit,
                 "Time unit must be a defined TimeUnit value.")
         };
+    }
+
+    static byte[] EncodeDictionaryLiteral(ReadOnlySpan<int> indexes, int bitWidth)
+    {
+        var groupCount = (indexes.Length + 7) / 8;
+        var padded = new int[groupCount * 8];
+        indexes.CopyTo(padded);
+        var payload = new byte[2 + (padded.Length * bitWidth + 7) / 8];
+        payload[0] = checked((byte)bitWidth);
+        payload[1] = checked((byte)(groupCount * 2 + 1));
+        ulong bitBuffer = 0;
+        var bufferedBits = 0;
+        var byteIndex = 2;
+        foreach (var index in padded)
+        {
+            bitBuffer |= (ulong)(uint)index << bufferedBits;
+            bufferedBits += bitWidth;
+            while (bufferedBits >= 8)
+            {
+                payload[byteIndex++] = (byte)bitBuffer;
+                bitBuffer >>= 8;
+                bufferedBits -= 8;
+            }
+        }
+        if (bufferedBits != 0)
+            payload[byteIndex] = (byte)bitBuffer;
+        return payload;
     }
 
     static DateTime[] CreateLargeValues(TimeUnit unit, bool isAdjustedToUtc)

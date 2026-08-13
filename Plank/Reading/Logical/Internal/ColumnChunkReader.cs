@@ -3944,6 +3944,19 @@ static class ColumnChunkReader
             }
         }
 
+        if (bitWidth is 19 or 20 && destination.Length >= 8 && Avx2.IsSupported &&
+            (typeof(T) == typeof(long) || typeof(T) == typeof(DateTime)))
+        {
+            var vectorizedLength = destination.Length & ~7;
+            DecodeDictionaryLiteralInt64IndexesWide(payload, bitWidth,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref dictionary),
+                Unsafe.As<Span<T>, Span<long>>(ref destination)[..vectorizedLength]);
+            payload = payload[(vectorizedLength / 8 * bitWidth)..];
+            destination = destination[vectorizedLength..];
+            if (destination.IsEmpty)
+                return;
+        }
+
         var mask = bitWidth == 32 ? ulong.MaxValue : (1UL << bitWidth) - 1UL;
         ulong bitBuffer = 0;
         var bufferedBits = 0;
@@ -4024,6 +4037,66 @@ static class ColumnChunkReader
                     .StoreUnsafe(ref target, (nuint)(valueIndex + 4));
             }
         }
+    }
+
+    static unsafe void DecodeDictionaryLiteralInt64IndexesWide(ReadOnlySpan<byte> payload, int bitWidth,
+        ReadOnlySpan<long> dictionary, Span<long> destination)
+    {
+        ref var source = ref MemoryMarshal.GetReference(payload);
+        ref var target = ref MemoryMarshal.GetReference(destination);
+        var maximumIndex = Vector256.Create(dictionary.Length - 1);
+        var mask = (1U << bitWidth) - 1U;
+        fixed (long* dictionaryPointer = dictionary)
+        {
+            var byteIndex = 0;
+            if (bitWidth == 20)
+            {
+                for (var valueIndex = 0; valueIndex < destination.Length; valueIndex += 8, byteIndex += 20)
+                {
+                    var a = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex));
+                    var b = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex + 8));
+                    var c = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref source, byteIndex + 16));
+                    var indexes = Vector256.Create(
+                        (int)(a & mask), (int)(a >> 20 & mask), (int)(a >> 40 & mask),
+                        (int)((a >> 60 | b << 4) & mask),
+                        (int)(b >> 16 & mask), (int)(b >> 36 & mask),
+                        (int)((b >> 56 | (ulong)c << 8) & mask), (int)(c >> 12 & mask));
+                    GatherDictionaryInt64(indexes, maximumIndex, dictionary.Length, dictionaryPointer,
+                        ref target, valueIndex);
+                }
+            }
+            else
+            {
+                for (var valueIndex = 0; valueIndex < destination.Length; valueIndex += 8, byteIndex += 19)
+                {
+                    var a = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex));
+                    var b = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex + 8));
+                    var c = (uint)(Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref source, byteIndex + 16)) |
+                        Unsafe.Add(ref source, byteIndex + 18) << 16);
+                    var indexes = Vector256.Create(
+                        (int)(a & mask), (int)(a >> 19 & mask), (int)(a >> 38 & mask),
+                        (int)((a >> 57 | b << 7) & mask),
+                        (int)(b >> 12 & mask), (int)(b >> 31 & mask),
+                        (int)((b >> 50 | (ulong)c << 14) & mask), (int)(c >> 5 & mask));
+                    GatherDictionaryInt64(indexes, maximumIndex, dictionary.Length, dictionaryPointer,
+                        ref target, valueIndex);
+                }
+            }
+        }
+    }
+
+    static unsafe void GatherDictionaryInt64(Vector256<int> indexes, Vector256<int> maximumIndex,
+        int dictionaryLength, long* dictionaryPointer, ref long target, int valueIndex)
+    {
+        if (Avx2.MoveMask(Avx2.CompareGreaterThan(indexes, maximumIndex).AsByte()) != 0)
+        {
+            for (var lane = 0; lane < 8; lane++)
+                ValidateDictionaryIndex(indexes.GetElement(lane), dictionaryLength);
+        }
+        Avx2.GatherVector256(dictionaryPointer, indexes.GetLower(), sizeof(long))
+            .StoreUnsafe(ref target, (nuint)valueIndex);
+        Avx2.GatherVector256(dictionaryPointer, indexes.GetUpper(), sizeof(long))
+            .StoreUnsafe(ref target, (nuint)(valueIndex + 4));
     }
 
     static Array DecodeValues(ReadOnlySpan<byte> payload, Column column, PageHeader header, CompressionKind compression,

@@ -53,6 +53,25 @@ internal sealed class Dictionary11BitDecodingTests
     }
 
     [Test]
+    public void WideLiteralDecoderHandlesVectorAndScalarBoundaries()
+    {
+        foreach (var bitWidth in new[] { 19, 20 })
+        {
+            var dictionaryLength = 1 << bitWidth;
+            var dictionary = Enumerable.Range(0, dictionaryLength)
+                .Select(index => unchecked((long)index * 1_000_000_007L)).ToArray();
+            foreach (var count in new[] { 8, 9, 31, 32, 33 })
+            {
+                var indexes = Enumerable.Range(0, count)
+                    .Select(index => unchecked(index * 104_729) & (dictionaryLength - 1)).ToArray();
+                indexes[^1] = dictionaryLength - 1;
+                AssertDecoded(dictionary, ParquetPhysicalType.Int64,
+                    EncodeLiteral(indexes, bitWidth), indexes);
+            }
+        }
+    }
+
+    [Test]
     public void CorruptIndexesAndTruncatedLiteralsAreRejectedWhileFallbacksRemainCorrect()
     {
         var intDictionary = Enumerable.Range(0, 2_047).ToArray();
@@ -63,6 +82,27 @@ internal sealed class Dictionary11BitDecodingTests
         int[] invalidTail = [0, 1, 2, 3, 4, 5, 6, 7, 2_047];
         Assert.Throws<CorruptParquetException>(() =>
             DecodeRequired(intDictionary, ParquetPhysicalType.Int32, EncodeLiteral(invalidTail, 11), 9));
+
+        foreach (var bitWidth in new[] { 19, 20 })
+        {
+            var dictionaryLength = (1 << bitWidth) - 1;
+            var dictionary = new long[dictionaryLength];
+            var wideInvalidVector = Enumerable.Range(0, 8).ToArray();
+            wideInvalidVector[^1] = dictionaryLength;
+            Assert.Throws<CorruptParquetException>(() =>
+                DecodeRequired(dictionary, ParquetPhysicalType.Int64,
+                    EncodeLiteral(wideInvalidVector, bitWidth), wideInvalidVector.Length));
+
+            var wideInvalidTail = Enumerable.Range(0, 9).ToArray();
+            wideInvalidTail[^1] = dictionaryLength;
+            Assert.Throws<CorruptParquetException>(() =>
+                DecodeRequired(dictionary, ParquetPhysicalType.Int64,
+                    EncodeLiteral(wideInvalidTail, bitWidth), wideInvalidTail.Length));
+
+            var wideTruncated = EncodeLiteral(Enumerable.Range(0, 8).ToArray(), bitWidth)[..^1];
+            Assert.Throws<CorruptParquetException>(() =>
+                DecodeRequired(dictionary, ParquetPhysicalType.Int64, wideTruncated, 8));
+        }
 
         var truncated = EncodeLiteral(Enumerable.Range(0, 8).ToArray(), 11)[..^1];
         Assert.Throws<CorruptParquetException>(() =>
