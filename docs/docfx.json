@@ -29,6 +29,13 @@
         ]
       }
     ],
+    "resource": [
+      {
+        "files": [
+          "benchmarks/**"
+        ]
+      }
+    ],
     "output": "_site",
     "template": [
       "default",
