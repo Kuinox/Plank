@@ -285,6 +285,109 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
+    public void ReadInt64IntoSpanRoundTripsEveryValidPackedWidthAndPartialMiniBlock()
+    {
+        int[] counts = [2, 5, 31, 32, 33, 127, 128, 129, 257];
+        for (var bitWidth = 0; bitWidth <= 64; bitWidth++)
+        foreach (var count in counts)
+        {
+            var values = CreateInt64ValuesForBitWidth(bitWidth, count);
+            var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 4096, 4096);
+            try
+            {
+                DeltaBinaryPackedEncoding.WriteInt64(values, ref writer);
+                var payload = new byte[writer.WrittenLength];
+                writer.CopyTo(payload);
+                var decoded = new long[values.Length];
+
+                var consumed = DeltaBinaryPackedDecoder.ReadInt64(payload, decoded);
+
+                if (!decoded.SequenceEqual(values))
+                    throw new InvalidOperationException(
+                        $"Int64 span decode did not round-trip bit width {bitWidth} with {count} values.");
+                if (consumed != payload.Length)
+                    throw new InvalidOperationException(
+                        $"Int64 bit width {bitWidth} with {count} values consumed {consumed} bytes " +
+                        $"instead of {payload.Length}.");
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+        }
+    }
+
+    [Test]
+    public void ReadInt64ArrayRoundTripsMixedMiniBlockWidths()
+    {
+        int[][] widthPatterns =
+        [
+            [0, 1, 2, 4],
+            [4, 3, 2, 1],
+            [4, 5, 4, 4],
+            [5, 6, 7, 8],
+            [8, 9, 15, 16],
+            [56, 57, 63, 64]
+        ];
+        foreach (var widths in widthPatterns)
+        {
+            var values = CreateInt64ValuesForMiniBlockWidths(257, widths);
+            var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 4096, 4096);
+            try
+            {
+                DeltaBinaryPackedEncoding.WriteInt64(values, ref writer);
+                var payload = new byte[writer.WrittenLength];
+                writer.CopyTo(payload);
+
+                var decoded = DeltaBinaryPackedDecoder.ReadInt64(payload);
+
+                if (!decoded.SequenceEqual(values))
+                    throw new InvalidOperationException(
+                        $"Int64 array decode did not round-trip widths {string.Join(", ", widths)}.");
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+        }
+    }
+
+    [Test]
+    public void ReadInt64RejectsTruncatedFullMiniBlocksOnFastUnpackWidths()
+    {
+        int[] bitWidths = [1, 3, 8, 9, 15, 16];
+        foreach (var bitWidth in bitWidths)
+        {
+            var payload = CreateDeclaredWidthPayload(bitWidth, valueCount: 33);
+            Array.Resize(ref payload, payload.Length - 1);
+
+            try
+            {
+                DeltaBinaryPackedDecoder.ReadInt64(payload, new long[33]);
+                throw new InvalidOperationException(
+                    $"Expected truncated Int64 bit width {bitWidth} payload to be rejected.");
+            }
+            catch (CorruptParquetException)
+            {
+            }
+        }
+    }
+
+    [Test]
+    public void ReadInt64RejectsBitWidthAbove64BeforeReadingPackedData()
+    {
+        var payload = CreateDeclaredWidthPayload(bitWidth: 65, valueCount: 33);
+        try
+        {
+            DeltaBinaryPackedDecoder.ReadInt64(payload, new long[33]);
+            throw new InvalidOperationException("Expected Int64 bit width 65 to be rejected.");
+        }
+        catch (CorruptParquetException)
+        {
+        }
+    }
+
+    [Test]
     public void ReadInt32AcceptsDeclaredPackedWidthsZeroThrough64()
     {
         for (var bitWidth = 0; bitWidth <= 64; bitWidth++)
