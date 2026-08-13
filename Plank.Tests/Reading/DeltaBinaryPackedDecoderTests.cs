@@ -108,6 +108,37 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
+    public void WriteInt32PackingDispatchMatchesReferenceAcrossWidthsAndPartialBlocks()
+    {
+        int[] counts = [3, 31, 32, 33, 127, 128, 129, 257];
+        for (var bitWidth = 0; bitWidth <= 33; bitWidth++)
+        foreach (var count in counts)
+        {
+            var values = CreateValuesForBitWidth(bitWidth, count);
+            AssertEncodedBytes(values, EncodeInt32Reference(values), chunkSize: 7);
+        }
+    }
+
+    [Test]
+    public void WriteInt32PackingDispatchMatchesReferenceAcrossMixedMiniBlockWidths()
+    {
+        int[] counts = [33, 127, 128, 129, 257];
+        int[][] widthPatterns =
+        [
+            [0, 1, 2, 4],
+            [4, 3, 2, 1],
+            [4, 5, 4, 4],
+            [5, 6, 7, 8]
+        ];
+        foreach (var widths in widthPatterns)
+        foreach (var count in counts)
+        {
+            var values = CreateInt32ValuesForMiniBlockWidths(count, widths);
+            AssertEncodedBytes(values, EncodeInt32Reference(values), chunkSize: 7);
+        }
+    }
+
+    [Test]
     public void WriteInt64MatchesReferenceForExtremeFirstValues()
     {
         long[][] cases =
@@ -564,6 +595,22 @@ internal sealed class DeltaBinaryPackedDecoderTests
             }
 
             values[i] = unchecked(values[i - 1] + delta);
+        }
+
+        return values;
+    }
+
+    static int[] CreateInt32ValuesForMiniBlockWidths(int count, ReadOnlySpan<int> widths)
+    {
+        var values = new int[count];
+        for (var i = 1; i < values.Length; i++)
+        {
+            var miniBlock = ((i - 1) / 32) & 3;
+            var width = widths[miniBlock];
+            var miniBlockOffset = (i - 1) & 31;
+            var residual = miniBlockOffset == 1 && width > 0 ? 1 << (width - 1) : 0;
+            var delta = -9 + residual;
+            values[i] = checked(values[i - 1] + delta);
         }
 
         return values;
