@@ -75,6 +75,12 @@ public struct ParquetPageCursor : IDisposable
         }
     }
 
+    // The logical continuation path already owns an active page and avoids repeating cursor validation per batch.
+    internal ReadOnlySpan<byte> CurrentPayloadUnchecked
+        => _borrowedPayload.IsEmpty
+            ? _payloadBuffer.Span[.._payloadLength]
+            : _borrowedPayload.Span;
+
     public ParquetPageCursor GetEnumerator()
         => this;
 

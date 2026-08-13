@@ -3,6 +3,8 @@ using Plank.Reading.Logical.Internal;
 
 namespace Plank.Reading.Logical;
 
+/// <summary>Exposes a row group's column as temporary decoded buffers.</summary>
+/// <remarks>Decoded buffer boundaries are not physical page boundaries and may change between versions.</remarks>
 public readonly struct RowGroupColumn<T>
 {
     readonly RowGroup _rowGroup;

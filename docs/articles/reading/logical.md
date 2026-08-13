@@ -1,6 +1,6 @@
 # Logical read layer
 
-The logical read layer decodes parquet column data into typed C# values. It exposes values a column at a time, in buffers that follow the file's page boundaries.
+The logical read layer decodes parquet column data into typed C# values. It exposes values a column at a time in temporary decoded buffers. Buffer boundaries are independent of the file's physical page boundaries.
 
 Use it when you want decoded values without constructing rows. If you need raw page bytes and encoding metadata instead, use the [physical read layer](physical.md).
 
@@ -65,7 +65,7 @@ foreach (EventSchema.ReadRowGroup rowGroup in reader.RowGroups)
 [`RowGroups`](xref:Plank.Reading.Logical.ParquetReader.RowGroups) can be enumerated or indexed. Each generated row group exposes its row count and a strongly typed [`RowGroupColumn<T>`](xref:Plank.Reading.Logical.RowGroupColumn`1) property for every schema property.
 
 > [!NOTE]
-> Each [`ColumnBuffer<T>`](xref:Plank.Reading.Logical.ColumnBuffer`1) contains one decoded batch. Consume [`Values`](xref:Plank.Reading.Logical.ColumnBuffer`1.Values) before advancing the column enumerator. The span is temporary and may refer to pooled storage that is reused for the next buffer.
+> Each [`ColumnBuffer<T>`](xref:Plank.Reading.Logical.ColumnBuffer`1) contains one decoded batch. A physical page may produce multiple buffers, so callers must not rely on page-sized or stable batch boundaries. Consume [`Values`](xref:Plank.Reading.Logical.ColumnBuffer`1.Values) before advancing the column enumerator. The span is temporary and may refer to pooled storage that is reused for the next buffer.
 
 Nullable schema properties generate nullable column types such as [`RowGroupColumn<int?>`](xref:Plank.Reading.Logical.RowGroupColumn`1).
 

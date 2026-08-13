@@ -9,8 +9,11 @@ namespace Plank.Reading.Logical.Internal;
 
 static class ColumnChunkReader
 {
-    static readonly DateOnly UnixEpochDate = new(1970, 1, 1);
+    internal const int NullableNumericBatchSizeBytes = 256 * 1024;
 
+    static readonly DateOnly UnixEpochDate = new(1970, 1, 1);
+    static readonly ulong[] ExpandedDefinitionBytes = CreateExpandedDefinitionBytes();
+    static readonly byte[] DefinitionByteCounts = CreateDefinitionByteCounts();
     internal static bool TryDecodeDictionaryPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
@@ -259,6 +262,449 @@ static class ColumnChunkReader
             maxLevel >>= 1;
         }
         return bitWidth;
+    }
+
+    internal enum NullableNumericDecoderKind : byte
+    {
+        None,
+        Plain,
+        ByteStreamSplit,
+        Dictionary
+    }
+
+    internal struct NullableNumericPageState
+    {
+        internal int ValueCount;
+        internal int ValueOffset;
+        internal int PhysicalCount;
+        internal int PhysicalOffset;
+        internal int DataOffset;
+        internal int DataLength;
+        internal int DefinitionBitsetLength;
+        internal NullableNumericDecoderKind DecoderKind;
+
+        internal readonly bool Active
+            => ValueOffset < ValueCount;
+    }
+
+    internal static bool TryStartNullableNumericPageBatches<T>(PageHeader header, ReadOnlySpan<byte> payload,
+        Column column, ulong rowCount, ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool,
+        ref NullableNumericPageState page, out ColumnBuffer<T> buffer)
+    {
+        buffer = default;
+        page = default;
+        var physicalType = GetPhysicalDecodeType<T>(column);
+        if (column.Converter is not null ||
+            header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2) ||
+            header.Encoding is not (EncodingKind.Plain or EncodingKind.ByteStreamSplit or
+                EncodingKind.RleDictionary or EncodingKind.PlainDictionary) ||
+            !IsNullableNumericProjection<T>(physicalType))
+            return false;
+        if (header.ValueCount == 0)
+            return false;
+        if (header.ValueCount > rowCount)
+            throw new CorruptParquetException(
+                $"Page value count ({header.ValueCount}) exceeds row group row count ({rowCount}).");
+        var decoderKind = header.Encoding switch
+        {
+            EncodingKind.Plain => NullableNumericDecoderKind.Plain,
+            EncodingKind.ByteStreamSplit => NullableNumericDecoderKind.ByteStreamSplit,
+            EncodingKind.RleDictionary or EncodingKind.PlainDictionary => NullableNumericDecoderKind.Dictionary,
+            _ => NullableNumericDecoderKind.None
+        };
+
+        var definitionOffset = 0;
+        var definitionLength = 0;
+        var dataOffset = 0;
+        var expectedPhysicalCount = header.ValueCount;
+        var definitionEncoding = header.Type == PageHeaderType.DataPage
+            ? header.DefinitionLevelEncoding
+            : EncodingKind.Rle;
+        if (header.Type == PageHeaderType.DataPageV2)
+        {
+            if (header.NullCount > header.ValueCount)
+                throw new CorruptParquetException(
+                    $"Page null count ({header.NullCount}) exceeds value count ({header.ValueCount}).");
+            var levelBytes = checked((int)(header.RepetitionLevelsByteLength +
+                header.DefinitionLevelsByteLength));
+            if ((uint)levelBytes > (uint)payload.Length)
+                throw new CorruptParquetException(
+                    $"Level bytes ({levelBytes}) exceed page payload size ({payload.Length}).");
+            definitionOffset = checked((int)header.RepetitionLevelsByteLength);
+            definitionLength = checked((int)header.DefinitionLevelsByteLength);
+            dataOffset = levelBytes;
+            expectedPhysicalCount -= header.NullCount;
+        }
+        else if (column.Options.Repetition == ParquetRepetition.Optional)
+        {
+            definitionLength = GetDataPageV1LevelPayloadLength(payload, header.ValueCount,
+                definitionEncoding, bitWidth: 1, "definition", out definitionOffset);
+            dataOffset = checked(definitionOffset + definitionLength);
+        }
+
+        var valueCount = checked((int)header.ValueCount);
+        var definitionBitsetLength = 0;
+        int physicalCount;
+        if (definitionLength == 0)
+            physicalCount = valueCount;
+        else
+        {
+            definitionBitsetLength = checked((valueCount + 7) / 8);
+            DecodeDefinitionBitset(payload.Slice(definitionOffset, definitionLength), valueCount,
+                definitionEncoding, buffers.GetCompactDefinitions(definitionBitsetLength, bufferPool),
+                out physicalCount);
+        }
+        if (header.Type == PageHeaderType.DataPageV2 && physicalCount != expectedPhysicalCount)
+            throw new CorruptParquetException(
+                $"Definition levels contain {physicalCount} values, expected {expectedPhysicalCount}.");
+
+        var dataPayload = payload[dataOffset..];
+        var physicalSize = GetNullableNumericPhysicalSize(physicalType);
+        if (header.Encoding == EncodingKind.Plain)
+            ValidatePlainPayload(dataPayload, checked((uint)physicalCount), checked((uint)physicalSize));
+        else if (header.Encoding == EncodingKind.ByteStreamSplit &&
+                 (long)physicalCount * physicalSize > dataPayload.Length)
+            throw new CorruptParquetException(
+                $"ByteStreamSplit payload ({dataPayload.Length} bytes) is too short for " +
+                $"{physicalCount} {physicalSize}-byte values.");
+        else if (header.Encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
+        {
+            if (!buffers.HasDictionary)
+                return false;
+            MaterializeNullableNumericDictionaryValues(dataPayload, physicalType, physicalCount,
+                ref buffers, bufferPool);
+        }
+
+        page = new NullableNumericPageState
+        {
+            ValueCount = valueCount,
+            PhysicalCount = physicalCount,
+            DataOffset = dataOffset,
+            DataLength = payload.Length - dataOffset,
+            DefinitionBitsetLength = definitionBitsetLength,
+            DecoderKind = decoderKind
+        };
+        buffer = DecodeNextNullableNumericBatch(payload, column, ref buffers, bufferPool, ref page);
+        return true;
+    }
+
+    internal static ColumnBuffer<T> DecodeNextNullableNumericBatch<T>(ReadOnlySpan<byte> payload, Column column,
+        ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool, ref NullableNumericPageState page)
+    {
+        System.Diagnostics.Debug.Assert(page.Active);
+        System.Diagnostics.Debug.Assert(page.DecoderKind != NullableNumericDecoderKind.None);
+        System.Diagnostics.Debug.Assert(page.DataOffset >= 0 && page.DataLength >= 0 &&
+            page.DataOffset <= payload.Length - page.DataLength);
+
+        var batchCapacity = Math.Max(1, NullableNumericBatchSizeBytes / Unsafe.SizeOf<T>());
+        var batchCount = Math.Min(batchCapacity, page.ValueCount - page.ValueOffset);
+        var values = buffers.GetValues<T>(batchCount, bufferPool);
+        var definitions = AsBytes(values)[..batchCount];
+        int physicalBatchCount;
+        if (page.DefinitionBitsetLength == 0)
+        {
+            definitions.Fill(1);
+            physicalBatchCount = batchCount;
+        }
+        else
+            ExpandDefinitionBitset(buffers.GetCompactDefinitions(page.DefinitionBitsetLength),
+                page.ValueOffset, definitions, out physicalBatchCount);
+        if (physicalBatchCount > page.PhysicalCount - page.PhysicalOffset)
+            throw new CorruptParquetException(
+                $"Definition levels contain more than the expected {page.PhysicalCount} physical values.");
+        var dataPayload = payload.Slice(page.DataOffset, page.DataLength);
+        DecodeNullableNumericBatch(dataPayload, column, definitions,
+            page.PhysicalCount, page.PhysicalOffset, physicalBatchCount, page.DecoderKind,
+            values, ref buffers, bufferPool);
+
+        page.ValueOffset += batchCount;
+        page.PhysicalOffset += physicalBatchCount;
+        if (!page.Active && page.PhysicalOffset != page.PhysicalCount)
+            throw new CorruptParquetException(
+                $"Definition levels consumed {page.PhysicalOffset} physical values, " +
+                $"expected {page.PhysicalCount}.");
+        return buffers.CreateNativeBuffer(batchCount);
+    }
+
+    static bool IsNullableNumericProjection<T>(Type physicalType)
+        => typeof(T) == typeof(int?) && physicalType == typeof(int) ||
+           typeof(T) == typeof(long?) && physicalType == typeof(long) ||
+           typeof(T) == typeof(float?) && physicalType == typeof(float) ||
+           typeof(T) == typeof(double?) && physicalType == typeof(double);
+
+    static int GetNullableNumericPhysicalSize(Type physicalType)
+        => physicalType == typeof(int) || physicalType == typeof(float)
+            ? sizeof(int)
+            : physicalType == typeof(long) || physicalType == typeof(double)
+                ? sizeof(long)
+                : throw new InvalidOperationException($"Unsupported nullable numeric physical type '{physicalType}'.");
+
+    static void MaterializeNullableNumericDictionaryValues<T>(ReadOnlySpan<byte> payload, Type physicalType,
+        int physicalCount, ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool)
+    {
+        var physicalBytes = buffers.GetScratch(
+            checked(physicalCount * GetNullableNumericPhysicalSize(physicalType)), bufferPool);
+        if (physicalType == typeof(int))
+            DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount), buffers.GetDictionary<int>(),
+                MemoryMarshal.Cast<byte, int>(physicalBytes));
+        else if (physicalType == typeof(long))
+            DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount), buffers.GetDictionary<long>(),
+                MemoryMarshal.Cast<byte, long>(physicalBytes));
+        else if (physicalType == typeof(float))
+            DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount), buffers.GetDictionary<float>(),
+                MemoryMarshal.Cast<byte, float>(physicalBytes));
+        else if (physicalType == typeof(double))
+            DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount), buffers.GetDictionary<double>(),
+                MemoryMarshal.Cast<byte, double>(physicalBytes));
+        else
+            throw new InvalidOperationException($"Unsupported nullable numeric physical type '{physicalType}'.");
+    }
+
+    static void DecodeNullableNumericBatch<T>(ReadOnlySpan<byte> payload, Column column,
+        ReadOnlySpan<byte> definitions, int totalPhysicalCount, int physicalOffset,
+        int physicalBatchCount, NullableNumericDecoderKind decoderKind, Span<T> values,
+        ref ColumnReadBuffers<T> buffers,
+        IParquetBufferPool bufferPool)
+    {
+        if (typeof(T) == typeof(int?))
+        {
+            DecodeNullableNumericBatch<T, int>(payload, column, definitions, totalPhysicalCount,
+                physicalOffset, physicalBatchCount, decoderKind, values, ref buffers, bufferPool);
+            return;
+        }
+        if (typeof(T) == typeof(long?))
+        {
+            DecodeNullableNumericBatch<T, long>(payload, column, definitions, totalPhysicalCount,
+                physicalOffset, physicalBatchCount, decoderKind, values, ref buffers, bufferPool);
+            return;
+        }
+        if (typeof(T) == typeof(float?))
+        {
+            DecodeNullableNumericBatch<T, float>(payload, column, definitions, totalPhysicalCount,
+                physicalOffset, physicalBatchCount, decoderKind, values, ref buffers, bufferPool);
+            return;
+        }
+        if (typeof(T) == typeof(double?))
+        {
+            DecodeNullableNumericBatch<T, double>(payload, column, definitions, totalPhysicalCount,
+                physicalOffset, physicalBatchCount, decoderKind, values, ref buffers, bufferPool);
+            return;
+        }
+        throw new InvalidOperationException($"Unsupported nullable numeric projection '{typeof(T)}'.");
+    }
+
+    static void DecodeNullableNumericBatch<T, TValue>(ReadOnlySpan<byte> payload, Column column,
+        ReadOnlySpan<byte> definitions, int totalPhysicalCount, int physicalOffset,
+        int physicalBatchCount, NullableNumericDecoderKind decoderKind, Span<T> values,
+        ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool)
+        where TValue : struct
+    {
+        var destination = Unsafe.As<Span<T>, Span<TValue?>>(ref values);
+        var physical = GetNullableNumericBatchValues<T, TValue>(payload, column, totalPhysicalCount,
+            physicalOffset, physicalBatchCount, decoderKind, ref buffers, bufferPool);
+        ScatterNullableNumericBatch(definitions, physical, destination);
+    }
+
+    static ReadOnlySpan<TValue> GetNullableNumericBatchValues<T, TValue>(ReadOnlySpan<byte> payload,
+        Column column, int totalPhysicalCount, int physicalOffset, int physicalBatchCount,
+        NullableNumericDecoderKind decoderKind, ref ColumnReadBuffers<T> buffers,
+        IParquetBufferPool bufferPool)
+        where TValue : struct
+    {
+        if (physicalBatchCount == 0)
+            return [];
+        if (decoderKind == NullableNumericDecoderKind.Dictionary)
+            return MemoryMarshal.Cast<byte, TValue>(buffers.GetScratch(
+                    checked(totalPhysicalCount * Unsafe.SizeOf<TValue>()), bufferPool))
+                .Slice(physicalOffset, physicalBatchCount);
+
+        var physical = MemoryMarshal.Cast<byte, TValue>(buffers.GetScratch(
+            checked(physicalBatchCount * Unsafe.SizeOf<TValue>()), bufferPool));
+        if (decoderKind == NullableNumericDecoderKind.Plain)
+        {
+            var offset = checked(physicalOffset * Unsafe.SizeOf<TValue>());
+            if (!TryDecodePlainIntoNative(payload[offset..], column, checked((uint)physicalBatchCount), physical))
+                throw new InvalidOperationException(
+                    $"Plain decoding declined nullable numeric type '{typeof(TValue)}'.");
+        }
+        else if (decoderKind == NullableNumericDecoderKind.ByteStreamSplit)
+        {
+            DecodeByteStreamSplitNumericSlice(payload, totalPhysicalCount, physicalOffset, physical);
+        }
+        else
+            throw new InvalidOperationException($"Unsupported nullable numeric decoder kind '{decoderKind}'.");
+        return physical;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static void ScatterNullableNumericBatch<TValue>(ReadOnlySpan<byte> definitions,
+        ReadOnlySpan<TValue> physical, Span<TValue?> destination)
+        where TValue : struct
+    {
+        var physicalIndex = physical.Length;
+        for (var i = definitions.Length - 1; i >= 0; i--)
+            destination[i] = definitions[i] == 0 ? null : physical[--physicalIndex];
+        if (physicalIndex != 0)
+            throw new CorruptParquetException(
+                $"Definition levels consumed {physical.Length - physicalIndex} physical values, " +
+                $"expected {physical.Length}.");
+    }
+
+    static void DecodeDefinitionBitset(ReadOnlySpan<byte> payload, int valueCount, EncodingKind encoding,
+        Span<byte> destination, out int nonNullCount)
+    {
+        destination.Clear();
+        if (encoding == EncodingKind.BitPacked)
+        {
+            var requiredBytes = LegacyBitPackedDecoder.GetByteCount(valueCount, bitWidth: 1);
+            if (payload.Length < requiredBytes)
+                throw new CorruptParquetException(
+                    $"Legacy bit-packed payload ({payload.Length} bytes) is too short to decode {valueCount} values.");
+            var count = 0;
+            for (var i = 0; i < valueCount; i++)
+            {
+                var value = (payload[i >> 3] >> (7 - (i & 7))) & 1;
+                destination[i >> 3] |= (byte)(value << (i & 7));
+                count += value;
+            }
+            nonNullCount = count;
+            return;
+        }
+        if (encoding != EncodingKind.Rle)
+            throw new NotSupportedException($"Definition level encoding '{encoding}' is not supported.");
+
+        var valueOffset = 0;
+        var nonNulls = 0;
+        while (valueOffset < valueCount)
+        {
+            var header = ReadUnsignedVarInt(ref payload);
+            if ((header & 1U) == 0)
+            {
+                var runLength = header >> 1;
+                if (runLength == 0)
+                    throw new CorruptParquetException("Definition levels contain an empty RLE run.");
+                var repeated = ReadLittleEndian(ref payload, byteWidth: 1);
+                if ((uint)repeated > 1)
+                    throw new CorruptParquetException(
+                        $"Definition level {repeated} exceeds the schema maximum of 1.");
+                var runCopyLength = (int)Math.Min(runLength, checked((uint)(valueCount - valueOffset)));
+                if (repeated != 0)
+                {
+                    SetDefinitionBits(destination, valueOffset, runCopyLength);
+                    nonNulls += runCopyLength;
+                }
+                valueOffset += runCopyLength;
+                continue;
+            }
+
+            var literalGroupCount = header >> 1;
+            if (literalGroupCount == 0 || literalGroupCount > uint.MaxValue / 8)
+                throw new CorruptParquetException(
+                    $"Definition levels literal run group count {literalGroupCount} is invalid.");
+            var literalCount = literalGroupCount * 8U;
+            var literalByteCount = checked((int)literalGroupCount);
+            if (literalByteCount > payload.Length)
+                throw new CorruptParquetException(
+                    $"Definition level literal group claims {literalByteCount} bytes but only {payload.Length} remain.");
+            var literalCopyLength = (int)Math.Min(literalCount, checked((uint)(valueCount - valueOffset)));
+            CopyDefinitionBits(payload[..literalByteCount], destination, valueOffset, literalCopyLength,
+                ref nonNulls);
+            valueOffset += literalCopyLength;
+            payload = payload[literalByteCount..];
+        }
+        nonNullCount = nonNulls;
+    }
+
+    static void SetDefinitionBits(Span<byte> destination, int valueOffset, int valueCount)
+    {
+        while (valueCount != 0 && (valueOffset & 7) != 0)
+        {
+            destination[valueOffset >> 3] |= (byte)(1 << (valueOffset & 7));
+            valueOffset++;
+            valueCount--;
+        }
+        var byteCount = valueCount >> 3;
+        destination.Slice(valueOffset >> 3, byteCount).Fill(byte.MaxValue);
+        valueOffset += byteCount << 3;
+        valueCount -= byteCount << 3;
+        if (valueCount != 0)
+            destination[valueOffset >> 3] |= (byte)((1 << valueCount) - 1);
+    }
+
+    static void CopyDefinitionBits(ReadOnlySpan<byte> source, Span<byte> destination,
+        int valueOffset, int valueCount, ref int nonNullCount)
+    {
+        if ((valueOffset & 7) == 0)
+        {
+            var byteCount = valueCount >> 3;
+            source[..byteCount].CopyTo(destination[(valueOffset >> 3)..]);
+            for (var i = 0; i < byteCount; i++)
+                nonNullCount += DefinitionByteCounts[source[i]];
+            valueOffset += byteCount << 3;
+            source = source[byteCount..];
+            valueCount -= byteCount << 3;
+        }
+        for (var i = 0; i < valueCount; i++)
+        {
+            var value = (source[i >> 3] >> (i & 7)) & 1;
+            destination[valueOffset >> 3] |= (byte)(value << (valueOffset & 7));
+            nonNullCount += value;
+            valueOffset++;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static void ExpandDefinitionBitset(ReadOnlySpan<byte> source, int valueOffset, Span<byte> destination,
+        out int nonNullCount)
+    {
+        var count = 0;
+        var destinationOffset = 0;
+        if ((valueOffset & 7) == 0)
+        {
+            var sourceOffset = valueOffset >> 3;
+            var byteCount = destination.Length >> 3;
+            ref var output = ref MemoryMarshal.GetReference(destination);
+            for (var i = 0; i < byteCount; i++)
+            {
+                var packed = source[sourceOffset + i];
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, i << 3), ExpandedDefinitionBytes[packed]);
+                count += DefinitionByteCounts[packed];
+            }
+            destinationOffset = byteCount << 3;
+            valueOffset += destinationOffset;
+        }
+        for (; destinationOffset < destination.Length; destinationOffset++, valueOffset++)
+        {
+            var value = (byte)((source[valueOffset >> 3] >> (valueOffset & 7)) & 1);
+            destination[destinationOffset] = value;
+            count += value;
+        }
+        nonNullCount = count;
+    }
+
+    static ulong[] CreateExpandedDefinitionBytes()
+    {
+        var expanded = new ulong[256];
+        var bytes = MemoryMarshal.AsBytes(expanded.AsSpan());
+        for (var value = 0; value < expanded.Length; value++)
+            for (var bit = 0; bit < 8; bit++)
+                bytes[value * sizeof(ulong) + bit] = (byte)((value >> bit) & 1);
+        return expanded;
+    }
+
+    static byte[] CreateDefinitionByteCounts()
+    {
+        var counts = new byte[256];
+        for (var value = 0; value < counts.Length; value++)
+        {
+            var remaining = value;
+            while (remaining != 0)
+            {
+                counts[value]++;
+                remaining &= remaining - 1;
+            }
+        }
+        return counts;
     }
 
     internal static bool TryDecodeNullablePageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
@@ -2609,18 +3055,25 @@ static class ColumnChunkReader
     }
 
     static void DecodeByteStreamSplitInt32(ReadOnlySpan<byte> payload, Span<int> destination)
+        => DecodeByteStreamSplitInt32Slice(payload, destination.Length, 0, destination);
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static void DecodeByteStreamSplitInt32Slice(ReadOnlySpan<byte> payload, int totalCount, int valueOffset,
+        Span<int> destination)
     {
-        var count = destination.Length;
-        if ((long)count * 4 > payload.Length)
+        if (totalCount < 0 || valueOffset < 0 || valueOffset > totalCount - destination.Length)
+            throw new ArgumentOutOfRangeException(nameof(valueOffset));
+        if ((long)totalCount * 4 > payload.Length)
             throw new CorruptParquetException(
-                $"ByteStreamSplit payload ({payload.Length} bytes) is too short for {count} Int32 values.");
+                $"ByteStreamSplit payload ({payload.Length} bytes) is too short for {totalCount} Int32 values.");
 
         ref var lane0 = ref MemoryMarshal.GetReference(payload);
-        ref var lane1 = ref Unsafe.Add(ref lane0, count);
-        ref var lane2 = ref Unsafe.Add(ref lane1, count);
-        ref var lane3 = ref Unsafe.Add(ref lane2, count);
+        ref var lane1 = ref Unsafe.Add(ref lane0, totalCount);
+        ref var lane2 = ref Unsafe.Add(ref lane1, totalCount);
+        ref var lane3 = ref Unsafe.Add(ref lane2, totalCount);
         ref var values = ref Unsafe.As<int, uint>(ref MemoryMarshal.GetReference(destination));
-        var length = (nuint)(uint)count;
+        var length = (nuint)(uint)destination.Length;
+        var sourceOffset = (nuint)(uint)valueOffset;
         nuint i = 0;
 
         if (Avx512F.IsSupported)
@@ -2628,13 +3081,13 @@ static class ColumnChunkReader
             var vectorCount = (nuint)Vector128<byte>.Count;
             for (; length - i >= vectorCount; i += vectorCount)
             {
-                var decoded = Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref lane0, i)).AsUInt32();
+                var decoded = Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref lane0, sourceOffset + i)).AsUInt32();
                 decoded |= Vector512.ShiftLeft(
-                    Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref lane1, i)).AsUInt32(), 8);
+                    Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref lane1, sourceOffset + i)).AsUInt32(), 8);
                 decoded |= Vector512.ShiftLeft(
-                    Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref lane2, i)).AsUInt32(), 16);
+                    Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref lane2, sourceOffset + i)).AsUInt32(), 16);
                 decoded |= Vector512.ShiftLeft(
-                    Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref lane3, i)).AsUInt32(), 24);
+                    Avx512F.ConvertToVector512Int32(Vector128.LoadUnsafe(ref lane3, sourceOffset + i)).AsUInt32(), 24);
                 decoded.StoreUnsafe(ref values, i);
             }
         }
@@ -2643,12 +3096,12 @@ static class ColumnChunkReader
             var vectorCount = (nuint)Vector256<uint>.Count;
             for (; length - i >= vectorCount; i += vectorCount)
             {
-                var decoded = Avx2.ConvertToVector256Int32(LoadLowerUInt64(ref lane0, i)).AsUInt32();
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int32(LoadLowerUInt64(ref lane1, i))
+                var decoded = Avx2.ConvertToVector256Int32(LoadLowerUInt64(ref lane0, sourceOffset + i)).AsUInt32();
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int32(LoadLowerUInt64(ref lane1, sourceOffset + i))
                     .AsUInt32(), 8);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int32(LoadLowerUInt64(ref lane2, i))
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int32(LoadLowerUInt64(ref lane2, sourceOffset + i))
                     .AsUInt32(), 16);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int32(LoadLowerUInt64(ref lane3, i))
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int32(LoadLowerUInt64(ref lane3, sourceOffset + i))
                     .AsUInt32(), 24);
                 decoded.StoreUnsafe(ref values, i);
             }
@@ -2656,10 +3109,10 @@ static class ColumnChunkReader
 
         for (; i < length; i++)
             Unsafe.Add(ref values, i) =
-                Unsafe.Add(ref lane0, i) |
-                ((uint)Unsafe.Add(ref lane1, i) << 8) |
-                ((uint)Unsafe.Add(ref lane2, i) << 16) |
-                ((uint)Unsafe.Add(ref lane3, i) << 24);
+                Unsafe.Add(ref lane0, sourceOffset + i) |
+                ((uint)Unsafe.Add(ref lane1, sourceOffset + i) << 8) |
+                ((uint)Unsafe.Add(ref lane2, sourceOffset + i) << 16) |
+                ((uint)Unsafe.Add(ref lane3, sourceOffset + i) << 24);
     }
 
     static void DecodeByteStreamSplitInt64(ReadOnlySpan<byte> payload, Span<long> destination)
@@ -2669,22 +3122,29 @@ static class ColumnChunkReader
     }
 
     static void DecodeByteStreamSplitUInt64(ReadOnlySpan<byte> payload, Span<ulong> destination)
+        => DecodeByteStreamSplitUInt64Slice(payload, destination.Length, 0, destination);
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static void DecodeByteStreamSplitUInt64Slice(ReadOnlySpan<byte> payload, int totalCount, int valueOffset,
+        Span<ulong> destination)
     {
-        var count = destination.Length;
-        if ((long)count * 8 > payload.Length)
+        if (totalCount < 0 || valueOffset < 0 || valueOffset > totalCount - destination.Length)
+            throw new ArgumentOutOfRangeException(nameof(valueOffset));
+        if ((long)totalCount * 8 > payload.Length)
             throw new CorruptParquetException(
-                $"ByteStreamSplit payload ({payload.Length} bytes) is too short for {count} 8-byte values.");
+                $"ByteStreamSplit payload ({payload.Length} bytes) is too short for {totalCount} 8-byte values.");
 
         ref var lane0 = ref MemoryMarshal.GetReference(payload);
-        ref var lane1 = ref Unsafe.Add(ref lane0, count);
-        ref var lane2 = ref Unsafe.Add(ref lane1, count);
-        ref var lane3 = ref Unsafe.Add(ref lane2, count);
-        ref var lane4 = ref Unsafe.Add(ref lane3, count);
-        ref var lane5 = ref Unsafe.Add(ref lane4, count);
-        ref var lane6 = ref Unsafe.Add(ref lane5, count);
-        ref var lane7 = ref Unsafe.Add(ref lane6, count);
+        ref var lane1 = ref Unsafe.Add(ref lane0, totalCount);
+        ref var lane2 = ref Unsafe.Add(ref lane1, totalCount);
+        ref var lane3 = ref Unsafe.Add(ref lane2, totalCount);
+        ref var lane4 = ref Unsafe.Add(ref lane3, totalCount);
+        ref var lane5 = ref Unsafe.Add(ref lane4, totalCount);
+        ref var lane6 = ref Unsafe.Add(ref lane5, totalCount);
+        ref var lane7 = ref Unsafe.Add(ref lane6, totalCount);
         ref var values = ref MemoryMarshal.GetReference(destination);
-        var length = (nuint)(uint)count;
+        var length = (nuint)(uint)destination.Length;
+        var sourceOffset = (nuint)(uint)valueOffset;
         nuint i = 0;
 
         if (Avx512F.IsSupported)
@@ -2692,20 +3152,20 @@ static class ColumnChunkReader
             var vectorCount = (nuint)Vector512<ulong>.Count;
             for (; length - i >= vectorCount; i += vectorCount)
             {
-                var decoded = Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane0, i)).AsUInt64();
-                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane1, i))
+                var decoded = Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane0, sourceOffset + i)).AsUInt64();
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane1, sourceOffset + i))
                     .AsUInt64(), 8);
-                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane2, i))
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane2, sourceOffset + i))
                     .AsUInt64(), 16);
-                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane3, i))
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane3, sourceOffset + i))
                     .AsUInt64(), 24);
-                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane4, i))
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane4, sourceOffset + i))
                     .AsUInt64(), 32);
-                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane5, i))
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane5, sourceOffset + i))
                     .AsUInt64(), 40);
-                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane6, i))
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane6, sourceOffset + i))
                     .AsUInt64(), 48);
-                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane7, i))
+                decoded |= Vector512.ShiftLeft(Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane7, sourceOffset + i))
                     .AsUInt64(), 56);
                 decoded.StoreUnsafe(ref values, i);
             }
@@ -2715,20 +3175,20 @@ static class ColumnChunkReader
             var vectorCount = (nuint)Vector256<ulong>.Count;
             for (; length - i >= vectorCount; i += vectorCount)
             {
-                var decoded = Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane0, i)).AsUInt64();
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane1, i))
+                var decoded = Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane0, sourceOffset + i)).AsUInt64();
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane1, sourceOffset + i))
                     .AsUInt64(), 8);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane2, i))
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane2, sourceOffset + i))
                     .AsUInt64(), 16);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane3, i))
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane3, sourceOffset + i))
                     .AsUInt64(), 24);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane4, i))
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane4, sourceOffset + i))
                     .AsUInt64(), 32);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane5, i))
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane5, sourceOffset + i))
                     .AsUInt64(), 40);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane6, i))
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane6, sourceOffset + i))
                     .AsUInt64(), 48);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane7, i))
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane7, sourceOffset + i))
                     .AsUInt64(), 56);
                 decoded.StoreUnsafe(ref values, i);
             }
@@ -2736,14 +3196,34 @@ static class ColumnChunkReader
 
         for (; i < length; i++)
             Unsafe.Add(ref values, i) =
-                Unsafe.Add(ref lane0, i) |
-                ((ulong)Unsafe.Add(ref lane1, i) << 8) |
-                ((ulong)Unsafe.Add(ref lane2, i) << 16) |
-                ((ulong)Unsafe.Add(ref lane3, i) << 24) |
-                ((ulong)Unsafe.Add(ref lane4, i) << 32) |
-                ((ulong)Unsafe.Add(ref lane5, i) << 40) |
-                ((ulong)Unsafe.Add(ref lane6, i) << 48) |
-                ((ulong)Unsafe.Add(ref lane7, i) << 56);
+                Unsafe.Add(ref lane0, sourceOffset + i) |
+                ((ulong)Unsafe.Add(ref lane1, sourceOffset + i) << 8) |
+                ((ulong)Unsafe.Add(ref lane2, sourceOffset + i) << 16) |
+                ((ulong)Unsafe.Add(ref lane3, sourceOffset + i) << 24) |
+                ((ulong)Unsafe.Add(ref lane4, sourceOffset + i) << 32) |
+                ((ulong)Unsafe.Add(ref lane5, sourceOffset + i) << 40) |
+                ((ulong)Unsafe.Add(ref lane6, sourceOffset + i) << 48) |
+                ((ulong)Unsafe.Add(ref lane7, sourceOffset + i) << 56);
+    }
+
+    static void DecodeByteStreamSplitNumericSlice<T>(ReadOnlySpan<byte> payload, int totalCount,
+        int valueOffset, Span<T> destination)
+        where T : struct
+    {
+        if (typeof(T) == typeof(int))
+            DecodeByteStreamSplitInt32Slice(payload, totalCount, valueOffset,
+                Unsafe.As<Span<T>, Span<int>>(ref destination));
+        else if (typeof(T) == typeof(long))
+            DecodeByteStreamSplitUInt64Slice(payload, totalCount, valueOffset,
+                MemoryMarshal.Cast<long, ulong>(Unsafe.As<Span<T>, Span<long>>(ref destination)));
+        else if (typeof(T) == typeof(float))
+            DecodeByteStreamSplitInt32Slice(payload, totalCount, valueOffset,
+                MemoryMarshal.Cast<float, int>(Unsafe.As<Span<T>, Span<float>>(ref destination)));
+        else if (typeof(T) == typeof(double))
+            DecodeByteStreamSplitUInt64Slice(payload, totalCount, valueOffset,
+                MemoryMarshal.Cast<double, ulong>(Unsafe.As<Span<T>, Span<double>>(ref destination)));
+        else
+            throw new InvalidOperationException($"Unsupported ByteStreamSplit numeric type '{typeof(T)}'.");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

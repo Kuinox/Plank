@@ -47,6 +47,7 @@ readonly struct ColumnBufferEnumerable<T>
         ParquetPageCursor _cursor;
         PageMetadataHandle _pageMetadata;
         ColumnReadBuffers<T> _buffers;
+        ColumnChunkReader.NullableNumericPageState _nullableNumericPage;
         bool _openedCursor;
 
         internal Enumerator(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
@@ -68,6 +69,7 @@ readonly struct ColumnBufferEnumerable<T>
             _cursor = default;
             _pageMetadata = default;
             _buffers = default;
+            _nullableNumericPage = default;
             _openedCursor = false;
             Current = default;
         }
@@ -89,11 +91,27 @@ readonly struct ColumnBufferEnumerable<T>
                 _openedCursor = true;
             }
 
+            if (_nullableNumericPage.Active)
+            {
+                Current = ColumnChunkReader.DecodeNextNullableNumericBatch(
+                    _cursor.CurrentPayloadUnchecked, _column, ref _buffers, _bufferPool,
+                    ref _nullableNumericPage);
+                return true;
+            }
+
             while (_cursor.MoveNext())
             {
                 if (ColumnChunkReader.TryDecodeDictionaryPageIntoNative<T>(_cursor.CurrentHeader,
                         _cursor.CurrentPayload, _column, ref _buffers, _bufferPool))
                     continue;
+
+                if (ColumnChunkReader.TryStartNullableNumericPageBatches(_cursor.CurrentHeader,
+                        _cursor.CurrentPayload, _column, _rowCount, ref _buffers, _bufferPool,
+                        ref _nullableNumericPage, out var batchedNullableBuffer))
+                {
+                    Current = batchedNullableBuffer;
+                    return true;
+                }
 
                 if (ColumnChunkReader.TryDecodeNullablePageIntoNative<T>(_cursor.CurrentHeader,
                         _cursor.CurrentPayload, _column, _rowCount, ref _buffers, _bufferPool,
@@ -126,6 +144,7 @@ readonly struct ColumnBufferEnumerable<T>
             _pageMetadata.Dispose();
             _pageMetadata = default;
             _buffers.Dispose();
+            _nullableNumericPage = default;
             _openedCursor = false;
             Current = default;
         }
