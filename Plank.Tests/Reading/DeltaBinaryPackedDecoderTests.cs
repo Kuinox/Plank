@@ -144,6 +144,38 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
+    public void WriteInt64PackingDispatchMatchesReferenceAcrossWidthsAndPartialBlocks()
+    {
+        int[] counts = [3, 31, 32, 33, 127, 128, 129, 257];
+        for (var bitWidth = 0; bitWidth <= 64; bitWidth++)
+        foreach (var count in counts)
+        {
+            var values = CreateInt64ValuesForBitWidth(bitWidth, count);
+            AssertEncodedBytes(values, EncodeInt64Reference(values), chunkSize: 7);
+        }
+    }
+
+    [Test]
+    public void WriteInt64PackingDispatchMatchesReferenceAcrossMixedMiniBlockWidths()
+    {
+        int[] counts = [33, 127, 128, 129, 257];
+        int[][] widthPatterns =
+        [
+            [0, 1, 2, 4],
+            [4, 3, 2, 1],
+            [4, 5, 4, 4],
+            [5, 6, 7, 8],
+            [64, 0, 1, 4]
+        ];
+        foreach (var widths in widthPatterns)
+        foreach (var count in counts)
+        {
+            var values = CreateInt64ValuesForMiniBlockWidths(count, widths);
+            AssertEncodedBytes(values, EncodeInt64Reference(values), chunkSize: 7);
+        }
+    }
+
+    [Test]
     public void WriteInt32PreservesKnownPayload()
     {
         int[] values = [4, 11, 3, 18, 2];
@@ -402,6 +434,55 @@ internal sealed class DeltaBinaryPackedDecoderTests
         {
             var mixed = unchecked((ulong)i * 0x9E3779B97F4A7C15UL);
             values[i] = unchecked((long)(mixed & mask));
+        }
+
+        return values;
+    }
+
+    static long[] CreateInt64ValuesForBitWidth(int bitWidth, int count)
+    {
+        var values = new long[count];
+        for (var i = 1; i < values.Length; i++)
+        {
+            long delta;
+            if (bitWidth == 0)
+            {
+                delta = 7;
+            }
+            else if (bitWidth == 64)
+            {
+                delta = (i & 1) != 0 ? long.MinValue : long.MaxValue;
+            }
+            else
+            {
+                const long minDelta = -8;
+                var highResidual = 1UL << (bitWidth - 1);
+                delta = (i & 1) != 0 ? minDelta : unchecked(minDelta + (long)highResidual);
+            }
+
+            values[i] = unchecked(values[i - 1] + delta);
+        }
+
+        return values;
+    }
+
+    static long[] CreateInt64ValuesForMiniBlockWidths(int count, ReadOnlySpan<int> widths)
+    {
+        var values = new long[count];
+        for (var i = 1; i < values.Length; i++)
+        {
+            var miniBlock = ((i - 1) / 32) & 3;
+            var width = widths[miniBlock];
+            var miniBlockOffset = (i - 1) & 31;
+            var residual = miniBlockOffset switch
+            {
+                0 => 0UL,
+                1 when width == 64 => 1UL << 63,
+                1 when width > 0 => 1UL << (width - 1),
+                _ => 0UL
+            };
+            var delta = unchecked(-9L + (long)residual);
+            values[i] = unchecked(values[i - 1] + delta);
         }
 
         return values;
