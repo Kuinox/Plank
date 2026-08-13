@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics.X86;
 using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Reading.Logical.Internal;
@@ -83,6 +85,67 @@ internal sealed class NullableNumericDecodingTests
         AssertCorrupt(column, definitionPayload: [0x10, 0x02], valueCount: 8, nullCount: 0);
         AssertCorrupt(column, definitionPayload: [0x08, 0x01], valueCount: 4, nullCount: 1,
             physicalPayload: new byte[4 * sizeof(int)]);
+    }
+
+    [Test]
+    public void Avx512DirectNullableDoubleByteStreamSplitPreservesAliasedDefinitionsAndBits()
+    {
+        if (!Avx512F.IsSupported)
+            return;
+
+        var expected = new double?[41];
+        for (var i = 0; i < expected.Length; i++)
+            if (i % 7 != 0 && i is not 1 and not 39)
+                expected[i] = BitConverter.Int64BitsToDouble(i switch
+                {
+                    2 => unchecked((long)0x8000_0000_0000_0000UL),
+                    3 => 0x7FF8_0000_0000_0001L,
+                    4 => 0x7FF8_0000_0000_0002L,
+                    5 => 0x7FF0_0000_0000_0000L,
+                    6 => unchecked((long)0xFFF0_0000_0000_0000UL),
+                    _ => unchecked((long)(0x3FF0_0000_0000_0000UL ^
+                                          ((ulong)i * 0xD6E8_FEB8_6659_FD93UL)))
+                });
+        var physicalValues = expected.Where(value => value.HasValue)
+            .Select(value => value.GetValueOrDefault()).ToArray();
+        var payload = EncodeByteStreamSplit(physicalValues);
+        var destination = new double?[expected.Length];
+        var destinationSpan = destination.AsSpan();
+        ref var destinationBytes = ref Unsafe.As<double?, byte>(
+            ref MemoryMarshal.GetReference(destinationSpan));
+        var definitions = MemoryMarshal.CreateSpan(ref destinationBytes,
+            checked(destination.Length * Unsafe.SizeOf<double?>()))[..expected.Length];
+        for (var i = 0; i < expected.Length; i++)
+            definitions[i] = expected[i].HasValue ? (byte)1 : (byte)0;
+
+        ColumnChunkReader.DecodeNullableDoubleByteStreamSplitAvx512(payload, definitions,
+            physicalValues.Length, destination);
+
+        AssertEqual(expected, destination, EncodingKind.ByteStreamSplit,
+            ParquetDataPageVersion.V2, NullPattern.Mixed);
+    }
+
+    [Test]
+    public void Avx512DirectNullableDoubleByteStreamSplitRejectsCorruption()
+    {
+        if (!Avx512F.IsSupported)
+            return;
+
+        var destination = new double?[17];
+        byte[] definitions = [1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0];
+        var values = Enumerable.Range(0, 12).Select(static value => (double)value).ToArray();
+        var payload = EncodeByteStreamSplit(values);
+
+        Assert.Throws<CorruptParquetException>(() =>
+            ColumnChunkReader.DecodeNullableDoubleByteStreamSplitAvx512(
+                payload.AsSpan(0, payload.Length - 1), definitions, values.Length, destination));
+        Assert.Throws<CorruptParquetException>(() =>
+            ColumnChunkReader.DecodeNullableDoubleByteStreamSplitAvx512(
+                payload.AsSpan(0, 10 * sizeof(double)), definitions, 10, destination));
+        byte[] fewerDefinitions = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        Assert.Throws<CorruptParquetException>(() =>
+            ColumnChunkReader.DecodeNullableDoubleByteStreamSplitAvx512(
+                payload, fewerDefinitions, values.Length, destination));
     }
 
     [Test]
@@ -187,30 +250,33 @@ internal sealed class NullableNumericDecodingTests
             3 => 0x7FF8_0000_0000_0002L,
             _ => unchecked((long)((ulong)index * 0xD6E8_FEB8_6659_FD93UL))
         }));
-        var (schema, bytes) = WriteSinglePage(ParquetPhysicalType.Double, expected,
-            EncodingKind.ByteStreamSplit);
-        var pool = new OffsetBufferPool();
-        using var start = new ManualResetEventSlim();
-        var reads = new Task<ParquetBuffer>[readerCount];
-        for (var i = 0; i < reads.Length; i++)
-            reads[i] = Task.Run(() =>
-            {
-                start.Wait();
-                return ReadRetainedSinglePage<double>(schema, bytes, pool);
-            });
-        start.Set();
+        foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        {
+            var (schema, bytes) = WriteSinglePage(ParquetPhysicalType.Double, expected,
+                EncodingKind.ByteStreamSplit, pageVersion);
+            var pool = new OffsetBufferPool();
+            using var start = new ManualResetEventSlim();
+            var reads = new Task<ParquetBuffer>[readerCount];
+            for (var i = 0; i < reads.Length; i++)
+                reads[i] = Task.Run(() =>
+                {
+                    start.Wait();
+                    return ReadRetainedSinglePage<double>(schema, bytes, pool);
+                });
+            start.Set();
 
-        var retained = await Task.WhenAll(reads).ConfigureAwait(false);
-        try
-        {
-            foreach (var buffer in retained)
-                AssertEqual(expected, buffer.AsSpan<double?>(), EncodingKind.ByteStreamSplit,
-                    ParquetDataPageVersion.V2, NullPattern.Mixed);
-        }
-        finally
-        {
-            foreach (var buffer in retained)
-                buffer.Dispose();
+            var retained = await Task.WhenAll(reads).ConfigureAwait(false);
+            try
+            {
+                foreach (var buffer in retained)
+                    AssertEqual(expected, buffer.AsSpan<double?>(), EncodingKind.ByteStreamSplit,
+                        pageVersion, NullPattern.Mixed);
+            }
+            finally
+            {
+                foreach (var buffer in retained)
+                    buffer.Dispose();
+            }
         }
     }
 
@@ -270,7 +336,8 @@ internal sealed class NullableNumericDecodingTests
     }
 
     static (ParquetSchema Schema, byte[] Bytes) WriteSinglePage<T>(ParquetPhysicalType physicalType,
-        T?[] values, EncodingKind encoding)
+        T?[] values, EncodingKind encoding,
+        ParquetDataPageVersion pageVersion = ParquetDataPageVersion.V2)
         where T : struct
     {
         var schema = CreateSinglePageSchema(physicalType, encoding);
@@ -278,7 +345,7 @@ internal sealed class NullableNumericDecodingTests
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
             Compression = CompressionKind.None,
-            DataPageVersion = ParquetDataPageVersion.V2
+            DataPageVersion = pageVersion
         });
         var serialized = writer.CreateSerializedColumn<T?>(schema.LeafColumns[0]);
         serialized.Serialize(values);
@@ -315,6 +382,19 @@ internal sealed class NullableNumericDecodingTests
                 i % 31 != 0 && i is not 1_023 and not 32_768 && i != values.Length - 1)
                 values[i] = factory(i);
         return values;
+    }
+
+    static byte[] EncodeByteStreamSplit(ReadOnlySpan<double> values)
+    {
+        var payload = new byte[checked(values.Length * sizeof(double))];
+        for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
+        {
+            var bits = unchecked((ulong)BitConverter.DoubleToInt64Bits(values[valueIndex]));
+            for (var byteIndex = 0; byteIndex < sizeof(double); byteIndex++)
+                payload[byteIndex * values.Length + valueIndex] =
+                    (byte)(bits >> (byteIndex * 8));
+        }
+        return payload;
     }
 
     static T?[] RoundTrip<T>(ParquetPhysicalType physicalType, T?[] values, EncodingKind encoding,
