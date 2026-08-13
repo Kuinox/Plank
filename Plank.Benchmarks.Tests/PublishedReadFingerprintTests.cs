@@ -37,6 +37,51 @@ internal sealed class PublishedReadFingerprintTests
             .IsNotEqualTo(PublishedReadFingerprint.AddValue(start, secondNaN));
     }
 
+    [Test]
+    public async Task DateTimeFingerprintMatchesUtcDateTimeOffsetAcrossKindsAndBounds()
+    {
+        long[] ticks =
+        [
+            DateTime.MinValue.Ticks,
+            DateTime.MinValue.Ticks + 1,
+            DateTime.UnixEpoch.Ticks - 1,
+            DateTime.UnixEpoch.Ticks,
+            DateTime.UnixEpoch.Ticks + 1,
+            638_591_653_234_567_890L,
+            DateTime.MaxValue.Ticks - 1,
+            DateTime.MaxValue.Ticks
+        ];
+        DateTimeKind[] kinds = [DateTimeKind.Unspecified, DateTimeKind.Utc, DateTimeKind.Local];
+        var start = PublishedReadFingerprint.Start();
+
+        foreach (var tickCount in ticks)
+            foreach (var kind in kinds)
+            {
+                var value = new DateTime(tickCount, kind);
+                var utcValue = new DateTimeOffset(DateTime.SpecifyKind(value, DateTimeKind.Utc));
+
+                await Assert.That(PublishedReadFingerprint.AddValue(start, value))
+                    .IsEqualTo(PublishedReadFingerprint.AddValue(start, utcValue));
+            }
+    }
+
+    [Test]
+    public async Task DateTimeFingerprintIgnoresKindAndPreservesTickPrecision()
+    {
+        const long ticks = 638_591_653_234_567_890L;
+        var start = PublishedReadFingerprint.Start();
+        var unspecified = PublishedReadFingerprint.AddValue(start,
+            new DateTime(ticks, DateTimeKind.Unspecified));
+        var utc = PublishedReadFingerprint.AddValue(start, new DateTime(ticks, DateTimeKind.Utc));
+        var local = PublishedReadFingerprint.AddValue(start, new DateTime(ticks, DateTimeKind.Local));
+        var adjacent = PublishedReadFingerprint.AddValue(start,
+            new DateTime(ticks + 1, DateTimeKind.Unspecified));
+
+        await Assert.That(utc).IsEqualTo(unspecified);
+        await Assert.That(local).IsEqualTo(unspecified);
+        await Assert.That(adjacent).IsNotEqualTo(unspecified);
+    }
+
     static PublishedBenchmarkDataSet DataSet(long[] values)
         => new()
         {
