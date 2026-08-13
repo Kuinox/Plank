@@ -29,6 +29,19 @@ internal sealed class Dictionary11BitDecodingTests
     }
 
     [Test]
+    public void RequiredAndOptionalDoubleRoundTripAcrossPageVersionsWithSpecialValues()
+    {
+        var dictionary = CreateDoubleDictionary(2_048, includeSpecialValues: false);
+        var required = Enumerable.Range(0, 4_113).Select(index => dictionary[index & 2_047]).ToArray();
+        var optional = required.Select((value, index) => index % 7 == 0 ? null : (double?)value).ToArray();
+        foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        {
+            AssertDoubleRoundTrip(required, pageVersion);
+            AssertDoubleRoundTrip(optional, pageVersion);
+        }
+    }
+
+    [Test]
     public void LiteralDecoderHandlesVectorAndScalarBoundariesAndMixedRleRuns()
     {
         var intDictionary = Enumerable.Range(0, 2_048).Select(index => index * 17).ToArray();
@@ -50,6 +63,57 @@ internal sealed class Dictionary11BitDecodingTests
         Pack(mixedIndexes.AsSpan(8), 11).CopyTo(mixedPayload, 5);
         AssertDecoded(intDictionary, ParquetPhysicalType.Int32, mixedPayload, mixedIndexes);
         AssertDecoded(longDictionary, ParquetPhysicalType.Int64, mixedPayload, mixedIndexes);
+    }
+
+    [Test]
+    public void DoubleLiteralDecoderHandlesVectorAndScalarBoundariesAndMixedRleRuns()
+    {
+        var dictionary = CreateDoubleDictionary(2_048);
+        foreach (var count in new[] { 0, 1, 7, 8, 9, 31, 32, 33 })
+        {
+            var indexes = Enumerable.Range(0, count).Select(index => index * 61 & 2_047).ToArray();
+            AssertDecodedDouble(dictionary, EncodeLiteral(indexes, 11), indexes);
+        }
+
+        int[] mixedIndexes = [23, 23, 23, 23, 23, 23, 23, 23, 0, 1, 2, 3, 4, 5, 2_047, 17];
+        var mixedPayload = new byte[1 + 1 + 2 + 1 + 11];
+        mixedPayload[0] = 11;
+        mixedPayload[1] = 16;
+        mixedPayload[2] = 23;
+        mixedPayload[3] = 0;
+        mixedPayload[4] = 3;
+        Pack(mixedIndexes.AsSpan(8), 11).CopyTo(mixedPayload, 5);
+        AssertDecodedDouble(dictionary, mixedPayload, mixedIndexes);
+    }
+
+    [Test]
+    public void DoubleLiteralDecoderRejectsInvalidAndTruncatedIndexesAndPreservesFallbacks()
+    {
+        var shortDictionary = CreateDoubleDictionary(2_047);
+        int[] invalidVector = [0, 1, 2, 3, 4, 5, 6, 2_047];
+        Assert.Throws<CorruptParquetException>(() =>
+            DecodeRequired(shortDictionary, ParquetPhysicalType.Double, EncodeLiteral(invalidVector, 11), 8));
+
+        int[] invalidTail = [0, 1, 2, 3, 4, 5, 6, 7, 2_047];
+        Assert.Throws<CorruptParquetException>(() =>
+            DecodeRequired(shortDictionary, ParquetPhysicalType.Double, EncodeLiteral(invalidTail, 11), 9));
+
+        var truncated = EncodeLiteral(Enumerable.Range(0, 8).ToArray(), 11)[..^1];
+        Assert.Throws<CorruptParquetException>(() =>
+            DecodeRequired(shortDictionary, ParquetPhysicalType.Double, truncated, 8));
+
+        byte[] invalidRle = [11, 16, 0xff, 0x07];
+        Assert.Throws<CorruptParquetException>(() =>
+            DecodeRequired(shortDictionary, ParquetPhysicalType.Double, invalidRle, 8));
+
+        var tenBitDictionary = CreateDoubleDictionary(1_024);
+        int[] tenBitIndexes = [0, 1, 511, 512, 1_023, 17, 33, 65, 129];
+        AssertDecodedDouble(tenBitDictionary, EncodeLiteral(tenBitIndexes, 10), tenBitIndexes);
+
+        var floatDictionary = Enumerable.Range(0, 2_048).Select(index => index * 0.25f).ToArray();
+        int[] floatIndexes = [0, 1, 1_023, 1_024, 2_047, 17, 33, 65, 129];
+        AssertDecoded(floatDictionary, ParquetPhysicalType.Float,
+            EncodeLiteral(floatIndexes, 11), floatIndexes);
     }
 
     [Test]
@@ -111,6 +175,36 @@ internal sealed class Dictionary11BitDecodingTests
             throw new InvalidOperationException($"{typeof(T).Name}/{pageVersion} dictionary values did not round-trip.");
     }
 
+    static void AssertDoubleRoundTrip<T>(T[] expected, ParquetDataPageVersion pageVersion)
+    {
+        var optional = default(T) is null;
+        var options = new ColumnOptions(optional ? ParquetRepetition.Optional : ParquetRepetition.Required,
+            ImmutableArray.Create(EncodingKind.RleDictionary));
+        var schema = new ParquetSchema([
+            optional
+                ? ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Double, options,
+                    pageStrategy: ForceDictionaryPageStrategy.Shared)
+                : ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Double, options,
+                    pageStrategy: ForceDictionaryPageStrategy.Shared)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = pageVersion
+        });
+        var serialized = writer.CreateSerializedColumn<T>(schema.LeafColumns[0]);
+        serialized.Serialize(expected);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+
+        using var reader = schema.CreateReader(new MemoryReadSource(stream.ToArray()));
+        var actual = new List<T>(expected.Length);
+        foreach (var buffer in reader.RowGroups[0].Column<T>(0))
+            actual.AddRange(buffer.Values);
+        AssertDoubleBits(actual, expected, pageVersion.ToString());
+    }
+
     static void AssertDecoded<T>(T[] dictionary, ParquetPhysicalType physicalType, byte[] payload,
         int[] indexes) where T : unmanaged
     {
@@ -118,6 +212,58 @@ internal sealed class Dictionary11BitDecodingTests
         var expected = indexes.Select(index => dictionary[index]).ToArray();
         if (!actual.SequenceEqual(expected))
             throw new InvalidOperationException($"{typeof(T).Name} dictionary values did not decode correctly.");
+    }
+
+    static void AssertDecodedDouble(double[] dictionary, byte[] payload, int[] indexes)
+    {
+        var actual = DecodeRequired(dictionary, ParquetPhysicalType.Double, payload, indexes.Length);
+        var expected = indexes.Select(index => dictionary[index]).ToArray();
+        AssertDoubleBits(actual, expected, "literal decoder");
+    }
+
+    static void AssertDoubleBits<TActual, TExpected>(IReadOnlyList<TActual> actual,
+        IReadOnlyList<TExpected> expected, string context)
+    {
+        if (actual.Count != expected.Count)
+            throw new InvalidOperationException(
+                $"Double {context} length mismatch. Expected {expected.Count}, got {actual.Count}.");
+        for (var i = 0; i < expected.Count; i++)
+        {
+            var actualBits = GetDoubleBits(actual[i]);
+            var expectedBits = GetDoubleBits(expected[i]);
+            if (actualBits != expectedBits)
+                throw new InvalidOperationException($"Double {context} bit pattern mismatch at index {i}.");
+        }
+    }
+
+    static long? GetDoubleBits<T>(T value)
+        => value is null ? null
+            : value is double number ? BitConverter.DoubleToInt64Bits(number)
+            : throw new InvalidOperationException($"Expected a Double value, got {typeof(T)}.");
+
+    static double[] CreateDoubleDictionary(int count)
+        => CreateDoubleDictionary(count, includeSpecialValues: true);
+
+    static double[] CreateDoubleDictionary(int count, bool includeSpecialValues)
+    {
+        var dictionary = new double[count];
+        for (var i = 0; i < dictionary.Length; i++)
+            dictionary[i] = i + 0.25;
+        if (!includeSpecialValues)
+            return dictionary;
+        if (dictionary.Length > 0)
+            dictionary[0] = 0.0;
+        if (dictionary.Length > 1)
+            dictionary[1] = -0.0;
+        if (dictionary.Length > 2)
+            dictionary[2] = double.PositiveInfinity;
+        if (dictionary.Length > 3)
+            dictionary[3] = double.NegativeInfinity;
+        if (dictionary.Length > 4)
+            dictionary[4] = BitConverter.Int64BitsToDouble(unchecked((long)0x7ff8_0000_0000_0001UL));
+        if (dictionary.Length > 5)
+            dictionary[5] = BitConverter.Int64BitsToDouble(unchecked((long)0xfff8_0000_0000_0002UL));
+        return dictionary;
     }
 
     static T[] DecodeRequired<T>(T[] dictionary, ParquetPhysicalType physicalType, byte[] payload,

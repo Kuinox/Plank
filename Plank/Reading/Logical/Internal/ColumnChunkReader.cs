@@ -3053,6 +3053,12 @@ static class ColumnChunkReader
                     Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref dictionary),
                     Unsafe.As<Span<T>, Span<long>>(ref destination)[..vectorizedLength]);
             }
+            else if (typeof(T) == typeof(double))
+            {
+                DecodeDictionaryLiteralDoubleIndexes11Bit(payload,
+                    Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref dictionary),
+                    Unsafe.As<Span<T>, Span<double>>(ref destination)[..vectorizedLength]);
+            }
             else
             {
                 vectorizedLength = 0;
@@ -3144,6 +3150,37 @@ static class ColumnChunkReader
                 Avx2.GatherVector256(dictionaryPointer, indexes.GetLower(), sizeof(long))
                     .StoreUnsafe(ref target, (nuint)valueIndex);
                 Avx2.GatherVector256(dictionaryPointer, indexes.GetUpper(), sizeof(long))
+                    .StoreUnsafe(ref target, (nuint)(valueIndex + 4));
+            }
+        }
+    }
+
+    static unsafe void DecodeDictionaryLiteralDoubleIndexes11Bit(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<double> dictionary, Span<double> destination)
+    {
+        const ulong laneMask = 0x07ff_07ff_07ff_07ffUL;
+        ref var source = ref MemoryMarshal.GetReference(payload);
+        ref var target = ref MemoryMarshal.GetReference(destination);
+        var maximumIndex = Vector256.Create(dictionary.Length - 1);
+        fixed (double* dictionaryPointer = dictionary)
+        {
+            var byteIndex = 0;
+            for (var valueIndex = 0; valueIndex < destination.Length; valueIndex += 8, byteIndex += 11)
+            {
+                var lower = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex));
+                ulong upper = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref source, byteIndex + 5));
+                upper |= (ulong)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref source, byteIndex + 9)) << 32;
+                var indexes = Avx2.ConvertToVector256Int32(Vector128.Create(
+                    Bmi2.X64.ParallelBitDeposit(lower, laneMask),
+                    Bmi2.X64.ParallelBitDeposit(upper >> 4, laneMask)).AsUInt16());
+                if (Avx2.MoveMask(Avx2.CompareGreaterThan(indexes, maximumIndex).AsByte()) != 0)
+                {
+                    for (var lane = 0; lane < 8; lane++)
+                        ValidateDictionaryIndex(indexes.GetElement(lane), dictionary.Length);
+                }
+                Avx2.GatherVector256(dictionaryPointer, indexes.GetLower(), sizeof(double))
+                    .StoreUnsafe(ref target, (nuint)valueIndex);
+                Avx2.GatherVector256(dictionaryPointer, indexes.GetUpper(), sizeof(double))
                     .StoreUnsafe(ref target, (nuint)(valueIndex + 4));
             }
         }
