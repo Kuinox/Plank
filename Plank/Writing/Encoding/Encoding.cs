@@ -574,12 +574,19 @@ static class Encoding
         var useTargetPageBytes = TryGetOptionalPageSizer(column, dataEncoding, useDictionary, dictionaryBitWidth,
             strategy, out var targetPageBytes, out var presentValueBytes);
         var fixedRowsPerPage = 0;
-        if (!useDictionary && dataEncoding == EncodingKind.ByteStreamSplit &&
-            column.PhysicalType == ParquetPhysicalType.Int32 && strategy is DefaultStrategy &&
-            strategy.TryGetTargetDataPageSizeBytes(out var fixedTargetPageBytes))
+        if (!useDictionary && column.PhysicalType == ParquetPhysicalType.Int32
+            && dataEncoding == EncodingKind.ByteStreamSplit && strategy is DefaultStrategy
+            && strategy.TryGetTargetDataPageSizeBytes(out var fixedTargetPageBytes))
         {
             const int estimatedEncodedBytesPerRow = sizeof(int) + 1;
             fixedRowsPerPage = Math.Max(1, checked((int)fixedTargetPageBytes) / estimatedEncodedBytesPerRow);
+        }
+        else if (useTargetPageBytes && !useDictionary && column.PhysicalType == ParquetPhysicalType.Int32
+                 && dataEncoding == EncodingKind.Plain && typeof(T) == typeof(int) && typeof(TSource) == typeof(int)
+                 && denseValues.Length == values.Length)
+        {
+            const int encodedBytesPerRow = sizeof(int) + 1;
+            fixedRowsPerPage = Math.Max(1, targetPageBytes / encodedBytesPerRow);
         }
 
         var rowsWritten = 0;
