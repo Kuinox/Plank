@@ -94,7 +94,7 @@ static class DeltaBinaryPackedEncoding
         {
             var count = Math.Min(BlockSize, values.Length - index);
             var minDelta = PrepareInt64Block(ref input, index, count, ref deltaBuffer);
-            WriteDeltaBlock(ref deltaBuffer, minDelta, ref writer);
+            WriteInt64DeltaBlock(ref deltaBuffer, minDelta, ref writer);
             index += count;
         }
     }
@@ -303,6 +303,160 @@ static class DeltaBinaryPackedEncoding
         }
 
         writer.Advance(outputLength);
+    }
+
+    static void WriteInt64DeltaBlock(ref long deltas, long minDelta, ref BufferWriter writer)
+    {
+        var bitWidths = Avx512F.IsSupported
+            ? NormalizeDeltasVectorized(ref deltas, minDelta, out var packedByteCount)
+            : NormalizeDeltasScalar(ref deltas, minDelta, out packedByteCount);
+
+        var encodedMinDelta = ZigZag64(minDelta);
+        var outputLength = GetUnsignedVarIntByteCount(encodedMinDelta) + MiniBlockCount + packedByteCount;
+        var destination = writer.GetSpan(outputLength);
+        ref var output = ref MemoryMarshal.GetReference(destination);
+        var outputOffset = WriteUnsignedVarInt(encodedMinDelta, ref output);
+        var bitWidthBytes = BitConverter.IsLittleEndian ? bitWidths : BinaryPrimitives.ReverseEndianness(bitWidths);
+        Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, outputOffset), bitWidthBytes);
+        outputOffset += MiniBlockCount;
+
+        var containsWidthAboveFour = ((bitWidths | 0x80808080U) - 0x05050505U) & 0x80808080U;
+        if (containsWidthAboveFour == 0)
+            PackNarrowInt64Block(ref deltas, bitWidths, ref Unsafe.Add(ref output, outputOffset));
+        else
+            PackGenericDeltaBlock(ref deltas, bitWidths, ref Unsafe.Add(ref output, outputOffset));
+
+        writer.Advance(outputLength);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    static void PackGenericDeltaBlock(ref long deltas, uint bitWidths, ref byte output)
+    {
+        var outputOffset = 0;
+        for (var block = 0; block < MiniBlockCount; block++)
+        {
+            var width = (int)(byte)(bitWidths >> (block * 8));
+            if (width == 0)
+                continue;
+
+            var byteCount = width * 4;
+            PackUnsignedValues(
+                ref Unsafe.Add(ref deltas, block * MiniBlockSize),
+                width,
+                ref Unsafe.Add(ref output, outputOffset));
+            outputOffset += byteCount;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    static void PackNarrowInt64Block(ref long input, uint bitWidths, ref byte output)
+    {
+        var outputOffset = 0;
+        for (var block = 0; block < MiniBlockCount; block++)
+        {
+            ref var blockInput = ref Unsafe.Add(ref input, block * MiniBlockSize);
+            var width = (byte)(bitWidths >> (block * 8));
+            switch (width)
+            {
+                case 0:
+                    break;
+                case 1:
+                    PackInt64Width1(ref blockInput, ref Unsafe.Add(ref output, outputOffset));
+                    outputOffset += 4;
+                    break;
+                case 2:
+                    PackInt64Width2(ref blockInput, ref Unsafe.Add(ref output, outputOffset));
+                    outputOffset += 8;
+                    break;
+                case 3:
+                    PackInt64Width3(ref blockInput, ref Unsafe.Add(ref output, outputOffset));
+                    outputOffset += 12;
+                    break;
+                case 4:
+                    PackInt64Width4(ref blockInput, ref Unsafe.Add(ref output, outputOffset));
+                    outputOffset += 16;
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unexpected narrow bit width {width}.");
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void PackInt64Width1(ref long input, ref byte output)
+    {
+        for (var i = 0; i < MiniBlockSize; i += 8)
+        {
+            var packed = (ulong)Unsafe.Add(ref input, i) |
+                         (ulong)Unsafe.Add(ref input, i + 1) << 1 |
+                         (ulong)Unsafe.Add(ref input, i + 2) << 2 |
+                         (ulong)Unsafe.Add(ref input, i + 3) << 3 |
+                         (ulong)Unsafe.Add(ref input, i + 4) << 4 |
+                         (ulong)Unsafe.Add(ref input, i + 5) << 5 |
+                         (ulong)Unsafe.Add(ref input, i + 6) << 6 |
+                         (ulong)Unsafe.Add(ref input, i + 7) << 7;
+            Unsafe.Add(ref output, i >> 3) = (byte)packed;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void PackInt64Width2(ref long input, ref byte output)
+    {
+        for (var i = 0; i < MiniBlockSize; i += 8)
+        {
+            var packed = (ulong)Unsafe.Add(ref input, i) |
+                         (ulong)Unsafe.Add(ref input, i + 1) << 2 |
+                         (ulong)Unsafe.Add(ref input, i + 2) << 4 |
+                         (ulong)Unsafe.Add(ref input, i + 3) << 6 |
+                         (ulong)Unsafe.Add(ref input, i + 4) << 8 |
+                         (ulong)Unsafe.Add(ref input, i + 5) << 10 |
+                         (ulong)Unsafe.Add(ref input, i + 6) << 12 |
+                         (ulong)Unsafe.Add(ref input, i + 7) << 14;
+            var word = (ushort)packed;
+            if (!BitConverter.IsLittleEndian)
+                word = BinaryPrimitives.ReverseEndianness(word);
+            Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, (i >> 3) * sizeof(ushort)), word);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void PackInt64Width3(ref long input, ref byte output)
+    {
+        for (var i = 0; i < MiniBlockSize; i += 8)
+        {
+            var packed = (ulong)Unsafe.Add(ref input, i) |
+                         (ulong)Unsafe.Add(ref input, i + 1) << 3 |
+                         (ulong)Unsafe.Add(ref input, i + 2) << 6 |
+                         (ulong)Unsafe.Add(ref input, i + 3) << 9 |
+                         (ulong)Unsafe.Add(ref input, i + 4) << 12 |
+                         (ulong)Unsafe.Add(ref input, i + 5) << 15 |
+                         (ulong)Unsafe.Add(ref input, i + 6) << 18 |
+                         (ulong)Unsafe.Add(ref input, i + 7) << 21;
+            var outputIndex = (i >> 3) * 3;
+            Unsafe.Add(ref output, outputIndex) = (byte)packed;
+            Unsafe.Add(ref output, outputIndex + 1) = (byte)(packed >> 8);
+            Unsafe.Add(ref output, outputIndex + 2) = (byte)(packed >> 16);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void PackInt64Width4(ref long input, ref byte output)
+    {
+        for (var i = 0; i < MiniBlockSize; i += 8)
+        {
+            var packed = (ulong)Unsafe.Add(ref input, i) |
+                         (ulong)Unsafe.Add(ref input, i + 1) << 4 |
+                         (ulong)Unsafe.Add(ref input, i + 2) << 8 |
+                         (ulong)Unsafe.Add(ref input, i + 3) << 12 |
+                         (ulong)Unsafe.Add(ref input, i + 4) << 16 |
+                         (ulong)Unsafe.Add(ref input, i + 5) << 20 |
+                         (ulong)Unsafe.Add(ref input, i + 6) << 24 |
+                         (ulong)Unsafe.Add(ref input, i + 7) << 28;
+            var word = (uint)packed;
+            if (!BitConverter.IsLittleEndian)
+                word = BinaryPrimitives.ReverseEndianness(word);
+            Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, (i >> 3) * sizeof(uint)), word);
+        }
     }
 
     static uint NormalizeDeltasVectorized(ref long deltas, long minDelta, out int packedByteCount)
