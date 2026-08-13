@@ -87,6 +87,39 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
+    public void Packed13BitMiniBlocksMatchReferenceForEveryValueInEveryLane()
+    {
+        const int bitWidth = 13;
+        const long mask = (1L << bitWidth) - 1;
+        var values = new long[32];
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 64, 64);
+        try
+        {
+            // Across 16,384 cases, every lane sees every 13-bit value both with and without
+            // irrelevant high bits. This also verifies the direct packer's masking semantics.
+            for (var testCase = 0; testCase < 2 * (mask + 1); testCase++)
+            {
+                var highBits = testCase > mask ? ~mask : 0;
+                var seed = testCase & (int)mask;
+                for (var lane = 0; lane < values.Length; lane++)
+                    values[lane] = ((seed + lane * 257) & mask) | highBits;
+
+                writer.Reset();
+                DeltaBinaryPackedEncoding.WritePackedUnsignedValues(values, bitWidth, ref writer);
+
+                var expected = PackReference(values, bitWidth);
+                if (!writer.TryGetSingleWrittenSpan(out var actual) || !actual.SequenceEqual(expected))
+                    throw new InvalidOperationException(
+                        $"Packed 13-bit bytes do not match the reference for case {testCase}.");
+            }
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+    }
+
+    [Test]
     public void WriteInt32MatchesReferenceAcrossBlockBoundaries()
     {
         int[] counts = [0, 1, 127, 128, 129];
@@ -128,7 +161,9 @@ internal sealed class DeltaBinaryPackedDecoderTests
             [0, 1, 2, 4],
             [4, 3, 2, 1],
             [4, 5, 4, 4],
-            [5, 6, 7, 8]
+            [5, 6, 7, 8],
+            [13, 4, 13, 5],
+            [12, 13, 14, 13]
         ];
         foreach (var widths in widthPatterns)
         foreach (var count in counts)
@@ -196,6 +231,8 @@ internal sealed class DeltaBinaryPackedDecoderTests
             [4, 3, 2, 1],
             [4, 5, 4, 4],
             [5, 6, 7, 8],
+            [13, 4, 13, 5],
+            [12, 13, 14, 13],
             [64, 0, 1, 4]
         ];
         foreach (var widths in widthPatterns)
@@ -357,6 +394,8 @@ internal sealed class DeltaBinaryPackedDecoderTests
             [4, 3, 2, 1],
             [4, 5, 4, 4],
             [5, 6, 7, 8],
+            [13, 4, 13, 5],
+            [12, 13, 14, 13],
             [8, 9, 15, 16],
             [56, 57, 63, 64]
         ];
