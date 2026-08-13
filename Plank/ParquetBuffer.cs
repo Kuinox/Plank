@@ -128,6 +128,15 @@ public unsafe struct ParquetBuffer : IDisposable
         return MemoryMarshal.CreateSpan(ref Unsafe.AsRef<T>(buffer._data), count);
     }
 
+    internal readonly bool IsExclusivelyOwned
+    {
+        get
+        {
+            var header = _header;
+            return header is not null && Volatile.Read(ref header->ReferenceCount) == 1;
+        }
+    }
+
     void RetainHeader()
     {
         var count = Interlocked.Increment(ref _header->ReferenceCount);
