@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -11,6 +12,11 @@ namespace Plank.Reading.Logical.Internal;
 static class ColumnChunkReader
 {
     const int NonTemporalNullableScatterMinimumValues = 65_536;
+
+    static readonly Vector512<ulong> NullableInterleaveLowerIndexes =
+        Vector512.Create(0UL, 1, 8, 9, 2, 3, 10, 11);
+    static readonly Vector512<ulong> NullableInterleaveUpperIndexes =
+        Vector512.Create(4UL, 5, 12, 13, 6, 7, 14, 15);
 
     static readonly DateOnly UnixEpochDate = new(1970, 1, 1);
     static int s_activeLargeNullableNumericDecodes;
@@ -420,6 +426,34 @@ static class ColumnChunkReader
             return true;
         }
 
+        // Keep the existing serial and AVX2 paths unchanged. Once an AVX-512
+        // nullable numeric decode is already active, BSS doubles can be expanded
+        // directly into their final interleaved Nullable<double> representation.
+        if (encoding == EncodingKind.ByteStreamSplit &&
+            typeof(TValue) == typeof(double) &&
+            valueCount >= NonTemporalNullableScatterMinimumValues &&
+            Unsafe.SizeOf<TValue?>() == 2 * sizeof(ulong) &&
+            Avx512F.IsSupported &&
+            Volatile.Read(ref s_activeLargeNullableNumericDecodes) > 0)
+        {
+            var directParallelDecodeCount =
+                Interlocked.Increment(ref s_activeLargeNullableNumericDecodes);
+            try
+            {
+                if (directParallelDecodeCount > 1)
+                {
+                    var doubleDestination = Unsafe.As<Span<TValue?>, Span<double?>>(ref destination);
+                    DecodeNullableDoubleByteStreamSplitAvx512(payload, definitions, physicalCount,
+                        doubleDestination);
+                    return true;
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref s_activeLargeNullableNumericDecodes);
+            }
+        }
+
         var physicalByteLength = checked(physicalCount * Unsafe.SizeOf<TValue>());
         var physicalValues = MemoryMarshal.Cast<byte, TValue>(
             state.GetScratch(physicalByteLength, bufferPool));
@@ -471,6 +505,129 @@ static class ColumnChunkReader
         if (physicalIndex != 0)
             ThrowDefinitionLevelPhysicalCountMismatch(physicalCount, physicalIndex);
         return true;
+    }
+
+    internal static void DecodeNullableDoubleByteStreamSplitAvx512(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<byte> definitions, int physicalCount, Span<double?> destination)
+    {
+        if (!Avx512F.IsSupported)
+            throw new PlatformNotSupportedException("AVX-512F is required for direct nullable BSS decoding.");
+        if (destination.Length != definitions.Length)
+            throw new ArgumentException("Definitions and destination must have the same length.");
+        if (physicalCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(physicalCount));
+        if ((long)physicalCount * sizeof(ulong) > payload.Length)
+            throw new CorruptParquetException(
+                $"ByteStreamSplit payload ({payload.Length} bytes) is too short for " +
+                $"{physicalCount} 8-byte values.");
+
+        ref var lane0 = ref MemoryMarshal.GetReference(payload);
+        ref var lane1 = ref Unsafe.Add(ref lane0, physicalCount);
+        ref var lane2 = ref Unsafe.Add(ref lane1, physicalCount);
+        ref var lane3 = ref Unsafe.Add(ref lane2, physicalCount);
+        ref var lane4 = ref Unsafe.Add(ref lane3, physicalCount);
+        ref var lane5 = ref Unsafe.Add(ref lane4, physicalCount);
+        ref var lane6 = ref Unsafe.Add(ref lane5, physicalCount);
+        ref var lane7 = ref Unsafe.Add(ref lane6, physicalCount);
+        ref var destinationWords = ref Unsafe.As<byte, ulong>(
+            ref MemoryMarshal.GetReference(AsBytes(destination)));
+        var physicalIndex = physicalCount;
+        var blockEnd = definitions.Length;
+
+        // Handle the partial logical block first so every vector store below writes
+        // exactly eight complete nullable values.
+        var remainder = blockEnd & (Vector512<ulong>.Count - 1);
+        for (var i = blockEnd - 1; i >= blockEnd - remainder; i--)
+            WriteNullableDoubleByteStreamSplitScalar(definitions[i], ref lane0, ref lane1,
+                ref lane2, ref lane3, ref lane4, ref lane5, ref lane6, ref lane7,
+                destination, i, physicalCount, ref physicalIndex);
+        blockEnd -= remainder;
+
+        while (blockEnd >= Vector512<ulong>.Count)
+        {
+            var blockStart = blockEnd - Vector512<ulong>.Count;
+            var packedDefinitions = Unsafe.ReadUnaligned<ulong>(
+                                        ref Unsafe.Add(ref MemoryMarshal.GetReference(definitions), blockStart)) &
+                                    0x0101_0101_0101_0101UL;
+            var blockPhysicalCount = BitOperations.PopCount(packedDefinitions);
+            var blockPhysicalStart = physicalIndex - blockPhysicalCount;
+
+            // A short high suffix can leave fewer than eight readable bytes in the
+            // final BSS lane. Keep that one block scalar rather than reading beyond
+            // the payload; subsequent backwards blocks normally have ample room.
+            if (blockPhysicalStart < 0 || blockPhysicalStart + Vector512<ulong>.Count > physicalCount)
+            {
+                for (var i = blockEnd - 1; i >= blockStart; i--)
+                    WriteNullableDoubleByteStreamSplitScalar(definitions[i], ref lane0, ref lane1,
+                        ref lane2, ref lane3, ref lane4, ref lane5, ref lane6, ref lane7,
+                        destination, i, physicalCount, ref physicalIndex);
+                blockEnd = blockStart;
+                continue;
+            }
+
+            var offset = (nuint)(uint)blockPhysicalStart;
+            var decoded = Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane0, offset)).AsUInt64();
+            decoded |= Vector512.ShiftLeft(
+                Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane1, offset)).AsUInt64(), 8);
+            decoded |= Vector512.ShiftLeft(
+                Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane2, offset)).AsUInt64(), 16);
+            decoded |= Vector512.ShiftLeft(
+                Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane3, offset)).AsUInt64(), 24);
+            decoded |= Vector512.ShiftLeft(
+                Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane4, offset)).AsUInt64(), 32);
+            decoded |= Vector512.ShiftLeft(
+                Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane5, offset)).AsUInt64(), 40);
+            decoded |= Vector512.ShiftLeft(
+                Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane6, offset)).AsUInt64(), 48);
+            decoded |= Vector512.ShiftLeft(
+                Avx512F.ConvertToVector512Int64(LoadLowerUInt64(ref lane7, offset)).AsUInt64(), 56);
+
+            var definitionFlags = Avx512F.ConvertToVector512Int64(
+                Vector128.CreateScalarUnsafe(packedDefinitions).AsByte()).AsUInt64();
+            var expanded = Avx512F.Expand(Vector512<ulong>.Zero,
+                Vector512.ShiftLeft(definitionFlags, 63), decoded);
+            var interleavedLow = Avx512F.UnpackLow(definitionFlags, expanded);
+            var interleavedHigh = Avx512F.UnpackHigh(definitionFlags, expanded);
+            Avx512F.PermuteVar8x64x2(interleavedLow, NullableInterleaveLowerIndexes,
+                    interleavedHigh)
+                .StoreUnsafe(ref destinationWords, (nuint)(uint)(blockStart * 2));
+            Avx512F.PermuteVar8x64x2(interleavedLow, NullableInterleaveUpperIndexes,
+                    interleavedHigh)
+                .StoreUnsafe(ref destinationWords, (nuint)(uint)(blockStart * 2 + 8));
+
+            physicalIndex = blockPhysicalStart;
+            blockEnd = blockStart;
+        }
+
+        if (physicalIndex != 0)
+            ThrowDefinitionLevelPhysicalCountMismatch(physicalCount, physicalIndex);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void WriteNullableDoubleByteStreamSplitScalar(byte definition,
+        ref byte lane0, ref byte lane1, ref byte lane2, ref byte lane3,
+        ref byte lane4, ref byte lane5, ref byte lane6, ref byte lane7,
+        Span<double?> destination, int destinationIndex, int physicalCount, ref int physicalIndex)
+    {
+        if (definition == 0)
+        {
+            destination[destinationIndex] = null;
+            return;
+        }
+        if (physicalIndex == 0)
+            ThrowDefinitionLevelPhysicalCountMismatch(physicalCount, physicalIndex);
+
+        var index = --physicalIndex;
+        var bits =
+            (ulong)Unsafe.Add(ref lane0, index) |
+            ((ulong)Unsafe.Add(ref lane1, index) << 8) |
+            ((ulong)Unsafe.Add(ref lane2, index) << 16) |
+            ((ulong)Unsafe.Add(ref lane3, index) << 24) |
+            ((ulong)Unsafe.Add(ref lane4, index) << 32) |
+            ((ulong)Unsafe.Add(ref lane5, index) << 40) |
+            ((ulong)Unsafe.Add(ref lane6, index) << 48) |
+            ((ulong)Unsafe.Add(ref lane7, index) << 56);
+        destination[destinationIndex] = BitConverter.Int64BitsToDouble(unchecked((long)bits));
     }
 
     static unsafe bool TryScatterNullableNumericValuesNonTemporal<TValue>(ReadOnlySpan<byte> definitions,
