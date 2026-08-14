@@ -214,6 +214,17 @@ sealed class ReusableDictionaryState<T>
             return WyHashing.Hash(Unsafe.As<T, ReadOnlyMemory<byte>>(ref key).Span) & int.MaxValue;
         if (typeof(T) == typeof(byte[]))
             return WyHashing.Hash(Unsafe.As<T, byte[]>(ref key)) & int.MaxValue;
+        // DateTime ticks often advance by a fixed decimal interval. Mix both halves so millisecond-aligned
+        // timestamps do not cluster into a small fraction of the power-of-two hash table.
+        if (typeof(T) == typeof(DateTime))
+        {
+            var ticks = unchecked((ulong)Unsafe.As<T, DateTime>(ref key).Ticks);
+            var bits = (uint)(ticks ^ (ticks >> 32));
+            bits ^= bits >> 16;
+            bits *= 0x45d9f3bu;
+            bits ^= bits >> 16;
+            return (int)(bits & (uint)int.MaxValue);
+        }
         // float.GetHashCode() = raw IEEE 754 bits with no mixing.
         // For data like (i%10000)/3f, all values share the same lower 16 mantissa bits
         // (binary 1/3 = repeating 0.010101...) → catastrophic clustering into ~48/65536 slots.

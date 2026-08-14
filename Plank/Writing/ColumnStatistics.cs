@@ -1440,7 +1440,7 @@ internal readonly struct ColumnStatistics
     static ColumnStatistics FromUInt32(uint min, uint max, long nullCount)
         => new(ColumnStatisticsValueKind.UInt32, min, max, nullCount, true);
 
-    static ColumnStatistics FromInt64(long min, long max, long nullCount)
+    internal static ColumnStatistics FromInt64(long min, long max, long nullCount)
         => new(ColumnStatisticsValueKind.Int64, min, max, nullCount, true);
 
     static ColumnStatistics FromUInt64(ulong min, ulong max, long nullCount)

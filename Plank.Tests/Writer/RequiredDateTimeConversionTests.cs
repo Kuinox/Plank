@@ -74,6 +74,71 @@ internal sealed class RequiredDateTimeConversionTests
         AssertKindRejected(new DateTime(DateTime.UnixEpoch.Ticks, DateTimeKind.Local), adjustedToUtc: false);
     }
 
+    [Test]
+    public void RequiredForcedDictionaryAvoidsFullColumnTimestampScratchAndRoundTrips()
+    {
+        const int rowCount = 5_003;
+        var epoch = DateTime.SpecifyKind(DateTime.UnixEpoch, DateTimeKind.Unspecified);
+        var unique = new[]
+        {
+            epoch.AddMilliseconds(-2),
+            epoch,
+            epoch.AddMilliseconds(1),
+            epoch.AddMilliseconds(7),
+            epoch.AddMilliseconds(31)
+        };
+        var values = new DateTime[rowCount];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = unique[(i * 3) % unique.Length];
+
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("timestamp", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.RleDictionary]),
+                new LogicalType.Timestamp(TimeUnit.Micros, false), ForceDictionaryPageStrategy.Shared)
+        ]);
+        var pool = new ScratchGuardBufferPool
+        {
+            ForbiddenMinimumByteLength = checked((uint)values.Length * sizeof(long))
+        };
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            BufferPool = pool,
+            BufferChunkSizeBytes = 4_096,
+            InitialPageBufferBytes = 4_096,
+            InitialColumnBufferBytes = 4_096,
+            Compression = CompressionKind.None,
+            DataPageVersion = ParquetDataPageVersion.V1,
+            WritePageIndexes = false
+        });
+        var serialized = writer.CreateSerializedColumn<DateTime>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        pool.ForbiddenMinimumByteLength = null;
+
+        var expectedMin = TimestampConversion.FromDateTimeTicks(unique.Min().Ticks, TimeUnit.Micros);
+        var expectedMax = TimestampConversion.FromDateTimeTicks(unique.Max().Ticks, TimeUnit.Micros);
+        if (serialized.Statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Int64
+            || serialized.Statistics.MinBits != expectedMin || serialized.Statistics.MaxBits != expectedMax)
+            throw new InvalidOperationException("Direct timestamp dictionary statistics were not preserved.");
+
+        var rowGroup = writer.StartRowGroup();
+        rowGroup.Write(serialized);
+        writer.CloseFile();
+
+        using var reader = schema.CreateReader(new MemoryReadSource(stream.ToArray()));
+        AssertSequence(values, Read<DateTime>(reader, 0), ParquetDataPageVersion.V1,
+            EncodingKind.RleDictionary, TimeUnit.Micros, adjustedToUtc: false, "required-direct");
+    }
+
+    [Test]
+    public void RequiredForcedDictionaryDirectPathValidatesKindAndNanosecondRange()
+    {
+        AssertDirectDictionaryRejected<InvalidOperationException>(
+            new DateTime(DateTime.UnixEpoch.Ticks, DateTimeKind.Utc), TimeUnit.Micros, adjustedToUtc: false);
+        AssertDirectDictionaryRejected<OverflowException>(
+            DateTime.UnixEpoch.AddTicks(long.MaxValue / 100 + 1), TimeUnit.Nanos, adjustedToUtc: true);
+    }
+
     static ParquetSchema CreateSchema(TimeUnit unit, bool adjustedToUtc, EncodingKind encoding)
     {
         var options = new ColumnOptions(encodings: ImmutableArray.Create(encoding));
@@ -162,6 +227,33 @@ internal sealed class RequiredDateTimeConversionTests
         var writer = schema.CreateWriter(stream);
         var serialized = writer.CreateSerializedColumn<DateTime>(schema.LeafColumns[0]);
         Assert.Throws<InvalidOperationException>(() => serialized.Serialize([value]));
+    }
+
+    static void AssertDirectDictionaryRejected<TException>(DateTime value, TimeUnit unit, bool adjustedToUtc)
+        where TException : Exception
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("timestamp", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.RleDictionary]),
+                new LogicalType.Timestamp(unit, adjustedToUtc), ForceDictionaryPageStrategy.Shared)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions { WritePageIndexes = false });
+        var serialized = writer.CreateSerializedColumn<DateTime>(schema.LeafColumns[0]);
+        Assert.Throws<TException>(() => serialized.Serialize([value]));
+    }
+
+    sealed class ScratchGuardBufferPool : IParquetBufferPool
+    {
+        internal uint? ForbiddenMinimumByteLength;
+
+        public ParquetBuffer Rent(uint minimumByteLength)
+        {
+            if (minimumByteLength == ForbiddenMinimumByteLength)
+                throw new InvalidOperationException(
+                    $"Timestamp serialization rented forbidden full-column scratch ({minimumByteLength} bytes).");
+            return DefaultParquetBufferPool.Shared.Rent(minimumByteLength);
+        }
     }
 
     sealed class FixedRowsPageStrategy(uint rowsPerPage, DictionaryMode dictionaryMode) : IPageStrategy
