@@ -7,8 +7,18 @@ using Plank.Writing.PageStrategy;
 
 namespace Plank.Writing.Encoding;
 
+/// <summary>Writes the present values of one page straight from the rows, skipping nulls.</summary>
+delegate void OptionalByteArrayPageWriter<TRow>(EncodingKind encoding, Column column, ReadOnlySpan<TRow> pageRows,
+    BufferWriterFactory bufferWriters, ref BufferWriter writer);
+
 static class Encoding
 {
+    static readonly OptionalByteArrayPageWriter<byte[]> WriteOptionalByteArrayPage =
+        ValueEncodingDispatcher.WriteOptionalByteArrayValues;
+
+    static readonly OptionalByteArrayPageWriter<ReadOnlyMemory<byte>?> WriteOptionalMemoryPage =
+        ValueEncodingDispatcher.WriteOptionalMemoryValues;
+
     const int DictionaryDropCheckPeriodRows = 2048;
     const int MaximumInitialForcedDictionaryCapacity = 2048;
 
@@ -370,15 +380,16 @@ static class Encoding
 
             var memoryValues = Unsafe.As<ReadOnlySpan<T?>, ReadOnlySpan<ReadOnlyMemory<byte>?>>(ref values);
             var memoryDictionary = (ReusableDictionaryState<ReadOnlyMemory<byte>>)(object)dictionaryState;
-            EncodeOptionalFlatMemory(bufferWriters, column, memoryValues, strategyContext, pages, dataPageVersion,
-                memoryDictionary);
+            EncodeOptionalFlatByteArrays<ReadOnlyMemory<byte>?, ReadOnlyMemory<byte>,
+                NullableValueRow<ReadOnlyMemory<byte>>>(bufferWriters, column, memoryValues, strategyContext, pages,
+                dataPageVersion, memoryDictionary, ReadOnlyMemoryByteComparer.Instance, WriteOptionalMemoryPage);
             return;
         }
 
-        var presentCount = CountPresentValues(values);
+        var presentCount = CountPresentValues<T?, T, NullableValueRow<T>>(values);
         var rentedValues = bufferWriters.RentScratch<T>(checked((uint)presentCount));
         var densePresentValues = ParquetBuffer.AsSpan<T>(rentedValues, presentCount);
-        CopyPresentValues(values, densePresentValues);
+        CopyPresentValues<T?, T, NullableValueRow<T>>(values, densePresentValues);
         try
         {
             EncodeOptionalFlatValues(bufferWriters, column, values, strategyContext, pages, dataPageVersion,
@@ -439,8 +450,9 @@ static class Encoding
 
         var byteArrays = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
         var byteArrayDictionary = (ReusableDictionaryState<byte[]>)(object)dictionaryState;
-        EncodeOptionalFlatByteArrays(bufferWriters, column, byteArrays, strategyContext, pages, dataPageVersion,
-            byteArrayDictionary);
+        EncodeOptionalFlatByteArrays<byte[], byte[], ReferenceRow<byte[]>>(bufferWriters, column, byteArrays,
+            strategyContext, pages, dataPageVersion, byteArrayDictionary, ByteArrayComparer.Instance,
+            WriteOptionalByteArrayPage);
     }
 
     static bool TryWriteDictionaryPage<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
@@ -654,7 +666,8 @@ static class Encoding
                         var rowBytes = 0;
                         if (useTargetPageBytes)
                         {
-                            rowBytes = GetOptionalRowBytes(column, values[rowsWritten], presentValueBytes);
+                            rowBytes = GetOptionalRowBytes<TSource?, TSource, NullableValueRow<TSource>>(
+                                column, in values[rowsWritten], presentValueBytes);
                             if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
                                 break;
                         }
@@ -676,8 +689,9 @@ static class Encoding
                 var pageRows = values.Slice(pageStart, pageRowCount);
                 var nullCount = 0;
                 var presentRows = 0;
-                var definitionLength = WriteOptionalDefinitionLevels(pageRows, ref nullCount, ref presentRows,
-                    dataPageVersion == ParquetDataPageVersion.V1, ref page.Content);
+                var definitionLength = WriteOptionalDefinitionLevels<TSource?, TSource, NullableValueRow<TSource>>(
+                    pageRows, ref nullCount, ref presentRows, dataPageVersion == ParquetDataPageVersion.V1,
+                    ref page.Content);
                 var pageDenseValues = denseValues.Slice(denseOffset, presentRows);
                 if (useDictionary)
                 {
@@ -700,157 +714,17 @@ static class Encoding
         }
     }
 
-    static bool TryWriteOptionalByteArrayDictionaryPage(BufferWriterFactory bufferWriters, Column column,
-        ReadOnlySpan<byte[]> values, int presentCount, PageStrategyContext strategyContext, PageList pages,
-        ReusableDictionaryState<byte[]> dictionaryState, out int dictionaryValueCount,
-        out ParquetBuffer dictionaryIndexesBuffer)
-    {
-        dictionaryValueCount = 0;
-        dictionaryIndexesBuffer = default;
-        if (presentCount == 0)
-            return false;
-
-        var strategy = strategyContext.Strategy;
-        var dictionaryMode = strategy.GetDictionaryMode();
-        if (dictionaryMode == DictionaryMode.Disabled)
-            return false;
-
-        var dictionaryPageIndex = AddDictionaryPage(bufferWriters, pages);
-        ref var dictionaryPage = ref pages[dictionaryPageIndex];
-        var indexByteLength = checked(presentCount * sizeof(int));
-        var rentedIndexesBuffer = bufferWriters.RentScratch(checked((uint)Math.Max(indexByteLength, sizeof(int))));
-        try
-        {
-            var indexes = MemoryMarshal.Cast<byte, int>(rentedIndexesBuffer.Span[..indexByteLength]);
-            var initialUniqueCapacity = dictionaryMode == DictionaryMode.Forced
-                ? GetInitialForcedDictionaryCapacity(presentCount)
-                : Math.Max(256, presentCount / 2);
-            dictionaryState.Reset(initialUniqueCapacity, useMap: true, ByteArrayComparer.Instance);
-            Volatile.Write(ref strategyContext.DictionarySortOrder, (int)DictionarySortOrder.Unsorted);
-
-            var denseIndex = 0;
-            var nextDropCheckRow = dictionaryMode == DictionaryMode.Maybe
-                ? Math.Min(DictionaryDropCheckPeriodRows, presentCount)
-                : 0;
-            for (var i = 0; i < values.Length; i++)
-            {
-                var value = values[i];
-                if (value is null)
-                    continue;
-
-                indexes[denseIndex++] = dictionaryState.GetOrAddIndex(value);
-                if (dictionaryMode != DictionaryMode.Maybe)
-                    continue;
-                if (denseIndex != nextDropCheckRow && denseIndex != presentCount)
-                    continue;
-                if (strategy.ShouldDropDictionary(checked((uint)dictionaryState.Count),
-                        checked((uint)presentCount), checked((uint)denseIndex)))
-                {
-                    dictionaryPage.Header.Reset();
-                    dictionaryPage.Content.Reset();
-                    pages.RemoveLast();
-                    return false;
-                }
-
-                nextDropCheckRow = Math.Min(presentCount, denseIndex + DictionaryDropCheckPeriodRows);
-            }
-
-            PlainEncoding.WriteValues(column, dictionaryState.AsSpan(), ref dictionaryPage.Content);
-            dictionaryPage.SetDictionaryPageMetadata(checked((uint)dictionaryState.Count));
-            dictionaryValueCount = dictionaryState.Count;
-            dictionaryIndexesBuffer = rentedIndexesBuffer;
-            rentedIndexesBuffer = default;
-            return true;
-        }
-        finally
-        {
-            rentedIndexesBuffer.Dispose();
-        }
-    }
-
-    static void EncodeOptionalFlatByteArrays(BufferWriterFactory bufferWriters, Column column,
-        ReadOnlySpan<byte[]> values, PageStrategyContext strategyContext, PageList pages,
-        ParquetDataPageVersion dataPageVersion,
-        ReusableDictionaryState<byte[]> dictionaryState)
-    {
-        var strategy = strategyContext.Strategy;
-        var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
-        var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
-        var presentCount = CountPresentValues(values);
-        var useDictionary = TryWriteOptionalByteArrayDictionaryPage(bufferWriters, column, values, presentCount,
-            strategyContext, pages, dictionaryState, out var dictionaryValueCount, out var dictionaryIndexesBuffer);
-        var dictionaryIndexes = useDictionary && !dictionaryIndexesBuffer.IsEmpty
-            ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBuffer.Span[..checked(presentCount * sizeof(int))])
-            : default;
-        var dictionaryBitWidth = useDictionary
-            ? EncodingPrimitives.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
-            : 0;
-        var useTargetPageBytes = TryGetOptionalPageSizer(column, dataEncoding, useDictionary, dictionaryBitWidth,
-            strategy, out var targetPageBytes, out var presentValueBytes);
-
-        var rowsWritten = 0;
-        var denseOffset = 0;
-        try
-        {
-            while (rowsWritten < values.Length)
-            {
-                var pageStart = rowsWritten;
-                var pageRowCount = 0;
-                var pageBytes = 0;
-                while (rowsWritten < values.Length)
-                {
-                    var rowBytes = 0;
-                    if (useTargetPageBytes)
-                    {
-                        rowBytes = GetOptionalRowBytes(column, values[rowsWritten], presentValueBytes);
-                        if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
-                            break;
-                    }
-
-                    rowsWritten++;
-                    pageRowCount++;
-                    if (useTargetPageBytes)
-                        pageBytes = checked(pageBytes + rowBytes);
-                    if (rowsWritten == values.Length)
-                        break;
-                    if (!useTargetPageBytes && strategy.ShouldStartNewDataPage(checked((uint)values.Length),
-                            checked((uint)rowsWritten), checked((uint)pageRowCount)))
-                        break;
-                }
-
-                var pageIndex = AddNewDataPage(bufferWriters, pages);
-                ref var page = ref pages[pageIndex];
-                var pageRows = values.Slice(pageStart, pageRowCount);
-                var nullCount = 0;
-                var presentRows = 0;
-                var definitionLength = WriteOptionalDefinitionLevels(pageRows, ref nullCount, ref presentRows,
-                    dataPageVersion == ParquetDataPageVersion.V1, ref page.Content);
-                if (useDictionary)
-                {
-                    if (dictionaryIndexes.IsEmpty)
-                        throw new InvalidOperationException("Dictionary index buffer is missing for dictionary-encoded page.");
-                    DictionaryIndexEncodingDispatcher.WriteIndexes(dictionaryEncoding,
-                        dictionaryIndexes.Slice(denseOffset, presentRows), dictionaryBitWidth, ref page.Content);
-                }
-                else if (presentRows > 0)
-                    ValueEncodingDispatcher.WriteOptionalByteArrayValues(dataEncoding, column, pageRows,
-                        bufferWriters, ref page.Content);
-
-                WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
-                    useDictionary ? dictionaryEncoding : dataEncoding);
-                denseOffset += presentRows;
-            }
-        }
-        finally
-        {
-            dictionaryIndexesBuffer.Dispose();
-        }
-    }
-
-    static bool TryWriteOptionalMemoryDictionaryPage(BufferWriterFactory bufferWriters, Column column,
-        ReadOnlySpan<ReadOnlyMemory<byte>?> values, int presentCount, PageStrategyContext strategyContext,
-        PageList pages, ReusableDictionaryState<ReadOnlyMemory<byte>> dictionaryState,
+    /// <summary>
+    /// Dictionary page for an optional byte-array column. Byte-array keys always take the hash-map
+    /// path, so unlike <see cref="TryWriteDictionaryPage"/> there is no sorted-run fast path here and
+    /// the column's sort order is reported as unsorted.
+    /// </summary>
+    static bool TryWriteOptionalByteArrayDictionaryPage<TRow, TValue, TProbe>(BufferWriterFactory bufferWriters,
+        Column column, ReadOnlySpan<TRow> values, int presentCount, PageStrategyContext strategyContext,
+        PageList pages, ReusableDictionaryState<TValue> dictionaryState, IEqualityComparer<TValue> comparer,
         out int dictionaryValueCount, out ParquetBuffer dictionaryIndexesBuffer)
+        where TValue : notnull
+        where TProbe : IOptionalRow<TRow, TValue>
     {
         dictionaryValueCount = 0;
         dictionaryIndexesBuffer = default;
@@ -865,14 +739,14 @@ static class Encoding
         var dictionaryPageIndex = AddDictionaryPage(bufferWriters, pages);
         ref var dictionaryPage = ref pages[dictionaryPageIndex];
         var indexByteLength = checked(presentCount * sizeof(int));
-        var rentedIndexesBuffer = bufferWriters.RentScratch(checked((uint)Math.Max(indexByteLength, sizeof(int))));
+        var rentedIndexesBuffer = bufferWriters.RentScratch(checked((uint)indexByteLength));
         try
         {
             var indexes = MemoryMarshal.Cast<byte, int>(rentedIndexesBuffer.Span[..indexByteLength]);
             var initialUniqueCapacity = dictionaryMode == DictionaryMode.Forced
                 ? GetInitialForcedDictionaryCapacity(presentCount)
                 : Math.Max(256, presentCount / 2);
-            dictionaryState.Reset(initialUniqueCapacity, useMap: true, ReadOnlyMemoryByteComparer.Instance);
+            dictionaryState.Reset(initialUniqueCapacity, useMap: true, comparer);
             Volatile.Write(ref strategyContext.DictionarySortOrder, (int)DictionarySortOrder.Unsorted);
 
             var denseIndex = 0;
@@ -881,11 +755,10 @@ static class Encoding
                 : 0;
             for (var i = 0; i < values.Length; i++)
             {
-                var nullableValue = values[i];
-                if (!nullableValue.HasValue)
+                if (!TProbe.IsPresent(in values[i]))
                     continue;
 
-                indexes[denseIndex++] = dictionaryState.GetOrAddIndex(nullableValue.Value);
+                indexes[denseIndex++] = dictionaryState.GetOrAddIndex(TProbe.GetValue(in values[i]));
                 if (dictionaryMode != DictionaryMode.Maybe)
                     continue;
                 if (denseIndex != nextDropCheckRow && denseIndex != presentCount)
@@ -915,17 +788,25 @@ static class Encoding
         }
     }
 
-    static void EncodeOptionalFlatMemory(BufferWriterFactory bufferWriters, Column column,
-        ReadOnlySpan<ReadOnlyMemory<byte>?> values, PageStrategyContext strategyContext, PageList pages,
-        ParquetDataPageVersion dataPageVersion,
-        ReusableDictionaryState<ReadOnlyMemory<byte>> dictionaryState)
+    /// <summary>
+    /// Page loop for an optional byte-array column. The values are written straight from the rows
+    /// rather than from a compacted array, so <paramref name="writeValues"/> receives the page rows
+    /// and skips nulls itself.
+    /// </summary>
+    static void EncodeOptionalFlatByteArrays<TRow, TValue, TProbe>(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<TRow> values, PageStrategyContext strategyContext, PageList pages,
+        ParquetDataPageVersion dataPageVersion, ReusableDictionaryState<TValue> dictionaryState,
+        IEqualityComparer<TValue> comparer, OptionalByteArrayPageWriter<TRow> writeValues)
+        where TValue : notnull
+        where TProbe : IOptionalRow<TRow, TValue>
     {
         var strategy = strategyContext.Strategy;
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
-        var presentCount = CountPresentValues(values);
-        var useDictionary = TryWriteOptionalMemoryDictionaryPage(bufferWriters, column, values, presentCount,
-            strategyContext, pages, dictionaryState, out var dictionaryValueCount, out var dictionaryIndexesBuffer);
+        var presentCount = CountPresentValues<TRow, TValue, TProbe>(values);
+        var useDictionary = TryWriteOptionalByteArrayDictionaryPage<TRow, TValue, TProbe>(bufferWriters, column,
+            values, presentCount, strategyContext, pages, dictionaryState, comparer, out var dictionaryValueCount,
+            out var dictionaryIndexesBuffer);
         var dictionaryIndexes = useDictionary && !dictionaryIndexesBuffer.IsEmpty
             ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBuffer.Span[..checked(presentCount * sizeof(int))])
             : default;
@@ -949,7 +830,8 @@ static class Encoding
                     var rowBytes = 0;
                     if (useTargetPageBytes)
                     {
-                        rowBytes = GetOptionalRowBytes(column, values[rowsWritten], presentValueBytes);
+                        rowBytes = GetOptionalRowBytes<TRow, TValue, TProbe>(column, in values[rowsWritten],
+                            presentValueBytes);
                         if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
                             break;
                     }
@@ -970,8 +852,8 @@ static class Encoding
                 var pageRows = values.Slice(pageStart, pageRowCount);
                 var nullCount = 0;
                 var presentRows = 0;
-                var definitionLength = WriteOptionalDefinitionLevels(pageRows, ref nullCount, ref presentRows,
-                    dataPageVersion == ParquetDataPageVersion.V1, ref page.Content);
+                var definitionLength = WriteOptionalDefinitionLevels<TRow, TValue, TProbe>(pageRows, ref nullCount,
+                    ref presentRows, dataPageVersion == ParquetDataPageVersion.V1, ref page.Content);
                 if (useDictionary)
                 {
                     if (dictionaryIndexes.IsEmpty)
@@ -980,8 +862,7 @@ static class Encoding
                         dictionaryIndexes.Slice(denseOffset, presentRows), dictionaryBitWidth, ref page.Content);
                 }
                 else if (presentRows > 0)
-                    ValueEncodingDispatcher.WriteOptionalMemoryValues(dataEncoding, column, pageRows,
-                        bufferWriters, ref page.Content);
+                    writeValues(dataEncoding, column, pageRows, bufferWriters, ref page.Content);
 
                 WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
                     useDictionary ? dictionaryEncoding : dataEncoding);
@@ -1041,21 +922,20 @@ static class Encoding
         return rowBytes > 0;
     }
 
-    static int GetOptionalRowBytes<T>(Column column, T? value, int presentValueBytes)
-        where T : struct
-        => 1 + (value is { } presentValue ? GetOptionalPresentValueBytes(column, presentValue, presentValueBytes) : 0);
-
-    static int GetOptionalRowBytes<T>(Column column, T value, int presentValueBytes)
-        where T : class
-        => 1 + (value is null ? 0 : GetOptionalPresentValueBytes(column, value, presentValueBytes));
+    static int GetOptionalRowBytes<TRow, TValue, TProbe>(Column column, in TRow row, int presentValueBytes)
+        where TValue : notnull
+        where TProbe : IOptionalRow<TRow, TValue>
+        => 1 + (TProbe.IsPresent(in row)
+            ? GetOptionalPresentValueBytes(column, TProbe.GetValue(in row), presentValueBytes)
+            : 0);
 
     static int GetOptionalPresentValueBytes<T>(Column column, T value, int presentValueBytes)
         where T : notnull
         => presentValueBytes > 0 ? presentValueBytes : GetVariablePlainValueBytes(column, value);
 
-    static int WriteOptionalDefinitionLevels<T>(ReadOnlySpan<T?> values, ref int nullCount, ref int presentRows,
-        bool writeLengthPrefix, ref BufferWriter writer)
-        where T : struct
+    static int WriteOptionalDefinitionLevels<TRow, TValue, TProbe>(ReadOnlySpan<TRow> values, ref int nullCount,
+        ref int presentRows, bool writeLengthPrefix, ref BufferWriter writer)
+        where TProbe : IOptionalRow<TRow, TValue>
     {
         var lengthPrefix = ReserveLevelLengthPrefix(writeLengthPrefix, ref writer);
         var start = writer.WrittenLength;
@@ -1064,7 +944,7 @@ static class Encoding
         var currentRunLength = 0;
         for (var i = 0; i < values.Length; i++)
         {
-            var level = values[i].HasValue ? 1 : 0;
+            var level = TProbe.IsPresent(in values[i]) ? 1 : 0;
             if (level == 0)
                 nullCount++;
             else
@@ -1093,82 +973,23 @@ static class Encoding
         return CompleteLevelEncoding(start, lengthPrefix, ref writer);
     }
 
-    static int WriteOptionalDefinitionLevels<T>(ReadOnlySpan<T> values, ref int nullCount, ref int presentRows,
-        bool writeLengthPrefix, ref BufferWriter writer)
-        where T : class
-    {
-        var lengthPrefix = ReserveLevelLengthPrefix(writeLengthPrefix, ref writer);
-        var start = writer.WrittenLength;
-        var definitionBitWidth = 1;
-        var currentLevel = -1;
-        var currentRunLength = 0;
-        for (var i = 0; i < values.Length; i++)
-        {
-            var level = values[i] is null ? 0 : 1;
-            if (level == 0)
-                nullCount++;
-            else
-                presentRows++;
-
-            if (currentRunLength == 0)
-            {
-                currentLevel = level;
-                currentRunLength = 1;
-                continue;
-            }
-
-            if (currentLevel == level)
-            {
-                currentRunLength++;
-                continue;
-            }
-
-            EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
-            currentLevel = level;
-            currentRunLength = 1;
-        }
-
-        if (currentRunLength > 0)
-            EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
-        return CompleteLevelEncoding(start, lengthPrefix, ref writer);
-    }
-
-    static int CountPresentValues<T>(ReadOnlySpan<T?> values)
-        where T : struct
+    static int CountPresentValues<TRow, TValue, TProbe>(ReadOnlySpan<TRow> values)
+        where TProbe : IOptionalRow<TRow, TValue>
     {
         var count = 0;
         for (var i = 0; i < values.Length; i++)
-            if (values[i].HasValue)
+            if (TProbe.IsPresent(in values[i]))
                 count++;
         return count;
     }
 
-    static int CountPresentValues<T>(ReadOnlySpan<T> values)
-        where T : class
-    {
-        var count = 0;
-        for (var i = 0; i < values.Length; i++)
-            if (values[i] is not null)
-                count++;
-        return count;
-    }
-
-    static void CopyPresentValues<T>(ReadOnlySpan<T?> values, Span<T> destination)
-        where T : struct
+    static void CopyPresentValues<TRow, TValue, TProbe>(ReadOnlySpan<TRow> values, Span<TValue> destination)
+        where TProbe : IOptionalRow<TRow, TValue>
     {
         var index = 0;
         for (var i = 0; i < values.Length; i++)
-            if (values[i].HasValue)
-                destination[index++] = values[i]!.Value;
-    }
-
-    static void CopyPresentValues<T>(ReadOnlySpan<T> values, Span<T> destination)
-        where T : class
-    {
-        var index = 0;
-        for (var i = 0; i < values.Length; i++)
-            if (values[i] is not null)
-                destination[index++] = values[i];
+            if (TProbe.IsPresent(in values[i]))
+                destination[index++] = TProbe.GetValue(in values[i]);
     }
 
     static void WriteBooleanDictionaryPage(Column column, ReadOnlySpan<bool> values, ref Page dictionaryPage,
