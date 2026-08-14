@@ -27,6 +27,9 @@ static class EncodingRegressionCatalog
 
     internal static IReadOnlyList<IEncodingRegressionColumn> Create(int rowCount)
     {
+        // One input array per (data type, repetition), shared by every encoding of that shape: it keeps
+        // the comparison fair across encodings and keeps a 200k-row run inside a sane memory budget.
+        var payloads = new Dictionary<(string DataType, string Repetition), Payload>();
         var columns = new List<IEncodingRegressionColumn>();
         foreach (var dataType in DataTypes)
             foreach (var encoding in Encodings)
@@ -34,10 +37,167 @@ static class EncodingRegressionCatalog
                 {
                     if (!IsSupported(dataType, encoding, repetition))
                         continue;
-                    columns.Add(Create(new EncodingRegressionCase(dataType, encoding, repetition), rowCount));
+
+                    var key = (dataType, repetition);
+                    if (!payloads.TryGetValue(key, out var payload))
+                    {
+                        payload = BuildPayload(dataType, repetition, rowCount);
+                        payloads.Add(key, payload);
+                    }
+
+                    var regressionCase = new EncodingRegressionCase(dataType, encoding, repetition);
+                    columns.Add(payload.CreateColumn(regressionCase, CreateSchema(regressionCase)));
                 }
 
         return columns;
+    }
+
+    /// <summary>Input values plus the factory that pairs them with a schema.</summary>
+    sealed record Payload(Func<EncodingRegressionCase, ParquetSchema, IEncodingRegressionColumn> CreateColumn);
+
+    static Payload BuildPayload(string dataType, string repetition, int rowCount)
+        => dataType switch
+        {
+            "bool" => BuildNumericPayload<bool>(repetition, rowCount, static i => (i % 3) != 0),
+            "int32" => BuildNumericPayload<int>(repetition, rowCount, static i => i % 100_000),
+            "int64" => BuildNumericPayload<long>(repetition, rowCount, static i => i * 37L),
+            "float" => BuildNumericPayload<float>(repetition, rowCount, static i => (i % 10_000) / 3f),
+            "double" => BuildNumericPayload<double>(repetition, rowCount, static i => (i % 10_000) / 7d),
+            "guid" => BuildNumericPayload<Guid>(repetition, rowCount, CreateGuid),
+            "binary" => BuildBinaryPayload(repetition, rowCount),
+            "memory" => BuildMemoryPayload(repetition, rowCount),
+            _ => throw new InvalidOperationException($"Unknown data type '{dataType}'.")
+        };
+
+    static Payload BuildNumericPayload<TValue>(string repetition, int rowCount, Func<int, TValue> factory)
+        where TValue : struct
+    {
+        switch (repetition)
+        {
+            case "required":
+            {
+                var values = new TValue[rowCount];
+                for (var i = 0; i < rowCount; i++)
+                    values[i] = factory(i);
+                return new Payload((regressionCase, schema)
+                    => new EncodingRegressionColumn<TValue>(regressionCase, schema, values, rowCount));
+            }
+            case "optional":
+            {
+                var values = new TValue?[rowCount];
+                var present = 0L;
+                for (var i = 0; i < rowCount; i++)
+                {
+                    if (i % NullEvery == 0)
+                        continue;
+                    values[i] = factory(i);
+                    present++;
+                }
+
+                return new Payload((regressionCase, schema)
+                    => new EncodingRegressionColumn<TValue?>(regressionCase, schema, values, present));
+            }
+            case "repeated":
+            {
+                var rows = new TValue[rowCount][];
+                var present = 0L;
+                for (var i = 0; i < rowCount; i++)
+                {
+                    var length = i % (MaxListLength + 1);
+                    var row = new TValue[length];
+                    for (var j = 0; j < length; j++)
+                        row[j] = factory(i + j);
+                    rows[i] = row;
+                    present += length;
+                }
+
+                return new Payload((regressionCase, schema)
+                    => new EncodingRegressionColumn<TValue[]>(regressionCase, schema, rows, present));
+            }
+            default:
+                throw new InvalidOperationException($"Unknown repetition '{repetition}'.");
+        }
+    }
+
+    static Payload BuildBinaryPayload(string repetition, int rowCount)
+    {
+        switch (repetition)
+        {
+            case "required":
+            {
+                var values = new byte[rowCount][];
+                for (var i = 0; i < rowCount; i++)
+                    values[i] = CreateBytes(i);
+                return new Payload((regressionCase, schema)
+                    => new EncodingRegressionColumn<byte[]>(regressionCase, schema, values, rowCount));
+            }
+            case "optional":
+            {
+                var values = new byte[rowCount][];
+                var present = 0L;
+                for (var i = 0; i < rowCount; i++)
+                {
+                    if (i % NullEvery == 0)
+                        continue;
+                    values[i] = CreateBytes(i);
+                    present++;
+                }
+
+                return new Payload((regressionCase, schema)
+                    => new EncodingRegressionColumn<byte[]>(regressionCase, schema, values, present));
+            }
+            case "repeated":
+            {
+                var rows = new byte[rowCount][][];
+                var present = 0L;
+                for (var i = 0; i < rowCount; i++)
+                {
+                    var length = i % (MaxListLength + 1);
+                    var row = new byte[length][];
+                    for (var j = 0; j < length; j++)
+                        row[j] = CreateBytes(i + j);
+                    rows[i] = row;
+                    present += length;
+                }
+
+                return new Payload((regressionCase, schema)
+                    => new EncodingRegressionColumn<byte[][]>(regressionCase, schema, rows, present));
+            }
+            default:
+                throw new InvalidOperationException($"Unknown repetition '{repetition}'.");
+        }
+    }
+
+    static Payload BuildMemoryPayload(string repetition, int rowCount)
+    {
+        switch (repetition)
+        {
+            case "required":
+            {
+                var values = new ReadOnlyMemory<byte>[rowCount];
+                for (var i = 0; i < rowCount; i++)
+                    values[i] = CreateBytes(i);
+                return new Payload((regressionCase, schema)
+                    => new EncodingRegressionColumn<ReadOnlyMemory<byte>>(regressionCase, schema, values, rowCount));
+            }
+            case "optional":
+            {
+                var values = new ReadOnlyMemory<byte>?[rowCount];
+                var present = 0L;
+                for (var i = 0; i < rowCount; i++)
+                {
+                    if (i % NullEvery == 0)
+                        continue;
+                    values[i] = CreateBytes(i);
+                    present++;
+                }
+
+                return new Payload((regressionCase, schema)
+                    => new EncodingRegressionColumn<ReadOnlyMemory<byte>?>(regressionCase, schema, values, present));
+            }
+            default:
+                throw new InvalidOperationException($"Unknown repetition '{repetition}'.");
+        }
     }
 
     /// <summary>
@@ -75,149 +235,6 @@ static class EncodingRegressionCatalog
             "byte_stream_split" => dataType is "int32" or "int64" or "float" or "double" or "guid",
             _ => false
         };
-
-    static IEncodingRegressionColumn Create(EncodingRegressionCase regressionCase, int rowCount)
-    {
-        var schema = CreateSchema(regressionCase);
-        return regressionCase.DataType switch
-        {
-            "bool" => CreateNumeric(regressionCase, schema, rowCount, static i => (i % 3) != 0),
-            "int32" => CreateNumeric(regressionCase, schema, rowCount, static i => i % 100_000),
-            "int64" => CreateNumeric(regressionCase, schema, rowCount, static i => i * 37L),
-            "float" => CreateNumeric(regressionCase, schema, rowCount, static i => (i % 10_000) / 3f),
-            "double" => CreateNumeric(regressionCase, schema, rowCount, static i => (i % 10_000) / 7d),
-            "guid" => CreateNumeric(regressionCase, schema, rowCount, CreateGuid),
-            "binary" => CreateBinary(regressionCase, schema, rowCount),
-            "memory" => CreateMemory(regressionCase, schema, rowCount),
-            _ => throw new InvalidOperationException($"Unknown data type '{regressionCase.DataType}'.")
-        };
-    }
-
-    static IEncodingRegressionColumn CreateNumeric<TValue>(EncodingRegressionCase regressionCase,
-        ParquetSchema schema, int rowCount, Func<int, TValue> factory)
-        where TValue : struct
-    {
-        switch (regressionCase.Repetition)
-        {
-            case "required":
-            {
-                var values = new TValue[rowCount];
-                for (var i = 0; i < rowCount; i++)
-                    values[i] = factory(i);
-                return new EncodingRegressionColumn<TValue>(regressionCase, schema, values, rowCount);
-            }
-            case "optional":
-            {
-                var values = new TValue?[rowCount];
-                var present = 0L;
-                for (var i = 0; i < rowCount; i++)
-                {
-                    if (i % NullEvery == 0)
-                        continue;
-                    values[i] = factory(i);
-                    present++;
-                }
-
-                return new EncodingRegressionColumn<TValue?>(regressionCase, schema, values, present);
-            }
-            case "repeated":
-            {
-                var rows = new TValue[rowCount][];
-                var present = 0L;
-                for (var i = 0; i < rowCount; i++)
-                {
-                    var length = i % (MaxListLength + 1);
-                    var row = new TValue[length];
-                    for (var j = 0; j < length; j++)
-                        row[j] = factory(i + j);
-                    rows[i] = row;
-                    present += length;
-                }
-
-                return new EncodingRegressionColumn<TValue[]>(regressionCase, schema, rows, present);
-            }
-            default:
-                throw new InvalidOperationException($"Unknown repetition '{regressionCase.Repetition}'.");
-        }
-    }
-
-    static IEncodingRegressionColumn CreateBinary(EncodingRegressionCase regressionCase, ParquetSchema schema,
-        int rowCount)
-    {
-        switch (regressionCase.Repetition)
-        {
-            case "required":
-            {
-                var values = new byte[rowCount][];
-                for (var i = 0; i < rowCount; i++)
-                    values[i] = CreateBytes(i);
-                return new EncodingRegressionColumn<byte[]>(regressionCase, schema, values, rowCount);
-            }
-            case "optional":
-            {
-                var values = new byte[rowCount][];
-                var present = 0L;
-                for (var i = 0; i < rowCount; i++)
-                {
-                    if (i % NullEvery == 0)
-                        continue;
-                    values[i] = CreateBytes(i);
-                    present++;
-                }
-
-                return new EncodingRegressionColumn<byte[]>(regressionCase, schema, values, present);
-            }
-            case "repeated":
-            {
-                var rows = new byte[rowCount][][];
-                var present = 0L;
-                for (var i = 0; i < rowCount; i++)
-                {
-                    var length = i % (MaxListLength + 1);
-                    var row = new byte[length][];
-                    for (var j = 0; j < length; j++)
-                        row[j] = CreateBytes(i + j);
-                    rows[i] = row;
-                    present += length;
-                }
-
-                return new EncodingRegressionColumn<byte[][]>(regressionCase, schema, rows, present);
-            }
-            default:
-                throw new InvalidOperationException($"Unknown repetition '{regressionCase.Repetition}'.");
-        }
-    }
-
-    static IEncodingRegressionColumn CreateMemory(EncodingRegressionCase regressionCase, ParquetSchema schema,
-        int rowCount)
-    {
-        switch (regressionCase.Repetition)
-        {
-            case "required":
-            {
-                var values = new ReadOnlyMemory<byte>[rowCount];
-                for (var i = 0; i < rowCount; i++)
-                    values[i] = CreateBytes(i);
-                return new EncodingRegressionColumn<ReadOnlyMemory<byte>>(regressionCase, schema, values, rowCount);
-            }
-            case "optional":
-            {
-                var values = new ReadOnlyMemory<byte>?[rowCount];
-                var present = 0L;
-                for (var i = 0; i < rowCount; i++)
-                {
-                    if (i % NullEvery == 0)
-                        continue;
-                    values[i] = CreateBytes(i);
-                    present++;
-                }
-
-                return new EncodingRegressionColumn<ReadOnlyMemory<byte>?>(regressionCase, schema, values, present);
-            }
-            default:
-                throw new InvalidOperationException($"Unknown repetition '{regressionCase.Repetition}'.");
-        }
-    }
 
     // Shared prefixes keep DELTA_BYTE_ARRAY on its prefix-compression path, and the bounded distinct
     // count keeps dictionary encoding representative rather than degenerate.
