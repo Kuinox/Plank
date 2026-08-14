@@ -169,30 +169,16 @@ static class Encoding
 
         if (dataEncoding != EncodingKind.Plain)
             return false;
-        if (!TryGetPlainEncodedValueSize(column, typeof(T), out var fixedValueBytes))
+        // TryWriteFixedWidthDataPages already claimed every fixed-width Plain shape - it covers
+        // Boolean plus exactly the types TryGetFixedWidthByteCount recognises, which is the same set
+        // TryGetPlainEncodedValueSize reports a non-zero size for. So the only Plain columns that
+        // reach here are variable-length byte arrays.
+        if (!TryGetPlainEncodedValueSize(column, typeof(T), out _))
             return false;
-
-        if (fixedValueBytes > 0)
-        {
-            var rowsPerPage = Math.Max(1, checked((int)targetPageBytes) / fixedValueBytes);
-            WriteFixedRowsDataPages(bufferWriters, column, values, dataEncoding, pages, rowsPerPage);
-            return true;
-        }
 
         WriteVariableByteArrayDataPages(bufferWriters, column, values, dataEncoding, pages,
             checked((int)targetPageBytes));
         return true;
-    }
-
-    static void WriteFixedRowsDataPages<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
-        EncodingKind dataEncoding, PageList pages, int rowsPerPage)
-        where T : notnull
-    {
-        for (var pageStart = 0; pageStart < values.Length; pageStart += rowsPerPage)
-        {
-            var pageRowCount = Math.Min(rowsPerPage, values.Length - pageStart);
-            WriteDataPage(bufferWriters, column, values.Slice(pageStart, pageRowCount), dataEncoding, pages);
-        }
     }
 
     static void WriteVariableByteArrayDataPages<T>(BufferWriterFactory bufferWriters, Column column,
