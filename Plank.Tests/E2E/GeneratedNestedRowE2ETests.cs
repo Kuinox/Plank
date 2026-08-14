@@ -22,6 +22,7 @@ internal sealed class GeneratedNestedRowE2ETests
                     new ParquetWriterOptions
                     {
                         Compression = CompressionKind.None,
+                        DataPageVersion = Plank.Writing.ParquetDataPageVersion.V1,
                         TargetRowGroupSizeBytes = 32 * 1024
                     });
                 for (var i = 0; i < MultiRowGroupRowCount; i++)
@@ -110,7 +111,7 @@ internal sealed class GeneratedNestedRowE2ETests
             }
 
             using var parquetNetStream = File.OpenRead(path);
-            using var parquetNet = await ParquetReader.CreateAsync(parquetNetStream).ConfigureAwait(false);
+            await using var parquetNet = await ParquetReader.CreateAsync(parquetNetStream).ConfigureAwait(false);
             if (parquetNet.RowGroupCount < 2)
                 throw new InvalidOperationException("Expected the generated pipeline to emit multiple row groups.");
             var fields = parquetNet.Schema.GetDataFields();
@@ -121,7 +122,10 @@ internal sealed class GeneratedNestedRowE2ETests
             {
                 using var rowGroup = parquetNet.OpenRowGroupReader(rowGroupIndex);
                 for (var fieldIndex = 0; fieldIndex < fields.Length; fieldIndex++)
-                    _ = await rowGroup.ReadColumnAsync(fields[fieldIndex]).ConfigureAwait(false);
+                {
+                    using var rawColumn = await rowGroup.ReadRawColumnDataBaseAsync(fields[fieldIndex])
+                        .ConfigureAwait(false);
+                }
             }
         }
         finally

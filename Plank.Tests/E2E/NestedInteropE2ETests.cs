@@ -1,8 +1,10 @@
 using Parquet;
+using Parquet.Data;
 using ParquetSharp;
 using Plank.Schema;
 using Plank.Writing;
 using PlankSchema = Plank.Schema.ParquetSchema;
+using PlankDataPageVersion = Plank.Writing.ParquetDataPageVersion;
 
 namespace Plank.Tests.E2E;
 
@@ -37,7 +39,8 @@ internal sealed class NestedInteropE2ETests
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
-                    Compression = CompressionKind.None
+                    Compression = CompressionKind.None,
+                    DataPageVersion = PlankDataPageVersion.V1
                 });
                 var rowGroup = writer.StartRowGroup();
 
@@ -90,7 +93,8 @@ internal sealed class NestedInteropE2ETests
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
-                    Compression = CompressionKind.None
+                    Compression = CompressionKind.None,
+                    DataPageVersion = PlankDataPageVersion.V1
                 });
                 var rowGroup = writer.StartRowGroup();
 
@@ -143,7 +147,8 @@ internal sealed class NestedInteropE2ETests
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
-                    Compression = CompressionKind.Snappy
+                    Compression = CompressionKind.Snappy,
+                    DataPageVersion = PlankDataPageVersion.V1
                 });
                 var rowGroup = writer.StartRowGroup();
 
@@ -200,7 +205,8 @@ internal sealed class NestedInteropE2ETests
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
-                    Compression = CompressionKind.Snappy
+                    Compression = CompressionKind.Snappy,
+                    DataPageVersion = PlankDataPageVersion.V1
                 });
                 var rowGroup = writer.StartRowGroup();
 
@@ -249,7 +255,8 @@ internal sealed class NestedInteropE2ETests
             {
                 var writer = schema.CreateWriter(stream, new ParquetWriterOptions
                 {
-                    Compression = CompressionKind.Snappy
+                    Compression = CompressionKind.Snappy,
+                    DataPageVersion = PlankDataPageVersion.V1
                 });
                 var rowGroup = writer.StartRowGroup();
 
@@ -273,13 +280,15 @@ internal sealed class NestedInteropE2ETests
     static async Task AssertParquetNetCanReadAsync(string path, int expectedLeafCount)
     {
         using var stream = File.OpenRead(path);
-        using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
+        await using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
         var fields = reader.Schema.GetDataFields();
         if (fields.Length != expectedLeafCount)
             throw new InvalidOperationException($"Expected {expectedLeafCount} data fields, got {fields.Length}.");
         using var rowGroup = reader.OpenRowGroupReader(0);
         for (var i = 0; i < fields.Length; i++)
-            await rowGroup.ReadColumnAsync(fields[i]).ConfigureAwait(false);
+        {
+            using var column = await rowGroup.ReadRawColumnDataBaseAsync(fields[i]).ConfigureAwait(false);
+        }
     }
 
     static void AssertParquetSharpListGroup(string path, int[][] expectedA, long[][] expectedB)
@@ -375,19 +384,19 @@ internal sealed class NestedInteropE2ETests
     static async Task AssertParquetNetNestedListAsync(string path, int[][][] expectedRows)
     {
         using var stream = File.OpenRead(path);
-        using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
+        await using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
         var fields = reader.Schema.GetDataFields();
         if (fields.Length != 1)
             throw new InvalidOperationException($"Expected one nested list field, got {fields.Length}.");
 
         using var rowGroup = reader.OpenRowGroupReader(0);
-        var column = await rowGroup.ReadColumnAsync(fields[0]).ConfigureAwait(false);
-        if (column.Data.Length == 0)
+        using var column = await rowGroup.ReadRawColumnDataBaseAsync(fields[0]).ConfigureAwait(false);
+        if (column is not RawColumnData<int> intColumn)
+            throw new InvalidOperationException($"Parquet.Net returned '{column.GetType()}' instead of int data.");
+        if (intColumn.Values.Length == 0)
             throw new InvalidOperationException("Nested list column returned no data.");
-        if (column.RepetitionLevels is not int[] rep)
-            throw new InvalidOperationException("Nested list column is missing repetition levels.");
-        if (column.DefinitionLevels is not int[] def)
-            throw new InvalidOperationException("Nested list column is missing definition levels.");
+        var rep = column.RepetitionLevels;
+        var def = column.DefinitionLevels;
         if (rep.Length != def.Length)
             throw new InvalidOperationException("Nested list repetition/definition level lengths mismatch.");
         if (rep.Length < expectedRows.Length)
