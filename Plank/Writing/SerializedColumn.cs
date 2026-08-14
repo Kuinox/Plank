@@ -646,6 +646,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         if (TrySerializeRequiredDateTimeDictionary(values, timestamp))
             return;
 
+        if (CanSerializeDateTimesDirectly(timestamp))
+        {
+            var statistics = ColumnStatistics.CreateDateTimes(values, timestamp);
+            SerializeTyped(values);
+            Statistics = statistics;
+            return;
+        }
+
         var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
@@ -660,8 +668,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                         if (value.Kind != expectedKind)
                             throw new InvalidOperationException(
                                 $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
-                        converted[i] = TimestampConversion.DivideFloor(
-                            value.Ticks - DateTime.UnixEpoch.Ticks, TimeSpan.TicksPerMillisecond);
+                        converted[i] = value.Ticks / TimeSpan.TicksPerMillisecond -
+                            DateTime.UnixEpoch.Ticks / TimeSpan.TicksPerMillisecond;
                     }
                     break;
                 case TimeUnit.Micros:
@@ -671,8 +679,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                         if (value.Kind != expectedKind)
                             throw new InvalidOperationException(
                                 $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
-                        converted[i] = TimestampConversion.DivideFloor(
-                            value.Ticks - DateTime.UnixEpoch.Ticks, 10);
+                        converted[i] = value.Ticks / 10 - DateTime.UnixEpoch.Ticks / 10;
                     }
                     break;
                 case TimeUnit.Nanos:
@@ -1636,6 +1643,18 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     static long ToUnixTimeFromTicks(long ticks, TimeUnit unit)
         => TimestampConversion.FromDateTimeTicks(ticks, unit);
+    bool CanSerializeDateTimesDirectly(LogicalType.Timestamp timestamp)
+    {
+        // Block-local conversion reduces aggregate memory traffic, but the whole-column path is faster for one worker.
+        if (_owner.WorkerCount <= 1 || _owner.WritePageIndexes || _column.Options.BloomFilter is not null)
+            return false;
+
+        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        var strategy = _owner.GetPageStrategyContext(columnOrdinal).Strategy;
+        return strategy.GetDictionaryMode() == DictionaryMode.Disabled &&
+            EncodingKindResolver.GetDataEncodingKind(_column) == EncodingKind.DeltaBinaryPacked &&
+            Enum.IsDefined(timestamp.Unit);
+    }
 
     static long ToTimeValue(TimeOnly value, TimeUnit unit)
         => unit switch

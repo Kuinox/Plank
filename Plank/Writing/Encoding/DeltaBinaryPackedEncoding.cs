@@ -250,6 +250,13 @@ static class DeltaBinaryPackedEncoding
             return;
         }
 
+        if (typeof(T) == typeof(DateTime))
+        {
+            var dateTimes = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<DateTime>>(ref values);
+            WriteDateTimes(dateTimes, GetTimestamp(column), ref writer);
+            return;
+        }
+
         Span<long> converted = values.Length <= 256 ? stackalloc long[values.Length] : new long[values.Length];
         if (typeof(T) == typeof(ulong))
         {
@@ -272,6 +279,132 @@ static class DeltaBinaryPackedEncoding
         throw new InvalidOperationException(
             $"Column '{column.Name}' expects '{ParquetPhysicalType.Int64}' values, but got '{typeof(T)}'.");
     }
+
+    static void WriteDateTimes(ReadOnlySpan<DateTime> values, LogicalType.Timestamp timestamp,
+        ref BufferWriter writer)
+    {
+        switch (timestamp.Unit)
+        {
+            case TimeUnit.Millis:
+                WriteDateTimeMillis(values, ref writer);
+                return;
+            case TimeUnit.Micros:
+                WriteDateTimeMicros(values, ref writer);
+                return;
+            case TimeUnit.Nanos:
+                WriteDateTimeNanos(values, ref writer);
+                return;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(timestamp), timestamp.Unit,
+                    "Time unit must be a defined TimeUnit value.");
+        }
+    }
+
+    static void WriteDateTimeMillis(ReadOnlySpan<DateTime> values, ref BufferWriter writer)
+    {
+        const long divisor = TimeSpan.TicksPerMillisecond;
+        var first = values.IsEmpty ? 0 : values[0].Ticks / divisor - DateTime.UnixEpoch.Ticks / divisor;
+        WriteDateTimesCore<MillisConverter>(values, first, ref writer);
+    }
+
+    static void WriteDateTimeMicros(ReadOnlySpan<DateTime> values, ref BufferWriter writer)
+    {
+        const long divisor = 10;
+        var first = values.IsEmpty ? 0 : values[0].Ticks / divisor - DateTime.UnixEpoch.Ticks / divisor;
+        WriteDateTimesCore<MicrosConverter>(values, first, ref writer);
+    }
+
+    static void WriteDateTimeNanos(ReadOnlySpan<DateTime> values, ref BufferWriter writer)
+    {
+        var first = values.IsEmpty ? 0 : checked((values[0].Ticks - DateTime.UnixEpoch.Ticks) * 100);
+        WriteDateTimesCore<NanosConverter>(values, first, ref writer);
+    }
+
+    static void WriteDateTimesCore<TConverter>(ReadOnlySpan<DateTime> values, long first,
+        ref BufferWriter writer)
+        where TConverter : struct, IDateTimeTicksConverter
+    {
+        var header = writer.GetSpan(MaxInt64HeaderByteCount);
+        ref var headerStart = ref MemoryMarshal.GetReference(header);
+        var headerLength = WriteUnsignedVarInt(BlockSize, ref headerStart);
+        headerLength += WriteUnsignedVarInt(MiniBlockCount, ref Unsafe.Add(ref headerStart, headerLength));
+        headerLength += WriteUnsignedVarInt((ulong)values.Length, ref Unsafe.Add(ref headerStart, headerLength));
+
+        if (values.IsEmpty)
+        {
+            headerLength += WriteUnsignedVarInt(0, ref Unsafe.Add(ref headerStart, headerLength));
+            writer.Advance(headerLength);
+            return;
+        }
+
+        headerLength += WriteUnsignedVarInt(ZigZag64(first), ref Unsafe.Add(ref headerStart, headerLength));
+        writer.Advance(headerLength);
+        if (values.Length == 1)
+            return;
+
+        Span<long> deltas = stackalloc long[BlockSize];
+        ref var deltaBuffer = ref MemoryMarshal.GetReference(deltas);
+        var previous = first;
+        var index = 1;
+        while (index < values.Length)
+        {
+            var count = Math.Min(BlockSize, values.Length - index);
+            var minDelta = long.MaxValue;
+            for (var i = 0; i < count; i++)
+            {
+                var current = TConverter.Convert(values[index + i].Ticks);
+                var delta = TConverter.Subtract(current, previous);
+                Unsafe.Add(ref deltaBuffer, i) = delta;
+                previous = current;
+                if (delta < minDelta)
+                    minDelta = delta;
+            }
+
+            FillPaddedDeltas(ref deltaBuffer, count, minDelta);
+            WriteInt64DeltaBlock(ref deltaBuffer, minDelta, ref writer);
+            index += count;
+        }
+    }
+
+    interface IDateTimeTicksConverter
+    {
+        static abstract long Convert(long ticks);
+
+        static abstract long Subtract(long current, long previous);
+    }
+
+    readonly struct MillisConverter : IDateTimeTicksConverter
+    {
+        public static long Convert(long ticks)
+            => ticks / TimeSpan.TicksPerMillisecond -
+                DateTime.UnixEpoch.Ticks / TimeSpan.TicksPerMillisecond;
+
+        public static long Subtract(long current, long previous)
+            => current - previous;
+    }
+
+    readonly struct MicrosConverter : IDateTimeTicksConverter
+    {
+        public static long Convert(long ticks)
+            => ticks / 10 - DateTime.UnixEpoch.Ticks / 10;
+
+        public static long Subtract(long current, long previous)
+            => current - previous;
+    }
+
+    readonly struct NanosConverter : IDateTimeTicksConverter
+    {
+        public static long Convert(long ticks)
+            => checked((ticks - DateTime.UnixEpoch.Ticks) * 100);
+
+        public static long Subtract(long current, long previous)
+            => checked(current - previous);
+    }
+
+    static LogicalType.Timestamp GetTimestamp(Column column)
+        => column.LogicalType as LogicalType.Timestamp ??
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' must declare a timestamp logical type for DateTime values.");
 
     static void WriteDeltaBlock(ref long deltas, long minDelta, ref BufferWriter writer)
     {

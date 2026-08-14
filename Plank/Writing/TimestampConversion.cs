@@ -11,15 +11,13 @@ static class TimestampConversion
     }
 
     internal static long FromDateTimeTicks(long ticks, TimeUnit unit)
-    {
-        var deltaTicks = ticks - DateTime.UnixEpoch.Ticks;
-        return unit switch
+        => unit switch
         {
-            TimeUnit.Millis => DivideFloor(deltaTicks, TimeSpan.TicksPerMillisecond),
-            TimeUnit.Micros => DivideFloor(deltaTicks, 10),
-            TimeUnit.Nanos => checked(deltaTicks * 100),
+            TimeUnit.Millis => ticks / TimeSpan.TicksPerMillisecond -
+                DateTime.UnixEpoch.Ticks / TimeSpan.TicksPerMillisecond,
+            TimeUnit.Micros => ticks / 10 - DateTime.UnixEpoch.Ticks / 10,
+            TimeUnit.Nanos => checked((ticks - DateTime.UnixEpoch.Ticks) * 100),
             _ => throw new ArgumentOutOfRangeException(nameof(unit), unit,
                 "Time unit must be a defined TimeUnit value.")
         };
-    }
 }
