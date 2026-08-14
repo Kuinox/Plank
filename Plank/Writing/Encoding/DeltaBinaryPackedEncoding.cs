@@ -96,7 +96,7 @@ static class DeltaBinaryPackedEncoding
         {
             var count = Math.Min(BlockSize, values.Length - index);
             var minDelta = PrepareInt64Block(ref input, index, count, ref deltaBuffer);
-            WriteInt64DeltaBlock(ref deltaBuffer, minDelta, ref writer);
+            WriteDeltaBlock(ref deltaBuffer, minDelta, ref writer);
             index += count;
         }
     }
@@ -275,54 +275,11 @@ static class DeltaBinaryPackedEncoding
             $"Column '{column.Name}' expects '{ParquetPhysicalType.Int64}' values, but got '{typeof(T)}'.");
     }
 
+    /// <summary>
+    /// Writes one delta block. Both the Int32 and Int64 writers widen their deltas to
+    /// <see cref="long"/> before calling this, so a single implementation serves both.
+    /// </summary>
     static void WriteDeltaBlock(ref long deltas, long minDelta, ref BufferWriter writer)
-    {
-        var bitWidths = Avx512F.IsSupported
-            ? NormalizeDeltasVectorized(ref deltas, minDelta, out var packedByteCount)
-            : NormalizeDeltasScalar(ref deltas, minDelta, out packedByteCount);
-
-        var encodedMinDelta = ZigZag64(minDelta);
-        var outputLength = GetUnsignedVarIntByteCount(encodedMinDelta) + MiniBlockCount + packedByteCount;
-        var destination = writer.GetSpan(outputLength);
-        ref var output = ref MemoryMarshal.GetReference(destination);
-        var outputOffset = WriteUnsignedVarInt(encodedMinDelta, ref output);
-        var bitWidthBytes = BitConverter.IsLittleEndian ? bitWidths : BinaryPrimitives.ReverseEndianness(bitWidths);
-        Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, outputOffset), bitWidthBytes);
-        outputOffset += MiniBlockCount;
-
-        if (bitWidths == Four13BitMiniBlocks)
-        {
-            Pack13BitDeltaBlock(ref deltas, ref Unsafe.Add(ref output, outputOffset));
-        }
-        else if (bitWidths != 0)
-        {
-            var containsWidthAboveFour = ((bitWidths | 0x80808080U) - 0x05050505U) & 0x80808080U;
-            if (containsWidthAboveFour == 0)
-            {
-                PackNarrowDeltaBlock(ref deltas, bitWidths, ref Unsafe.Add(ref output, outputOffset));
-            }
-            else
-            {
-                for (var block = 0; block < MiniBlockCount; block++)
-                {
-                    var width = (int)(byte)(bitWidths >> (block * 8));
-                    if (width == 0)
-                        continue;
-
-                    var byteCount = width * 4;
-                    PackUnsignedValues(
-                        ref Unsafe.Add(ref deltas, block * MiniBlockSize),
-                        width,
-                        ref Unsafe.Add(ref output, outputOffset));
-                    outputOffset += byteCount;
-                }
-            }
-        }
-
-        writer.Advance(outputLength);
-    }
-
-    static void WriteInt64DeltaBlock(ref long deltas, long minDelta, ref BufferWriter writer)
     {
         var bitWidths = Avx512F.IsSupported
             ? NormalizeDeltasVectorized(ref deltas, minDelta, out var packedByteCount)
