@@ -63,6 +63,12 @@ public sealed class EncodingRegressionReport
 
         public long? OutputBytes { get; init; }
 
+        /// <summary>
+        /// Fastest observed iteration. Contention and GC only ever add time, so under a shared runner
+        /// this converges on the true cost far more stably than the median. Regressions compare on this.
+        /// </summary>
+        public double? MinMicroseconds { get; init; }
+
         public double? MedianMicroseconds { get; init; }
 
         public double? P25Microseconds { get; init; }

@@ -14,16 +14,24 @@ dotnet run -c Release --project Plank.Benchmarks -- --encoding-regression-compar
   artifacts/benchmarks/encoding-regression-current.json
 ```
 
-The compare step exits non-zero when a case gets slower than the tolerance (5% by default,
-`--tolerance 1.10` to loosen), when a case flips between `ok` and `failed`, or — most usefully for
-refactors — when the encoded bytes change at all. A refactor that is meant to preserve behaviour
-should report every case as `same`.
+The compare step exits non-zero when a case flips between `ok` and `failed`, when a case gets slower
+than the tolerance, or — most usefully for refactors — when the encoded bytes change at all. A
+refactor that is meant to preserve behaviour should report every case as `same`.
+
+**The encoded-bytes check is the exact signal; the timings are a coarse net.** Cases are measured
+round-robin (one sample per case per round, 30 rounds) and compared on the fastest observed
+iteration, because contention and GC only ever add time. Even so, two *identical* runs on a shared
+runner disagree by a median of 2.6% and a p90 of 9%, so the tolerance defaults to 10% and cases whose
+baseline is under 100 us are printed but not failed — `bool/plain/required` encodes 200k values in
+~30 us, where a few microseconds of jitter reads as tens of percent. Expect the occasional false
+positive on a busy machine and re-run before believing a lone timing regression. Tune with
+`--tolerance 1.20` and `--significance-floor 500`.
 
 Only `SerializedColumn.Serialize` is timed. That covers level writing, dictionary construction, value
-encoding and page splitting, but also the column statistics pass, so encoder-only deltas are damped;
-read a 2% move as noise and reach for `--rows`/`--iterations` before drawing conclusions.
+encoding and page splitting, but also the column statistics pass, so encoder-only deltas are damped
+rather than shown at full size.
 
-Override the defaults with `--rows` (200,000), `--warmups` (3), `--iterations` (15) or `--output`.
+Override the defaults with `--rows` (200,000), `--warmups` (3), `--iterations` (30) or `--output`.
 
 # Published benchmarks
 
