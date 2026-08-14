@@ -35,7 +35,11 @@ public static class PublishedBenchmarkRunner
                 PageIndexes = false,
                 BloomFilters = false,
                 RowGroupBoundaries = "Identical for every writer and preserved from the source taxi file.",
-                TimingBoundary = "Writer creation through complete in-memory output, metadata, footer, and close. Input loading and conversion are excluded.",
+                TimingBoundary = "Writer creation through complete in-memory output, metadata, footer, and close. " +
+                                 "Input loading is excluded. Timestamp columns are handed to every writer as logical " +
+                                 "DateTime values, so the conversion each library performs is timed. String columns " +
+                                 "are handed to Plank and ParquetSharp pre-encoded; Parquet.Net has no pre-encoded " +
+                                 "entry point and encodes inside the timed region.",
                 Quick = options.Quick
             },
             Suites = suites
