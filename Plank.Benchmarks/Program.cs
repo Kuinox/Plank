@@ -20,5 +20,11 @@ if (args is ["--audit-encodings", ..])
     return;
 }
 
+if (args is ["--encoding-profile", ..])
+{
+    EncodingProfile.Run();
+    return;
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(EncodingBenchmark).Assembly)
     .Run(args);
