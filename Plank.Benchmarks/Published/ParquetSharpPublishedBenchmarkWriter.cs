@@ -15,8 +15,10 @@ sealed class ParquetSharpPublishedBenchmarkWriter : IPublishedBenchmarkWriter
     readonly bool _useThreads;
     readonly int _workerCount;
     readonly ArrowSchema _schema;
-    readonly RecordBatch[] _batches;
-    RecordBatch[]? _preparedBatches;
+    // Master arrays for column kinds whose benchmark values are already physical. The Arrow writer takes ownership
+    // of whatever it is handed, so these are never written directly: PrepareWrite clones them, untimed.
+    readonly IArrowArray?[][] _preparedArrays;
+    IArrowArray?[][]? _clonedArrays;
 
     public ParquetSharpPublishedBenchmarkWriter(PublishedBenchmarkDataSet dataSet, bool useThreads, int workerCount)
     {
@@ -24,7 +26,7 @@ sealed class ParquetSharpPublishedBenchmarkWriter : IPublishedBenchmarkWriter
         _useThreads = useThreads;
         _workerCount = workerCount;
         _schema = new ArrowSchema(dataSet.Columns.Select(CreateField), null);
-        _batches = CreateBatches(dataSet, _schema);
+        _preparedArrays = CreatePreparedArrays(dataSet);
     }
 
     public string ImplementationId
@@ -44,15 +46,18 @@ sealed class ParquetSharpPublishedBenchmarkWriter : IPublishedBenchmarkWriter
 
     public void PrepareWrite()
     {
-        DisposePreparedBatches();
-        _preparedBatches = _batches.Select(static batch => batch.Clone()).ToArray();
+        DisposeClonedArrays();
+        _clonedArrays = _preparedArrays
+            .Select(static arrays => arrays.Select(static array => Clone(array)).ToArray())
+            .ToArray();
     }
 
     public ValueTask WriteAsync(Stream destination, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var batches = _preparedBatches
+        var cloned = _clonedArrays
             ?? throw new InvalidOperationException("Call PrepareWrite before writing a ParquetSharp benchmark file.");
+        var batches = new RecordBatch[cloned.Length];
         try
         {
             using var writerProperties = CreateWriterProperties(_dataSet.Encoding);
@@ -60,6 +65,7 @@ sealed class ParquetSharpPublishedBenchmarkWriter : IPublishedBenchmarkWriter
             using var writer = new ArrowFileWriter(destination, _schema, writerProperties, arrowProperties, true);
             for (var rowGroupIndex = 0; rowGroupIndex < batches.Length; rowGroupIndex++)
             {
+                batches[rowGroupIndex] = CreateBatch(cloned[rowGroupIndex], rowGroupIndex);
                 if (rowGroupIndex != 0)
                     writer.NewBufferedRowGroup();
                 writer.WriteBufferedRecordBatch(batches[rowGroupIndex]);
@@ -69,24 +75,42 @@ sealed class ParquetSharpPublishedBenchmarkWriter : IPublishedBenchmarkWriter
         }
         finally
         {
-            DisposePreparedBatches();
+            foreach (var batch in batches)
+                batch?.Dispose();
+            _clonedArrays = null;
         }
     }
 
     public void Dispose()
     {
-        DisposePreparedBatches();
-        foreach (var batch in _batches)
-            batch.Dispose();
+        DisposeClonedArrays();
+        foreach (var arrays in _preparedArrays)
+            foreach (var array in arrays)
+                array?.Dispose();
     }
 
-    void DisposePreparedBatches()
+    // Timestamp arrays are built here, inside the timed write, because turning DateTime into microseconds is work
+    // the library does for the caller. Every other column was cloned by PrepareWrite, outside the stopwatch.
+    RecordBatch CreateBatch(IArrowArray?[] cloned, int rowGroupIndex)
     {
-        if (_preparedBatches is null)
+        var arrays = new IArrowArray[cloned.Length];
+        for (var columnIndex = 0; columnIndex < arrays.Length; columnIndex++)
+            arrays[columnIndex] = cloned[columnIndex]
+                ?? CreateTimestampArray(_dataSet.Columns[columnIndex], rowGroupIndex);
+        return new RecordBatch(_schema, arrays, arrays[0].Length);
+    }
+
+    static IArrowArray? Clone(IArrowArray? array)
+        => array is null ? null : ArrowArrayFactory.BuildArray(array.Data.Clone());
+
+    void DisposeClonedArrays()
+    {
+        if (_clonedArrays is null)
             return;
-        foreach (var batch in _preparedBatches)
-            batch.Dispose();
-        _preparedBatches = null;
+        foreach (var arrays in _clonedArrays)
+            foreach (var array in arrays)
+                array?.Dispose();
+        _clonedArrays = null;
     }
 
     static Field CreateField(PublishedBenchmarkDataSet.Column column)
@@ -101,20 +125,20 @@ sealed class ParquetSharpPublishedBenchmarkWriter : IPublishedBenchmarkWriter
             _ => throw new NotSupportedException($"Unsupported column kind '{column.Kind}'.")
         }, column.Nullable);
 
-    static RecordBatch[] CreateBatches(PublishedBenchmarkDataSet dataSet, ArrowSchema schema)
+    static IArrowArray?[][] CreatePreparedArrays(PublishedBenchmarkDataSet dataSet)
     {
-        var batches = new RecordBatch[dataSet.RowGroupCount];
-        for (var rowGroupIndex = 0; rowGroupIndex < batches.Length; rowGroupIndex++)
+        var prepared = new IArrowArray?[dataSet.RowGroupCount][];
+        for (var rowGroupIndex = 0; rowGroupIndex < prepared.Length; rowGroupIndex++)
         {
-            var arrays = new IArrowArray[dataSet.Columns.Count];
-            for (var columnIndex = 0; columnIndex < arrays.Length; columnIndex++)
-                arrays[columnIndex] = CreateArray(dataSet.Columns[columnIndex], rowGroupIndex);
-            batches[rowGroupIndex] = new RecordBatch(schema, arrays, arrays[0].Length);
+            prepared[rowGroupIndex] = new IArrowArray?[dataSet.Columns.Count];
+            for (var columnIndex = 0; columnIndex < prepared[rowGroupIndex].Length; columnIndex++)
+                prepared[rowGroupIndex][columnIndex] = CreatePreparedArray(dataSet.Columns[columnIndex], rowGroupIndex);
         }
-        return batches;
+        return prepared;
     }
 
-    static IArrowArray CreateArray(PublishedBenchmarkDataSet.Column column, int rowGroupIndex)
+    // Returns null for timestamp columns: those are built by the timed write instead.
+    static IArrowArray? CreatePreparedArray(PublishedBenchmarkDataSet.Column column, int rowGroupIndex)
         => (column.Kind, column.Nullable) switch
         {
             (BenchmarkColumnKind.Boolean, true) => CreateBoolean((bool?[])column.Values[rowGroupIndex]),
@@ -123,14 +147,18 @@ sealed class ParquetSharpPublishedBenchmarkWriter : IPublishedBenchmarkWriter
             (BenchmarkColumnKind.Int32, false) => new Int32Array.Builder().Append((int[])column.Values[rowGroupIndex]).Build(),
             (BenchmarkColumnKind.Int64, true) => CreateInt64((long?[])column.Values[rowGroupIndex]),
             (BenchmarkColumnKind.Int64, false) => new Int64Array.Builder().Append((long[])column.Values[rowGroupIndex]).Build(),
-            (BenchmarkColumnKind.Timestamp, true) => CreateTimestamp((DateTime?[])column.Values[rowGroupIndex]),
-            (BenchmarkColumnKind.Timestamp, false) => CreateTimestamp((DateTime[])column.Values[rowGroupIndex]),
+            (BenchmarkColumnKind.Timestamp, _) => null,
             (BenchmarkColumnKind.Double, true) => CreateDouble((double?[])column.Values[rowGroupIndex]),
             (BenchmarkColumnKind.Double, false) => new DoubleArray.Builder().Append((double[])column.Values[rowGroupIndex]).Build(),
             (BenchmarkColumnKind.String, true) => CreateString((string?[])column.Values[rowGroupIndex]),
             (BenchmarkColumnKind.String, false) => CreateString((string[])column.Values[rowGroupIndex]),
             _ => throw new NotSupportedException($"Unsupported column kind '{column.Kind}'.")
         };
+
+    static IArrowArray CreateTimestampArray(PublishedBenchmarkDataSet.Column column, int rowGroupIndex)
+        => column.Nullable
+            ? CreateTimestamp((DateTime?[])column.Values[rowGroupIndex])
+            : CreateTimestamp((DateTime[])column.Values[rowGroupIndex]);
 
     static BooleanArray CreateBoolean(bool?[] values)
     {
