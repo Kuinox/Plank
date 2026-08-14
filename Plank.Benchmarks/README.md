@@ -1,3 +1,30 @@
+# Encoding regression suite
+
+`--encoding-regression` measures every encoder path in `Plank.Writing.Encoding` — each supported
+(physical type × encoding × repetition) combination, required, optional and repeated — and records a
+SHA-256 of each encoded file alongside the timings.
+
+```bash
+git checkout master
+dotnet run -c Release --project Plank.Benchmarks -- --encoding-regression --label baseline
+git checkout my-branch
+dotnet run -c Release --project Plank.Benchmarks -- --encoding-regression --label current
+dotnet run -c Release --project Plank.Benchmarks -- --encoding-regression-compare \
+  artifacts/benchmarks/encoding-regression-baseline.json \
+  artifacts/benchmarks/encoding-regression-current.json
+```
+
+The compare step exits non-zero when a case gets slower than the tolerance (5% by default,
+`--tolerance 1.10` to loosen), when a case flips between `ok` and `failed`, or — most usefully for
+refactors — when the encoded bytes change at all. A refactor that is meant to preserve behaviour
+should report every case as `same`.
+
+Only `SerializedColumn.Serialize` is timed. That covers level writing, dictionary construction, value
+encoding and page splitting, but also the column statistics pass, so encoder-only deltas are damped;
+read a 2% move as noise and reach for `--rows`/`--iterations` before drawing conclusions.
+
+Override the defaults with `--rows` (200,000), `--warmups` (3), `--iterations` (15) or `--output`.
+
 # Published benchmarks
 
 The homepage benchmark is generated manually. DocFX only copies the reviewed JSON snapshot and never runs a benchmark.
