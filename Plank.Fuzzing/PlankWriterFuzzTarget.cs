@@ -44,7 +44,7 @@ public static class PlankWriterFuzzTarget
     {
         var writer = fuzzCase.Schema.CreateWriter(stream, new ParquetWriterOptions
         {
-            Compression = CompressionKind.None
+            Compression = fuzzCase.Compression
         });
         var serializedColumns = new object[fuzzCase.Columns.Count];
         for (var columnIndex = 0; columnIndex < serializedColumns.Length; columnIndex++)
@@ -258,10 +258,11 @@ public static class PlankWriterFuzzTarget
 
     public sealed class FuzzCase
     {
-        internal FuzzCase(ColumnSpec[] columns, Array[][] rowGroups)
+        internal FuzzCase(ColumnSpec[] columns, Array[][] rowGroups, CompressionKind compression)
         {
             Columns = columns;
             RowGroups = rowGroups;
+            Compression = compression;
             Schema = new PlankSchema(columns.Select(static c => c.Column).ToImmutableArray());
         }
 
@@ -271,8 +272,10 @@ public static class PlankWriterFuzzTarget
 
         public PlankSchema Schema { get; }
 
+        public CompressionKind Compression { get; }
+
         public string Describe()
-            => $"Columns=[{string.Join(", ", Columns.Select(static c => $"{c.Column.Name}:{c.Describe()}"))}], RowGroups={RowGroups.Count}";
+            => $"Columns=[{string.Join(", ", Columns.Select(static c => $"{c.Column.Name}:{c.Describe()}"))}], RowGroups={RowGroups.Count}, Compression={Compression}";
     }
 
     public readonly record struct ColumnSpec(PlankColumn Column, Type ClrType)
@@ -293,10 +296,25 @@ public static class PlankWriterFuzzTarget
 
         public FuzzCase Decode()
         {
+            var compression = PickCompression();
             var columns = CreateColumns();
             var rowGroups = CreateRowGroups(columns);
-            return new FuzzCase(columns, rowGroups);
+            return new FuzzCase(columns, rowGroups, compression);
         }
+
+        // Compression used to be pinned to None, which left every codec — and
+        // the round-trip through it — outside anything this target could
+        // generate. Lz4Legacy is excluded: the writer cannot produce it.
+        CompressionKind PickCompression()
+            => _cursor.NextInt(0, 6) switch
+            {
+                0 => CompressionKind.None,
+                1 => CompressionKind.Snappy,
+                2 => CompressionKind.Gzip,
+                3 => CompressionKind.Zstd,
+                4 => CompressionKind.Lz4,
+                _ => CompressionKind.Brotli
+            };
 
         ColumnSpec[] CreateColumns()
         {
