@@ -1,1 +1,4 @@
 #nullable enable
+Plank.Reading.MemoryReadSource.Dispose() -> void
+Plank.Reading.StreamReadSource.Dispose() -> void
+Plank.Writing.ParquetWriter.Dispose() -> void

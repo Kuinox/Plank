@@ -12,6 +12,11 @@ public sealed class MemoryReadSource : IParquetReadSource
     public ulong Length
         => (ulong)_bytes.Length;
 
+    /// <summary>Does nothing: this source borrows memory and holds no operating-system resource.</summary>
+    public void Dispose()
+    {
+    }
+
     public void ReadExactly(ulong offset, Span<byte> destination)
     {
         ValidateRange(offset, destination.Length);

@@ -1,7 +1,7 @@
 namespace Plank.Writing;
 
 /// <summary>Provides reusable random-access writes to a Parquet data source.</summary>
-public interface IParquetWriteSource
+public interface IParquetWriteSource : IDisposable
 {
     /// <summary>Opens a destination from its full UTF-8 path.</summary>
     /// <param name="path">The full UTF-8 file path.</param>

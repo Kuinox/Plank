@@ -27,6 +27,10 @@ public sealed class StreamReadSource : IParquetReadSource
         _stream = stream;
     }
 
+    /// <summary>Closes the stream this source is currently pointed at.</summary>
+    public void Dispose()
+        => _stream.Dispose();
+
     public ulong Length
         => (ulong)_stream.Length;
 

@@ -387,6 +387,10 @@ internal sealed class LogicalPageMetadataTests
         public ulong Length
             => (ulong)_bytes.Length;
 
+        public void Dispose()
+        {
+        }
+
         public void ReadExactly(ulong offset, Span<byte> destination)
         {
             if (offset > Length || offset > int.MaxValue || (ulong)destination.Length > Length - offset)

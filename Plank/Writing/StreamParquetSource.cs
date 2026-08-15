@@ -58,6 +58,9 @@ sealed class StreamParquetSource : IParquetReadWriteSource
     public void Flush()
         => GetStream().Flush();
 
+    public void Dispose()
+        => Close();
+
     Stream GetStream()
         => Stream ?? throw new ObjectDisposedException(nameof(StreamParquetSource));
 }

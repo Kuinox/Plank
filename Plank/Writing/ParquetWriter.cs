@@ -8,7 +8,7 @@ using TextEncoding = System.Text.Encoding;
 
 namespace Plank.Writing;
 
-public sealed class ParquetWriter
+public sealed class ParquetWriter : IDisposable
 {
     static readonly byte[] _fileMagic = "PAR1"u8.ToArray();
 
@@ -45,6 +45,7 @@ public sealed class ParquetWriter
     bool _replacingLatestRowGroup;
     bool _rowGroupOpen;
     bool _fileClosed;
+    bool _disposed;
 
     internal ParquetWriter(Stream stream, ParquetSchema schema, ParquetWriterOptions options)
         : this(new StreamParquetSource(stream), schema, options, appendOptions: null)
@@ -251,6 +252,26 @@ public sealed class ParquetWriter
     {
         FinishFile();
         ReleaseBuffers();
+    }
+
+    /// <summary>
+    /// Releases the writer's pooled buffers and its destination.
+    /// </summary>
+    /// <remarks>
+    /// Disposing does not finish the file — call <see cref="CloseFile"/> for that. A parquet file is only valid once
+    /// its footer has been written, and committing one implicitly here would turn a failure part-way through writing
+    /// into a truncated file that still looks closed. Dispose is the cleanup path: it makes
+    /// <c>using var writer = ...</c> release buffers and close the destination even when an exception escapes
+    /// before <see cref="CloseFile"/>. It is safe to call after <see cref="CloseFile"/>, and more than once.
+    /// </remarks>
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+        ReleaseBuffers();
+        CloseCurrentFile();
     }
 
     internal void FinishFile()
