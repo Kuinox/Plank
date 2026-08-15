@@ -14,6 +14,11 @@ public sealed class ParquetFileReader : IDisposable
     readonly ParquetFileReaderOptions _options;
     readonly ParquetFileMetadata _metadata = new();
     IParquetReadSource? _source;
+    // The wrapper we built around a caller's Stream, and that stream. We close a
+    // stream we wrapped ourselves; a caller-supplied IParquetReadSource stays
+    // the caller's to manage, since we did not open anything on their behalf.
+    StreamReadSource? _ownedSource;
+    Stream? _ownedStream;
     int _generation;
     bool _disposed;
 
@@ -37,21 +42,36 @@ public sealed class ParquetFileReader : IDisposable
     /// </summary>
     /// <param name="stream">The stream containing a parquet file.</param>
     /// <remarks>
+    /// <para>
+    /// The reader takes ownership of <paramref name="stream"/>: it is closed when the reader is reset onto a
+    /// different source, and when the reader is disposed. Pass a <see cref="IParquetReadSource"/> instead to keep
+    /// ownership of the underlying resource.
+    /// </para>
+    /// <para>
     /// Resetting the reader invalidates page cursors created from an earlier source. After the first stream reset,
     /// the reader keeps the same stream wrapper. Metadata buffers come from the configured pool, so reset does not
     /// allocate them when the pool already has arrays big enough.
+    /// </para>
     /// </remarks>
     public void Reset(Stream stream)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(stream);
-        if (_source is not StreamReadSource source)
-            source = new StreamReadSource(stream);
-        else
-            source.Reset(stream);
 
-        ResetCore(source);
-        _source = source;
+        // Retargeting abandons the previous stream, so close it here: callers
+        // reset across a run of files and only dispose the reader at the end,
+        // which otherwise left every earlier file handle open until finalization.
+        if (!ReferenceEquals(_ownedStream, stream))
+            DisposeOwnedStream();
+
+        if (_ownedSource is null)
+            _ownedSource = new StreamReadSource(stream);
+        else
+            _ownedSource.Reset(stream);
+
+        ResetCore(_ownedSource);
+        _source = _ownedSource;
+        _ownedStream = stream;
     }
 
     /// <summary>
@@ -59,13 +79,25 @@ public sealed class ParquetFileReader : IDisposable
     /// </summary>
     /// <param name="source">The random-access parquet source to read from.</param>
     /// <remarks>
+    /// <para>
+    /// The caller keeps ownership of <paramref name="source"/>: the reader never disposes it, so a source holding a
+    /// handle (such as <see cref="FileReadSource"/>) must be disposed by whoever constructed it. This is what lets a
+    /// single source be shared — an in-place merge reads and writes through one
+    /// <see cref="Plank.Writing.IParquetReadWriteSource"/>, and would break if resetting the reader closed it.
+    /// Any stream the reader had wrapped itself is still closed here, since resetting abandons it.
+    /// </para>
+    /// <para>
     /// Resetting the reader invalidates page cursors created from an earlier source. Metadata buffers come from the
     /// configured pool, so reset does not allocate them when the pool already has arrays big enough.
+    /// </para>
     /// </remarks>
     public void Reset(IParquetReadSource source)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
+        // Switching to a caller-owned source still abandons any stream we had
+        // wrapped, so that one is ours to close.
+        DisposeOwnedStream();
         ResetCore(source);
         _source = source;
     }
@@ -104,7 +136,16 @@ public sealed class ParquetFileReader : IDisposable
         _disposed = true;
         _generation++;
         ReturnMetadataBuffers();
+        DisposeOwnedStream();
+        _ownedSource = null;
         _source = null;
+    }
+
+    void DisposeOwnedStream()
+    {
+        var stream = _ownedStream;
+        _ownedStream = null;
+        stream?.Dispose();
     }
 
     void ResetCore(IParquetReadSource source)
