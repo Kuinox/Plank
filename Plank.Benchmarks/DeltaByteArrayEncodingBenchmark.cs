@@ -70,7 +70,7 @@ public class DeltaByteArrayEncodingBenchmark
     public int DeltaByteArrayOptionalByteArrays()
     {
         _writer.Reset();
-        DeltaByteArrayEncoding.WriteOptionalByteArrayValues(DeltaByteArrayColumn, _optionalByteArrayValues,
+        DeltaByteArrayEncoding.WriteOptionalValues<byte[], OptionalByteArrayRow>(DeltaByteArrayColumn, _optionalByteArrayValues,
             _bufferWriters, ref _writer);
         return _writer.WrittenLength;
     }
@@ -79,7 +79,7 @@ public class DeltaByteArrayEncodingBenchmark
     public int DeltaByteArrayOptionalMemory()
     {
         _writer.Reset();
-        DeltaByteArrayEncoding.WriteOptionalMemoryValues(DeltaByteArrayColumn, _optionalMemoryValues, _bufferWriters,
+        DeltaByteArrayEncoding.WriteOptionalValues<ReadOnlyMemory<byte>?, OptionalMemoryRow>(DeltaByteArrayColumn, _optionalMemoryValues, _bufferWriters,
             ref _writer);
         return _writer.WrittenLength;
     }
@@ -106,7 +106,7 @@ public class DeltaByteArrayEncodingBenchmark
     public int DeltaLengthByteArrayOptionalByteArrays()
     {
         _writer.Reset();
-        DeltaLengthByteArrayEncoding.WriteOptionalByteArrayValues(DeltaLengthByteArrayColumn, _optionalByteArrayValues,
+        DeltaLengthByteArrayEncoding.WriteOptionalValues<byte[], OptionalByteArrayRow>(DeltaLengthByteArrayColumn, _optionalByteArrayValues,
             _bufferWriters, ref _writer);
         return _writer.WrittenLength;
     }
@@ -115,7 +115,7 @@ public class DeltaByteArrayEncodingBenchmark
     public int DeltaLengthByteArrayOptionalMemory()
     {
         _writer.Reset();
-        DeltaLengthByteArrayEncoding.WriteOptionalMemoryValues(DeltaLengthByteArrayColumn, _optionalMemoryValues,
+        DeltaLengthByteArrayEncoding.WriteOptionalValues<ReadOnlyMemory<byte>?, OptionalMemoryRow>(DeltaLengthByteArrayColumn, _optionalMemoryValues,
             _bufferWriters, ref _writer);
         return _writer.WrittenLength;
     }

@@ -163,7 +163,7 @@ internal sealed class PlainEncodingTests
         var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 128 * 1024, 128 * 1024);
         try
         {
-            PlainEncoding.WriteOptionalByteArrayValues(column, values, ref writer);
+            PlainEncoding.WriteOptionalValues<byte[], OptionalByteArrayRow>(column, values, ref writer);
             return CopyWritten(ref writer);
         }
         finally
@@ -177,7 +177,7 @@ internal sealed class PlainEncodingTests
         var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 128 * 1024, 128 * 1024);
         try
         {
-            PlainEncoding.WriteOptionalMemoryValues(column, values, ref writer);
+            PlainEncoding.WriteOptionalValues<ReadOnlyMemory<byte>?, OptionalMemoryRow>(column, values, ref writer);
             return CopyWritten(ref writer);
         }
         finally
