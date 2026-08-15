@@ -40,39 +40,26 @@ static class ValueEncodingDispatcher
         }
     }
 
-    internal static void WriteOptionalByteArrayValues(EncodingKind encoding, Column column,
-        ReadOnlySpan<byte[]> values, BufferWriterFactory bufferWriters, ref BufferWriter writer)
+    /// <summary>
+    /// Writes the present values of one optional byte-array page straight from the rows. The row
+    /// shape - <c>byte[]</c> or <see cref="ReadOnlyMemory{T}"/> - is carried by
+    /// <typeparamref name="TRowAccess"/> rather than by a separate overload per shape.
+    /// </summary>
+    internal static void WriteOptionalValues<TRow, TRowAccess>(EncodingKind encoding, Column column,
+        ReadOnlySpan<TRow> rows, BufferWriterFactory bufferWriters, ref BufferWriter writer)
+        where TRowAccess : IByteArrayRow<TRow>
     {
         switch (encoding)
         {
             case EncodingKind.Plain:
-                PlainEncoding.WriteOptionalByteArrayValues(column, values, ref writer);
+                PlainEncoding.WriteOptionalValues<TRow, TRowAccess>(column, rows, ref writer);
                 return;
             case EncodingKind.DeltaLengthByteArray:
-                DeltaLengthByteArrayEncoding.WriteOptionalByteArrayValues(column, values, bufferWriters, ref writer);
+                DeltaLengthByteArrayEncoding.WriteOptionalValues<TRow, TRowAccess>(column, rows, bufferWriters,
+                    ref writer);
                 return;
             case EncodingKind.DeltaByteArray:
-                DeltaByteArrayEncoding.WriteOptionalByteArrayValues(column, values, bufferWriters, ref writer);
-                return;
-            default:
-                throw new NotSupportedException(
-                    $"Encoding '{encoding}' is not supported for optional byte-array values.");
-        }
-    }
-
-    internal static void WriteOptionalMemoryValues(EncodingKind encoding, Column column,
-        ReadOnlySpan<ReadOnlyMemory<byte>?> values, BufferWriterFactory bufferWriters, ref BufferWriter writer)
-    {
-        switch (encoding)
-        {
-            case EncodingKind.Plain:
-                PlainEncoding.WriteOptionalMemoryValues(column, values, ref writer);
-                return;
-            case EncodingKind.DeltaLengthByteArray:
-                DeltaLengthByteArrayEncoding.WriteOptionalMemoryValues(column, values, bufferWriters, ref writer);
-                return;
-            case EncodingKind.DeltaByteArray:
-                DeltaByteArrayEncoding.WriteOptionalMemoryValues(column, values, bufferWriters, ref writer);
+                DeltaByteArrayEncoding.WriteOptionalValues<TRow, TRowAccess>(column, rows, bufferWriters, ref writer);
                 return;
             default:
                 throw new NotSupportedException(

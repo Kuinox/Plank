@@ -148,10 +148,11 @@ internal sealed class DeltaByteArrayEncodingTests
         try
         {
             if (encoding == EncodingKind.DeltaByteArray)
-                DeltaByteArrayEncoding.WriteOptionalByteArrayValues(DeltaByteArrayColumn, values, factory, ref writer);
+                DeltaByteArrayEncoding.WriteOptionalValues<byte[], OptionalByteArrayRow>(DeltaByteArrayColumn, values,
+                    factory, ref writer);
             else
-                DeltaLengthByteArrayEncoding.WriteOptionalByteArrayValues(DeltaLengthByteArrayColumn, values, factory,
-                    ref writer);
+                DeltaLengthByteArrayEncoding.WriteOptionalValues<byte[], OptionalByteArrayRow>(DeltaLengthByteArrayColumn,
+                    values, factory, ref writer);
             return CopyWritten(ref writer);
         }
         finally
@@ -167,10 +168,11 @@ internal sealed class DeltaByteArrayEncodingTests
         try
         {
             if (encoding == EncodingKind.DeltaByteArray)
-                DeltaByteArrayEncoding.WriteOptionalMemoryValues(DeltaByteArrayColumn, values, factory, ref writer);
+                DeltaByteArrayEncoding.WriteOptionalValues<ReadOnlyMemory<byte>?, OptionalMemoryRow>(DeltaByteArrayColumn,
+                    values, factory, ref writer);
             else
-                DeltaLengthByteArrayEncoding.WriteOptionalMemoryValues(DeltaLengthByteArrayColumn, values, factory,
-                    ref writer);
+                DeltaLengthByteArrayEncoding.WriteOptionalValues<ReadOnlyMemory<byte>?, OptionalMemoryRow>(
+                    DeltaLengthByteArrayColumn, values, factory, ref writer);
             return CopyWritten(ref writer);
         }
         finally

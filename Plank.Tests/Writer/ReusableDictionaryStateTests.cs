@@ -8,7 +8,7 @@ internal sealed class ReusableDictionaryStateTests
     public async Task GetOrAddIndexUsesOrdinalStringEquality()
     {
         var state = new ReusableDictionaryState<string>();
-        state.Reset(16, useMap: true, StringComparer.Ordinal);
+        state.Reset(16, useMap: true);
 
         var first = state.GetOrAddIndex(new string("same"));
         var second = state.GetOrAddIndex(new string("same"));
@@ -23,7 +23,7 @@ internal sealed class ReusableDictionaryStateTests
         var state = new ReusableDictionaryState<object>();
         var references = Populate(state, 512);
 
-        state.Reset(512, useMap: true, EqualityComparer<object>.Default);
+        state.Reset(512, useMap: true);
 
         GC.Collect();
         GC.WaitForPendingFinalizers();
@@ -42,7 +42,7 @@ internal sealed class ReusableDictionaryStateTests
         var state = new ReusableDictionaryState<int>();
         for (var reset = 0; reset < 300; reset++)
         {
-            state.Reset(4, useMap: true, EqualityComparer<int>.Default);
+            state.Reset(4, useMap: true);
             for (var i = 0; i < 4; i++)
             {
                 var value = reset * 4 + i;
@@ -59,7 +59,7 @@ internal sealed class ReusableDictionaryStateTests
     public void ExactThresholdGrowthPreservesIndexes()
     {
         var state = new ReusableDictionaryState<int>();
-        state.Reset(0, useMap: true, EqualityComparer<int>.Default);
+        state.Reset(0, useMap: true);
 
         for (var i = 0; i < 4; i++)
             if (state.GetOrAddIndex(i) != i)
@@ -79,7 +79,7 @@ internal sealed class ReusableDictionaryStateTests
     public void ExistingLookupAtThresholdDoesNotGrowTheTable()
     {
         var state = new ReusableDictionaryState<int>();
-        state.Reset(0, useMap: true, EqualityComparer<int>.Default);
+        state.Reset(0, useMap: true);
         for (var i = 0; i < 4; i++)
             state.GetOrAddIndex(i);
 
@@ -97,7 +97,7 @@ internal sealed class ReusableDictionaryStateTests
     public void ZeroCapacityCanGrowAcrossMultipleTableSizes()
     {
         var state = new ReusableDictionaryState<int>();
-        state.Reset(0, useMap: true, EqualityComparer<int>.Default);
+        state.Reset(0, useMap: true);
 
         for (var i = 0; i < 1_024; i++)
             if (state.GetOrAddIndex(i) != i)
@@ -111,7 +111,7 @@ internal sealed class ReusableDictionaryStateTests
     public void EnableMapAfterSortedPopulationPreservesIndexes()
     {
         var state = new ReusableDictionaryState<int>();
-        state.Reset(2, useMap: false, EqualityComparer<int>.Default);
+        state.Reset(2, useMap: false);
         state.AddFirst(10);
         for (var i = 1; i < 128; i++)
             state.AddSortedUnique(10 + i);
@@ -124,16 +124,16 @@ internal sealed class ReusableDictionaryStateTests
     }
 
     [Test]
-    public void CollisionHeavyKeysRemainDistinctAcrossComparerChanges()
+    public void CollisionHeavyKeysRemainDistinctAcrossResets()
     {
         var state = new ReusableDictionaryState<CollidingKey>();
-        PopulateCollisions(state, EqualityComparer<CollidingKey>.Default);
-        PopulateCollisions(state, new PassthroughComparer());
+        PopulateCollisions(state);
+        PopulateCollisions(state);
     }
 
     static WeakReference[] Populate(ReusableDictionaryState<object> state, int count)
     {
-        state.Reset(count, useMap: true, EqualityComparer<object>.Default);
+        state.Reset(count, useMap: true);
         var result = new WeakReference[count];
         for (var i = 0; i < count; i++)
         {
@@ -145,10 +145,9 @@ internal sealed class ReusableDictionaryStateTests
         return result;
     }
 
-    static void PopulateCollisions(ReusableDictionaryState<CollidingKey> state,
-        IEqualityComparer<CollidingKey> comparer)
+    static void PopulateCollisions(ReusableDictionaryState<CollidingKey> state)
     {
-        state.Reset(256, useMap: true, comparer);
+        state.Reset(256, useMap: true);
         for (var i = 0; i < 256; i++)
             if (state.GetOrAddIndex(new CollidingKey(i)) != i)
                 throw new InvalidOperationException($"Colliding key {i} received the wrong insertion index.");
@@ -166,11 +165,5 @@ internal sealed class ReusableDictionaryStateTests
         public bool Equals(CollidingKey? other) => other is not null && other.Value == Value;
         public override bool Equals(object? obj) => obj is CollidingKey other && Equals(other);
         public override int GetHashCode() => 1;
-    }
-
-    sealed class PassthroughComparer : IEqualityComparer<CollidingKey>
-    {
-        public bool Equals(CollidingKey? x, CollidingKey? y) => EqualityComparer<CollidingKey>.Default.Equals(x, y);
-        public int GetHashCode(CollidingKey obj) => obj.GetHashCode();
     }
 }

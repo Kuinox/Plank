@@ -31,7 +31,12 @@ sealed class ReusableDictionaryState<T>
     public bool IsMapEnabled => _mapEnabled;
     public int Count => _count;
 
-    public void Reset(int initialUniqueCapacity, bool useMap, IEqualityComparer<T> comparer)
+    /// <summary>
+    /// Clears the dictionary for reuse. Key equality is not configurable - <see cref="KeysEqual"/>
+    /// and <see cref="HashKey"/> specialize on <typeparamref name="T"/> so that they inline, which
+    /// an <see cref="IEqualityComparer{T}"/> could not.
+    /// </summary>
+    public void Reset(int initialUniqueCapacity, bool useMap)
     {
         var previousCount = _count;
         if (previousCount > 0 && RuntimeHelpers.IsReferenceOrContainsReferences<T>())

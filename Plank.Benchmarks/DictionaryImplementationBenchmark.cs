@@ -88,7 +88,7 @@ public class DictionaryImplementationBenchmark
     [BenchmarkCategory("Int32")]
     public int PlankInt32()
     {
-        _plankIntDictionary.Reset(_uniqueCount, useMap: true, EqualityComparer<int>.Default);
+        _plankIntDictionary.Reset(_uniqueCount, useMap: true);
         for (var i = 0; i < _intValues.Length; i++)
             _plankIntDictionary.GetOrAddIndex(_intValues[i]);
         return _plankIntDictionary.Count;
@@ -113,7 +113,7 @@ public class DictionaryImplementationBenchmark
     [BenchmarkCategory("String")]
     public int PlankString()
     {
-        _plankStringDictionary.Reset(_uniqueCount, useMap: true, StringComparer.Ordinal);
+        _plankStringDictionary.Reset(_uniqueCount, useMap: true);
         for (var i = 0; i < _stringValues.Length; i++)
             _plankStringDictionary.GetOrAddIndex(_stringValues[i]);
         return _plankStringDictionary.Count;
@@ -138,7 +138,7 @@ public class DictionaryImplementationBenchmark
     [BenchmarkCategory("Binary")]
     public int PlankBinary()
     {
-        _plankBinaryDictionary.Reset(_uniqueCount, useMap: true, ByteArrayComparer.Instance);
+        _plankBinaryDictionary.Reset(_uniqueCount, useMap: true);
         for (var i = 0; i < _binaryValues.Length; i++)
             _plankBinaryDictionary.GetOrAddIndex(_binaryValues[i]);
         return _plankBinaryDictionary.Count;

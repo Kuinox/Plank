@@ -10,19 +10,18 @@ static class DeltaLengthByteArrayEncoding
         ref BufferWriter writer)
         where T : notnull
     {
-        if (column.PhysicalType != ParquetPhysicalType.ByteArray)
-            throw new NotSupportedException(
-                $"Encoding '{EncodingKind.DeltaLengthByteArray}' does not support physical type '{column.PhysicalType}' for column '{column.Name}'.");
+        RequireByteArrayColumn(column);
         if (typeof(T) == typeof(byte[]))
         {
-            var byteArrayValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
-            WriteByteArrayValues(column, byteArrayValues, bufferWriters, ref writer);
+            WritePayloads<byte[], RequiredByteArrayRow>(column,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), bufferWriters, ref writer);
             return;
         }
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
         {
-            var memoryValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>>>(ref values);
-            WriteMemoryValues(column, memoryValues, bufferWriters, ref writer);
+            WritePayloads<ReadOnlyMemory<byte>, RequiredMemoryRow>(column,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>>>(ref values), bufferWriters,
+                ref writer);
             return;
         }
 
@@ -30,127 +29,57 @@ static class DeltaLengthByteArrayEncoding
             $"Column '{column.Name}' expects '{ParquetPhysicalType.ByteArray}' values, but got '{typeof(T)}'.");
     }
 
-    static void WriteByteArrayValues(Column column, ReadOnlySpan<byte[]> values, BufferWriterFactory bufferWriters,
-        ref BufferWriter writer)
+    internal static void WriteOptionalValues<TRow, TRowAccess>(Column column, ReadOnlySpan<TRow> rows,
+        BufferWriterFactory bufferWriters, ref BufferWriter writer)
+        where TRowAccess : IByteArrayRow<TRow>
+        => WritePayloads<TRow, TRowAccess>(column, rows, bufferWriters, ref writer);
+
+    /// <summary>
+    /// DELTA_LENGTH_BYTE_ARRAY layout: the delta-binary-packed lengths of every present value,
+    /// followed by their bytes back to back. Absent rows contribute nothing, so this serves the
+    /// required and optional shapes alike.
+    /// </summary>
+    static void WritePayloads<TRow, TRowAccess>(Column column, ReadOnlySpan<TRow> rows,
+        BufferWriterFactory bufferWriters, ref BufferWriter writer)
+        where TRowAccess : IByteArrayRow<TRow>
     {
-        var byteLength = checked(values.Length * sizeof(int));
+        var presentCount = ByteArrayRows.CountPresent<TRow, TRowAccess>(rows);
+        // An optional page with no present value writes nothing at all, while a required page always
+        // emits the length header even when it is empty.
+        if (!TRowAccess.ValueRequired && presentCount == 0)
+            return;
+
+        var byteLength = checked(presentCount * sizeof(int));
         var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
         var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.Span[..byteLength]);
         var totalPayloadBytes = 0;
 
         try
         {
-            for (var i = 0; i < values.Length; i++)
-            {
-                var value = values[i] ?? throw new InvalidOperationException(
-                    $"Column '{column.Name}' does not support null values.");
-                var length = value.Length;
-                lengths[i] = length;
-                totalPayloadBytes = checked(totalPayloadBytes + length);
-            }
-
-            DeltaBinaryPackedEncoding.WriteInt32(lengths, ref writer);
-            if (totalPayloadBytes == 0)
-                return;
-
-            var payload = writer.GetSpan(totalPayloadBytes);
-            var payloadOffset = 0;
-            for (var i = 0; i < values.Length; i++)
-            {
-                var value = values[i]!;
-                value.CopyTo(payload[payloadOffset..]);
-                payloadOffset += value.Length;
-            }
-
-            writer.Advance(payloadOffset);
-        }
-        finally
-        {
-            bufferWriters.ReturnScratch(rentedLengthsBytes);
-        }
-    }
-
-    static void WriteMemoryValues(Column column, ReadOnlySpan<ReadOnlyMemory<byte>> values, BufferWriterFactory bufferWriters,
-        ref BufferWriter writer)
-    {
-        var byteLength = checked(values.Length * sizeof(int));
-        var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
-        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.Span[..byteLength]);
-        var totalPayloadBytes = 0;
-
-        try
-        {
-            for (var i = 0; i < values.Length; i++)
-            {
-                var length = values[i].Length;
-                lengths[i] = length;
-                totalPayloadBytes = checked(totalPayloadBytes + length);
-            }
-
-            DeltaBinaryPackedEncoding.WriteInt32(lengths, ref writer);
-            if (totalPayloadBytes == 0)
-                return;
-
-            var payload = writer.GetSpan(totalPayloadBytes);
-            var payloadOffset = 0;
-            for (var i = 0; i < values.Length; i++)
-            {
-                var value = values[i];
-                value.Span.CopyTo(payload[payloadOffset..]);
-                payloadOffset += value.Length;
-            }
-
-            writer.Advance(payloadOffset);
-        }
-        finally
-        {
-            bufferWriters.ReturnScratch(rentedLengthsBytes);
-        }
-    }
-
-    internal static void WriteOptionalByteArrayValues(Column column, ReadOnlySpan<byte[]> values,
-        BufferWriterFactory bufferWriters, ref BufferWriter writer)
-    {
-        var presentCount = 0;
-        for (var i = 0; i < values.Length; i++)
-            if (values[i] is not null)
-                presentCount++;
-        if (presentCount == 0)
-            return;
-
-        var byteLength = checked(presentCount * sizeof(int));
-        var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
-        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.Span[..byteLength]);
-        var totalPayloadBytes = 0;
-
-        try
-        {
             var denseIndex = 0;
-            for (var i = 0; i < values.Length; i++)
+            for (var i = 0; i < rows.Length; i++)
             {
-                var value = values[i];
-                if (value is null)
+                if (!ByteArrayRows.TryGetPayload<TRow, TRowAccess>(column, in rows[i], out var payload))
                     continue;
-                lengths[denseIndex++] = value.Length;
-                totalPayloadBytes = checked(totalPayloadBytes + value.Length);
+                lengths[denseIndex++] = payload.Length;
+                totalPayloadBytes = checked(totalPayloadBytes + payload.Length);
             }
 
             DeltaBinaryPackedEncoding.WriteInt32(lengths, ref writer);
             if (totalPayloadBytes == 0)
                 return;
 
-            var payload = writer.GetSpan(totalPayloadBytes);
-            var payloadOffset = 0;
-            for (var i = 0; i < values.Length; i++)
+            var destination = writer.GetSpan(totalPayloadBytes);
+            var offset = 0;
+            for (var i = 0; i < rows.Length; i++)
             {
-                var value = values[i];
-                if (value is null)
+                if (!ByteArrayRows.TryGetPayload<TRow, TRowAccess>(column, in rows[i], out var payload))
                     continue;
-                value.CopyTo(payload[payloadOffset..]);
-                payloadOffset += value.Length;
+                payload.CopyTo(destination[offset..]);
+                offset += payload.Length;
             }
 
-            writer.Advance(payloadOffset);
+            writer.Advance(offset);
         }
         finally
         {
@@ -158,55 +87,10 @@ static class DeltaLengthByteArrayEncoding
         }
     }
 
-    internal static void WriteOptionalMemoryValues(Column column, ReadOnlySpan<ReadOnlyMemory<byte>?> values,
-        BufferWriterFactory bufferWriters, ref BufferWriter writer)
+    static void RequireByteArrayColumn(Column column)
     {
-        var presentCount = 0;
-        for (var i = 0; i < values.Length; i++)
-            if (values[i].HasValue)
-                presentCount++;
-        if (presentCount == 0)
-            return;
-
-        var byteLength = checked(presentCount * sizeof(int));
-        var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
-        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.Span[..byteLength]);
-        var totalPayloadBytes = 0;
-
-        try
-        {
-            var denseIndex = 0;
-            for (var i = 0; i < values.Length; i++)
-            {
-                var nullableValue = values[i];
-                if (!nullableValue.HasValue)
-                    continue;
-                var value = nullableValue.Value;
-                lengths[denseIndex++] = value.Length;
-                totalPayloadBytes = checked(totalPayloadBytes + value.Length);
-            }
-
-            DeltaBinaryPackedEncoding.WriteInt32(lengths, ref writer);
-            if (totalPayloadBytes == 0)
-                return;
-
-            var payload = writer.GetSpan(totalPayloadBytes);
-            var payloadOffset = 0;
-            for (var i = 0; i < values.Length; i++)
-            {
-                var nullableValue = values[i];
-                if (!nullableValue.HasValue)
-                    continue;
-                var value = nullableValue.Value;
-                value.Span.CopyTo(payload[payloadOffset..]);
-                payloadOffset += value.Length;
-            }
-
-            writer.Advance(payloadOffset);
-        }
-        finally
-        {
-            bufferWriters.ReturnScratch(rentedLengthsBytes);
-        }
+        if (column.PhysicalType != ParquetPhysicalType.ByteArray)
+            throw new NotSupportedException(
+                $"Encoding '{EncodingKind.DeltaLengthByteArray}' does not support physical type '{column.PhysicalType}' for column '{column.Name}'.");
     }
 }
