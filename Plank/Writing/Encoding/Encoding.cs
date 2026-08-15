@@ -1164,15 +1164,15 @@ static class Encoding
             case ParquetPhysicalType.Boolean:
                 if (typeof(T) == typeof(bool[]))
                 {
-                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                    EncodeRepeatedRowsCore<bool, bool, RequiredRow<bool>>(bufferWriters, column, dataEncoding,
                         Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool[]>>(ref rows), ref page,
                         writeLevelLengthPrefixes, leafProjectionInfo);
                     return;
                 }
                 if (leafProjectionInfo.ElementOptional && typeof(T) == typeof(bool?[]))
                 {
-                    EncodeRepeatedRowsCoreNullableValue(bufferWriters, column, dataEncoding,
-                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool?[]>>(ref rows), ref page,
+                    EncodeRepeatedRowsCore<bool?, bool, NullableValueRow<bool>>(bufferWriters, column,
+                        dataEncoding, Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool?[]>>(ref rows), ref page,
                         writeLevelLengthPrefixes, leafProjectionInfo);
                     return;
                 }
@@ -1180,15 +1180,15 @@ static class Encoding
             case ParquetPhysicalType.Int32:
                 if (typeof(T) == typeof(int[]))
                 {
-                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                    EncodeRepeatedRowsCore<int, int, RequiredRow<int>>(bufferWriters, column, dataEncoding,
                         Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int[]>>(ref rows), ref page,
                         writeLevelLengthPrefixes, leafProjectionInfo);
                     return;
                 }
                 if (leafProjectionInfo.ElementOptional && typeof(T) == typeof(int?[]))
                 {
-                    EncodeRepeatedRowsCoreNullableValue(bufferWriters, column, dataEncoding,
-                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int?[]>>(ref rows), ref page,
+                    EncodeRepeatedRowsCore<int?, int, NullableValueRow<int>>(bufferWriters, column,
+                        dataEncoding, Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int?[]>>(ref rows), ref page,
                         writeLevelLengthPrefixes, leafProjectionInfo);
                     return;
                 }
@@ -1196,15 +1196,15 @@ static class Encoding
             case ParquetPhysicalType.Int64:
                 if (typeof(T) == typeof(long[]))
                 {
-                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                    EncodeRepeatedRowsCore<long, long, RequiredRow<long>>(bufferWriters, column, dataEncoding,
                         Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long[]>>(ref rows), ref page,
                         writeLevelLengthPrefixes, leafProjectionInfo);
                     return;
                 }
                 if (leafProjectionInfo.ElementOptional && typeof(T) == typeof(long?[]))
                 {
-                    EncodeRepeatedRowsCoreNullableValue(bufferWriters, column, dataEncoding,
-                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long?[]>>(ref rows), ref page,
+                    EncodeRepeatedRowsCore<long?, long, NullableValueRow<long>>(bufferWriters, column,
+                        dataEncoding, Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long?[]>>(ref rows), ref page,
                         writeLevelLengthPrefixes, leafProjectionInfo);
                     return;
                 }
@@ -1212,15 +1212,15 @@ static class Encoding
             case ParquetPhysicalType.Float:
                 if (typeof(T) == typeof(float[]))
                 {
-                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                    EncodeRepeatedRowsCore<float, float, RequiredRow<float>>(bufferWriters, column, dataEncoding,
                         Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float[]>>(ref rows), ref page,
                         writeLevelLengthPrefixes, leafProjectionInfo);
                     return;
                 }
                 if (leafProjectionInfo.ElementOptional && typeof(T) == typeof(float?[]))
                 {
-                    EncodeRepeatedRowsCoreNullableValue(bufferWriters, column, dataEncoding,
-                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float?[]>>(ref rows), ref page,
+                    EncodeRepeatedRowsCore<float?, float, NullableValueRow<float>>(bufferWriters, column,
+                        dataEncoding, Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float?[]>>(ref rows), ref page,
                         writeLevelLengthPrefixes, leafProjectionInfo);
                     return;
                 }
@@ -1228,15 +1228,15 @@ static class Encoding
             case ParquetPhysicalType.Double:
                 if (typeof(T) == typeof(double[]))
                 {
-                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                    EncodeRepeatedRowsCore<double, double, RequiredRow<double>>(bufferWriters, column, dataEncoding,
                         Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double[]>>(ref rows), ref page,
                         writeLevelLengthPrefixes, leafProjectionInfo);
                     return;
                 }
                 if (leafProjectionInfo.ElementOptional && typeof(T) == typeof(double?[]))
                 {
-                    EncodeRepeatedRowsCoreNullableValue(bufferWriters, column, dataEncoding,
-                        Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double?[]>>(ref rows), ref page,
+                    EncodeRepeatedRowsCore<double?, double, NullableValueRow<double>>(bufferWriters, column,
+                        dataEncoding, Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double?[]>>(ref rows), ref page,
                         writeLevelLengthPrefixes, leafProjectionInfo);
                     return;
                 }
@@ -1247,12 +1247,12 @@ static class Encoding
                 if (typeof(T) == typeof(byte[][]))
                 {
                     if (leafProjectionInfo.ElementOptional)
-                        EncodeRepeatedRowsCoreNullableReference(bufferWriters, column, dataEncoding,
-                            Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[][]>>(ref rows), ref page,
+                        EncodeRepeatedRowsCore<byte[], byte[], ReferenceRow<byte[]>>(bufferWriters, column,
+                            dataEncoding, Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[][]>>(ref rows), ref page,
                             writeLevelLengthPrefixes, leafProjectionInfo);
                     else
-                        EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
-                            Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[][]>>(ref rows), ref page,
+                        EncodeRepeatedRowsCore<byte[], byte[], RequiredRow<byte[]>>(bufferWriters, column,
+                            dataEncoding, Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[][]>>(ref rows), ref page,
                             writeLevelLengthPrefixes, leafProjectionInfo);
                     return;
                 }
@@ -1262,7 +1262,8 @@ static class Encoding
                         throw new InvalidOperationException(
                             $"Column '{column.Name}' has optional list elements; use nullable row element type for this column.");
 
-                    EncodeRepeatedRowsCore(bufferWriters, column, dataEncoding,
+                    EncodeRepeatedRowsCore<ReadOnlyMemory<byte>, ReadOnlyMemory<byte>,
+                        RequiredRow<ReadOnlyMemory<byte>>>(bufferWriters, column, dataEncoding,
                         Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>[]>>(ref rows), ref page,
                         writeLevelLengthPrefixes, leafProjectionInfo);
                     return;
@@ -1274,77 +1275,21 @@ static class Encoding
             $"Repeated column '{column.Name}' with physical type '{column.PhysicalType}' expects rows of '{column.PhysicalType}[]'.");
     }
 
-    static void EncodeRepeatedRowsCore<TElement>(BufferWriterFactory bufferWriters, Column column, EncodingKind dataEncoding,
-        ReadOnlySpan<TElement[]> rows, ref Page page, bool writeLevelLengthPrefixes,
+    /// <summary>
+    /// Flattens one page of repeated rows and writes its levels and values. The element shape -
+    /// required, nullable value or nullable reference - is carried by <typeparamref name="TProbe"/>;
+    /// each of those used to be a full copy of this method.
+    /// </summary>
+    static void EncodeRepeatedRowsCore<TRowElement, TValue, TProbe>(BufferWriterFactory bufferWriters, Column column,
+        EncodingKind dataEncoding, ReadOnlySpan<TRowElement[]> rows, ref Page page, bool writeLevelLengthPrefixes,
         LeafProjectionInfo leafProjectionInfo)
-        where TElement : notnull
+        where TValue : notnull
+        where TProbe : IOptionalRow<TRowElement, TValue>
     {
-        if (leafProjectionInfo.ElementOptional)
+        if (TProbe.ValueRequired && leafProjectionInfo.ElementOptional)
             throw new InvalidOperationException(
                 $"Column '{column.Name}' has optional list elements; use nullable row element type for this column.");
-
-        var rowCount = rows.Length;
-        var physicalValueCount = 0;
-        var levelValueCount = 0;
-        var nullCount = 0;
-        var allowsNullRow = leafProjectionInfo.ListOptional;
-        var listDefinedDefinitionLevel = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional ? 1 : 0;
-        var presentElementDefinitionLevel = listDefinedDefinitionLevel + 1;
-        var definitionBitWidth = EncodingPrimitives.GetBitWidthFromMaxValue(presentElementDefinitionLevel);
-
-        for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
-        {
-            var row = rows[rowIndex];
-            if (row is null)
-            {
-                if (!allowsNullRow)
-                    throw new InvalidOperationException(
-                        $"Column '{column.Name}' has repeated values; null row arrays are not supported.");
-                levelValueCount = checked(levelValueCount + 1);
-                nullCount = checked(nullCount + 1);
-                continue;
-            }
-
-            if (row.Length == 0)
-            {
-                if (!leafProjectionInfo.IsList)
-                    throw new InvalidOperationException(
-                        $"Column '{column.Name}' has repeated values; empty rows are not supported for this schema.");
-                levelValueCount = checked(levelValueCount + 1);
-                nullCount = checked(nullCount + 1);
-                continue;
-            }
-
-            levelValueCount = checked(levelValueCount + row.Length);
-            physicalValueCount = checked(physicalValueCount + row.Length);
-        }
-
-        var flatValues = new TElement[physicalValueCount];
-        var flatIndex = 0;
-        for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
-        {
-            var row = rows[rowIndex];
-            if (row is null || row.Length == 0)
-                continue;
-            row.CopyTo(flatValues.AsSpan(flatIndex));
-            flatIndex += row.Length;
-        }
-
-        var repetitionLength = WriteRepeatedLevels(rows, writeLevelLengthPrefixes, ref page.Content);
-        var definitionLength = WriteRepeatedDefinitionLevels(rows, listDefinedDefinitionLevel,
-            presentElementDefinitionLevel, allowsNullRow, definitionBitWidth, writeLevelLengthPrefixes,
-            ref page.Content);
-        ValueEncodingDispatcher.WriteValues(dataEncoding, column, flatValues, bufferWriters, ref page.Content);
-        WriteDataPageHeader(ref page, rowCount, levelValueCount, nullCount, repetitionLength, definitionLength,
-            dataEncoding);
-    }
-
-    static void EncodeRepeatedRowsCoreNullableValue<TValue>(BufferWriterFactory bufferWriters, Column column,
-        EncodingKind dataEncoding, ReadOnlySpan<TValue?[]> rows, ref Page page, bool writeLevelLengthPrefixes,
-        LeafProjectionInfo leafProjectionInfo)
-        where TValue : struct
-    {
-        if (!leafProjectionInfo.ElementOptional)
+        if (!TProbe.ValueRequired && !leafProjectionInfo.ElementOptional)
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects required list elements, but nullable row values were provided.");
 
@@ -1354,8 +1299,10 @@ static class Encoding
         var nullCount = 0;
         var allowsNullRow = leafProjectionInfo.ListOptional;
         var listDefinedDefinitionLevel = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional ? 1 : 0;
+        // A required element sits one level above the defined list; an optional one needs a level of
+        // its own in between.
         var nullElementDefinitionLevel = listDefinedDefinitionLevel + 1;
-        var presentElementDefinitionLevel = listDefinedDefinitionLevel + 2;
+        var presentElementDefinitionLevel = listDefinedDefinitionLevel + (TProbe.ValueRequired ? 1 : 2);
         var definitionBitWidth = EncodingPrimitives.GetBitWidthFromMaxValue(presentElementDefinitionLevel);
 
         for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
@@ -1382,9 +1329,15 @@ static class Encoding
             }
 
             levelValueCount = checked(levelValueCount + row.Length);
+            if (TProbe.ValueRequired)
+            {
+                physicalValueCount = checked(physicalValueCount + row.Length);
+                continue;
+            }
+
             for (var i = 0; i < row.Length; i++)
             {
-                if (row[i].HasValue)
+                if (TProbe.IsPresent(in row[i]))
                     physicalValueCount = checked(physicalValueCount + 1);
                 else
                     nullCount = checked(nullCount + 1);
@@ -1398,96 +1351,29 @@ static class Encoding
             var row = rows[rowIndex];
             if (row is null || row.Length == 0)
                 continue;
+
+            if (TProbe.ValueRequired)
+            {
+                // TRowElement is TValue on the required instantiations, so the row copies in bulk.
+                MemoryMarshal.CreateReadOnlySpan(
+                        ref Unsafe.As<TRowElement, TValue>(ref MemoryMarshal.GetArrayDataReference(row)), row.Length)
+                    .CopyTo(flatValues.AsSpan(flatIndex));
+                flatIndex += row.Length;
+                continue;
+            }
+
             for (var i = 0; i < row.Length; i++)
             {
-                var value = row[i];
-                if (!value.HasValue)
+                if (!TProbe.IsPresent(in row[i]))
                     continue;
-                flatValues[flatIndex++] = value.Value;
+                flatValues[flatIndex++] = TProbe.GetValue(in row[i]);
             }
         }
 
         var repetitionLength = WriteRepeatedLevels(rows, writeLevelLengthPrefixes, ref page.Content);
-        var definitionLength = WriteRepeatedDefinitionLevelsNullableValues(rows, listDefinedDefinitionLevel,
-            nullElementDefinitionLevel, presentElementDefinitionLevel, allowsNullRow, definitionBitWidth,
-            writeLevelLengthPrefixes, ref page.Content);
-        ValueEncodingDispatcher.WriteValues(dataEncoding, column, flatValues, bufferWriters, ref page.Content);
-        WriteDataPageHeader(ref page, rowCount, levelValueCount, nullCount, repetitionLength, definitionLength,
-            dataEncoding);
-    }
-
-    static void EncodeRepeatedRowsCoreNullableReference<TElement>(BufferWriterFactory bufferWriters, Column column,
-        EncodingKind dataEncoding, ReadOnlySpan<TElement[]> rows, ref Page page, bool writeLevelLengthPrefixes,
-        LeafProjectionInfo leafProjectionInfo)
-        where TElement : class
-    {
-        if (!leafProjectionInfo.ElementOptional)
-            throw new InvalidOperationException(
-                $"Column '{column.Name}' expects required list elements, but nullable row values were provided.");
-
-        var rowCount = rows.Length;
-        var physicalValueCount = 0;
-        var levelValueCount = 0;
-        var nullCount = 0;
-        var allowsNullRow = leafProjectionInfo.ListOptional;
-        var listDefinedDefinitionLevel = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional ? 1 : 0;
-        var nullElementDefinitionLevel = listDefinedDefinitionLevel + 1;
-        var presentElementDefinitionLevel = listDefinedDefinitionLevel + 2;
-        var definitionBitWidth = EncodingPrimitives.GetBitWidthFromMaxValue(presentElementDefinitionLevel);
-
-        for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
-        {
-            var row = rows[rowIndex];
-            if (row is null)
-            {
-                if (!allowsNullRow)
-                    throw new InvalidOperationException(
-                        $"Column '{column.Name}' has repeated values; null row arrays are not supported.");
-                levelValueCount = checked(levelValueCount + 1);
-                nullCount = checked(nullCount + 1);
-                continue;
-            }
-
-            if (row.Length == 0)
-            {
-                if (!leafProjectionInfo.IsList)
-                    throw new InvalidOperationException(
-                        $"Column '{column.Name}' has repeated values; empty rows are not supported for this schema.");
-                levelValueCount = checked(levelValueCount + 1);
-                nullCount = checked(nullCount + 1);
-                continue;
-            }
-
-            levelValueCount = checked(levelValueCount + row.Length);
-            for (var i = 0; i < row.Length; i++)
-            {
-                if (row[i] is null)
-                    nullCount = checked(nullCount + 1);
-                else
-                    physicalValueCount = checked(physicalValueCount + 1);
-            }
-        }
-
-        var flatValues = new TElement[physicalValueCount];
-        var flatIndex = 0;
-        for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
-        {
-            var row = rows[rowIndex];
-            if (row is null || row.Length == 0)
-                continue;
-            for (var i = 0; i < row.Length; i++)
-            {
-                var value = row[i];
-                if (value is null)
-                    continue;
-                flatValues[flatIndex++] = value;
-            }
-        }
-
-        var repetitionLength = WriteRepeatedLevels(rows, writeLevelLengthPrefixes, ref page.Content);
-        var definitionLength = WriteRepeatedDefinitionLevelsNullableReferences(rows, listDefinedDefinitionLevel,
-            nullElementDefinitionLevel, presentElementDefinitionLevel, allowsNullRow, definitionBitWidth,
-            writeLevelLengthPrefixes, ref page.Content);
+        var definitionLength = WriteRepeatedDefinitionLevels<TRowElement, TValue, TProbe>(rows,
+            listDefinedDefinitionLevel, nullElementDefinitionLevel, presentElementDefinitionLevel, allowsNullRow,
+            definitionBitWidth, writeLevelLengthPrefixes, ref page.Content);
         ValueEncodingDispatcher.WriteValues(dataEncoding, column, flatValues, bufferWriters, ref page.Content);
         WriteDataPageHeader(ref page, rowCount, levelValueCount, nullCount, repetitionLength, definitionLength,
             dataEncoding);
@@ -1623,9 +1509,14 @@ static class Encoding
         return CompleteLevelEncoding(start, lengthPrefix, ref writer);
     }
 
-    static int WriteRepeatedDefinitionLevels<TElement>(ReadOnlySpan<TElement[]> rows, int listDefinedDefinitionLevel,
-        int presentElementDefinitionLevel, bool allowsNullRow, int definitionBitWidth, bool writeLengthPrefix,
-        ref BufferWriter writer)
+    /// <summary>
+    /// Definition levels for one page of repeated rows. Required elements share a single RLE run per
+    /// row; optional ones need a level per element because presence varies within the row.
+    /// </summary>
+    static int WriteRepeatedDefinitionLevels<TRowElement, TValue, TProbe>(ReadOnlySpan<TRowElement[]> rows,
+        int listDefinedDefinitionLevel, int nullElementDefinitionLevel, int presentElementDefinitionLevel,
+        bool allowsNullRow, int definitionBitWidth, bool writeLengthPrefix, ref BufferWriter writer)
+        where TProbe : IOptionalRow<TRowElement, TValue>
     {
         var lengthPrefix = ReserveLevelLengthPrefix(writeLengthPrefix, ref writer);
         var start = writer.WrittenLength;
@@ -1646,70 +1537,16 @@ static class Encoding
                 continue;
             }
 
-            EncodingPrimitives.WriteRleRun(presentElementDefinitionLevel, row.Length, definitionBitWidth, ref writer);
-        }
-
-        return CompleteLevelEncoding(start, lengthPrefix, ref writer);
-    }
-
-    static int WriteRepeatedDefinitionLevelsNullableValues<TValue>(ReadOnlySpan<TValue?[]> rows, int listDefinedDefinitionLevel,
-        int nullElementDefinitionLevel, int presentElementDefinitionLevel, bool allowsNullRow, int definitionBitWidth,
-        bool writeLengthPrefix, ref BufferWriter writer)
-        where TValue : struct
-    {
-        var lengthPrefix = ReserveLevelLengthPrefix(writeLengthPrefix, ref writer);
-        var start = writer.WrittenLength;
-        for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
-        {
-            var row = rows[rowIndex];
-            if (row is null)
+            if (TProbe.ValueRequired)
             {
-                if (!allowsNullRow)
-                    throw new InvalidOperationException("Null row is not allowed for this repeated column.");
-                EncodingPrimitives.WriteRleRun(0, 1, definitionBitWidth, ref writer);
-                continue;
-            }
-
-            if (row.Length == 0)
-            {
-                EncodingPrimitives.WriteRleRun(listDefinedDefinitionLevel, 1, definitionBitWidth, ref writer);
+                EncodingPrimitives.WriteRleRun(presentElementDefinitionLevel, row.Length, definitionBitWidth,
+                    ref writer);
                 continue;
             }
 
             for (var i = 0; i < row.Length; i++)
-                EncodingPrimitives.WriteRleRun(row[i].HasValue ? presentElementDefinitionLevel : nullElementDefinitionLevel, 1,
-                    definitionBitWidth, ref writer);
-        }
-
-        return CompleteLevelEncoding(start, lengthPrefix, ref writer);
-    }
-
-    static int WriteRepeatedDefinitionLevelsNullableReferences<TElement>(ReadOnlySpan<TElement[]> rows,
-        int listDefinedDefinitionLevel, int nullElementDefinitionLevel, int presentElementDefinitionLevel, bool allowsNullRow,
-        int definitionBitWidth, bool writeLengthPrefix, ref BufferWriter writer)
-        where TElement : class
-    {
-        var lengthPrefix = ReserveLevelLengthPrefix(writeLengthPrefix, ref writer);
-        var start = writer.WrittenLength;
-        for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
-        {
-            var row = rows[rowIndex];
-            if (row is null)
-            {
-                if (!allowsNullRow)
-                    throw new InvalidOperationException("Null row is not allowed for this repeated column.");
-                EncodingPrimitives.WriteRleRun(0, 1, definitionBitWidth, ref writer);
-                continue;
-            }
-
-            if (row.Length == 0)
-            {
-                EncodingPrimitives.WriteRleRun(listDefinedDefinitionLevel, 1, definitionBitWidth, ref writer);
-                continue;
-            }
-
-            for (var i = 0; i < row.Length; i++)
-                EncodingPrimitives.WriteRleRun(row[i] is null ? nullElementDefinitionLevel : presentElementDefinitionLevel, 1,
+                EncodingPrimitives.WriteRleRun(
+                    TProbe.IsPresent(in row[i]) ? presentElementDefinitionLevel : nullElementDefinitionLevel, 1,
                     definitionBitWidth, ref writer);
         }
 
