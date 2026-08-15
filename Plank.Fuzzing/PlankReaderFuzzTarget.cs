@@ -68,7 +68,7 @@ public static class PlankReaderFuzzTarget
                 DrainBuffers(rowGroup.Column<double>(column));
                 break;
             case ParquetPhysicalType.ByteArray:
-                DrainBuffers(rowGroup.Column<byte[]>(column));
+                DrainBinaryBuffers(rowGroup.Column<byte>(column));
                 break;
         }
     }
@@ -81,6 +81,21 @@ public static class PlankReaderFuzzTarget
             for (var i = 0; i < span.Length; i++)
                 _ = span[i];
         }
+    }
+
+    // Variable-length byte[] columns are read as RowGroupColumn<byte>: one span
+    // per row rather than one flat value span per buffer. Touching every byte
+    // is what exercises the offset/length bookkeeping we want fuzzed.
+    static void DrainBinaryBuffers(RowGroupColumn<byte> buffers)
+    {
+        foreach (var buffer in buffers)
+            for (var i = 0; i < buffer.Count; i++)
+            {
+                if (buffer.IsNull(i)) continue;
+                var value = buffer.GetValue(i);
+                for (var j = 0; j < value.Length; j++)
+                    _ = value[j];
+            }
     }
 
     static ParquetSchema[] BuildSchemas()

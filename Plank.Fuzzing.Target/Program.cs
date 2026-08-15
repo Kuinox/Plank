@@ -1,3 +1,4 @@
+using Plank.Fuzzing.Harness;
 using SharpFuzz;
 
 namespace Plank.Fuzzing.Target;
@@ -17,7 +18,7 @@ static class Program
         }
         else
         {
-            AflPersistentHarness.Run(data => PlankWriterFuzzTarget.Execute(data));
+            AflPersistentHarness.Run("writer", data => PlankWriterFuzzTarget.Execute(data));
         }
     }
 }
