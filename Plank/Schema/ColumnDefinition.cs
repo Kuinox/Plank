@@ -204,78 +204,107 @@ public sealed record ColumnDefinition
     internal static void ValidateLogicalType(string name, ParquetPhysicalType physicalType, ColumnOptions options,
         LogicalType? logicalType)
     {
+        if (DescribeLogicalTypeError(name, physicalType, options, logicalType) is { } error)
+            throw new ArgumentException(error.Message, error.ParameterName);
+    }
+
+    /// <summary>
+    /// Returns the reason <paramref name="logicalType"/> cannot annotate this column, or <see langword="null"/> when
+    /// it can.
+    /// </summary>
+    /// <remarks>
+    /// Callers building a schema by hand go through <see cref="ValidateLogicalType"/> and get an
+    /// <see cref="ArgumentException"/>, because passing an incompatible pair is their mistake. The reader binds
+    /// schemas out of a file footer, where the same pair means the *file* is malformed, so it checks here and
+    /// reports <see cref="CorruptParquetException"/> instead. Both paths share these rules so they cannot drift.
+    /// </remarks>
+    internal static (string Message, string ParameterName)? DescribeLogicalTypeError(string name,
+        ParquetPhysicalType physicalType, ColumnOptions options, LogicalType? logicalType)
+    {
         if (logicalType is LogicalType.Date && physicalType != ParquetPhysicalType.Int32)
-            throw new ArgumentException(
+            return (
                 $"Logical type '{nameof(LogicalType.Date)}' requires physical type '{ParquetPhysicalType.Int32}' for column '{name}'.",
                 nameof(physicalType));
 
         if (logicalType is LogicalType.Enum or LogicalType.Bson or LogicalType.Geometry or LogicalType.Geography &&
             physicalType != ParquetPhysicalType.ByteArray)
-            throw new ArgumentException(
+            return (
                 $"Logical type '{logicalType.GetType().Name}' requires physical type '{ParquetPhysicalType.ByteArray}' for column '{name}'.",
                 nameof(physicalType));
 
         if (logicalType is LogicalType.Float16 &&
             (physicalType != ParquetPhysicalType.FixedLenByteArray || options.TypeLength != 2))
-            throw new ArgumentException(
+            return (
                 $"Logical type '{nameof(LogicalType.Float16)}' requires a 2-byte '{ParquetPhysicalType.FixedLenByteArray}' physical type for column '{name}'.",
                 nameof(physicalType));
 
         if (logicalType is LogicalType.Interval &&
             (physicalType != ParquetPhysicalType.FixedLenByteArray || options.TypeLength != 12))
-            throw new ArgumentException(
+            return (
                 $"Logical type '{nameof(LogicalType.Interval)}' requires a 12-byte '{ParquetPhysicalType.FixedLenByteArray}' physical type for column '{name}'.",
                 nameof(physicalType));
 
         if (logicalType is LogicalType.Variant)
-            throw new ArgumentException(
+            return (
                 $"Logical type '{nameof(LogicalType.Variant)}' requires a group for column '{name}'.",
                 nameof(logicalType));
 
         if (logicalType is LogicalType.Unknown && options.Repetition != ParquetRepetition.Optional)
-            throw new ArgumentException(
+            return (
                 $"Logical type '{nameof(LogicalType.Unknown)}' requires an optional column because all values must be null for column '{name}'.",
                 nameof(logicalType));
 
         if (logicalType is not LogicalType.Decimal decimalType)
-            return;
+            return null;
         if (decimalType.Precision <= 0)
-            throw new ArgumentException(
-                $"Decimal precision must be positive for column '{name}'.", nameof(logicalType));
+            return ($"Decimal precision must be positive for column '{name}'.", nameof(logicalType));
         if (decimalType.Scale < 0 || decimalType.Scale > decimalType.Precision)
-            throw new ArgumentException(
+            return (
                 $"Decimal scale must be non-negative and no greater than precision for column '{name}'.",
                 nameof(logicalType));
         if (physicalType is not (ParquetPhysicalType.Int32 or ParquetPhysicalType.Int64 or
             ParquetPhysicalType.ByteArray or ParquetPhysicalType.FixedLenByteArray))
-            throw new ArgumentException(
+            return (
                 $"Logical type '{nameof(LogicalType.Decimal)}' is not compatible with physical type '{physicalType}' for column '{name}'.",
                 nameof(physicalType));
         if (physicalType == ParquetPhysicalType.Int32 && decimalType.Precision > 9)
-            throw new ArgumentException(
+            return (
                 $"Decimal precision {decimalType.Precision} exceeds the maximum precision 9 for INT32 column '{name}'.",
                 nameof(logicalType));
         if (physicalType == ParquetPhysicalType.Int64 && decimalType.Precision > 18)
-            throw new ArgumentException(
+            return (
                 $"Decimal precision {decimalType.Precision} exceeds the maximum precision 18 for INT64 column '{name}'.",
                 nameof(logicalType));
         if (physicalType == ParquetPhysicalType.FixedLenByteArray)
         {
             var maximumPrecision = GetMaximumDecimalPrecision(options.TypeLength);
             if (decimalType.Precision > maximumPrecision)
-                throw new ArgumentException(
+                return (
                     $"Decimal precision {decimalType.Precision} exceeds the maximum precision {maximumPrecision} for {options.TypeLength}-byte column '{name}'.",
                     nameof(logicalType));
         }
+
+        return null;
     }
 
     internal static void ValidateGroupLogicalType(string name, LogicalType? logicalType,
         ReadOnlySpan<ColumnDefinition> children)
     {
+        if (DescribeGroupLogicalTypeError(name, logicalType, children) is { } error)
+            throw new ArgumentException(error.Message, error.ParameterName);
+    }
+
+    /// <summary>
+    /// Returns the reason <paramref name="logicalType"/> cannot annotate this group, or <see langword="null"/> when
+    /// it can. Shared with the reader for the reason given on <see cref="DescribeLogicalTypeError"/>.
+    /// </summary>
+    internal static (string Message, string ParameterName)? DescribeGroupLogicalTypeError(string name,
+        LogicalType? logicalType, ReadOnlySpan<ColumnDefinition> children)
+    {
         if (logicalType is null)
-            return;
+            return null;
         if (logicalType is not LogicalType.Variant)
-            throw new ArgumentException(
+            return (
                 $"Logical type '{logicalType.GetType().Name}' cannot annotate group '{name}'.",
                 nameof(logicalType));
 
@@ -293,7 +322,7 @@ public sealed record ColumnDefinition
                 Repetition: ParquetRepetition.Required,
                 PhysicalType: ParquetPhysicalType.ByteArray
             })
-            throw new ArgumentException(
+            return (
                 $"Variant group '{name}' requires a BYTE_ARRAY field named 'metadata'.",
                 nameof(children));
         if (value is not
@@ -302,9 +331,11 @@ public sealed record ColumnDefinition
                 Repetition: ParquetRepetition.Required or ParquetRepetition.Optional,
                 PhysicalType: ParquetPhysicalType.ByteArray
             })
-            throw new ArgumentException(
+            return (
                 $"Variant group '{name}' requires a BYTE_ARRAY field named 'value'.",
                 nameof(children));
+
+        return null;
     }
 
     static int GetMaximumDecimalPrecision(uint typeLength)
