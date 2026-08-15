@@ -23,7 +23,16 @@ static class PhysicalSchemaBinder
         if (index != metadata.SchemaNodeCount)
             throw new CorruptParquetException("Parquet schema contains unreferenced nodes.");
 
-        return new ParquetSchema(definitions.MoveToImmutable());
+        // Projection is where every leaf and group in the schema is validated, so it is also the only place that can
+        // tell us the footer describes something that is not a schema — an incompatible logical/physical pair, a
+        // repeated node with no child, a map without its key. The public constructor reports those as argument
+        // mistakes, which they are for a caller building a schema by hand but not for a file we were handed.
+        if (!ParquetSchema.TryCreate(definitions.MoveToImmutable(), out var schema, out var error))
+            throw new CorruptParquetException(error is null
+                ? "Parquet schema definitions do not form a valid, projectable schema."
+                : $"Parquet schema is not valid: {error}");
+
+        return schema;
     }
 
     internal static InternalParquetFooter Bind(ParquetFileReader physicalReader, ParquetSchema fileSchema,
@@ -96,17 +105,21 @@ static class PhysicalSchemaBinder
         var node = metadata.SchemaNodes[index++];
         var name = Encoding.UTF8.GetString(metadata.SchemaNodeNameUtf8(node.Ordinal));
         if (node.PhysicalType is { } physicalType)
+        {
+            var logicalType = ConvertLogicalType(metadata, node);
+            var options = new ColumnOptions(node.Repetition, typeLength: node.TypeLength);
             return new ColumnDefinition
             {
                 Name = name,
                 Kind = NodeKind.Leaf,
                 Repetition = node.Repetition,
                 PhysicalType = physicalType,
-                LogicalType = ConvertLogicalType(metadata, node),
+                LogicalType = logicalType,
                 FieldId = node.FieldId,
-                Options = new ColumnOptions(node.Repetition, typeLength: node.TypeLength),
+                Options = options,
                 Children = []
             };
+        }
 
         return node.Kind switch
         {
@@ -122,14 +135,16 @@ static class PhysicalSchemaBinder
         var children = ImmutableArray.CreateBuilder<ColumnDefinition>(node.ChildCount);
         for (var i = 0; i < node.ChildCount; i++)
             children.Add(BuildDefinition(metadata, ref index));
+        var groupChildren = children.MoveToImmutable();
+        var logicalType = ConvertLogicalType(metadata, node);
         return new ColumnDefinition
         {
             Name = name,
             Kind = NodeKind.Group,
             Repetition = node.Repetition,
             FieldId = node.FieldId,
-            LogicalType = ConvertLogicalType(metadata, node),
-            Children = children.MoveToImmutable()
+            LogicalType = logicalType,
+            Children = groupChildren
         };
     }
 
@@ -334,13 +349,20 @@ static class PhysicalSchemaBinder
             LogicalTypeKind.Timestamp => new LogicalType.Timestamp(node.LogicalType.Unit,
                 node.LogicalType.IsAdjustedToUtc),
             LogicalTypeKind.Integer => new LogicalType.Int(node.LogicalType.BitWidth, node.LogicalType.IsSigned),
-            LogicalTypeKind.Decimal => new LogicalType.Decimal(node.LogicalType.Precision, node.LogicalType.Scale),
+            LogicalTypeKind.Decimal => BuildDecimal(node.LogicalType.Precision, node.LogicalType.Scale),
             LogicalTypeKind.Variant => new LogicalType.Variant(node.LogicalType.SpecificationVersion),
             LogicalTypeKind.Geometry => new LogicalType.Geometry(ReadCrs(metadata, node)),
             LogicalTypeKind.Geography => new LogicalType.Geography(ReadCrs(metadata, node),
                 node.LogicalType.Algorithm),
             _ => throw new NotSupportedException($"Logical type '{node.LogicalType.Kind}' is not supported.")
         };
+
+    // The precision and scale come off the wire, so a bad pair is a malformed file rather than a caller mistake.
+    // Checking first keeps LogicalType.Decimal's constructor from raising ArgumentOutOfRangeException at a reader.
+    static LogicalType.Decimal BuildDecimal(int precision, int scale)
+        => LogicalType.Decimal.DescribeError(precision, scale) is { } error
+            ? throw new CorruptParquetException($"Parquet schema is not valid: {error}")
+            : new LogicalType.Decimal(precision, scale);
 
     static string? ReadCrs(PhysicalFileMetadata metadata, ParquetSchemaNodeInfo node)
         => node.LogicalType.HasCrs

@@ -54,15 +54,25 @@ public abstract record LogicalType
         public Decimal(int Precision, int Scale)
         {
             if (Precision <= 0)
-                throw new ArgumentOutOfRangeException(nameof(Precision), Precision,
-                    "Decimal precision must be positive.");
+                throw new ArgumentOutOfRangeException(nameof(Precision), Precision, DescribeError(Precision, Scale));
             if (Scale < 0 || Scale > Precision)
-                throw new ArgumentOutOfRangeException(nameof(Scale), Scale,
-                    "Decimal scale must be non-negative and no greater than precision.");
+                throw new ArgumentOutOfRangeException(nameof(Scale), Scale, DescribeError(Precision, Scale));
 
             this.Precision = Precision;
             this.Scale = Scale;
         }
+
+        /// <summary>
+        /// Returns why this precision and scale pair is invalid, or <see langword="null"/> when it is valid.
+        /// </summary>
+        /// <remarks>
+        /// The reader reads both out of a file footer and must reject a bad pair as a corrupt file rather than let
+        /// this constructor raise <see cref="ArgumentOutOfRangeException"/> at it. Shared so the two cannot drift.
+        /// </remarks>
+        internal static string? DescribeError(int precision, int scale)
+            => precision <= 0 ? "Decimal precision must be positive."
+            : scale < 0 || scale > precision ? "Decimal scale must be non-negative and no greater than precision."
+            : null;
 
         public int Precision { get; init; }
 

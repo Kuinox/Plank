@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Writing;
@@ -10,13 +11,40 @@ public sealed record ParquetSchema
     public ParquetSchema(ImmutableArray<ColumnDefinition> definitions)
     {
         Definitions = definitions.IsDefault ? [] : definitions;
-        if (!TryProjectLeafColumns(Definitions, out var projectedColumns, out var projectedPaths, out var projectedInfos))
-            throw new ArgumentException("Schema definitions must form a valid, projectable schema.", nameof(definitions));
+        if (!TryProjectLeafColumns(Definitions, out var projectedColumns, out var projectedPaths, out var projectedInfos,
+                out var error))
+            throw error is { } reason
+                ? new ArgumentException(reason.Message, reason.ParameterName)
+                : new ArgumentException("Schema definitions must form a valid, projectable schema.", nameof(definitions));
 
         Columns = projectedColumns;
         LeafColumns = BuildLeafColumns(projectedColumns, projectedInfos);
         LeafPaths = projectedPaths;
         LeafProjectionInfos = projectedInfos;
+    }
+
+    /// <summary>
+    /// Builds a schema, returning <see langword="false"/> instead of throwing when the definitions do not project.
+    /// </summary>
+    /// <remarks>
+    /// For the reader, definitions that do not project mean the file's footer is malformed, not that a caller passed
+    /// bad arguments — so it needs the failure as a value it can turn into <see cref="CorruptParquetException"/>.
+    /// </remarks>
+    internal static bool TryCreate(ImmutableArray<ColumnDefinition> definitions,
+        [NotNullWhen(true)] out ParquetSchema? schema, out string? error)
+    {
+        var normalized = definitions.IsDefault ? [] : definitions;
+        if (!TryProjectLeafColumns(normalized, out _, out _, out _, out var reason))
+        {
+            schema = null;
+            error = reason?.Message;
+            return false;
+        }
+
+        error = null;
+
+        schema = new ParquetSchema(normalized);
+        return true;
     }
 
     public ImmutableArray<ColumnDefinition> Definitions { get; }
@@ -80,9 +108,18 @@ public sealed record ParquetSchema
 
     internal ImmutableArray<Column> Columns { get; }
 
-    static bool TryProjectLeafColumns(ImmutableArray<ColumnDefinition> definitions, out ImmutableArray<Column> columns,
-        out ImmutableArray<ImmutableArray<string>> leafPaths, out ImmutableArray<LeafProjectionInfo> leafInfos)
+    // Carries the reason a projection failed back out of the recursion, so the caller can decide whether it means
+    // "you passed bad arguments" (public constructor) or "this file is malformed" (reader).
+    sealed class ProjectionError
     {
+        internal (string Message, string ParameterName)? Value;
+    }
+
+    static bool TryProjectLeafColumns(ImmutableArray<ColumnDefinition> definitions, out ImmutableArray<Column> columns,
+        out ImmutableArray<ImmutableArray<string>> leafPaths, out ImmutableArray<LeafProjectionInfo> leafInfos,
+        out (string Message, string ParameterName)? error)
+    {
+        error = null;
         if (definitions.IsDefaultOrEmpty)
         {
             columns = [];
@@ -97,14 +134,16 @@ public sealed record ParquetSchema
         var pathBuffer = new List<string>(8);
         var mapProjections = new List<MapProjectionInfo>(2);
         var nextMapId = 0;
+        var errorSink = new ProjectionError();
         for (var i = 0; i < definitions.Length; i++)
             if (!TryCollectLeaves(definitions[i], columnsBuilder, pathsBuilder, pathBuffer, repeatedLevel: 0,
                     definitionLevel: 0, infosBuilder, isListLeaf: false, listOptional: false, elementOptional: false,
-                    mapProjections, ref nextMapId))
+                    mapProjections, ref nextMapId, errorSink))
             {
                 columns = [];
                 leafPaths = [];
                 leafInfos = [];
+                error = errorSink.Value;
                 return false;
             }
 
@@ -117,7 +156,8 @@ public sealed record ParquetSchema
     static bool TryCollectLeaves(ColumnDefinition node, ImmutableArray<Column>.Builder columnsBuilder,
         ImmutableArray<ImmutableArray<string>>.Builder pathsBuilder, List<string> pathBuffer, int repeatedLevel,
         int definitionLevel, ImmutableArray<LeafProjectionInfo>.Builder infosBuilder, bool isListLeaf,
-        bool listOptional, bool elementOptional, List<MapProjectionInfo> mapProjections, ref int nextMapId)
+        bool listOptional, bool elementOptional, List<MapProjectionInfo> mapProjections, ref int nextMapId,
+        ProjectionError error)
     {
         pathBuffer.Add(node.Name);
         var nodeRepetition = node.Repetition == ParquetRepetition.Repeated;
@@ -141,6 +181,14 @@ public sealed record ParquetSchema
                             options.Compression, options.CompressionLevel, options.BloomFilter);
                     var path = pathBuffer.ToArray().ToImmutableArray();
                     var columnName = string.Join(".", path);
+                    // Every leaf in the schema is constructed here, so this is the one place that has to decide
+                    // whether the logical/physical pair is acceptable. Reporting it as a value rather than letting
+                    // Column's constructor throw is what lets the reader — which projects schemas out of untrusted
+                    // file footers — turn it into a CorruptParquetException instead of an ArgumentException.
+                    error.Value = ColumnDefinition.DescribeLogicalTypeError(columnName, node.PhysicalType.Value,
+                        options, node.LogicalType);
+                    if (error.Value is not null)
+                        return false;
                     columnsBuilder.Add(new Column(columnName, node.PhysicalType.Value, options, node.LogicalType,
                         node.PageStrategy, node.Converter, node.FieldId));
                     pathsBuilder.Add(path);
@@ -153,11 +201,14 @@ public sealed record ParquetSchema
                 {
                     if (node.Children.IsDefaultOrEmpty)
                         return false;
-                    ColumnDefinition.ValidateGroupLogicalType(node.Name, node.LogicalType, node.Children.AsSpan());
+                    error.Value = ColumnDefinition.DescribeGroupLogicalTypeError(node.Name, node.LogicalType,
+                        node.Children.AsSpan());
+                    if (error.Value is not null)
+                        return false;
                     for (var i = 0; i < node.Children.Length; i++)
                         if (!TryCollectLeaves(node.Children[i], columnsBuilder, pathsBuilder, pathBuffer, nextRepeatedLevel,
                                 nextDefinitionLevel, infosBuilder, isListLeaf, listOptional, elementOptional,
-                                mapProjections, ref nextMapId))
+                                mapProjections, ref nextMapId, error))
                             return false;
                     return true;
                 }
@@ -174,7 +225,7 @@ public sealed record ParquetSchema
                             repeatedLevel: nextRepeatedLevel + 1, definitionLevel: nextDefinitionLevel + 1, infosBuilder,
                             isListLeaf: true, listOptional: listOptional || node.Repetition == ParquetRepetition.Optional,
                             elementOptional: element.Repetition == ParquetRepetition.Optional, mapProjections,
-                            ref nextMapId);
+                            ref nextMapId, error);
                     }
                     finally
                     {
@@ -195,7 +246,7 @@ public sealed record ParquetSchema
                     var keyOk = TryCollectLeaves(keyNode with { Name = "key" }, columnsBuilder, pathsBuilder,
                         pathBuffer, repeatedLevel: mapRepetitionLevel, definitionLevel: nextDefinitionLevel + 1,
                         infosBuilder, isListLeaf: true, listOptional: node.Repetition == ParquetRepetition.Optional,
-                        elementOptional: false, mapProjections, ref nextMapId);
+                        elementOptional: false, mapProjections, ref nextMapId, error);
                     mapProjections.RemoveAt(mapProjections.Count - 1);
                     if (!keyOk)
                     {
@@ -215,7 +266,7 @@ public sealed record ParquetSchema
                         pathBuffer, repeatedLevel: mapRepetitionLevel, definitionLevel: nextDefinitionLevel + 1, infosBuilder,
                         isListLeaf: true, listOptional: node.Repetition == ParquetRepetition.Optional,
                         elementOptional: valueNode.Repetition == ParquetRepetition.Optional, mapProjections,
-                        ref nextMapId);
+                        ref nextMapId, error);
                     mapProjections.RemoveAt(mapProjections.Count - 1);
                     pathBuffer.RemoveAt(pathBuffer.Count - 1);
                     return valueOk;
