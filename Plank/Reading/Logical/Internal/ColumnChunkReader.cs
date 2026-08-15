@@ -76,7 +76,18 @@ static class ColumnChunkReader
     static bool TryDecodeDictionaryIntoNative<TPage, TValue>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ref ColumnReadBuffers<TPage> state, IParquetBufferPool bufferPool)
     {
-        var valueCount = checked((int)header.ValueCount);
+        // Plain encoding spends at least one bit per value — booleans are
+        // bit-packed, every other physical type is at least a byte wide — so the
+        // payload size caps how many dictionary entries can exist. The header's
+        // count used to go straight into the buffer sizing below, where a
+        // corrupt value overflowed and escaped as OverflowException instead of
+        // CorruptParquetException.
+        var maximumValueCount = Math.Min((ulong)payload.Length * 8, int.MaxValue);
+        if (header.ValueCount > maximumValueCount)
+            throw new CorruptParquetException(
+                $"Dictionary page declares {header.ValueCount} values, but its {payload.Length}-byte payload cannot encode that many.");
+
+        var valueCount = (int)header.ValueCount;
         var destination = state.GetDictionary<TValue>(valueCount, bufferPool);
         return TryDecodeValuesIntoNative(payload, column, header.ValueCount, header.Encoding, destination);
     }
