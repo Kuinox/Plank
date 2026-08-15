@@ -749,30 +749,24 @@ static class Encoding
             dictionaryState.Reset(initialUniqueCapacity, useMap: true, comparer);
             Volatile.Write(ref strategyContext.DictionarySortOrder, (int)DictionarySortOrder.Unsorted);
 
-            var denseIndex = 0;
-            var nextDropCheckRow = dictionaryMode == DictionaryMode.Maybe
-                ? Math.Min(DictionaryDropCheckPeriodRows, presentCount)
-                : 0;
-            for (var i = 0; i < values.Length; i++)
+            // byte[] shares __Canon generic codegen, where the probe dispatch and GetOrAddIndex do not
+            // inline - a ~20% cost on this hot per-value build loop. typeof(TValue) is a JIT constant per
+            // instantiation, so the byte[] instantiation compiles to the concrete branch only (and value
+            // types like ReadOnlyMemory<byte> keep their already-inlined dedicated codegen).
+            var kept = typeof(TValue) == typeof(byte[])
+                ? BuildByteArrayDictionaryIndexes(
+                    MemoryMarshal.CreateReadOnlySpan(
+                        ref Unsafe.As<TRow, byte[]>(ref MemoryMarshal.GetReference(values)), values.Length),
+                    indexes, Unsafe.As<ReusableDictionaryState<byte[]>>(dictionaryState), dictionaryMode,
+                    presentCount, strategy)
+                : BuildOptionalDictionaryIndexes<TRow, TValue, TProbe>(values, indexes, dictionaryState,
+                    dictionaryMode, presentCount, strategy);
+            if (!kept)
             {
-                if (!TProbe.IsPresent(in values[i]))
-                    continue;
-
-                indexes[denseIndex++] = dictionaryState.GetOrAddIndex(TProbe.GetValue(in values[i]));
-                if (dictionaryMode != DictionaryMode.Maybe)
-                    continue;
-                if (denseIndex != nextDropCheckRow && denseIndex != presentCount)
-                    continue;
-                if (strategy.ShouldDropDictionary(checked((uint)dictionaryState.Count),
-                        checked((uint)presentCount), checked((uint)denseIndex)))
-                {
-                    dictionaryPage.Header.Reset();
-                    dictionaryPage.Content.Reset();
-                    pages.RemoveLast();
-                    return false;
-                }
-
-                nextDropCheckRow = Math.Min(presentCount, denseIndex + DictionaryDropCheckPeriodRows);
+                dictionaryPage.Header.Reset();
+                dictionaryPage.Content.Reset();
+                pages.RemoveLast();
+                return false;
             }
 
             PlainEncoding.WriteValues(column, dictionaryState.AsSpan(), ref dictionaryPage.Content);
@@ -786,6 +780,76 @@ static class Encoding
         {
             rentedIndexesBuffer.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Concrete byte[] build loop. Kept separate from the generic path so that, on the byte[]
+    /// instantiation, the null check and <see cref="ReusableDictionaryState{T}.GetOrAddIndex"/> inline
+    /// instead of paying non-inlined calls under __Canon shared generics. Returns false if the
+    /// dictionary was dropped.
+    /// </summary>
+    static bool BuildByteArrayDictionaryIndexes(ReadOnlySpan<byte[]> values, Span<int> indexes,
+        ReusableDictionaryState<byte[]> dictionaryState, DictionaryMode dictionaryMode, int presentCount,
+        IPageStrategy strategy)
+    {
+        var denseIndex = 0;
+        var nextDropCheckRow = dictionaryMode == DictionaryMode.Maybe
+            ? Math.Min(DictionaryDropCheckPeriodRows, presentCount)
+            : 0;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (value is null)
+                continue;
+
+            indexes[denseIndex++] = dictionaryState.GetOrAddIndex(value);
+            if (dictionaryMode != DictionaryMode.Maybe)
+                continue;
+            if (denseIndex != nextDropCheckRow && denseIndex != presentCount)
+                continue;
+            if (strategy.ShouldDropDictionary(checked((uint)dictionaryState.Count),
+                    checked((uint)presentCount), checked((uint)denseIndex)))
+                return false;
+
+            nextDropCheckRow = Math.Min(presentCount, denseIndex + DictionaryDropCheckPeriodRows);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Generic build loop for the value-type instantiations (for example ReadOnlyMemory&lt;byte&gt;),
+    /// which get dedicated codegen where the probe and dictionary calls already inline. Returns false
+    /// if the dictionary was dropped.
+    /// </summary>
+    static bool BuildOptionalDictionaryIndexes<TRow, TValue, TProbe>(ReadOnlySpan<TRow> values,
+        Span<int> indexes, ReusableDictionaryState<TValue> dictionaryState, DictionaryMode dictionaryMode,
+        int presentCount, IPageStrategy strategy)
+        where TValue : notnull
+        where TProbe : IOptionalRow<TRow, TValue>
+    {
+        var denseIndex = 0;
+        var nextDropCheckRow = dictionaryMode == DictionaryMode.Maybe
+            ? Math.Min(DictionaryDropCheckPeriodRows, presentCount)
+            : 0;
+        for (var i = 0; i < values.Length; i++)
+        {
+            if (!TProbe.IsPresent(in values[i]))
+                continue;
+
+            indexes[denseIndex++] = dictionaryState.GetOrAddIndex(TProbe.GetValue(in values[i]));
+            if (dictionaryMode != DictionaryMode.Maybe)
+                continue;
+            if (denseIndex != nextDropCheckRow && denseIndex != presentCount)
+                continue;
+            if (strategy.ShouldDropDictionary(checked((uint)dictionaryState.Count),
+                    checked((uint)presentCount), checked((uint)denseIndex)))
+                return false;
+
+            nextDropCheckRow = Math.Min(presentCount, denseIndex + DictionaryDropCheckPeriodRows);
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -944,7 +1008,7 @@ static class Encoding
         var currentRunLength = 0;
         for (var i = 0; i < values.Length; i++)
         {
-            var level = TProbe.IsPresent(in values[i]) ? 1 : 0;
+            var level = IsPresentFast<TRow, TValue, TProbe>(in values[i]) ? 1 : 0;
             if (level == 0)
                 nullCount++;
             else
@@ -978,10 +1042,23 @@ static class Encoding
     {
         var count = 0;
         for (var i = 0; i < values.Length; i++)
-            if (TProbe.IsPresent(in values[i]))
+            if (IsPresentFast<TRow, TValue, TProbe>(in values[i]))
                 count++;
         return count;
     }
+
+    /// <summary>
+    /// Presence probe with a concrete byte[] fast path. <c>typeof(TValue) == typeof(byte[])</c> is a
+    /// JIT constant per instantiation, so the byte[] instantiation folds to a plain null check (no
+    /// non-inlined static-abstract dispatch under __Canon shared generics) while value-type
+    /// instantiations keep the probe, which already inlines there.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static bool IsPresentFast<TRow, TValue, TProbe>(in TRow row)
+        where TProbe : IOptionalRow<TRow, TValue>
+        => typeof(TValue) == typeof(byte[])
+            ? Unsafe.As<TRow, byte[]>(ref Unsafe.AsRef(in row)) is not null
+            : TProbe.IsPresent(in row);
 
     static void CopyPresentValues<TRow, TValue, TProbe>(ReadOnlySpan<TRow> values, Span<TValue> destination)
         where TProbe : IOptionalRow<TRow, TValue>
