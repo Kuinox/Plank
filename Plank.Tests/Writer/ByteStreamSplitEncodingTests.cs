@@ -85,6 +85,87 @@ internal sealed class ByteStreamSplitEncodingTests
     }
 
     [Test]
+    public void AlternateIntegerRepresentationsMatchReferenceAcrossVectorBoundaries()
+    {
+        int[] lengths = [0, 1, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129];
+        foreach (var length in lengths)
+        {
+            var byteValues = new byte[length];
+            var ushortValues = new ushort[length];
+            var state = unchecked(0x85EBCA6Bu + (uint)length);
+            FillPseudoRandom(byteValues, ref state);
+            FillPseudoRandom(System.Runtime.InteropServices.MemoryMarshal.AsBytes(ushortValues.AsSpan()), ref state);
+
+            AssertEqual(EncodeReference(byteValues, 4, static value => value), Encode(Int32Column, byteValues));
+            AssertEqual(EncodeReference(ushortValues, 4, static value => value), Encode(Int32Column, ushortValues));
+        }
+    }
+
+    [Test]
+    public void DecimalsSplitTheirUnscaledIntegerCarrier()
+    {
+        // Beyond MaxStackConvertedValues so adjacent conversion chunks and lane offsets are covered.
+        int[] lengths = [0, 1, 3, 33, 256, 257, 512];
+        foreach (var length in lengths)
+        {
+            var int32Column = DecimalColumn(ParquetPhysicalType.Int32, precision: 9, scale: 2);
+            var int64Column = DecimalColumn(ParquetPhysicalType.Int64, precision: 18, scale: 2);
+            var int32Values = new decimal[length];
+            var int64Values = new decimal[length];
+            for (var i = 0; i < length; i++)
+            {
+                int32Values[i] = (i % 2 == 0 ? 1 : -1) * (i * 7919m % 9_999_999m) / 100m;
+                int64Values[i] = (i % 2 == 0 ? 1 : -1) * (i * 7_919_000_017m % 999_999_999_999m) / 100m;
+            }
+
+            AssertEqual(
+                EncodeReference(int32Values, 4,
+                    value => unchecked((uint)ParquetDecimalConverter.ToInt32(value, int32Column))),
+                Encode(int32Column, int32Values));
+            AssertEqual(
+                EncodeReference(int64Values, 8,
+                    value => unchecked((ulong)ParquetDecimalConverter.ToInt64(value, int64Column))),
+                Encode(int64Column, int64Values));
+        }
+    }
+
+    static Column DecimalColumn(ParquetPhysicalType physicalType, int precision, int scale)
+        => new("value", physicalType, logicalType: new LogicalType.Decimal(precision, scale));
+
+    [Test]
+    public void LargeDecimalCarrierConversionDoesNotAllocate()
+    {
+        var column = DecimalColumn(ParquetPhysicalType.Int64, precision: 18, scale: 2);
+        var values = new decimal[4096];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = (i - 2048) / 100m;
+
+        var bufferSize = checked((uint)(values.Length * sizeof(long)));
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, bufferSize, bufferSize);
+        try
+        {
+            for (var i = 0; i < 4; i++)
+            {
+                writer.Reset();
+                ByteStreamSplitEncoding.WriteValues(column, values, ref writer);
+            }
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            writer.Reset();
+            ByteStreamSplitEncoding.WriteValues(column, values, ref writer);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            if (allocated != 0)
+                throw new InvalidOperationException(
+                    $"Expected zero allocations for decimal byte-stream-split encoding but saw {allocated} bytes.");
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+    }
+
+    [Test]
     public void FixedLengthByteArraysHaveExactByteStreamLayout()
     {
         var column = new Column("value", ParquetPhysicalType.FixedLenByteArray,
