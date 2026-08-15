@@ -104,7 +104,7 @@ internal sealed class ByteStreamSplitEncodingTests
     [Test]
     public void DecimalsSplitTheirUnscaledIntegerCarrier()
     {
-        // Beyond MaxStackConvertedValues so both the stack and heap conversion buffers are covered.
+        // Beyond MaxStackConvertedValues so adjacent conversion chunks and lane offsets are covered.
         int[] lengths = [0, 1, 3, 33, 256, 257, 512];
         foreach (var length in lengths)
         {
@@ -131,6 +131,39 @@ internal sealed class ByteStreamSplitEncodingTests
 
     static Column DecimalColumn(ParquetPhysicalType physicalType, int precision, int scale)
         => new("value", physicalType, logicalType: new LogicalType.Decimal(precision, scale));
+
+    [Test]
+    public void LargeDecimalCarrierConversionDoesNotAllocate()
+    {
+        var column = DecimalColumn(ParquetPhysicalType.Int64, precision: 18, scale: 2);
+        var values = new decimal[4096];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = (i - 2048) / 100m;
+
+        var bufferSize = checked((uint)(values.Length * sizeof(long)));
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, bufferSize, bufferSize);
+        try
+        {
+            for (var i = 0; i < 4; i++)
+            {
+                writer.Reset();
+                ByteStreamSplitEncoding.WriteValues(column, values, ref writer);
+            }
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            writer.Reset();
+            ByteStreamSplitEncoding.WriteValues(column, values, ref writer);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            if (allocated != 0)
+                throw new InvalidOperationException(
+                    $"Expected zero allocations for decimal byte-stream-split encoding but saw {allocated} bytes.");
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+    }
 
     [Test]
     public void FixedLengthByteArraysHaveExactByteStreamLayout()

@@ -9,8 +9,8 @@ namespace Plank.Writing.Encoding;
 static class ByteStreamSplitEncoding
 {
     /// <summary>
-    /// Values converted onto the stack before being deinterleaved. Matches the threshold the other
-    /// converting encoders use so a large page falls back to the heap instead of blowing the stack.
+    /// Values converted onto the stack before being deinterleaved. Large pages are processed in
+    /// fixed-size chunks so the shared lane writers remain allocation-free.
     /// </summary>
     const int MaxStackConvertedValues = 256;
 
@@ -230,12 +230,18 @@ static class ByteStreamSplitEncoding
         if (typeof(T) == typeof(decimal))
         {
             var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
-            Span<uint> converted = decimalValues.Length <= MaxStackConvertedValues
-                ? stackalloc uint[decimalValues.Length]
-                : new uint[decimalValues.Length];
-            for (var i = 0; i < decimalValues.Length; i++)
-                converted[i] = unchecked((uint)ParquetDecimalConverter.ToInt32(decimalValues[i], column));
-            WriteUInt32Lanes(converted, destination);
+            Span<uint> converted = stackalloc uint[MaxStackConvertedValues];
+            for (var offset = 0; offset < decimalValues.Length; offset += converted.Length)
+            {
+                var count = Math.Min(converted.Length, decimalValues.Length - offset);
+                var chunk = converted[..count];
+                for (var i = 0; i < chunk.Length; i++)
+                {
+                    chunk[i] = unchecked((uint)ParquetDecimalConverter.ToInt32(
+                        decimalValues[offset + i], column));
+                }
+                WriteUInt32Lanes(chunk, destination, decimalValues.Length, offset);
+            }
             return;
         }
 
@@ -263,12 +269,18 @@ static class ByteStreamSplitEncoding
         if (typeof(T) == typeof(decimal))
         {
             var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
-            Span<ulong> converted = decimalValues.Length <= MaxStackConvertedValues
-                ? stackalloc ulong[decimalValues.Length]
-                : new ulong[decimalValues.Length];
-            for (var i = 0; i < decimalValues.Length; i++)
-                converted[i] = unchecked((ulong)ParquetDecimalConverter.ToInt64(decimalValues[i], column));
-            WriteUInt64Lanes(converted, destination);
+            Span<ulong> converted = stackalloc ulong[MaxStackConvertedValues];
+            for (var offset = 0; offset < decimalValues.Length; offset += converted.Length)
+            {
+                var count = Math.Min(converted.Length, decimalValues.Length - offset);
+                var chunk = converted[..count];
+                for (var i = 0; i < chunk.Length; i++)
+                {
+                    chunk[i] = unchecked((ulong)ParquetDecimalConverter.ToInt64(
+                        decimalValues[offset + i], column));
+                }
+                WriteUInt64Lanes(chunk, destination, decimalValues.Length, offset);
+            }
             return;
         }
 
@@ -277,13 +289,17 @@ static class ByteStreamSplitEncoding
     }
 
     static void WriteUInt32Lanes(ReadOnlySpan<uint> values, Span<byte> destination)
+        => WriteUInt32Lanes(values, destination, values.Length, destinationOffset: 0);
+
+    static void WriteUInt32Lanes(ReadOnlySpan<uint> values, Span<byte> destination, int laneStride,
+        int destinationOffset)
     {
         var count = values.Length;
         ref var source = ref MemoryMarshal.GetReference(values);
-        ref var lane0 = ref MemoryMarshal.GetReference(destination);
-        ref var lane1 = ref Unsafe.Add(ref lane0, count);
-        ref var lane2 = ref Unsafe.Add(ref lane1, count);
-        ref var lane3 = ref Unsafe.Add(ref lane2, count);
+        ref var lane0 = ref Unsafe.Add(ref MemoryMarshal.GetReference(destination), destinationOffset);
+        ref var lane1 = ref Unsafe.Add(ref lane0, laneStride);
+        ref var lane2 = ref Unsafe.Add(ref lane1, laneStride);
+        ref var lane3 = ref Unsafe.Add(ref lane2, laneStride);
         var length = (nuint)(uint)count;
         nuint i = 0;
 
@@ -315,17 +331,21 @@ static class ByteStreamSplitEncoding
     }
 
     static void WriteUInt64Lanes(ReadOnlySpan<ulong> values, Span<byte> destination)
+        => WriteUInt64Lanes(values, destination, values.Length, destinationOffset: 0);
+
+    static void WriteUInt64Lanes(ReadOnlySpan<ulong> values, Span<byte> destination, int laneStride,
+        int destinationOffset)
     {
         var count = values.Length;
         ref var source = ref MemoryMarshal.GetReference(values);
-        ref var lane0 = ref MemoryMarshal.GetReference(destination);
-        ref var lane1 = ref Unsafe.Add(ref lane0, count);
-        ref var lane2 = ref Unsafe.Add(ref lane1, count);
-        ref var lane3 = ref Unsafe.Add(ref lane2, count);
-        ref var lane4 = ref Unsafe.Add(ref lane3, count);
-        ref var lane5 = ref Unsafe.Add(ref lane4, count);
-        ref var lane6 = ref Unsafe.Add(ref lane5, count);
-        ref var lane7 = ref Unsafe.Add(ref lane6, count);
+        ref var lane0 = ref Unsafe.Add(ref MemoryMarshal.GetReference(destination), destinationOffset);
+        ref var lane1 = ref Unsafe.Add(ref lane0, laneStride);
+        ref var lane2 = ref Unsafe.Add(ref lane1, laneStride);
+        ref var lane3 = ref Unsafe.Add(ref lane2, laneStride);
+        ref var lane4 = ref Unsafe.Add(ref lane3, laneStride);
+        ref var lane5 = ref Unsafe.Add(ref lane4, laneStride);
+        ref var lane6 = ref Unsafe.Add(ref lane5, laneStride);
+        ref var lane7 = ref Unsafe.Add(ref lane6, laneStride);
         var length = (nuint)(uint)count;
         nuint i = 0;
 
