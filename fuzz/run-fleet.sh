@@ -41,6 +41,16 @@ mkdir -p "$OUT" "$LOGS"
 [ -x "$AFL" ] || { echo "run fuzz/install-afl.sh first" >&2; exit 2; }
 [ -x "$BIN" ] || { echo "build the $TARGET target first" >&2; exit 2; }
 
+# The reader's generated seeds are derived from the writer, not checked in: they
+# are regenerable binaries that must track the code. Without them the fuzzer
+# only ever sees uncompressed files of a few types, and no amount of mutation
+# invents a valid Snappy or Zstd frame plus the matching codec field — those
+# decoders simply never run.
+if [ "$TARGET" = "reader" ] && ! ls "$CORPUS"/gen-*.bin >/dev/null 2>&1; then
+  echo "==> Generating reader seed corpus..."
+  "$BIN" --generate-corpus "$CORPUS" || echo "!! seed generation failed; continuing with checked-in seeds"
+fi
+
 echo "==> Stopping any existing $TARGET fuzzers..."
 pkill -9 -f "$OUT" 2>/dev/null || true
 pkill -9 -f "$(basename "$BIN")" 2>/dev/null || true

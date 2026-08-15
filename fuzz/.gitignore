@@ -1,4 +1,6 @@
 reader-corpus/id:*
+# Regenerable from the writer; see run-fleet.sh.
+reader-corpus/gen-*.bin
 reader-findings/
 findings/
 writer-findings/
