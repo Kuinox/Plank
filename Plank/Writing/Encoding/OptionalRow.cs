@@ -9,6 +9,13 @@ namespace Plank.Writing.Encoding;
 /// </summary>
 interface IOptionalRow<TRow, out TValue>
 {
+    /// <summary>
+    /// True when the row always carries a value, so presence never has to be tested. This is a JIT
+    /// constant per instantiation, letting shared loops keep the bulk paths the required-only
+    /// copies used to hand-write.
+    /// </summary>
+    static abstract bool ValueRequired { get; }
+
     static abstract bool IsPresent(in TRow row);
 
     static abstract TValue GetValue(in TRow row);
@@ -17,6 +24,8 @@ interface IOptionalRow<TRow, out TValue>
 readonly struct NullableValueRow<T> : IOptionalRow<T?, T>
     where T : struct
 {
+    public static bool ValueRequired => false;
+
     public static bool IsPresent(in T? row)
         => row.HasValue;
 
@@ -27,8 +36,23 @@ readonly struct NullableValueRow<T> : IOptionalRow<T?, T>
 readonly struct ReferenceRow<T> : IOptionalRow<T, T>
     where T : class
 {
+    public static bool ValueRequired => false;
+
     public static bool IsPresent(in T row)
         => row is not null;
+
+    public static T GetValue(in T row)
+        => row;
+}
+
+/// <summary>A row of a column whose values are never absent.</summary>
+readonly struct RequiredRow<T> : IOptionalRow<T, T>
+    where T : notnull
+{
+    public static bool ValueRequired => true;
+
+    public static bool IsPresent(in T row)
+        => true;
 
     public static T GetValue(in T row)
         => row;
