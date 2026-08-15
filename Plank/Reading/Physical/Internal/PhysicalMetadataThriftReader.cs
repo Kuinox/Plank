@@ -10,8 +10,24 @@ static class PhysicalMetadataThriftReader
     {
         var reader = new CompactProtocolReader(metadata.FooterBytes);
         reader.BeginStruct();
+        var seenFields = 0;
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
+            // Each FileMetaData field is defined at most once, but nothing in the
+            // compact protocol enforces that. A repeated field re-rents
+            // metadata.*Buffer on top of the previous rental — leaking it — while
+            // counters like ColumnCount keep accumulating across both passes, so
+            // the second ReadSchema indexed its freshly-sized column buffer out of
+            // bounds. Unknown field ids stay skippable; only the ones that own
+            // buffers or counters are rejected.
+            if (fieldId is 1 or 2 or 4 or 5 or 6)
+            {
+                var fieldBit = 1 << fieldId;
+                if ((seenFields & fieldBit) != 0)
+                    throw new CorruptParquetException($"File metadata repeats field {fieldId}.");
+                seenFields |= fieldBit;
+            }
+
             switch (fieldId)
             {
                 case 1:
