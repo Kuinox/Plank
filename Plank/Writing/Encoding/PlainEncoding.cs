@@ -56,79 +56,7 @@ static class PlainEncoding
         if (byteCount == 0)
             return;
 
-        var sourceBytes = MemoryMarshal.AsBytes(booleanValues);
-        var destination = writer.GetSpan(byteCount);
-        var fullByteCount = booleanValues.Length >> 3;
-        var valueIndex = 0;
-        var byteIndex = 0;
-        if (BitConverter.IsLittleEndian && Vector512.IsHardwareAccelerated && Vector512<byte>.IsSupported)
-        {
-            var vectorValueCount = sourceBytes.Length / Vector512<byte>.Count;
-            ref var source = ref MemoryMarshal.GetReference(sourceBytes);
-            for (var i = 0; i < vectorValueCount; i++)
-            {
-                var isFalse = Vector512.Equals(Vector512.LoadUnsafe(ref source), Vector512<byte>.Zero);
-                var mask = (ulong)~isFalse.ExtractMostSignificantBits();
-                Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
-                byteIndex += sizeof(ulong);
-                source = ref Unsafe.Add(ref source, Vector512<byte>.Count);
-            }
-
-            valueIndex = vectorValueCount * Vector512<byte>.Count;
-        }
-        else if (BitConverter.IsLittleEndian && Vector256.IsHardwareAccelerated && Vector256<byte>.IsSupported)
-        {
-            var vectorValueCount = sourceBytes.Length / Vector256<byte>.Count;
-            ref var source = ref MemoryMarshal.GetReference(sourceBytes);
-            for (var i = 0; i < vectorValueCount; i++)
-            {
-                var isFalse = Vector256.Equals(Vector256.LoadUnsafe(ref source), Vector256<byte>.Zero);
-                var mask = (uint)~isFalse.ExtractMostSignificantBits();
-                Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
-                byteIndex += sizeof(uint);
-                source = ref Unsafe.Add(ref source, Vector256<byte>.Count);
-            }
-
-            valueIndex = vectorValueCount * Vector256<byte>.Count;
-        }
-        else if (Sse2.IsSupported)
-        {
-            var simdValueCount = sourceBytes.Length & ~15;
-            for (; valueIndex < simdValueCount; valueIndex += 16)
-            {
-                var chunk = MemoryMarshal.Read<Vector128<byte>>(sourceBytes[valueIndex..]);
-                var gtZero = Sse2.CompareGreaterThan(chunk.AsSByte(), Vector128<sbyte>.Zero);
-                var mask = Sse2.MoveMask(gtZero);
-                destination[byteIndex] = (byte)mask;
-                destination[byteIndex + 1] = (byte)(mask >> 8);
-                byteIndex += 2;
-            }
-        }
-
-        for (; byteIndex < fullByteCount; byteIndex++)
-        {
-            var packed =
-                (booleanValues[valueIndex] ? 1 : 0) |
-                ((booleanValues[valueIndex + 1] ? 1 : 0) << 1) |
-                ((booleanValues[valueIndex + 2] ? 1 : 0) << 2) |
-                ((booleanValues[valueIndex + 3] ? 1 : 0) << 3) |
-                ((booleanValues[valueIndex + 4] ? 1 : 0) << 4) |
-                ((booleanValues[valueIndex + 5] ? 1 : 0) << 5) |
-                ((booleanValues[valueIndex + 6] ? 1 : 0) << 6) |
-                ((booleanValues[valueIndex + 7] ? 1 : 0) << 7);
-            destination[byteIndex] = (byte)packed;
-            valueIndex += 8;
-        }
-
-        var tailCount = booleanValues.Length - valueIndex;
-        if (tailCount > 0)
-        {
-            var packed = 0;
-            for (var bit = 0; bit < tailCount; bit++)
-                packed |= (booleanValues[valueIndex + bit] ? 1 : 0) << bit;
-            destination[byteIndex] = (byte)packed;
-        }
-
+        EncodingPrimitives.PackBooleans(booleanValues, writer.GetSpan(byteCount));
         writer.Advance(byteCount);
     }
 
@@ -474,7 +402,7 @@ static class PlainEncoding
     {
         if (column.PhysicalType is ParquetPhysicalType.FixedLenByteArray or ParquetPhysicalType.Int96)
         {
-            var valueLength = column.PhysicalType == ParquetPhysicalType.Int96 ? 12 : GetFixedLength(column);
+            var valueLength = column.PhysicalType == ParquetPhysicalType.Int96 ? 12 : EncodingPrimitives.GetFixedLength(column);
             var presentCount = 0;
             for (var i = 0; i < values.Length; i++)
                 if (values[i] is not null)
@@ -588,7 +516,7 @@ static class PlainEncoding
     static void WriteFixedLengthByteArrayValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
-        var valueLength = GetFixedLength(column);
+        var valueLength = EncodingPrimitives.GetFixedLength(column);
         if (typeof(T) == typeof(Guid))
         {
             if (valueLength != 16)
@@ -644,16 +572,4 @@ static class PlainEncoding
         writer.Advance(offset);
     }
 
-    static int GetFixedLength(Column column)
-    {
-        var valueLength = column.Options.TypeLength;
-        if (valueLength == 0)
-            throw new InvalidOperationException(
-                $"Column '{column.Name}' is '{ParquetPhysicalType.FixedLenByteArray}' and requires a positive '{nameof(ColumnOptions.TypeLength)}'.");
-        if (valueLength > int.MaxValue)
-            throw new InvalidOperationException(
-                $"Column '{column.Name}' fixed length ({valueLength}) exceeds supported maximum of {int.MaxValue}.");
-
-        return checked((int)valueLength);
-    }
 }

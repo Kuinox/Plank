@@ -40,7 +40,7 @@ static class Encoding
             ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBuffer.Span[..checked(values.Length * sizeof(int))])
             : default;
         var dictionaryBitWidth = useDictionary
-            ? RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
+            ? EncodingPrimitives.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
             : 0;
 
         try
@@ -95,7 +95,7 @@ static class Encoding
         {
             var dictionaryIndexes = MemoryMarshal.Cast<byte, int>(
                 dictionaryIndexesBuffer.Span[..checked(values.Length * sizeof(int))]);
-            var dictionaryBitWidth = RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(
+            var dictionaryBitWidth = EncodingPrimitives.GetBitWidthFromMaxValue(
                 dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1);
             WriteDictionaryDataPages(bufferWriters, values.Length, dictionaryEncoding, pages, dictionaryIndexes,
                 dictionaryBitWidth, strategyContext.Strategy);
@@ -609,7 +609,7 @@ static class Encoding
             ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBuffer.Span[..checked(denseValues.Length * sizeof(int))])
             : default;
         var dictionaryBitWidth = useDictionary
-            ? RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
+            ? EncodingPrimitives.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
             : 0;
         var useTargetPageBytes = TryGetOptionalPageSizer(column, dataEncoding, useDictionary, dictionaryBitWidth,
             strategy, out var targetPageBytes, out var presentValueBytes);
@@ -783,7 +783,7 @@ static class Encoding
             ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBuffer.Span[..checked(presentCount * sizeof(int))])
             : default;
         var dictionaryBitWidth = useDictionary
-            ? RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
+            ? EncodingPrimitives.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
             : 0;
         var useTargetPageBytes = TryGetOptionalPageSizer(column, dataEncoding, useDictionary, dictionaryBitWidth,
             strategy, out var targetPageBytes, out var presentValueBytes);
@@ -930,7 +930,7 @@ static class Encoding
             ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBuffer.Span[..checked(presentCount * sizeof(int))])
             : default;
         var dictionaryBitWidth = useDictionary
-            ? RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
+            ? EncodingPrimitives.GetBitWidthFromMaxValue(dictionaryValueCount <= 1 ? 0 : dictionaryValueCount - 1)
             : 0;
         var useTargetPageBytes = TryGetOptionalPageSizer(column, dataEncoding, useDictionary, dictionaryBitWidth,
             strategy, out var targetPageBytes, out var presentValueBytes);
@@ -1083,13 +1083,13 @@ static class Encoding
                 continue;
             }
 
-            WriteLevelRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
+            EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
             currentLevel = level;
             currentRunLength = 1;
         }
 
         if (currentRunLength > 0)
-            WriteLevelRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
+            EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
         return CompleteLevelEncoding(start, lengthPrefix, ref writer);
     }
 
@@ -1123,13 +1123,13 @@ static class Encoding
                 continue;
             }
 
-            WriteLevelRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
+            EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
             currentLevel = level;
             currentRunLength = 1;
         }
 
         if (currentRunLength > 0)
-            WriteLevelRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
+            EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, definitionBitWidth, ref writer);
         return CompleteLevelEncoding(start, lengthPrefix, ref writer);
     }
 
@@ -1392,7 +1392,7 @@ static class Encoding
         var allowsNullRow = leafProjectionInfo.ListOptional;
         var listDefinedDefinitionLevel = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional ? 1 : 0;
         var presentElementDefinitionLevel = listDefinedDefinitionLevel + 1;
-        var definitionBitWidth = GetBitWidth(presentElementDefinitionLevel);
+        var definitionBitWidth = EncodingPrimitives.GetBitWidthFromMaxValue(presentElementDefinitionLevel);
 
         for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
         {
@@ -1458,7 +1458,7 @@ static class Encoding
         var listDefinedDefinitionLevel = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional ? 1 : 0;
         var nullElementDefinitionLevel = listDefinedDefinitionLevel + 1;
         var presentElementDefinitionLevel = listDefinedDefinitionLevel + 2;
-        var definitionBitWidth = GetBitWidth(presentElementDefinitionLevel);
+        var definitionBitWidth = EncodingPrimitives.GetBitWidthFromMaxValue(presentElementDefinitionLevel);
 
         for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
         {
@@ -1535,7 +1535,7 @@ static class Encoding
         var listDefinedDefinitionLevel = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional ? 1 : 0;
         var nullElementDefinitionLevel = listDefinedDefinitionLevel + 1;
         var presentElementDefinitionLevel = listDefinedDefinitionLevel + 2;
-        var definitionBitWidth = GetBitWidth(presentElementDefinitionLevel);
+        var definitionBitWidth = EncodingPrimitives.GetBitWidthFromMaxValue(presentElementDefinitionLevel);
 
         for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
         {
@@ -1614,8 +1614,8 @@ static class Encoding
                 leafProjectionInfo.MaxDefinitionLevel, repLevels, defLevels, values, column.Name);
         }
 
-        var repBitWidth = GetBitWidth(leafProjectionInfo.MaxRepetitionLevel);
-        var defBitWidth = GetBitWidth(leafProjectionInfo.MaxDefinitionLevel);
+        var repBitWidth = EncodingPrimitives.GetBitWidthFromMaxValue(leafProjectionInfo.MaxRepetitionLevel);
+        var defBitWidth = EncodingPrimitives.GetBitWidthFromMaxValue(leafProjectionInfo.MaxDefinitionLevel);
         var repetitionLength = WriteLevelSequence(repLevels, repBitWidth, writeLevelLengthPrefixes, ref page.Content);
         var definitionLength = WriteLevelSequence(defLevels, defBitWidth, writeLevelLengthPrefixes, ref page.Content);
         ValueEncodingDispatcher.WriteValues(dataEncoding, column, CollectionsMarshal.AsSpan(values), bufferWriters, ref page.Content);
@@ -1685,14 +1685,14 @@ static class Encoding
             var row = rows[rowIndex];
             if (row is null)
             {
-                WriteLevelRun(0, 1, 1, ref writer);
+                EncodingPrimitives.WriteRleRun(0, 1, 1, ref writer);
                 continue;
             }
 
             var rowLength = row.Length;
-            WriteLevelRun(0, 1, 1, ref writer);
+            EncodingPrimitives.WriteRleRun(0, 1, 1, ref writer);
             if (rowLength > 1)
-                WriteLevelRun(1, rowLength - 1, 1, ref writer);
+                EncodingPrimitives.WriteRleRun(1, rowLength - 1, 1, ref writer);
         }
 
         return CompleteLevelEncoding(start, lengthPrefix, ref writer);
@@ -1716,12 +1716,12 @@ static class Encoding
                 continue;
             }
 
-            WriteLevelRun(runValue, runLength, bitWidth, ref writer);
+            EncodingPrimitives.WriteRleRun(runValue, runLength, bitWidth, ref writer);
             runValue = value;
             runLength = 1;
         }
 
-        WriteLevelRun(runValue, runLength, bitWidth, ref writer);
+        EncodingPrimitives.WriteRleRun(runValue, runLength, bitWidth, ref writer);
         return CompleteLevelEncoding(start, lengthPrefix, ref writer);
     }
 
@@ -1738,17 +1738,17 @@ static class Encoding
             {
                 if (!allowsNullRow)
                     throw new InvalidOperationException("Null row is not allowed for this repeated column.");
-                WriteLevelRun(0, 1, definitionBitWidth, ref writer);
+                EncodingPrimitives.WriteRleRun(0, 1, definitionBitWidth, ref writer);
                 continue;
             }
 
             if (row.Length == 0)
             {
-                WriteLevelRun(listDefinedDefinitionLevel, 1, definitionBitWidth, ref writer);
+                EncodingPrimitives.WriteRleRun(listDefinedDefinitionLevel, 1, definitionBitWidth, ref writer);
                 continue;
             }
 
-            WriteLevelRun(presentElementDefinitionLevel, row.Length, definitionBitWidth, ref writer);
+            EncodingPrimitives.WriteRleRun(presentElementDefinitionLevel, row.Length, definitionBitWidth, ref writer);
         }
 
         return CompleteLevelEncoding(start, lengthPrefix, ref writer);
@@ -1768,18 +1768,18 @@ static class Encoding
             {
                 if (!allowsNullRow)
                     throw new InvalidOperationException("Null row is not allowed for this repeated column.");
-                WriteLevelRun(0, 1, definitionBitWidth, ref writer);
+                EncodingPrimitives.WriteRleRun(0, 1, definitionBitWidth, ref writer);
                 continue;
             }
 
             if (row.Length == 0)
             {
-                WriteLevelRun(listDefinedDefinitionLevel, 1, definitionBitWidth, ref writer);
+                EncodingPrimitives.WriteRleRun(listDefinedDefinitionLevel, 1, definitionBitWidth, ref writer);
                 continue;
             }
 
             for (var i = 0; i < row.Length; i++)
-                WriteLevelRun(row[i].HasValue ? presentElementDefinitionLevel : nullElementDefinitionLevel, 1,
+                EncodingPrimitives.WriteRleRun(row[i].HasValue ? presentElementDefinitionLevel : nullElementDefinitionLevel, 1,
                     definitionBitWidth, ref writer);
         }
 
@@ -1800,18 +1800,18 @@ static class Encoding
             {
                 if (!allowsNullRow)
                     throw new InvalidOperationException("Null row is not allowed for this repeated column.");
-                WriteLevelRun(0, 1, definitionBitWidth, ref writer);
+                EncodingPrimitives.WriteRleRun(0, 1, definitionBitWidth, ref writer);
                 continue;
             }
 
             if (row.Length == 0)
             {
-                WriteLevelRun(listDefinedDefinitionLevel, 1, definitionBitWidth, ref writer);
+                EncodingPrimitives.WriteRleRun(listDefinedDefinitionLevel, 1, definitionBitWidth, ref writer);
                 continue;
             }
 
             for (var i = 0; i < row.Length; i++)
-                WriteLevelRun(row[i] is null ? nullElementDefinitionLevel : presentElementDefinitionLevel, 1,
+                EncodingPrimitives.WriteRleRun(row[i] is null ? nullElementDefinitionLevel : presentElementDefinitionLevel, 1,
                     definitionBitWidth, ref writer);
         }
 
@@ -1834,41 +1834,6 @@ static class Encoding
         if (!lengthPrefix.IsEmpty)
             BinaryPrimitives.WriteUInt32LittleEndian(lengthPrefix, checked((uint)length));
         return length;
-    }
-
-    static int GetBitWidth(int maxLevel)
-        => RleBitPackingHybridEncoding.GetBitWidthFromMaxValue(maxLevel);
-
-    static void WriteLevelRun(int value, int runLength, int bitWidth, ref BufferWriter writer)
-    {
-        if (runLength <= 0)
-            return;
-
-        WriteUnsignedVarInt(((uint)runLength) << 1, ref writer);
-        var byteWidth = (bitWidth + 7) >> 3;
-        if (byteWidth == 0)
-            return;
-
-        var destination = writer.GetSpan(byteWidth);
-        var unsignedValue = unchecked((uint)value);
-        for (var i = 0; i < byteWidth; i++)
-            destination[i] = (byte)(unsignedValue >> (8 * i));
-        writer.Advance(byteWidth);
-    }
-
-    static void WriteUnsignedVarInt(uint value, ref BufferWriter writer)
-    {
-        while (value >= 0x80)
-        {
-            var byteSpan = writer.GetSpan(1);
-            byteSpan[0] = (byte)(value | 0x80);
-            writer.Advance(1);
-            value >>= 7;
-        }
-
-        var finalByte = writer.GetSpan(1);
-        finalByte[0] = (byte)value;
-        writer.Advance(1);
     }
 
 

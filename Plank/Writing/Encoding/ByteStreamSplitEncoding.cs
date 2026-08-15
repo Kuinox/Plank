@@ -99,7 +99,7 @@ static class ByteStreamSplitEncoding
     static void WriteFixedLengthByteArrayValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
-        var valueLength = GetFixedLength(column);
+        var valueLength = EncodingPrimitives.GetFixedLength(column);
         if (typeof(T) == typeof(Guid))
         {
             if (valueLength != 16)
@@ -179,18 +179,6 @@ static class ByteStreamSplitEncoding
         writer.Advance(byteCount);
     }
 
-    static int GetFixedLength(Column column)
-    {
-        var valueLength = column.Options.TypeLength;
-        if (valueLength == 0)
-            throw new InvalidOperationException(
-                $"Column '{column.Name}' is '{ParquetPhysicalType.FixedLenByteArray}' and requires a positive '{nameof(ColumnOptions.TypeLength)}'.");
-        if (valueLength > int.MaxValue)
-            throw new InvalidOperationException(
-                $"Column '{column.Name}' fixed length ({valueLength}) exceeds supported maximum of {int.MaxValue}.");
-
-        return checked((int)valueLength);
-    }
 
     static void WriteInt32Lanes<T>(Column column, ReadOnlySpan<T> values, Span<byte> destination)
         where T : notnull
