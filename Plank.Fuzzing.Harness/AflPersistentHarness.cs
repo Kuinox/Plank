@@ -40,9 +40,7 @@ internal static unsafe class AflPersistentHarness
         if (!TryGetEnvInt("__AFL_SHM_ID", out int shmId))
         {
             // Running outside AFL++ — execute once from stdin.
-            // Pin a dummy bitmap so SharpFuzz instrumentation doesn't AV on null SharedMem.
-            var dummy = GCHandle.Alloc(new byte[MapSize], GCHandleType.Pinned);
-            Trace.SharedMem = (byte*)dummy.AddrOfPinnedObject();
+            PinDummyCoverageBuffer();
             execute(ReadTestcase());
             return;
         }
@@ -197,6 +195,25 @@ internal static unsafe class AflPersistentHarness
     }
 
     const int SEEK_SET = 0;
+
+    /// <summary>
+    /// Points the SharpFuzz instrumentation at a throwaway bitmap.
+    /// </summary>
+    /// <remarks>
+    /// Every instrumented method writes a coverage byte through Trace.SharedMem.
+    /// Outside AFL that pointer is null, so any code path through the
+    /// instrumented assemblies dies with an AccessViolationException that looks
+    /// alarmingly like memory corruption in the library under test. Anything
+    /// that runs instrumented code without a real AFL bitmap must call this
+    /// first.
+    /// </remarks>
+    internal static void PinDummyCoverageBuffer()
+    {
+        if (Trace.SharedMem != null)
+            return;
+        var dummy = GCHandle.Alloc(new byte[MapSize], GCHandleType.Pinned);
+        Trace.SharedMem = (byte*)dummy.AddrOfPinnedObject();
+    }
 
     // PLANK_FUZZ_CRASH_DIR lets every worker on a machine funnel crashes into
     // one durable directory that outlives the AFL output dir.

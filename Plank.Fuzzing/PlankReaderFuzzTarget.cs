@@ -11,38 +11,19 @@ public static class PlankReaderFuzzTarget
 
     public static void Execute(ReadOnlySpan<byte> data)
     {
-        var schemaIndex = data.IsEmpty ? 0 : data[0] % Schemas.Length;
-        var fileBytes = data.IsEmpty ? [] : data[1..].ToArray();
-
-        var schema = Schemas[schemaIndex];
-        var source = new MemoryReadSource(fileBytes);
-
         try
         {
-            using var reader = schema.CreateReader(source);
-            foreach (var group in reader.RowGroups)
-            {
-                foreach (var column in reader.Schema.LeafColumns)
-                    DrainColumn(group, column);
-            }
+            Run(data.IsEmpty ? (byte)0 : data[0], data.IsEmpty ? [] : data[1..].ToArray());
         }
         catch (Exception ex) when (ex is CorruptParquetException or NotSupportedException or InvalidOperationException) { }
     }
 
     public static Exception? GetHandledException(byte[] data)
     {
-        var schemaIndex = data.Length == 0 ? 0 : data[0] % Schemas.Length;
-        var fileBytes = data.Length == 0 ? [] : data[1..];
-        var schema = Schemas[schemaIndex];
-        var source = new MemoryReadSource(fileBytes);
+        ArgumentNullException.ThrowIfNull(data);
         try
         {
-            using var reader = schema.CreateReader(source);
-            foreach (var group in reader.RowGroups)
-            {
-                foreach (var column in reader.Schema.LeafColumns)
-                    DrainColumn(group, column);
-            }
+            Run(data.Length == 0 ? (byte)0 : data[0], data.Length == 0 ? [] : data[1..]);
             return null;
         }
         catch (Exception ex) when (ex is CorruptParquetException or NotSupportedException or InvalidOperationException)
@@ -51,23 +32,69 @@ public static class PlankReaderFuzzTarget
         }
     }
 
+    static void Run(byte selector, byte[] fileBytes)
+    {
+        var source = new MemoryReadSource(fileBytes);
+
+        // Half the inputs bind the file's own schema. Reading through a fixed
+        // requested schema — the only thing this target used to do — can never
+        // reach a decoder for a type that schema does not name, so FLOAT, INT96,
+        // FIXED_LEN_BYTE_ARRAY, every logical type and every compression codec
+        // the file declares were unreachable no matter how long it ran. The
+        // other half keeps exercising the strict projection path, which is where
+        // the requested schema is matched against the file's.
+        using var reader = (selector & 1) == 0
+            ? OpenWithFileSchema(source)
+            : Schemas[(selector >> 1) % Schemas.Length].CreateReader(source);
+
+        foreach (var group in reader.RowGroups)
+            foreach (var column in reader.Schema.LeafColumns)
+                DrainColumn(group, column);
+    }
+
+    static ParquetReader OpenWithFileSchema(IParquetReadSource source)
+    {
+        var reader = new ParquetReader();
+        reader.Reset(source);
+        return reader;
+    }
+
+    // Every physical type has to be drained through the CLR type the reader
+    // accepts for it, and an optional column has to be read as a nullable, or
+    // the reader rejects the call before decoding anything. Missing cases here
+    // are silent: the column is skipped and its decoder never runs, which is how
+    // FLOAT, INT96 and FIXED_LEN_BYTE_ARRAY went unfuzzed.
     static void DrainColumn(RowGroup rowGroup, LeafColumn column)
     {
+        // A non-zero max definition level means the value can be absent, whether
+        // because the leaf itself is optional or because an ancestor group is.
+        var optional = column.MaxDefinitionLevel > 0;
         switch (column.PhysicalType)
         {
             case ParquetPhysicalType.Boolean:
-                DrainBuffers(rowGroup.Column<bool>(column));
+                if (optional) DrainBuffers(rowGroup.Column<bool?>(column));
+                else DrainBuffers(rowGroup.Column<bool>(column));
                 break;
             case ParquetPhysicalType.Int32:
-                DrainBuffers(rowGroup.Column<int>(column));
+                if (optional) DrainBuffers(rowGroup.Column<int?>(column));
+                else DrainBuffers(rowGroup.Column<int>(column));
                 break;
             case ParquetPhysicalType.Int64:
-                DrainBuffers(rowGroup.Column<long>(column));
+                if (optional) DrainBuffers(rowGroup.Column<long?>(column));
+                else DrainBuffers(rowGroup.Column<long>(column));
+                break;
+            case ParquetPhysicalType.Float:
+                if (optional) DrainBuffers(rowGroup.Column<float?>(column));
+                else DrainBuffers(rowGroup.Column<float>(column));
                 break;
             case ParquetPhysicalType.Double:
-                DrainBuffers(rowGroup.Column<double>(column));
+                if (optional) DrainBuffers(rowGroup.Column<double?>(column));
+                else DrainBuffers(rowGroup.Column<double>(column));
                 break;
+            // ByteArray, FixedLenByteArray and Int96 are all read as spans of bytes.
             case ParquetPhysicalType.ByteArray:
+            case ParquetPhysicalType.FixedLenByteArray:
+            case ParquetPhysicalType.Int96:
                 DrainBinaryBuffers(rowGroup.Column<byte>(column));
                 break;
         }
