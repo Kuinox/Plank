@@ -341,7 +341,7 @@ static class PlainEncoding
 
         if (typeof(T) == typeof(byte[]))
         {
-            WriteLengthPrefixedPayloads<byte[], RequiredByteArrayRow>(column,
+            WriteRequiredByteArrayPayloads(column,
                 Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), ref writer);
             return;
         }
@@ -355,6 +355,36 @@ static class PlainEncoding
 
         throw new InvalidOperationException(
             $"Column '{column.Name}' expects '{ParquetPhysicalType.ByteArray}' values, but got '{typeof(T)}'.");
+    }
+
+    // Required byte[] is a shared-generic reference-type instantiation. Keeping its hot loop
+    // concrete lets the JIT eliminate the row-shape dispatch and recover the pre-unification path.
+    static void WriteRequiredByteArrayPayloads(Column column, ReadOnlySpan<byte[]> values,
+        ref BufferWriter writer)
+    {
+        var byteCount = 0;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var value = values[i] ?? throw new InvalidOperationException(
+                $"Column '{column.Name}' does not support null values.");
+            byteCount = checked(byteCount + sizeof(int) + value.Length);
+        }
+
+        if (byteCount == 0)
+            return;
+
+        var destination = writer.GetSpan(byteCount);
+        var offset = 0;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var value = values[i]!;
+            BinaryPrimitives.WriteInt32LittleEndian(destination[offset..], value.Length);
+            offset += sizeof(int);
+            value.CopyTo(destination[offset..]);
+            offset += value.Length;
+        }
+
+        writer.Advance(offset);
     }
 
     /// <summary>
@@ -393,6 +423,13 @@ static class PlainEncoding
         ref BufferWriter writer)
         where TRowAccess : IByteArrayRow<TRow>
     {
+        if (typeof(TRow) == typeof(byte[]))
+        {
+            WriteOptionalByteArrayPayloads(column,
+                Unsafe.As<ReadOnlySpan<TRow>, ReadOnlySpan<byte[]>>(ref rows), ref writer);
+            return;
+        }
+
         // INT96 and FIXED_LEN_BYTE_ARRAY columns carry payloads of a known width and are written
         // without a length prefix. Only the byte[] row shape has ever taken this branch: the memory
         // shape falls through to the length-prefixed layout, which is wrong for these physical types
@@ -405,6 +442,61 @@ static class PlainEncoding
         }
 
         WriteLengthPrefixedPayloads<TRow, TRowAccess>(column, rows, ref writer);
+    }
+
+    static void WriteOptionalByteArrayPayloads(Column column, ReadOnlySpan<byte[]> values,
+        ref BufferWriter writer)
+    {
+        if (column.PhysicalType is ParquetPhysicalType.FixedLenByteArray or ParquetPhysicalType.Int96)
+        {
+            var valueLength = column.PhysicalType == ParquetPhysicalType.Int96
+                ? 12
+                : EncodingPrimitives.GetFixedLength(column);
+            var presentCount = 0;
+            for (var i = 0; i < values.Length; i++)
+                if (values[i] is not null)
+                    presentCount++;
+
+            var destination = writer.GetSpan(checked(presentCount * valueLength));
+            var offset = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var value = values[i];
+                if (value is null)
+                    continue;
+                if (value.Length != valueLength)
+                    throw new InvalidOperationException(
+                        $"Column '{column.Name}' expects fixed-length values of {valueLength} bytes, but got {value.Length}.");
+                value.CopyTo(destination[offset..]);
+                offset += valueLength;
+            }
+
+            writer.Advance(offset);
+            return;
+        }
+
+        var byteCount = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i] is { } value)
+                byteCount = checked(byteCount + sizeof(int) + value.Length);
+
+        if (byteCount == 0)
+            return;
+
+        var lengthPrefixedDestination = writer.GetSpan(byteCount);
+        var lengthPrefixedOffset = 0;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (value is null)
+                continue;
+            BinaryPrimitives.WriteInt32LittleEndian(lengthPrefixedDestination[lengthPrefixedOffset..], value.Length);
+            lengthPrefixedOffset += sizeof(int);
+            value.CopyTo(lengthPrefixedDestination[lengthPrefixedOffset..]);
+            lengthPrefixedOffset += value.Length;
+        }
+
+        writer.Advance(lengthPrefixedOffset);
     }
 
     static void WriteOptionalFixedLengthPayloads<TRow, TRowAccess>(Column column, ReadOnlySpan<TRow> rows,

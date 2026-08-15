@@ -13,7 +13,7 @@ static class DeltaByteArrayEncoding
         RequireByteArrayColumn(column);
         if (typeof(T) == typeof(byte[]))
         {
-            WritePayloads<byte[], RequiredByteArrayRow>(column,
+            WriteRequiredByteArrayPayloads(column,
                 Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), bufferWriters, ref writer);
             return;
         }
@@ -29,10 +29,138 @@ static class DeltaByteArrayEncoding
             $"Column '{column.Name}' expects '{ParquetPhysicalType.ByteArray}' values, but got '{typeof(T)}'.");
     }
 
+    // Required byte[] is a shared-generic reference-type instantiation. A concrete loop avoids the
+    // row-access abstraction cost while the optional and memory shapes still share WritePayloads.
+    static void WriteRequiredByteArrayPayloads(Column column, ReadOnlySpan<byte[]> values,
+        BufferWriterFactory bufferWriters, ref BufferWriter writer)
+    {
+        var byteLength = checked(values.Length * sizeof(int));
+        var rentedPrefixLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
+        var rentedSuffixLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
+        var prefixLengths = MemoryMarshal.Cast<byte, int>(rentedPrefixLengthsBytes.Span[..byteLength]);
+        var suffixLengths = MemoryMarshal.Cast<byte, int>(rentedSuffixLengthsBytes.Span[..byteLength]);
+        var totalSuffixBytes = 0;
+
+        try
+        {
+            ReadOnlySpan<byte> previous = [];
+            for (var i = 0; i < values.Length; i++)
+            {
+                var current = values[i] ?? throw new InvalidOperationException(
+                    $"Column '{column.Name}' does not support null values.");
+                var prefixLength = previous.CommonPrefixLength(current);
+                var suffixLength = current.Length - prefixLength;
+                prefixLengths[i] = prefixLength;
+                suffixLengths[i] = suffixLength;
+                totalSuffixBytes = checked(totalSuffixBytes + suffixLength);
+                previous = current;
+            }
+
+            DeltaBinaryPackedEncoding.WriteInt32(prefixLengths, ref writer);
+            DeltaBinaryPackedEncoding.WriteInt32(suffixLengths, ref writer);
+            if (totalSuffixBytes == 0)
+                return;
+
+            var destination = writer.GetSpan(totalSuffixBytes);
+            var offset = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var current = values[i]!;
+                var prefixLength = prefixLengths[i];
+                var suffixLength = suffixLengths[i];
+                if (suffixLength == 0)
+                    continue;
+                current.AsSpan(prefixLength, suffixLength).CopyTo(destination[offset..]);
+                offset += suffixLength;
+            }
+
+            writer.Advance(offset);
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rentedPrefixLengthsBytes);
+            bufferWriters.ReturnScratch(rentedSuffixLengthsBytes);
+        }
+    }
+
     internal static void WriteOptionalValues<TRow, TRowAccess>(Column column, ReadOnlySpan<TRow> rows,
         BufferWriterFactory bufferWriters, ref BufferWriter writer)
         where TRowAccess : IByteArrayRow<TRow>
-        => WritePayloads<TRow, TRowAccess>(column, rows, bufferWriters, ref writer);
+    {
+        if (typeof(TRow) == typeof(byte[]))
+        {
+            WriteOptionalByteArrayPayloads(column,
+                Unsafe.As<ReadOnlySpan<TRow>, ReadOnlySpan<byte[]>>(ref rows), bufferWriters, ref writer);
+            return;
+        }
+
+        WritePayloads<TRow, TRowAccess>(column, rows, bufferWriters, ref writer);
+    }
+
+    static void WriteOptionalByteArrayPayloads(Column column, ReadOnlySpan<byte[]> values,
+        BufferWriterFactory bufferWriters, ref BufferWriter writer)
+    {
+        var presentCount = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i] is not null)
+                presentCount++;
+        if (presentCount == 0)
+            return;
+
+        var byteLength = checked(presentCount * sizeof(int));
+        var rentedPrefixLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
+        var rentedSuffixLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
+        var prefixLengths = MemoryMarshal.Cast<byte, int>(rentedPrefixLengthsBytes.Span[..byteLength]);
+        var suffixLengths = MemoryMarshal.Cast<byte, int>(rentedSuffixLengthsBytes.Span[..byteLength]);
+        var totalSuffixBytes = 0;
+
+        try
+        {
+            ReadOnlySpan<byte> previous = [];
+            var denseIndex = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var current = values[i];
+                if (current is null)
+                    continue;
+                var prefixLength = previous.CommonPrefixLength(current);
+                var suffixLength = current.Length - prefixLength;
+                prefixLengths[denseIndex] = prefixLength;
+                suffixLengths[denseIndex] = suffixLength;
+                denseIndex++;
+                totalSuffixBytes = checked(totalSuffixBytes + suffixLength);
+                previous = current;
+            }
+
+            DeltaBinaryPackedEncoding.WriteInt32(prefixLengths, ref writer);
+            DeltaBinaryPackedEncoding.WriteInt32(suffixLengths, ref writer);
+            if (totalSuffixBytes == 0)
+                return;
+
+            var destination = writer.GetSpan(totalSuffixBytes);
+            var offset = 0;
+            denseIndex = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var current = values[i];
+                if (current is null)
+                    continue;
+                var prefixLength = prefixLengths[denseIndex];
+                var suffixLength = suffixLengths[denseIndex++];
+                if (suffixLength == 0)
+                    continue;
+                current.AsSpan(prefixLength, suffixLength).CopyTo(destination[offset..]);
+                offset += suffixLength;
+            }
+
+            writer.Advance(offset);
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rentedPrefixLengthsBytes);
+            bufferWriters.ReturnScratch(rentedSuffixLengthsBytes);
+        }
+    }
 
     /// <summary>
     /// DELTA_BYTE_ARRAY layout: the delta-binary-packed prefix lengths, then the suffix lengths,

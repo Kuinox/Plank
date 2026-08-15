@@ -13,7 +13,7 @@ static class DeltaLengthByteArrayEncoding
         RequireByteArrayColumn(column);
         if (typeof(T) == typeof(byte[]))
         {
-            WritePayloads<byte[], RequiredByteArrayRow>(column,
+            WriteRequiredByteArrayPayloads(column,
                 Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), bufferWriters, ref writer);
             return;
         }
@@ -29,10 +29,110 @@ static class DeltaLengthByteArrayEncoding
             $"Column '{column.Name}' expects '{ParquetPhysicalType.ByteArray}' values, but got '{typeof(T)}'.");
     }
 
+    // Required byte[] is a shared-generic reference-type instantiation. A concrete loop avoids the
+    // row-access abstraction cost while the optional and memory shapes still share WritePayloads.
+    static void WriteRequiredByteArrayPayloads(Column column, ReadOnlySpan<byte[]> values,
+        BufferWriterFactory bufferWriters, ref BufferWriter writer)
+    {
+        var byteLength = checked(values.Length * sizeof(int));
+        var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
+        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.Span[..byteLength]);
+        var totalPayloadBytes = 0;
+
+        try
+        {
+            for (var i = 0; i < values.Length; i++)
+            {
+                var value = values[i] ?? throw new InvalidOperationException(
+                    $"Column '{column.Name}' does not support null values.");
+                lengths[i] = value.Length;
+                totalPayloadBytes = checked(totalPayloadBytes + value.Length);
+            }
+
+            DeltaBinaryPackedEncoding.WriteInt32(lengths, ref writer);
+            if (totalPayloadBytes == 0)
+                return;
+
+            var destination = writer.GetSpan(totalPayloadBytes);
+            var offset = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var value = values[i]!;
+                value.CopyTo(destination[offset..]);
+                offset += value.Length;
+            }
+
+            writer.Advance(offset);
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rentedLengthsBytes);
+        }
+    }
+
     internal static void WriteOptionalValues<TRow, TRowAccess>(Column column, ReadOnlySpan<TRow> rows,
         BufferWriterFactory bufferWriters, ref BufferWriter writer)
         where TRowAccess : IByteArrayRow<TRow>
-        => WritePayloads<TRow, TRowAccess>(column, rows, bufferWriters, ref writer);
+    {
+        if (typeof(TRow) == typeof(byte[]))
+        {
+            WriteOptionalByteArrayPayloads(column,
+                Unsafe.As<ReadOnlySpan<TRow>, ReadOnlySpan<byte[]>>(ref rows), bufferWriters, ref writer);
+            return;
+        }
+
+        WritePayloads<TRow, TRowAccess>(column, rows, bufferWriters, ref writer);
+    }
+
+    static void WriteOptionalByteArrayPayloads(Column column, ReadOnlySpan<byte[]> values,
+        BufferWriterFactory bufferWriters, ref BufferWriter writer)
+    {
+        var presentCount = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i] is not null)
+                presentCount++;
+        if (presentCount == 0)
+            return;
+
+        var byteLength = checked(presentCount * sizeof(int));
+        var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
+        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.Span[..byteLength]);
+        var totalPayloadBytes = 0;
+
+        try
+        {
+            var denseIndex = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var value = values[i];
+                if (value is null)
+                    continue;
+                lengths[denseIndex++] = value.Length;
+                totalPayloadBytes = checked(totalPayloadBytes + value.Length);
+            }
+
+            DeltaBinaryPackedEncoding.WriteInt32(lengths, ref writer);
+            if (totalPayloadBytes == 0)
+                return;
+
+            var destination = writer.GetSpan(totalPayloadBytes);
+            var offset = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var value = values[i];
+                if (value is null)
+                    continue;
+                value.CopyTo(destination[offset..]);
+                offset += value.Length;
+            }
+
+            writer.Advance(offset);
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rentedLengthsBytes);
+        }
+    }
 
     /// <summary>
     /// DELTA_LENGTH_BYTE_ARRAY layout: the delta-binary-packed lengths of every present value,
