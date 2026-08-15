@@ -7,72 +7,55 @@ namespace Plank.Writing.Encoding;
 
 static class RleBitPackingHybridEncoding
 {
+    /// <summary>
+    /// Validating entry point. The run-splitting and packing are shared with
+    /// <see cref="WriteWithBitWidthPrefixUnchecked"/>; the only difference is that every value is
+    /// range-checked first, so callers that cannot guarantee the invariant get an exception instead
+    /// of silently truncated output.
+    /// </summary>
     internal static void WriteWithBitWidthPrefix(ReadOnlySpan<int> values, int bitWidth, ref BufferWriter writer)
     {
-        if ((uint)bitWidth > 32)
-            throw new ArgumentOutOfRangeException(nameof(bitWidth), bitWidth, "Bit width must be between 0 and 32.");
-
-        var header = writer.GetSpan(1);
-        header[0] = (byte)bitWidth;
-        writer.Advance(1);
-        Write(values, bitWidth, ref writer);
+        ValidateValues(values, bitWidth);
+        WriteWithBitWidthPrefixUnchecked(values, bitWidth, ref writer);
     }
 
+    /// <inheritdoc cref="WriteWithBitWidthPrefix"/>
     internal static void Write(ReadOnlySpan<int> values, int bitWidth, ref BufferWriter writer)
+    {
+        ValidateValues(values, bitWidth);
+        WriteUnchecked(values, bitWidth, ref writer);
+    }
+
+    /// <summary>
+    /// Rejects values that do not fit <paramref name="bitWidth"/>, before any output is produced.
+    /// The dictionary-index callers satisfy this by construction, which is why they take the
+    /// unchecked path.
+    /// </summary>
+    static void ValidateValues(ReadOnlySpan<int> values, int bitWidth)
     {
         if ((uint)bitWidth > 32)
             throw new ArgumentOutOfRangeException(nameof(bitWidth), bitWidth, "Bit width must be between 0 and 32.");
-        if (values.Length == 0)
+        if (bitWidth == 32)
             return;
 
-        var index = 0;
-        while (index < values.Length)
+        if (bitWidth == 0)
         {
-            var runLength = CountRunLength(values, index);
-            if (runLength >= 8)
-            {
-                WriteRleRun(values[index], runLength, bitWidth, ref writer);
-                index += runLength;
-                continue;
-            }
+            for (var i = 0; i < values.Length; i++)
+                if (values[i] != 0)
+                    throw new InvalidOperationException("Non-zero value cannot be encoded with bit width 0.");
+            return;
+        }
 
-            var literalStart = index;
-            index += runLength;
-            var previousRunWasSingle = runLength == 1;
-
-            while (index < values.Length)
-            {
-                if (previousRunWasSingle)
-                {
-                    var skipped = SkipDistinctAdjacentValues(values, index);
-                    if (skipped != 0)
-                    {
-                        index += skipped;
-                        continue;
-                    }
-                }
-
-                runLength = CountRunLength(values, index);
-                if (runLength >= 8)
-                {
-                    var literalLength = index - literalStart;
-                    var padding = literalLength & 7;
-                    if (padding == 0)
-                        break;
-
-                    var take = Math.Min(runLength, 8 - padding);
-                    index += take;
-                    if (take < runLength)
-                        break;
-                    previousRunWasSingle = false;
-                    continue;
-                }
-
-                previousRunWasSingle = runLength == 1;
-                index += runLength;
-            }
-
-            WriteBitPackedRun(values[literalStart..index], bitWidth, ref writer);
+        var maxValue = (1u << bitWidth) - 1u;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (value < 0)
+                throw new InvalidOperationException(
+                    $"Value '{value}' cannot be encoded with bit width {bitWidth}.");
+            if ((uint)value > maxValue)
+                throw new InvalidOperationException(
+                    $"Value '{value}' cannot be encoded with bit width {bitWidth}. Max is {maxValue}.");
         }
     }
 
@@ -375,21 +358,6 @@ static class RleBitPackingHybridEncoding
         return index - start;
     }
 
-    static void WriteRleRun(int value, int runLength, int bitWidth, ref BufferWriter writer)
-    {
-        if (runLength <= 0)
-            throw new ArgumentOutOfRangeException(nameof(runLength), runLength, "Run length must be positive.");
-
-        WriteUnsignedVarInt(((uint)runLength) << 1, ref writer);
-
-        var byteWidth = (bitWidth + 7) >> 3;
-        if (byteWidth == 0)
-            return;
-
-        var unsignedValue = ValidateAndNormalizeValue(value, bitWidth);
-        WriteLittleEndianUInt32(unsignedValue, byteWidth, ref writer);
-    }
-
     static void WriteRleRunUnchecked(int value, int runLength, int bitWidth, ref BufferWriter writer)
     {
         WriteUnsignedVarInt(((uint)runLength) << 1, ref writer);
@@ -407,47 +375,6 @@ static class RleBitPackingHybridEncoding
         var encoded = writer.GetSpan(1);
         encoded[0] = value ? (byte)1 : (byte)0;
         writer.Advance(1);
-    }
-
-    static void WriteBitPackedRun(ReadOnlySpan<int> literals, int bitWidth, ref BufferWriter writer)
-    {
-        if (literals.Length == 0)
-            return;
-
-        if (bitWidth == 0)
-        {
-            WriteRleRun(0, literals.Length, 0, ref writer);
-            return;
-        }
-
-        var groupCount = (literals.Length + 7) >> 3;
-        WriteUnsignedVarInt((((uint)groupCount) << 1) | 1u, ref writer);
-
-        var byteCount = checked(groupCount * bitWidth);
-        var destination = writer.GetSpan(byteCount);
-        var mask = bitWidth == 32 ? uint.MaxValue : (1u << bitWidth) - 1u;
-        ulong bitBuffer = 0;
-        var bufferedBits = 0;
-        var outputOffset = 0;
-        var totalLiterals = groupCount * 8;
-        for (var i = 0; i < totalLiterals; i++)
-        {
-            var value = i < literals.Length ? ValidateAndNormalizeValue(literals[i], bitWidth) : 0u;
-            bitBuffer |= ((ulong)value & mask) << bufferedBits;
-            bufferedBits += bitWidth;
-
-            while (bufferedBits >= 8)
-            {
-                destination[outputOffset++] = (byte)bitBuffer;
-                bitBuffer >>= 8;
-                bufferedBits -= 8;
-            }
-        }
-
-        if (bufferedBits > 0)
-            destination[outputOffset++] = (byte)bitBuffer;
-
-        writer.Advance(outputOffset);
     }
 
     static void WriteBitPackedRunUnchecked(ReadOnlySpan<int> literals, int bitWidth, ref BufferWriter writer)
@@ -572,30 +499,6 @@ static class RleBitPackingHybridEncoding
         }
 
         writer.Advance(groupCount);
-    }
-
-    static uint ValidateAndNormalizeValue(int value, int bitWidth)
-    {
-        if (bitWidth == 32)
-            return unchecked((uint)value);
-
-        if (value < 0)
-            throw new InvalidOperationException($"Value '{value}' cannot be encoded with bit width {bitWidth}.");
-
-        var unsignedValue = (uint)value;
-        if (bitWidth == 0)
-        {
-            if (unsignedValue != 0)
-                throw new InvalidOperationException("Non-zero value cannot be encoded with bit width 0.");
-            return 0;
-        }
-
-        var maxValue = (1u << bitWidth) - 1u;
-        if (unsignedValue > maxValue)
-            throw new InvalidOperationException(
-                $"Value '{value}' cannot be encoded with bit width {bitWidth}. Max is {maxValue}.");
-
-        return unsignedValue;
     }
 
     static void WriteLittleEndianUInt32(uint value, int byteWidth, ref BufferWriter writer)
