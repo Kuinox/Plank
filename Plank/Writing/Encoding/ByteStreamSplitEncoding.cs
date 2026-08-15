@@ -8,6 +8,12 @@ namespace Plank.Writing.Encoding;
 
 static class ByteStreamSplitEncoding
 {
+    /// <summary>
+    /// Values converted onto the stack before being deinterleaved. Matches the threshold the other
+    /// converting encoders use so a large page falls back to the heap instead of blowing the stack.
+    /// </summary>
+    const int MaxStackConvertedValues = 256;
+
     internal static void WriteValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
@@ -116,8 +122,7 @@ static class ByteStreamSplitEncoding
             for (var i = 0; i < guidValues.Length; i++)
             {
                 guidValues[i].TryWriteBytes(guidBytes, bigEndian: true, out _);
-                for (var lane = 0; lane < guidBytes.Length; lane++)
-                    guidDestination[(lane * guidValues.Length) + i] = guidBytes[lane];
+                ScatterValueAcrossLanes(guidBytes, i, guidValues.Length, guidDestination);
             }
 
             writer.Advance(guidByteCount);
@@ -136,8 +141,7 @@ static class ByteStreamSplitEncoding
             for (var i = 0; i < decimalValues.Length; i++)
             {
                 ParquetDecimalConverter.WriteFixedBigEndian(decimalValues[i], column, encoded);
-                for (var lane = 0; lane < valueLength; lane++)
-                    decimalDestination[(lane * decimalValues.Length) + i] = encoded[lane];
+                ScatterValueAcrossLanes(encoded, i, decimalValues.Length, decimalDestination);
             }
             writer.Advance(decimalByteCount);
             return;
@@ -192,37 +196,27 @@ static class ByteStreamSplitEncoding
 
         if (typeof(T) == typeof(byte))
         {
+            // Lane 0 is the value bytes verbatim and lanes 1-3 are the zero high bytes, so the
+            // deinterleave degenerates into a copy followed by a clear.
             var byteValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte>>(ref values);
-            var lane0 = destination[..values.Length];
-            var lane1 = destination.Slice(values.Length, values.Length);
-            var lane2 = destination.Slice(values.Length * 2, values.Length);
-            var lane3 = destination.Slice(values.Length * 3, values.Length);
-            for (var i = 0; i < byteValues.Length; i++)
-            {
-                var value = byteValues[i];
-                lane0[i] = value;
-                lane1[i] = 0;
-                lane2[i] = 0;
-                lane3[i] = 0;
-            }
+            byteValues.CopyTo(destination);
+            destination[byteValues.Length..].Clear();
             return;
         }
 
         if (typeof(T) == typeof(ushort))
         {
             var ushortValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ushort>>(ref values);
-            var lane0 = destination[..values.Length];
-            var lane1 = destination.Slice(values.Length, values.Length);
-            var lane2 = destination.Slice(values.Length * 2, values.Length);
-            var lane3 = destination.Slice(values.Length * 3, values.Length);
+            var lane0 = destination[..ushortValues.Length];
+            var lane1 = destination.Slice(ushortValues.Length, ushortValues.Length);
             for (var i = 0; i < ushortValues.Length; i++)
             {
                 var value = ushortValues[i];
                 lane0[i] = (byte)value;
                 lane1[i] = (byte)(value >> 8);
-                lane2[i] = 0;
-                lane3[i] = 0;
             }
+
+            destination[(ushortValues.Length * 2)..].Clear();
             return;
         }
 
@@ -236,18 +230,12 @@ static class ByteStreamSplitEncoding
         if (typeof(T) == typeof(decimal))
         {
             var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
-            var lane0 = destination[..values.Length];
-            var lane1 = destination.Slice(values.Length, values.Length);
-            var lane2 = destination.Slice(values.Length * 2, values.Length);
-            var lane3 = destination.Slice(values.Length * 3, values.Length);
+            Span<uint> converted = decimalValues.Length <= MaxStackConvertedValues
+                ? stackalloc uint[decimalValues.Length]
+                : new uint[decimalValues.Length];
             for (var i = 0; i < decimalValues.Length; i++)
-            {
-                var value = ParquetDecimalConverter.ToInt32(decimalValues[i], column);
-                lane0[i] = (byte)value;
-                lane1[i] = (byte)(value >> 8);
-                lane2[i] = (byte)(value >> 16);
-                lane3[i] = (byte)(value >> 24);
-            }
+                converted[i] = unchecked((uint)ParquetDecimalConverter.ToInt32(decimalValues[i], column));
+            WriteUInt32Lanes(converted, destination);
             return;
         }
 
@@ -275,26 +263,12 @@ static class ByteStreamSplitEncoding
         if (typeof(T) == typeof(decimal))
         {
             var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
-            var lane0 = destination[..values.Length];
-            var lane1 = destination.Slice(values.Length, values.Length);
-            var lane2 = destination.Slice(values.Length * 2, values.Length);
-            var lane3 = destination.Slice(values.Length * 3, values.Length);
-            var lane4 = destination.Slice(values.Length * 4, values.Length);
-            var lane5 = destination.Slice(values.Length * 5, values.Length);
-            var lane6 = destination.Slice(values.Length * 6, values.Length);
-            var lane7 = destination.Slice(values.Length * 7, values.Length);
+            Span<ulong> converted = decimalValues.Length <= MaxStackConvertedValues
+                ? stackalloc ulong[decimalValues.Length]
+                : new ulong[decimalValues.Length];
             for (var i = 0; i < decimalValues.Length; i++)
-            {
-                var value = ParquetDecimalConverter.ToInt64(decimalValues[i], column);
-                lane0[i] = (byte)value;
-                lane1[i] = (byte)(value >> 8);
-                lane2[i] = (byte)(value >> 16);
-                lane3[i] = (byte)(value >> 24);
-                lane4[i] = (byte)(value >> 32);
-                lane5[i] = (byte)(value >> 40);
-                lane6[i] = (byte)(value >> 48);
-                lane7[i] = (byte)(value >> 56);
-            }
+                converted[i] = unchecked((ulong)ParquetDecimalConverter.ToInt64(decimalValues[i], column));
+            WriteUInt64Lanes(converted, destination);
             return;
         }
 
@@ -388,6 +362,18 @@ static class ByteStreamSplitEncoding
             Unsafe.Add(ref lane6, i) = (byte)(value >> 48);
             Unsafe.Add(ref lane7, i) = (byte)(value >> 56);
         }
+    }
+
+    /// <summary>
+    /// Writes one already-encoded fixed-length payload into the byte-stream-split lanes: byte
+    /// <c>lane</c> of value <paramref name="valueIndex"/> lands at <c>lane * valueCount + valueIndex</c>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void ScatterValueAcrossLanes(ReadOnlySpan<byte> encoded, int valueIndex, int valueCount,
+        Span<byte> destination)
+    {
+        for (var lane = 0; lane < encoded.Length; lane++)
+            destination[(lane * valueCount) + valueIndex] = encoded[lane];
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
