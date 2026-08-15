@@ -12,6 +12,15 @@ set -euo pipefail
 
 TARGET="${1:-reader}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Workers run under setsid, which does not read .bashrc — so a machine whose
+# toolchain lives somewhere non-standard (a private DOTNET_ROOT, say) must say
+# so here rather than in a login profile. Untracked: this is machine setup, not
+# project detail. Without it such a fleet starts and every worker immediately
+# dies with "You must install .NET to run this application".
+# shellcheck source=/dev/null
+[ -f "$ROOT/fuzz/env.conf" ] && . "$ROOT/fuzz/env.conf"
+
 AFL="$ROOT/fuzz/.afl/bin/afl-fuzz"
 
 case "$TARGET" in
@@ -82,3 +91,26 @@ done
 
 sleep 5
 echo "==> Running: $(pgrep -fc "$OUT" || echo 0) afl-fuzz processes"
+
+# A machine that finds something should say so without anyone watching it.
+# Same lifecycle as the workers: no cron, no service, gone when the fleet is
+# killed. Guarded so starting the reader and writer fleets leaves one notifier.
+if [ -f "$ROOT/fuzz/webhook.conf" ] || [ -n "${PLANK_FUZZ_WEBHOOK:-}" ]; then
+  # Match on a marker rather than the script path: the supervisor's command
+  # line quotes that path, so a path-based pattern never matches and every
+  # fleet start would add another notifier.
+  if pgrep -f PLANK_FUZZ_NOTIFIER_LOOP=1 >/dev/null 2>&1; then
+    echo "==> Crash notifier already running"
+  else
+    nohup setsid bash -c "
+      export PLANK_FUZZ_NOTIFIER_LOOP=1
+      while true; do
+        '$ROOT/fuzz/notify-crashes.sh' --loop >>'$ROOT/fuzz/logs/notify.log' 2>&1
+        sleep 300
+      done" >/dev/null 2>&1 &
+    disown || true
+    echo "==> Crash notifier started (every 5 min)"
+  fi
+else
+  echo "==> No fuzz/webhook.conf — crash notifier not started"
+fi

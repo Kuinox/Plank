@@ -6,5 +6,11 @@ crashes/
 logs/
 .afl/
 .tmp/
+.notified
 # Describes your fuzzing machines, not the project.
 hosts.conf
+label.conf
+# Per-machine toolchain paths for non-interactive fleet startup.
+env.conf
+# Credential for the crash notifier. Never commit this.
+webhook.conf
