@@ -8,12 +8,22 @@ public abstract record LogicalType
     {
         public Int(byte bitWidth, bool isSigned)
         {
-            if (bitWidth is not 8 and not 16 and not 32 and not 64)
-                throw new ArgumentOutOfRangeException(nameof(bitWidth), bitWidth, "Integer logical type bit width must be 8, 16, 32, or 64.");
+            if (DescribeError(bitWidth) is { } error)
+                throw new ArgumentOutOfRangeException(nameof(bitWidth), bitWidth, error);
 
             BitWidth = bitWidth;
             IsSigned = isSigned;
         }
+
+        /// <summary>Returns why this bit width is invalid, or <see langword="null"/> when it is valid.</summary>
+        /// <remarks>
+        /// The reader reads the bit width out of a file footer, so a bad one is a corrupt file rather than a caller
+        /// mistake. Shared so the two cannot drift.
+        /// </remarks>
+        internal static string? DescribeError(byte bitWidth)
+            => bitWidth is not 8 and not 16 and not 32 and not 64
+                ? "Integer logical type bit width must be 8, 16, 32, or 64."
+                : null;
 
         public byte BitWidth { get; }
 

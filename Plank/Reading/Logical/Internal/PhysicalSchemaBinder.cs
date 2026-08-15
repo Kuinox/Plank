@@ -348,7 +348,7 @@ static class PhysicalSchemaBinder
             LogicalTypeKind.Time => new LogicalType.Time(node.LogicalType.Unit, node.LogicalType.IsAdjustedToUtc),
             LogicalTypeKind.Timestamp => new LogicalType.Timestamp(node.LogicalType.Unit,
                 node.LogicalType.IsAdjustedToUtc),
-            LogicalTypeKind.Integer => new LogicalType.Int(node.LogicalType.BitWidth, node.LogicalType.IsSigned),
+            LogicalTypeKind.Integer => BuildInt(node.LogicalType.BitWidth, node.LogicalType.IsSigned),
             LogicalTypeKind.Decimal => BuildDecimal(node.LogicalType.Precision, node.LogicalType.Scale),
             LogicalTypeKind.Variant => new LogicalType.Variant(node.LogicalType.SpecificationVersion),
             LogicalTypeKind.Geometry => new LogicalType.Geometry(ReadCrs(metadata, node)),
@@ -357,8 +357,14 @@ static class PhysicalSchemaBinder
             _ => throw new NotSupportedException($"Logical type '{node.LogicalType.Kind}' is not supported.")
         };
 
-    // The precision and scale come off the wire, so a bad pair is a malformed file rather than a caller mistake.
-    // Checking first keeps LogicalType.Decimal's constructor from raising ArgumentOutOfRangeException at a reader.
+    // These come off the wire, so a bad value is a malformed file rather than a caller mistake. Checking first
+    // keeps the LogicalType constructors from raising ArgumentOutOfRangeException at a reader. Int and Decimal are
+    // the only two that validate their arguments; the rest cannot fail.
+    static LogicalType.Int BuildInt(byte bitWidth, bool isSigned)
+        => LogicalType.Int.DescribeError(bitWidth) is { } error
+            ? throw new CorruptParquetException($"Parquet schema is not valid: {error}")
+            : new LogicalType.Int(bitWidth, isSigned);
+
     static LogicalType.Decimal BuildDecimal(int precision, int scale)
         => LogicalType.Decimal.DescribeError(precision, scale) is { } error
             ? throw new CorruptParquetException($"Parquet schema is not valid: {error}")
