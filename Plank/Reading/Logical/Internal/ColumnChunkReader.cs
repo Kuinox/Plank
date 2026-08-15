@@ -1560,9 +1560,29 @@ static class ColumnChunkReader
         if (!IsBinaryPhysicalType(column.PhysicalType) || header.Encoding != EncodingKind.Plain)
             return false;
 
-        var valueCount = checked((int)header.ValueCount);
+        // Every plain-encoded dictionary entry costs at least its 4-byte length
+        // prefix, or its fixed width, so a page cannot hold more entries than
+        // that. Unlike the data-page path, which bounds ValueCount against the
+        // row count, this one trusted the header outright: a corrupt count let
+        // the casts below overflow and escape as OverflowException instead of
+        // CorruptParquetException, before ReadPlainBinaryLengths ever got the
+        // chance to notice the payload was too short.
+        var minimumEntryBytes = column.PhysicalType == ParquetPhysicalType.ByteArray
+            ? sizeof(int)
+            : GetFixedBinaryLength(column);
+        var maximumValueCount = payload.Length / minimumEntryBytes;
+        if (header.ValueCount > (uint)maximumValueCount)
+            throw new CorruptParquetException(
+                $"Dictionary page declares {header.ValueCount} values, but its {payload.Length}-byte payload holds at most {maximumValueCount}.");
+
+        var valueCount = (int)header.ValueCount;
+        var scratchByteLength = (long)valueCount * sizeof(int);
+        if (scratchByteLength > int.MaxValue)
+            throw new CorruptParquetException(
+                $"Dictionary page value count ({valueCount}) needs more than {int.MaxValue} bytes of length scratch.");
+
         var lengths = MemoryMarshal.Cast<byte, int>(
-            state.GetScratch(checked(valueCount * sizeof(int)), bufferPool));
+            state.GetScratch((int)scratchByteLength, bufferPool));
         var payloadByteLength = ReadPlainBinaryLengths(payload, column, valueCount, lengths);
         var destination = state.GetBinaryDictionary(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
