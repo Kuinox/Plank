@@ -1,3 +1,10 @@
 reader-corpus/id:*
 reader-findings/
 findings/
+writer-findings/
+crashes/
+logs/
+.afl/
+.tmp/
+# Describes your fuzzing machines, not the project.
+hosts.conf

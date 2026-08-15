@@ -31,10 +31,13 @@ public static class PlankWriterFuzzTarget
         ArgumentNullException.ThrowIfNull(fuzzCase);
         using var ms = new MemoryStream();
         WriteToStream(fuzzCase, ms);
-        ms.Position = 0;
-        AssertPlankCanRead(ms, fuzzCase);
-        ms.Position = 0;
-        AssertParquetSharpCanRead(ms, fuzzCase);
+
+        // CloseFile() closes the stream it was writing to, so the written bytes
+        // have to be taken from the MemoryStream rather than rewinding it.
+        // (ToArray still works on a closed MemoryStream.)
+        var bytes = ms.ToArray();
+        AssertPlankCanRead(new MemoryStream(bytes, writable: false), fuzzCase);
+        AssertParquetSharpCanRead(new MemoryStream(bytes, writable: false), fuzzCase);
     }
 
     static void WriteToStream(FuzzCase fuzzCase, Stream stream)
@@ -142,7 +145,7 @@ public static class PlankWriterFuzzTarget
         : spec.ClrType == typeof(int) ? ReadAllBuffers(rowGroup.Column<int>(column))
         : spec.ClrType == typeof(long) ? ReadAllBuffers(rowGroup.Column<long>(column))
         : spec.ClrType == typeof(double) ? ReadAllBuffers(rowGroup.Column<double>(column))
-        : ReadAllBuffers(rowGroup.Column<byte[]>(column));
+        : ReadAllBinaryBuffers(rowGroup.Column<byte>(column));
 
     static void AssertParquetSharpCanRead(Stream stream, FuzzCase fuzzCase)
     {
@@ -207,6 +210,17 @@ public static class PlankWriterFuzzTarget
         foreach (var buffer in buffers)
             foreach (var value in buffer.Values)
                 values.Add(value);
+        return values.ToArray();
+    }
+
+    // Variable-length byte[] columns are read as RowGroupColumn<byte>, one
+    // span per row, rather than as RowGroupColumn<byte[]>.
+    static byte[][] ReadAllBinaryBuffers(RowGroupColumn<byte> buffers)
+    {
+        var values = new List<byte[]>();
+        foreach (var buffer in buffers)
+            for (var i = 0; i < buffer.Count; i++)
+                values.Add(buffer.IsNull(i) ? [] : buffer.GetValue(i).ToArray());
         return values.ToArray();
     }
 
