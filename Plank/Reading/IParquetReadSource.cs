@@ -3,7 +3,7 @@ namespace Plank.Reading;
 /// <summary>
 /// Provides random-access reads over a Parquet data source so callers can read many files without allocating <see cref="FileStream"/> instances.
 /// </summary>
-public interface IParquetReadSource
+public interface IParquetReadSource : IDisposable
 {
     /// <summary>
     /// Gets the source length in bytes.
