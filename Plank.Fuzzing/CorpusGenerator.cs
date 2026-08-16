@@ -71,6 +71,18 @@ public static class CorpusGenerator
                 if (TryBuild($"{nullName}-{tag}", compression, column, writer, out var file))
                     yield return file;
             }
+
+            // Bloom filters are a separate structure with its own offsets in the
+            // footer, and nothing generated one, so BloomFilterReader had never
+            // run. Only for one codec: the filter is stored uncompressed, so
+            // repeating it per codec would add files without adding paths.
+            if (compression != CompressionKind.None)
+                continue;
+            foreach (var (bloomName, column, writer) in BloomFilterColumns())
+            {
+                if (TryBuild(bloomName, compression, column, writer, out var file))
+                    yield return file;
+            }
         }
     }
 
@@ -132,6 +144,16 @@ public static class CorpusGenerator
             (w, g, c) => Write<byte[]?>(w, g, c, [[1], null, [3, 3], null, []]));
     }
 
+    static IEnumerable<(string, ColumnDefinition, Action<ParquetWriter, RowGroupWriter, LeafColumn>)> BloomFilterColumns()
+    {
+        yield return ("bloom-i32", LeafBloom("c", ParquetPhysicalType.Int32),
+            (w, g, c) => Write<int>(w, g, c, [1, 2, 3, 4, 5]));
+        yield return ("bloom-i64", LeafBloom("c", ParquetPhysicalType.Int64),
+            (w, g, c) => Write<long>(w, g, c, [1L, 2L, 3L, 4L, 5L]));
+        yield return ("bloom-bin", LeafBloom("c", ParquetPhysicalType.ByteArray),
+            (w, g, c) => Write<byte[]>(w, g, c, [[1], [2], [3], [4], [5]]));
+    }
+
     static bool TryBuild(string name, CompressionKind compression, ColumnDefinition column,
         Action<ParquetWriter, RowGroupWriter, LeafColumn> write, out (string, byte[]) file)
     {
@@ -169,6 +191,12 @@ public static class CorpusGenerator
     static ColumnDefinition LeafOptional(string name, ParquetPhysicalType type, EncodingKind encoding)
         => ColumnDefinition.Leaf(name, type,
             new ColumnOptions(ParquetRepetition.Optional, encodings: ImmutableArray.Create(encoding)));
+
+    static ColumnDefinition LeafBloom(string name, ParquetPhysicalType type)
+        => ColumnDefinition.Leaf(name, type,
+            new ColumnOptions(ParquetRepetition.Required,
+                encodings: ImmutableArray.Create(EncodingKind.Plain),
+                bloomFilter: ParquetBloomFilterOptions.Default));
 
     static ColumnDefinition LeafFixed(string name, uint length, EncodingKind encoding)
         => ColumnDefinition.Leaf(name, ParquetPhysicalType.FixedLenByteArray,
