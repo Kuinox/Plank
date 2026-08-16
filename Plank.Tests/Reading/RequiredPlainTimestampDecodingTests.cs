@@ -129,7 +129,10 @@ internal sealed class RequiredPlainTimestampDecodingTests
         {
             Decode(rawValues, unit, adjustedToUtc, pageType);
         }
-        catch (Exception exception) when (exception is ArgumentOutOfRangeException or OverflowException)
+        // The reader reports an out-of-range raw timestamp as corrupt data; it
+        // used to let ArgumentOutOfRangeException or OverflowException escape
+        // from the DateTime constructor and the tick scaling.
+        catch (CorruptParquetException)
         {
             return;
         }

@@ -75,7 +75,7 @@ static class ParquetDecimalConverter
                ((value[1] & 0x80) != 0) == negative)
             value = value[1..];
         if (value.Length > sizeof(ulong) * 2)
-            throw new OverflowException(
+            throw new CorruptParquetException(
                 $"Decimal payload for column '{column.Name}' exceeds the supported System.Decimal range.");
 
         Span<byte> encoded = stackalloc byte[sizeof(ulong) * 2];
@@ -134,13 +134,13 @@ static class ParquetDecimalConverter
     {
         var decimalType = RequireLogicalType(column);
         if (value == Int128.MinValue)
-            throw new OverflowException(
+            throw new CorruptParquetException(
                 $"Decimal value for column '{column.Name}' exceeds the supported System.Decimal range.");
 
         var negative = value < 0;
         var magnitude = (UInt128)(negative ? -value : value);
         if (magnitude >= PowerOfTen(decimalType.Precision) || magnitude > (UInt128)decimal.MaxValue)
-            throw new OverflowException(
+            throw new CorruptParquetException(
                 $"Decimal value for column '{column.Name}' exceeds the supported System.Decimal range.");
 
         return new decimal(
