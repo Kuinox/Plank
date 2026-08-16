@@ -363,14 +363,34 @@ static class RleBitPackingHybridEncoding
         EncodingPrimitives.WriteUnsignedVarInt((((uint)groupCount) << 1) | 1u, ref writer);
 
         var byteCount = checked(groupCount * bitWidth);
-        var destination = writer.GetSpan(byteCount);
         if (BitConverter.IsLittleEndian && (bitWidth & 7) == 0)
         {
-            WriteByteAlignedLiteralsUnchecked(literals, bitWidth >> 3, destination[..byteCount]);
+            var byteAlignedDestination = writer.GetSpan(byteCount);
+            WriteByteAlignedLiteralsUnchecked(literals, bitWidth >> 3, byteAlignedDestination[..byteCount]);
+            writer.Advance(byteCount);
+            return;
+        }
+        if (BitConverter.IsLittleEndian && bitWidth < 8)
+        {
+            // Eight values occupy exactly bitWidth bytes. Requesting seven spare bytes lets every
+            // group use one unaligned 64-bit store; the next group overwrites the unused high bytes.
+            var narrowDestination = writer.GetSpan(checked(byteCount + sizeof(ulong) - 1));
+            WriteNarrowLiteralsUnchecked(literals, bitWidth, narrowDestination);
+            writer.Advance(byteCount);
+            return;
+        }
+        if (BitConverter.IsLittleEndian && bitWidth < 16)
+        {
+            // Split eight values into two four-value words. Four values at widths 9..15 fit in a
+            // ulong, then two shifts join those words into the low/high halves of the bit stream.
+            // This removes the byte-at-a-time state machine used by the general 17..32-bit path.
+            var mediumDestination = writer.GetSpan(checked(byteCount + 2 * sizeof(ulong) - 1));
+            WriteMediumLiteralsUnchecked(literals, bitWidth, mediumDestination);
             writer.Advance(byteCount);
             return;
         }
 
+        var destination = writer.GetSpan(byteCount);
         var mask = bitWidth == 32 ? uint.MaxValue : (1u << bitWidth) - 1u;
         ulong bitBuffer = 0;
         var bufferedBits = 0;
@@ -394,6 +414,89 @@ static class RleBitPackingHybridEncoding
             destination[outputOffset++] = (byte)bitBuffer;
 
         writer.Advance(outputOffset);
+    }
+
+    static void WriteNarrowLiteralsUnchecked(ReadOnlySpan<int> literals, int bitWidth, Span<byte> destination)
+    {
+        var mask = (1u << bitWidth) - 1u;
+        ref var source = ref MemoryMarshal.GetReference(literals);
+        ref var output = ref MemoryMarshal.GetReference(destination);
+        var inputOffset = 0;
+        var outputOffset = 0;
+        while (inputOffset <= literals.Length - 8)
+        {
+            var packed = PackEightNarrow(ref Unsafe.Add(ref source, inputOffset), mask, bitWidth);
+            Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, outputOffset), packed);
+            inputOffset += 8;
+            outputOffset += bitWidth;
+        }
+
+        if (inputOffset == literals.Length)
+            return;
+
+        Span<int> tail = stackalloc int[8];
+        tail.Clear();
+        literals[inputOffset..].CopyTo(tail);
+        var tailPacked = PackEightNarrow(ref MemoryMarshal.GetReference(tail), mask, bitWidth);
+        Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, outputOffset), tailPacked);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static ulong PackEightNarrow(ref int source, uint mask, int bitWidth)
+        => ((uint)source & mask)
+           | ((ulong)((uint)Unsafe.Add(ref source, 1) & mask) << bitWidth)
+           | ((ulong)((uint)Unsafe.Add(ref source, 2) & mask) << (2 * bitWidth))
+           | ((ulong)((uint)Unsafe.Add(ref source, 3) & mask) << (3 * bitWidth))
+           | ((ulong)((uint)Unsafe.Add(ref source, 4) & mask) << (4 * bitWidth))
+           | ((ulong)((uint)Unsafe.Add(ref source, 5) & mask) << (5 * bitWidth))
+           | ((ulong)((uint)Unsafe.Add(ref source, 6) & mask) << (6 * bitWidth))
+           | ((ulong)((uint)Unsafe.Add(ref source, 7) & mask) << (7 * bitWidth));
+
+    static void WriteMediumLiteralsUnchecked(ReadOnlySpan<int> literals, int bitWidth, Span<byte> destination)
+    {
+        var mask = (1u << bitWidth) - 1u;
+        ref var source = ref MemoryMarshal.GetReference(literals);
+        ref var output = ref MemoryMarshal.GetReference(destination);
+        var inputOffset = 0;
+        var outputOffset = 0;
+        while (inputOffset <= literals.Length - 8)
+        {
+            PackEightMedium(ref Unsafe.Add(ref source, inputOffset), mask, bitWidth,
+                out var low, out var high);
+            ref var groupOutput = ref Unsafe.Add(ref output, outputOffset);
+            Unsafe.WriteUnaligned(ref groupOutput, low);
+            Unsafe.WriteUnaligned(ref Unsafe.Add(ref groupOutput, sizeof(ulong)), high);
+            inputOffset += 8;
+            outputOffset += bitWidth;
+        }
+
+        if (inputOffset == literals.Length)
+            return;
+
+        Span<int> tail = stackalloc int[8];
+        tail.Clear();
+        literals[inputOffset..].CopyTo(tail);
+        PackEightMedium(ref MemoryMarshal.GetReference(tail), mask, bitWidth,
+            out var tailLow, out var tailHigh);
+        ref var tailOutput = ref Unsafe.Add(ref output, outputOffset);
+        Unsafe.WriteUnaligned(ref tailOutput, tailLow);
+        Unsafe.WriteUnaligned(ref Unsafe.Add(ref tailOutput, sizeof(ulong)), tailHigh);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void PackEightMedium(ref int source, uint mask, int bitWidth, out ulong low, out ulong high)
+    {
+        var first = ((uint)source & mask)
+                    | ((ulong)((uint)Unsafe.Add(ref source, 1) & mask) << bitWidth)
+                    | ((ulong)((uint)Unsafe.Add(ref source, 2) & mask) << (2 * bitWidth))
+                    | ((ulong)((uint)Unsafe.Add(ref source, 3) & mask) << (3 * bitWidth));
+        var second = ((uint)Unsafe.Add(ref source, 4) & mask)
+                     | ((ulong)((uint)Unsafe.Add(ref source, 5) & mask) << bitWidth)
+                     | ((ulong)((uint)Unsafe.Add(ref source, 6) & mask) << (2 * bitWidth))
+                     | ((ulong)((uint)Unsafe.Add(ref source, 7) & mask) << (3 * bitWidth));
+        var firstBitCount = 4 * bitWidth;
+        low = first | second << firstBitCount;
+        high = second >> (64 - firstBitCount);
     }
 
     static void WriteByteAlignedLiteralsUnchecked(ReadOnlySpan<int> literals, int byteWidth, Span<byte> destination)

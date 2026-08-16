@@ -23,6 +23,7 @@ public class RleBitPackingHybridEncodingBenchmark
         "threshold-runs-w8",
         "mixed-runs-w8",
         "long-runs-w8",
+        "random-w11",
         "random-w16",
         "random-w24",
         "random-w32")]
@@ -60,6 +61,7 @@ public class RleBitPackingHybridEncodingBenchmark
             "constant-w0" => 0,
             "alternating-w1" => 1,
             "random-w8" or "short-runs-w8" or "threshold-runs-w8" or "mixed-runs-w8" or "long-runs-w8" => 8,
+            "random-w11" => 11,
             "random-w16" => 16,
             "random-w24" => 24,
             "random-w32" => 32,
@@ -79,6 +81,7 @@ public class RleBitPackingHybridEncodingBenchmark
                     values[i] = (i + (int)(seed & 1)) & 1;
                 return values;
             case "random-w8":
+            case "random-w11":
             case "random-w16":
             case "random-w24":
             case "random-w32":
