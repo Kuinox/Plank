@@ -42,6 +42,12 @@ public class DictionaryImplementationBenchmark
                 uniqueStrings[i] = FindCollidingString(ref stringCollisionCandidate);
                 uniqueBinary[i] = FindCollidingBinary(ref binaryCollisionCandidate);
             }
+            else if (Scenario == InputScenario.ShortDistinctArrays)
+            {
+                uniqueInts[i] = i;
+                uniqueStrings[i] = $"value-{i}";
+                uniqueBinary[i] = System.Text.Encoding.UTF8.GetBytes(uniqueStrings[i]);
+            }
             else
             {
                 uniqueInts[i] = unchecked((int)(i * 2_654_435_761u));
@@ -58,7 +64,11 @@ public class DictionaryImplementationBenchmark
             var index = indexes[i];
             _intValues[i] = uniqueInts[index];
             _stringValues[i] = uniqueStrings[index];
-            _binaryValues[i] = uniqueBinary[index];
+            // Real byte-array string columns commonly contain a separate UTF-8 allocation per row,
+            // even when dictionary equality collapses their content to a small repeated set.
+            _binaryValues[i] = Scenario == InputScenario.ShortDistinctArrays
+                ? uniqueBinary[index].ToArray()
+                : uniqueBinary[index];
         }
 
         _plankIntDictionary = new ReusableDictionaryState<int>();
@@ -153,6 +163,7 @@ public class DictionaryImplementationBenchmark
             InputScenario.HotSet => 16,
             InputScenario.Unique => RowCount,
             InputScenario.ProbeCollision => 256,
+            InputScenario.ShortDistinctArrays => 2_048,
             _ => throw new ArgumentOutOfRangeException(nameof(scenario))
         };
 
@@ -165,6 +176,7 @@ public class DictionaryImplementationBenchmark
                 InputScenario.HotSet => random.Next(uniqueCount),
                 InputScenario.Unique => i,
                 InputScenario.ProbeCollision => i % uniqueCount,
+                InputScenario.ShortDistinctArrays => i % uniqueCount,
                 _ => throw new ArgumentOutOfRangeException(nameof(scenario))
             };
         }
@@ -220,6 +232,7 @@ public class DictionaryImplementationBenchmark
     {
         HotSet,
         Unique,
-        ProbeCollision
+        ProbeCollision,
+        ShortDistinctArrays
     }
 }

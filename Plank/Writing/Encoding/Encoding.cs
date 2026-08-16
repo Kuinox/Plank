@@ -485,8 +485,15 @@ static class Encoding
                 ? GetInitialForcedDictionaryCapacity(values.Length)
                 : Math.Max(256, values.Length / 2);
             var knownSortOrder = (DictionarySortOrder)Volatile.Read(ref strategyContext.DictionarySortOrder);
-            if (dictionaryMode == DictionaryMode.Forced
-                && knownSortOrder == DictionarySortOrder.Unsorted)
+            if (dictionaryMode == DictionaryMode.Forced && typeof(T) == typeof(byte[]))
+            {
+                var byteArrayValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
+                BuildForcedRequiredByteArrayDictionaryIndexes(byteArrayValues, indexes,
+                    Unsafe.As<ReusableDictionaryState<byte[]>>(dictionaryState), initialUniqueCapacity,
+                    knownSortOrder, strategyContext);
+            }
+            else if (dictionaryMode == DictionaryMode.Forced
+                     && knownSortOrder == DictionarySortOrder.Unsorted)
             {
                 dictionaryState.Reset(initialUniqueCapacity, useMap: true);
                 BuildForcedDictionaryIndexes(values, indexes, dictionaryState);
@@ -605,6 +612,76 @@ static class Encoding
         {
             rentedIndexesBuffer.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Builds a forced dictionary for a required <c>byte[]</c> column. Keeping this hot loop concrete
+    /// lets the JIT inline <see cref="ReusableDictionaryState{T}.GetOrAddIndex"/> instead of using the
+    /// shared-generic <c>__Canon</c> implementation used by the surrounding method. Once a sorted run
+    /// breaks, the remaining map-only tail also avoids checking the dictionary mode for every value.
+    /// </summary>
+    static void BuildForcedRequiredByteArrayDictionaryIndexes(ReadOnlySpan<byte[]> values, Span<int> indexes,
+        ReusableDictionaryState<byte[]> dictionaryState, int initialUniqueCapacity,
+        DictionarySortOrder knownSortOrder, PageStrategyContext strategyContext)
+    {
+        dictionaryState.Reset(initialUniqueCapacity, knownSortOrder == DictionarySortOrder.Unsorted);
+        if (dictionaryState.IsMapEnabled)
+        {
+            for (var i = 0; i < values.Length; i++)
+                indexes[i] = dictionaryState.GetOrAddIndex(values[i]);
+            return;
+        }
+
+        indexes[0] = dictionaryState.AddFirst(values[0]);
+        var currentSortedIndex = 0;
+        var sortedDirection = knownSortOrder switch
+        {
+            DictionarySortOrder.Ascending => 1,
+            DictionarySortOrder.Descending => -1,
+            _ => 0
+        };
+        if (values.Length > 1 && sortedDirection == 0)
+        {
+            var firstComparison = values[0].AsSpan().SequenceCompareTo(values[1]);
+            if (firstComparison != 0)
+                sortedDirection = firstComparison < 0 ? 1 : -1;
+        }
+
+        for (var i = 1; i < values.Length; i++)
+        {
+            var value = values[i];
+            var previous = values[i - 1];
+            if (ReferenceEquals(value, previous)
+                || value is not null && previous is not null && value.AsSpan().SequenceEqual(previous))
+            {
+                indexes[i] = currentSortedIndex;
+                continue;
+            }
+
+            var comparison = previous.AsSpan().SequenceCompareTo(value);
+            if (IsSortedStep(comparison, ref sortedDirection))
+            {
+                currentSortedIndex = dictionaryState.AddSortedUnique(value!);
+                indexes[i] = currentSortedIndex;
+                continue;
+            }
+
+            if (knownSortOrder != DictionarySortOrder.Unsorted)
+                Volatile.Write(ref strategyContext.DictionarySortOrder, (int)DictionarySortOrder.Unsorted);
+            dictionaryState.EnableMap();
+            for (; i < values.Length; i++)
+                indexes[i] = dictionaryState.GetOrAddIndex(values[i]);
+            return;
+        }
+
+        var discoveredSortOrder = sortedDirection switch
+        {
+            1 => DictionarySortOrder.Ascending,
+            -1 => DictionarySortOrder.Descending,
+            _ => DictionarySortOrder.Unknown
+        };
+        if (discoveredSortOrder != knownSortOrder)
+            Volatile.Write(ref strategyContext.DictionarySortOrder, (int)discoveredSortOrder);
     }
 
     /// <summary>
