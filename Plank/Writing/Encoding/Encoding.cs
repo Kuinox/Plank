@@ -689,7 +689,13 @@ static class Encoding
                     DictionaryIndexEncodingDispatcher.WriteIndexes(dictionaryEncoding,
                         dictionaryIndexes.Slice(denseOffset, presentRows), dictionaryBitWidth, ref page.Content);
                 }
-                else if (presentRows > 0)
+                // Encode even with nothing present. PLAIN is happy to emit zero
+                // bytes, but DELTA_BINARY_PACKED and the DELTA_*_BYTE_ARRAY
+                // encodings begin with a mandatory header, so skipping the call
+                // for an all-null page produced a data section that no compliant
+                // reader accepts — Plank could not read it back and neither could
+                // arrow-cpp ("Unexpected end of stream: InitHeader EOF").
+                else
                     ValueEncodingDispatcher.WriteValues(dataEncoding, column, pageDenseValues, bufferWriters, ref page.Content);
 
                 WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
@@ -914,7 +920,13 @@ static class Encoding
                     DictionaryIndexEncodingDispatcher.WriteIndexes(dictionaryEncoding,
                         dictionaryIndexes.Slice(denseOffset, presentRows), dictionaryBitWidth, ref page.Content);
                 }
-                else if (presentRows > 0)
+                // Encode even with nothing present. PLAIN is happy to emit zero
+                // bytes, but DELTA_BINARY_PACKED and the DELTA_*_BYTE_ARRAY
+                // encodings begin with a mandatory header, so skipping the call
+                // for an all-null page produced a data section that no compliant
+                // reader accepts — Plank could not read it back and neither could
+                // arrow-cpp ("Unexpected end of stream: InitHeader EOF").
+                else
                     ValueEncodingDispatcher.WriteOptionalValues<TRow, TRowAccess>(dataEncoding, column, pageRows,
                         bufferWriters, ref page.Content);
 
@@ -951,9 +963,14 @@ static class Encoding
         if (!useDictionary)
             return false;
 
-        presentValueBytes = dictionaryBitWidth <= 0
-            ? 0
-            : Math.Max(1, (dictionaryBitWidth + 7) / 8);
+        // A dictionary holding a single distinct value needs zero bits per index,
+        // but zero is also how GetOptionalPresentValueBytes spells "size unknown,
+        // measure the value instead" — and that measurement only handles
+        // variable-length types, so an optional dictionary column of one distinct
+        // value threw "cannot estimate plain encoded size" for every fixed-width
+        // type. Charge a byte instead: this is a page budget, and rounding a
+        // free index up to one byte only splits pages very slightly early.
+        presentValueBytes = Math.Max(1, (dictionaryBitWidth + 7) / 8);
         return true;
     }
 
