@@ -72,6 +72,12 @@ if [ -f "$STATE" ] && [ "$(head -1 "$STATE" 2>/dev/null)" != "commit:$commit" ];
 fi
 [ -f "$STATE" ] || echo "commit:$commit" > "$STATE"
 
+# Housekeeping on the same cadence: a .NET minidump is written for every crash
+# and nothing ever removes them. They are worth keeping for a native fault the
+# crash input alone will not explain, but not without a bound — they reached
+# several GiB on a box with 26 GiB free.
+ls -t /tmp/plank-*crash*.dmp 2>/dev/null | tail -n +51 | xargs -r rm -f
+
 [ -d "$CRASHES" ] || exit 0
 
 new=()

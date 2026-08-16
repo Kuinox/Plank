@@ -84,8 +84,12 @@ start_one() {
   # Respawn loop keeps the fleet alive across the occasional worker abort.
   nohup setsid bash -c "
     while true; do
-      AFL_TMPDIR='$tmp' nice -n 19 '$AFL' -b $core -i '$CORPUS' -o '$OUT' -t $TIMEOUT $3 -- '$BIN' \
-        >>'$LOGS/$name.log' 2>&1
+      AFL_TMPDIR='$tmp' nice -n 19 '$AFL' -b $core -i '$CORPUS' -o '$OUT' -t $TIMEOUT $3 -- '$BIN' 2>&1 \
+        | grep --line-buffered -v 'Fuzzing test case #' >>'$LOGS/$name.log'
+      # AFL_NO_UI reprints a status line continuously, which is ~1.2 GiB per
+      # worker per 10 hours — enough to fill a small disk overnight while
+      # telling us nothing. Everything else (warnings, aborts, crash notices)
+      # still reaches the log.
       sleep 5
     done" >/dev/null 2>&1 &
   disown || true
