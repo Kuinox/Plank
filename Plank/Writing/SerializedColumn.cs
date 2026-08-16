@@ -1073,6 +1073,23 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var firstPresentIndex = IndexOfFirstPresent(values);
             if (firstPresentIndex >= 0)
             {
+                if (typeof(TValue) == typeof(double)
+                    && strategyContext.Strategy is ForceDictionaryPageStrategy
+                    && !_owner.WritePageIndexes && _column.Options.BloomFilter is null)
+                {
+                    Pages.Clear();
+                    ColumnOrdinal = columnOrdinal;
+                    RowCount = checked((uint)values.Length);
+                    HasPendingData = true;
+                    var doubleValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<double?>>(ref values);
+                    Statistics = Plank.Writing.Encoding.Encoding.EncodeOptionalForcedDoubleDictionary(
+                        _owner.BufferWriters, _column, doubleValues, strategyContext, Pages,
+                        _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
+                        GetOrCreateDictionaryState<double>());
+                    _bloomFilterByteLength = 0;
+                    return;
+                }
+
                 var remainingValues = values[firstPresentIndex..];
                 var rented = _owner.BufferWriters.RentScratch<TValue>(checked((uint)remainingValues.Length));
                 try

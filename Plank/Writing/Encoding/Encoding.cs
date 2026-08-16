@@ -416,6 +416,127 @@ static class Encoding
             densePresentValues, dictionaryState);
     }
 
+    /// <summary>
+    /// Encodes the single-page optional-double dictionary shape without first compacting present values.
+    /// Definition levels, dictionary indexes, and statistics are produced in the same nullable-row scan.
+    /// </summary>
+    internal static ColumnStatistics EncodeOptionalForcedDoubleDictionary(BufferWriterFactory bufferWriters,
+        Column column, ReadOnlySpan<double?> values, PageStrategyContext strategyContext, PageList pages,
+        ParquetDataPageVersion dataPageVersion, LeafProjectionInfo leafProjectionInfo,
+        ReusableDictionaryState<double> dictionaryState)
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        ArgumentNullException.ThrowIfNull(strategyContext);
+        ArgumentNullException.ThrowIfNull(pages);
+        if (column.Options.Repetition != ParquetRepetition.Optional)
+            throw new InvalidOperationException($"Column '{column.Name}' does not support null values.");
+        if (leafProjectionInfo.MaxDefinitionLevel != 1 || leafProjectionInfo.MaxRepetitionLevel != 0)
+            throw new NotSupportedException(
+                $"Column '{column.Name}' optional flat encoding requires a single optional leaf.");
+        if (strategyContext.Strategy is not ForceDictionaryPageStrategy)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' requires the force-dictionary page strategy for fused encoding.");
+
+        pages.Clear();
+        if (values.IsEmpty)
+            return ColumnStatistics.Empty(0);
+
+        var dictionaryPageIndex = AddDictionaryPage(bufferWriters, pages);
+        var dataPageIndex = AddNewDataPage(bufferWriters, pages);
+        ref var dictionaryPage = ref pages[dictionaryPageIndex];
+        ref var dataPage = ref pages[dataPageIndex];
+        var indexByteLength = checked(values.Length * sizeof(int));
+        var rentedIndexesBuffer = bufferWriters.RentScratch(checked((uint)Math.Max(indexByteLength, sizeof(int))));
+        try
+        {
+            var indexes = MemoryMarshal.Cast<byte, int>(rentedIndexesBuffer.Span[..indexByteLength]);
+            dictionaryState.Reset(GetInitialForcedDictionaryCapacity(values.Length), useMap: true);
+            Volatile.Write(ref strategyContext.DictionarySortOrder, (int)DictionarySortOrder.Unsorted);
+
+            var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
+                ref dataPage.Content);
+            var definitionStart = dataPage.Content.WrittenLength;
+            var currentLevel = -1;
+            var currentRunLength = 0;
+            var presentCount = 0;
+            var nullCount = 0;
+            var nanCount = 0L;
+            var min = 0.0d;
+            var max = 0.0d;
+            var hasStatisticsValue = false;
+
+            for (var i = 0; i < values.Length; i++)
+            {
+                var level = 0;
+                if (values[i] is { } value)
+                {
+                    level = 1;
+                    indexes[presentCount++] = dictionaryState.GetOrAddIndex(value);
+                    if (double.IsNaN(value))
+                    {
+                        nanCount++;
+                    }
+                    else if (!hasStatisticsValue)
+                    {
+                        min = value;
+                        max = value;
+                        hasStatisticsValue = true;
+                    }
+                    else
+                    {
+                        if (value < min || value == 0 && min == 0
+                            && BitConverter.DoubleToInt64Bits(value) < BitConverter.DoubleToInt64Bits(min))
+                            min = value;
+                        if (value > max || value == 0 && max == 0
+                            && BitConverter.DoubleToInt64Bits(value) > BitConverter.DoubleToInt64Bits(max))
+                            max = value;
+                    }
+                }
+                else
+                {
+                    nullCount++;
+                }
+
+                if (currentRunLength == 0)
+                {
+                    currentLevel = level;
+                    currentRunLength = 1;
+                }
+                else if (currentLevel == level)
+                {
+                    currentRunLength++;
+                }
+                else
+                {
+                    EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref dataPage.Content);
+                    currentLevel = level;
+                    currentRunLength = 1;
+                }
+            }
+
+            if (currentRunLength > 0)
+                EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref dataPage.Content);
+            var definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref dataPage.Content);
+            if (presentCount == 0)
+                throw new InvalidOperationException("Fused optional dictionary encoding requires a present value.");
+
+            PlainEncoding.WriteValues(column, dictionaryState.AsSpan(), ref dictionaryPage.Content);
+            dictionaryPage.SetDictionaryPageMetadata(checked((uint)dictionaryState.Count));
+            var dictionaryBitWidth = EncodingPrimitives.GetBitWidthFromMaxValue(
+                dictionaryState.Count <= 1 ? 0 : dictionaryState.Count - 1);
+            DictionaryIndexEncodingDispatcher.WriteIndexes(EncodingKindResolver.GetDictionaryEncodingKind(column),
+                indexes[..presentCount], dictionaryBitWidth, ref dataPage.Content);
+            WriteDataPageHeader(ref dataPage, values.Length, values.Length, nullCount, 0, definitionLength,
+                EncodingKindResolver.GetDictionaryEncodingKind(column));
+
+            return ColumnStatistics.FromDoubleAccumulation(min, max, nullCount, nanCount, hasStatisticsValue);
+        }
+        finally
+        {
+            rentedIndexesBuffer.Dispose();
+        }
+    }
+
     internal static void EncodeOptional<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         PageStrategyContext strategyContext, PageList pages, ParquetDataPageVersion dataPageVersion,
         LeafProjectionInfo leafProjectionInfo, ReusableDictionaryState<T> dictionaryState)
