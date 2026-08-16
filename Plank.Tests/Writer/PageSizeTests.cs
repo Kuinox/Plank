@@ -51,6 +51,114 @@ internal sealed class PageSizeTests
     }
 
     [Test]
+    public void RequiredVariableWidthColumnFillsAPageToItsExactTarget()
+    {
+        // 4 length bytes plus 12 payload bytes is 16, so two rows land on exactly the 32-byte
+        // target. The row that fits precisely must stay on the page rather than open a new one.
+        var nameColumn = CreateByteArrayColumn(32, out _);
+
+        nameColumn.Serialize([
+            "abcdefghijkl"u8.ToArray(),
+            "mnopqrstuvwx"u8.ToArray(),
+            "yzabcdefghij"u8.ToArray(),
+            "klmnopqrstuv"u8.ToArray(),
+            "wxyzabcdefgh"u8.ToArray()
+        ]);
+
+        AssertDataPageRows(nameColumn.Pages, [2, 2, 1]);
+    }
+
+    [Test]
+    public void RequiredVariableWidthValueLargerThanTheTargetGetsItsOwnPage()
+    {
+        // The oversized row cannot share a page with either neighbour, so it opens one and closes
+        // it. A page writer that trusted the target as a hard bound would truncate this row.
+        var nameColumn = CreateByteArrayColumn(32, out _);
+        var oversized = new byte[128];
+        oversized.AsSpan().Fill((byte)'x');
+
+        nameColumn.Serialize(["ab"u8.ToArray(), oversized, "cd"u8.ToArray()]);
+
+        AssertDataPageRows(nameColumn.Pages, [1, 1, 1]);
+        AssertPageContentBytes(nameColumn.Pages, 1, checked(sizeof(int) + oversized.Length));
+    }
+
+    [Test]
+    public void RequiredMemoryColumnSplitsLikeTheByteArrayShape()
+    {
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 32
+        });
+        var nameColumn = writer.CreateSerializedColumn<ReadOnlyMemory<byte>>(schema.LeafColumns[0]);
+
+        nameColumn.Serialize([
+            "abcdefghij"u8.ToArray(),
+            "klmnopqrst"u8.ToArray(),
+            "uvwxyzabcd"u8.ToArray(),
+            "efghijklmn"u8.ToArray(),
+            "opqrstuvwx"u8.ToArray()
+        ]);
+
+        AssertDataPageRows(nameColumn.Pages, [2, 2, 1]);
+    }
+
+    [Test]
+    public void RequiredVariableWidthColumnRejectsANullAfterAWrittenRow()
+    {
+        var nameColumn = CreateByteArrayColumn(32, out _);
+
+        try
+        {
+            nameColumn.Serialize(["ab"u8.ToArray(), null!]);
+        }
+        catch (InvalidOperationException exception)
+            when (exception.Message.Contains("does not support null values", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException("A required byte-array column accepted a null value.");
+    }
+
+    static SerializedColumn<byte[]> CreateByteArrayColumn(uint targetDataPageSizeBytes, out MemoryStream stream)
+    {
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray)
+        ]);
+        stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = targetDataPageSizeBytes
+        });
+        return writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+    }
+
+    static void AssertPageContentBytes(PageList pages, int dataPageOrdinal, int expectedPayloadBytes)
+    {
+        var dataPageIndex = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (dataPageIndex++ != dataPageOrdinal)
+                continue;
+
+            if (page.Content.WrittenLength != expectedPayloadBytes)
+                throw new InvalidOperationException(
+                    $"Page {dataPageOrdinal} payload mismatch. Expected {expectedPayloadBytes} bytes, got {page.Content.WrittenLength}.");
+            return;
+        }
+
+        throw new InvalidOperationException($"Data page {dataPageOrdinal} not found.");
+    }
+
+    [Test]
     public void OptionalColumnSplitsByTargetPageSize()
     {
         var schema = new PlankParquetSchema([
