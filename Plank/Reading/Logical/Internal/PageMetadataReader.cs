@@ -449,15 +449,25 @@ static class PageMetadataReader
     {
         if (required <= capacity)
             return;
-        var nextCapacity = Math.Max(required, Math.Max(8, capacity * 2));
-        var next = pool.Rent(checked((uint)(nextCapacity * Unsafe.SizeOf<PageMetadataEntry>())));
-        var nextEntries = ParquetBuffer.AsSpan<PageMetadataEntry>(next, nextCapacity);
+        // `required` is the page count declared by the column index, so it is
+        // file-controlled: a corrupt one made both the growth doubling and the
+        // byte-size multiply below overflow, surfacing as OverflowException
+        // rather than the CorruptParquetException a reader is documented to
+        // throw. Compute in long and reject over-large counts as what they are.
+        var nextCapacity = Math.Max((long)required, Math.Max(8L, (long)capacity * 2));
+        var byteLength = nextCapacity * Unsafe.SizeOf<PageMetadataEntry>();
+        if ((ulong)byteLength > int.MaxValue)
+            throw new CorruptParquetException(
+                $"Column index declares {required} pages, which needs more than {int.MaxValue} bytes of page metadata.");
+
+        var next = pool.Rent((uint)byteLength);
+        var nextEntries = ParquetBuffer.AsSpan<PageMetadataEntry>(next, (int)nextCapacity);
         nextEntries.Clear();
         if (capacity != 0)
             Entries(buffer, capacity).CopyTo(nextEntries);
         buffer.Dispose();
         buffer = next;
-        capacity = nextCapacity;
+        capacity = (int)nextCapacity;
     }
 
     static Span<PageMetadataEntry> Entries(ParquetBuffer buffer, int count)

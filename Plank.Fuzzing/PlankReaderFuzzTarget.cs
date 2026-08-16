@@ -49,7 +49,56 @@ public static class PlankReaderFuzzTarget
 
         foreach (var group in reader.RowGroups)
             foreach (var column in reader.Schema.LeafColumns)
+            {
+                DrainMetadata(group, column);
                 DrainColumn(group, column);
+            }
+    }
+
+    // Draining values only ever exercised the value decoders. Everything a
+    // caller reaches through the metadata APIs — page index, offset index,
+    // column statistics, bloom filters — parses offsets and lengths straight
+    // out of the footer and was never executed at all: PageMetadataReader and
+    // BloomFilterReader measured 0% over a 14k-input corpus.
+    static void DrainMetadata(RowGroup rowGroup, LeafColumn column)
+    {
+        var metadata = rowGroup.GetColumnMetadata(column);
+        _ = metadata.ValueCount;
+        _ = metadata.Compression;
+        foreach (var encoding in metadata.Encodings)
+            _ = encoding;
+
+        var statistics = metadata.Statistics;
+        Consume(statistics.Minimum);
+        Consume(statistics.Maximum);
+        _ = statistics.NullCount;
+
+        using (var pages = metadata.OpenPages())
+            for (var i = 0; i < pages.Count; i++)
+            {
+                var page = pages[i];
+                _ = page.Offset;
+                _ = page.CompressedSize;
+                _ = page.FirstRowIndex;
+                _ = page.RowCount;
+                _ = page.IsNullPage;
+                Consume(page.Statistics.Minimum);
+                Consume(page.Statistics.Maximum);
+            }
+
+        if (!metadata.HasBloomFilter)
+            return;
+        var bloom = metadata.OpenBloomFilter();
+        _ = bloom.BitsetSizeBytes;
+        Consume(bloom.Bitset);
+        _ = bloom.MightContain(0);
+        _ = bloom.MightContain(long.MaxValue);
+    }
+
+    static void Consume(ReadOnlySpan<byte> bytes)
+    {
+        for (var i = 0; i < bytes.Length; i++)
+            _ = bytes[i];
     }
 
     static ParquetReader OpenWithFileSchema(IParquetReadSource source)
