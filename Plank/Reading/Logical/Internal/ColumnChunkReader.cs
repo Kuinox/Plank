@@ -111,7 +111,7 @@ static class ColumnChunkReader
         if (maxRepetitionLevel < 0 || maxDefinitionLevel < 0)
             throw new CorruptParquetException($"Column '{column.Name}' has negative maximum levels.");
 
-        var levelCount = checked((int)header.ValueCount);
+        var levelCount = PageValueCount(header, "levels");
         state.GetLevels(levelCount, bufferPool, out var repetitionLevels, out var definitionLevels);
 
         ReadOnlySpan<byte> dataPayload;
@@ -378,7 +378,7 @@ static class ColumnChunkReader
             dataOffset = checked(definitionOffset + definitionLength);
         }
 
-        var valueCount = checked((int)header.ValueCount);
+        var valueCount = PageValueCount(header, "values");
         var definitionBitsetLength = 0;
         int physicalCount;
         if (definitionLength == 0)
@@ -1014,7 +1014,7 @@ static class ColumnChunkReader
             dataPayload = payload;
         }
 
-        var valueCount = checked((int)header.ValueCount);
+        var valueCount = PageValueCount(header, "values");
         var definitionLevelEncoding = header.Type == PageHeaderType.DataPage
             ? header.DefinitionLevelEncoding
             : EncodingKind.Rle;
@@ -1382,7 +1382,7 @@ static class ColumnChunkReader
             dataPayload = payload;
         }
 
-        var valueCount = checked((int)header.ValueCount);
+        var valueCount = PageValueCount(header, "values");
         if (converter is not null)
             return TryDecodeConvertedRequiredByPhysicalType(dataPayload, valueCount, column, header.Encoding,
                 converter.PhysicalType, converter, ref state, bufferPool, out buffer);
@@ -1565,6 +1565,25 @@ static class ColumnChunkReader
         return true;
     }
 
+    // header.ValueCount is file-controlled and only bounded by its own width, so
+    // casting it straight to int let a corrupt page ask the buffer pool for a
+    // two-gigabyte level buffer, where payloadOffset + capacity overflowed and
+    // surfaced as OverflowException rather than the CorruptParquetException a
+    // reader is documented to throw. It cannot be bounded against the payload:
+    // levels are run-length encoded, so a legitimate all-null page really can
+    // describe sixteen thousand values in four bytes.
+    static int PageValueCount(PageHeader header, string what)
+    {
+        if (header.ValueCount > MaximumPageValueCount)
+            throw new CorruptParquetException(
+                $"Page declares {header.ValueCount} {what}, which exceeds the maximum of {MaximumPageValueCount}.");
+        return (int)header.ValueCount;
+    }
+
+    // Leaves room for the pool's own alignment header on top of the widest
+    // per-value buffer this reader builds (two levels of four bytes each).
+    const int MaximumPageValueCount = (int.MaxValue - 1024) / (2 * sizeof(int));
+
     static bool TryDecodeBinaryDictionaryPage<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
@@ -1651,7 +1670,7 @@ static class ColumnChunkReader
             dataPayload = payload;
         }
 
-        var valueCount = checked((int)header.ValueCount);
+        var valueCount = PageValueCount(header, "values");
         var scratch = MemoryMarshal.Cast<byte, int>(
             state.GetScratch(checked(valueCount * 3 * sizeof(int)), bufferPool));
         var definitions = scratch[..valueCount];
