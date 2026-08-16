@@ -164,6 +164,42 @@ public static class CorpusGenerator
             (w, g, c) => Write<double>(w, g, c, [1d, 2d, 3d, 4d, 5d]));
         yield return ("f32-bss", Leaf("c", ParquetPhysicalType.Float, EncodingKind.ByteStreamSplit),
             (w, g, c) => Write<float>(w, g, c, [1f, 2f, 3f, 4f, 5f]));
+
+        yield return ("i32-bss", Leaf("c", ParquetPhysicalType.Int32, EncodingKind.ByteStreamSplit),
+            (w, g, c) => Write<int>(w, g, c, [0, 1, -1, int.MaxValue, int.MinValue]));
+
+        yield return ("i64-bss", Leaf("c", ParquetPhysicalType.Int64, EncodingKind.ByteStreamSplit),
+            (w, g, c) => Write<long>(w, g, c, [0L, 1L, -1L, long.MaxValue, long.MinValue]));
+
+        // The batched "slice" decoders only run once a page is big enough to be
+        // split into batches; every seed so far held five values, so the slice
+        // variants of ByteStreamSplit and delta never ran.
+        yield return ("i64-bss-large", Leaf("c", ParquetPhysicalType.Int64, EncodingKind.ByteStreamSplit),
+            (w, g, c) => Write<long>(w, g, c, Ramp(5000)));
+
+        yield return ("i32-bss-large", Leaf("c", ParquetPhysicalType.Int32, EncodingKind.ByteStreamSplit),
+            (w, g, c) => Write<int>(w, g, c, Array.ConvertAll(Ramp(5000), static v => (int)v)));
+
+        yield return ("f64-bss-large", Leaf("c", ParquetPhysicalType.Double, EncodingKind.ByteStreamSplit),
+            (w, g, c) => Write<double>(w, g, c, Array.ConvertAll(Ramp(5000), static v => v / 8d)));
+
+        yield return ("i64-delta-large", Leaf("c", ParquetPhysicalType.Int64, EncodingKind.DeltaBinaryPacked),
+            (w, g, c) => Write<long>(w, g, c, Ramp(5000)));
+
+        yield return ("i32-delta-large", Leaf("c", ParquetPhysicalType.Int32, EncodingKind.DeltaBinaryPacked),
+            (w, g, c) => Write<int>(w, g, c, Array.ConvertAll(Ramp(5000), static v => (int)v)));
+
+        yield return ("i64-plain-large", Leaf("c", ParquetPhysicalType.Int64, EncodingKind.Plain),
+            (w, g, c) => Write<long>(w, g, c, Ramp(5000)));
+
+        // A dictionary wider than 2048 entries needs more than 11 bits per
+        // index, which is a separate decode path from the narrow one. The
+        // five-value seeds only ever produced single-digit dictionaries.
+        yield return ("i64-dict-wide", Leaf("c", ParquetPhysicalType.Int64, EncodingKind.RleDictionary),
+            (w, g, c) => Write<long>(w, g, c, WideDictionary(3000, 3)));
+
+        yield return ("i32-dict-11bit", Leaf("c", ParquetPhysicalType.Int32, EncodingKind.RleDictionary),
+            (w, g, c) => Write<int>(w, g, c, Array.ConvertAll(WideDictionary(1500, 3), static v => (int)v)));
     }
 
     static IEnumerable<(string, ColumnDefinition, Action<ParquetWriter, RowGroupWriter, LeafColumn>)> NullableColumns()
@@ -252,6 +288,60 @@ public static class CorpusGenerator
         yield return ("logical-uint64", Annotated("c", ParquetPhysicalType.Int64, new LogicalType.Int(64, false)),
             (w, g, c) => Write<ulong>(w, g, c, [0ul, 1ul, ulong.MaxValue, 9223372036854775808ul, 12345ul]));
 
+        // Nullable annotated columns take a separate decode path from the
+        // required ones — DecodeNullablePlainDateTimes measured 0% with only
+        // required temporal columns in the corpus.
+        yield return ("logical-timestamp-opt",
+            AnnotatedOptional("c", ParquetPhysicalType.Int64,
+                new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true)),
+            (w, g, c) => Write<DateTime?>(w, g, c,
+                [DateTime.UnixEpoch, null, new(2026, 7, 27, 1, 2, 3, DateTimeKind.Utc), null,
+                 DateTime.UnixEpoch.AddTicks(5)]));
+
+        yield return ("logical-date-opt",
+            AnnotatedOptional("c", ParquetPhysicalType.Int32, new LogicalType.Date()),
+            (w, g, c) => Write<DateOnly?>(w, g, c,
+                [new(1970, 1, 1), null, new(2026, 7, 27), null, DateOnly.MaxValue]));
+
+        yield return ("logical-time-opt",
+            AnnotatedOptional("c", ParquetPhysicalType.Int64,
+                new LogicalType.Time(TimeUnit.Micros, IsAdjustedToUtc: false)),
+            (w, g, c) => Write<TimeOnly?>(w, g, c,
+                [TimeOnly.MinValue, null, new(12, 34, 56), null, TimeOnly.MaxValue]));
+
+        yield return ("logical-decimal-opt",
+            AnnotatedOptional("c", ParquetPhysicalType.Int32, new LogicalType.Decimal(9, 2)),
+            (w, g, c) => Write<decimal?>(w, g, c, [0m, null, 1.23m, null, -9999999.99m]));
+
+        yield return ("logical-uint32-opt",
+            AnnotatedOptional("c", ParquetPhysicalType.Int32, new LogicalType.Int(32, false)),
+            (w, g, c) => Write<uint?>(w, g, c, [0u, null, uint.MaxValue, null, 12345u]));
+
+        // ByteStreamSplit over integers and over an annotated column: the
+        // float-only seeds never reached the integer or projected lanes, which
+        // is where the unguarded lane indexing lived.
+        yield return ("logical-timestamp-bss",
+            AnnotatedEncoded("c", ParquetPhysicalType.Int64,
+                new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true), EncodingKind.ByteStreamSplit),
+            (w, g, c) => Write<DateTime>(w, g, c,
+                [DateTime.UnixEpoch, DateTime.UnixEpoch.AddSeconds(1), DateTime.UnixEpoch.AddDays(1),
+                 DateTime.UnixEpoch.AddTicks(10), new(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc)]));
+
+        yield return ("logical-uint32-bss",
+            AnnotatedEncoded("c", ParquetPhysicalType.Int32, new LogicalType.Int(32, false),
+                EncodingKind.ByteStreamSplit),
+            (w, g, c) => Write<uint>(w, g, c, [0u, 1u, uint.MaxValue, 2147483648u, 12345u]));
+
+        yield return ("logical-uint64-bss",
+            AnnotatedEncoded("c", ParquetPhysicalType.Int64, new LogicalType.Int(64, false),
+                EncodingKind.ByteStreamSplit),
+            (w, g, c) => Write<ulong>(w, g, c, [0ul, 1ul, ulong.MaxValue, 9223372036854775808ul, 7ul]));
+
+        yield return ("logical-decimal-bss",
+            AnnotatedEncoded("c", ParquetPhysicalType.Int64, new LogicalType.Decimal(18, 4),
+                EncodingKind.ByteStreamSplit),
+            (w, g, c) => Write<decimal>(w, g, c, [0m, 1.2345m, -1.2345m, 99999999999999.9999m, 0.0001m]));
+
         yield return ("logical-uint16", Annotated("c", ParquetPhysicalType.Int32, new LogicalType.Int(16, false)),
             (w, g, c) => Write<ushort>(w, g, c, [0, 1, 65535, 32768, 12345]));
     }
@@ -333,6 +423,37 @@ public static class CorpusGenerator
     static ColumnDefinition LeafOptional(string name, ParquetPhysicalType type, EncodingKind encoding)
         => ColumnDefinition.Leaf(name, type,
             new ColumnOptions(ParquetRepetition.Optional, encodings: ImmutableArray.Create(encoding)));
+
+    // Varying values, so a batched decoder cannot shortcut a constant run.
+    static long[] Ramp(int count)
+    {
+        var values = new long[count];
+        for (var i = 0; i < count; i++)
+            values[i] = ((long)i * 2_654_435_761L) % 1_000_003L;
+        return values;
+    }
+
+    // A wide dictionary needs many distinct values that also repeat. All-distinct
+    // values make a dictionary pointless and the writer correctly falls back to
+    // plain, which is what a first attempt at this produced.
+    static long[] WideDictionary(int distinct, int repeats)
+    {
+        var values = new long[distinct * repeats];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = i % distinct;
+        return values;
+    }
+
+    static ColumnDefinition AnnotatedOptional(string name, ParquetPhysicalType type, LogicalType logicalType,
+        EncodingKind encoding = EncodingKind.Plain)
+        => ColumnDefinition.OptionalLeaf(name, type,
+            new ColumnOptions(ParquetRepetition.Optional, encodings: ImmutableArray.Create(encoding)),
+            logicalType);
+
+    static ColumnDefinition AnnotatedEncoded(string name, ParquetPhysicalType type, LogicalType logicalType,
+        EncodingKind encoding)
+        => ColumnDefinition.RequiredLeaf(name, type,
+            new ColumnOptions(encodings: ImmutableArray.Create(encoding)), logicalType);
 
     static ColumnDefinition Annotated(string name, ParquetPhysicalType type, LogicalType logicalType)
         => ColumnDefinition.RequiredLeaf(name, type,
