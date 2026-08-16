@@ -83,6 +83,16 @@ public static class CorpusGenerator
                 if (TryBuild(bloomName, compression, column, writer, out var file))
                     yield return file;
             }
+
+            // Nested shapes are the only source of repetition levels, and those
+            // levels come off the page rather than the schema, so a corrupt file
+            // controls them. Nothing generated a nested file, so none of that
+            // decoding had ever run.
+            foreach (var (nestedName, column, writer) in NestedColumns())
+            {
+                if (TryBuild(nestedName, compression, column, writer, out var file))
+                    yield return file;
+            }
         }
     }
 
@@ -152,6 +162,46 @@ public static class CorpusGenerator
             (w, g, c) => Write<long>(w, g, c, [1L, 2L, 3L, 4L, 5L]));
         yield return ("bloom-bin", LeafBloom("c", ParquetPhysicalType.ByteArray),
             (w, g, c) => Write<byte[]>(w, g, c, [[1], [2], [3], [4], [5]]));
+    }
+
+    static IEnumerable<(string, ColumnDefinition, Action<ParquetWriter, RowGroupWriter, LeafColumn>)> NestedColumns()
+    {
+        // A top-level repeated leaf: one repetition level, no wrapping group.
+        // No empty rows here — without a wrapping group there is no definition
+        // level to express one, and Plank rejects it. Only LIST can be empty.
+        yield return ("nested-repeated-i32",
+            ColumnDefinition.Leaf("c", ParquetPhysicalType.Int32,
+                new ColumnOptions(ParquetRepetition.Repeated, encodings: ImmutableArray.Create(EncodingKind.Plain))),
+            (w, g, c) => WriteRows<int[]>(g, c, [[1, 2], [3], [4, 5, 6]]));
+
+        yield return ("nested-repeated-bin",
+            ColumnDefinition.Leaf("c", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(ParquetRepetition.Repeated, encodings: ImmutableArray.Create(EncodingKind.Plain))),
+            (w, g, c) => WriteRows<byte[][]>(g, c, [[[1], [2, 2]], [[3, 3, 3]]]));
+
+        // A LIST group: the element sits under a repeated intermediate, so the
+        // leaf carries both a repetition and a definition level.
+        yield return ("nested-list-i32",
+            ColumnDefinition.List("c",
+                ColumnDefinition.Leaf("element", ParquetPhysicalType.Int32,
+                    new ColumnOptions(ParquetRepetition.Optional,
+                        encodings: ImmutableArray.Create(EncodingKind.Plain)))),
+            (w, g, c) => WriteRows<int?[]>(g, c, [[1, null], [], [3]]));
+
+        yield return ("nested-list-required-i32",
+            ColumnDefinition.List("c",
+                ColumnDefinition.Leaf("element", ParquetPhysicalType.Int32,
+                    new ColumnOptions(ParquetRepetition.Required,
+                        encodings: ImmutableArray.Create(EncodingKind.Plain)))),
+            (w, g, c) => WriteRows<int[]>(g, c, [[1, 2], [], [3]]));
+    }
+
+    // Nested columns are serialized per row group rather than per file.
+    static void WriteRows<TRow>(RowGroupWriter group, LeafColumn column, TRow[] rows)
+    {
+        var serialized = group.CreateSerializedColumn<TRow>(column);
+        serialized.Serialize(rows);
+        group.Write(serialized);
     }
 
     static bool TryBuild(string name, CompressionKind compression, ColumnDefinition column,

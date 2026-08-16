@@ -115,6 +115,15 @@ public static class PlankReaderFuzzTarget
     // FLOAT, INT96 and FIXED_LEN_BYTE_ARRAY went unfuzzed.
     static void DrainColumn(RowGroup rowGroup, LeafColumn column)
     {
+        // A repeated leaf has to go through NestedColumn<T>; the flat API refuses
+        // it. Skipping them left the repetition-level decoding — the fiddliest
+        // bookkeeping in the format — entirely unexercised.
+        if (column.MaxRepetitionLevel > 0)
+        {
+            DrainNestedColumn(rowGroup, column);
+            return;
+        }
+
         // A non-zero max definition level means the value can be absent, whether
         // because the leaf itself is optional or because an ancestor group is.
         var optional = column.MaxDefinitionLevel > 0;
@@ -146,6 +155,44 @@ public static class PlankReaderFuzzTarget
             case ParquetPhysicalType.Int96:
                 DrainBinaryBuffers(rowGroup.Column<byte>(column));
                 break;
+        }
+    }
+
+    static void DrainNestedColumn(RowGroup rowGroup, LeafColumn column)
+    {
+        switch (column.PhysicalType)
+        {
+            case ParquetPhysicalType.Boolean: DrainNested(rowGroup.NestedColumn<bool>(column)); break;
+            case ParquetPhysicalType.Int32: DrainNested(rowGroup.NestedColumn<int>(column)); break;
+            case ParquetPhysicalType.Int64: DrainNested(rowGroup.NestedColumn<long>(column)); break;
+            case ParquetPhysicalType.Float: DrainNested(rowGroup.NestedColumn<float>(column)); break;
+            case ParquetPhysicalType.Double: DrainNested(rowGroup.NestedColumn<double>(column)); break;
+            case ParquetPhysicalType.ByteArray:
+            case ParquetPhysicalType.FixedLenByteArray:
+            case ParquetPhysicalType.Int96:
+                DrainNested(rowGroup.NestedColumn<byte>(column));
+                break;
+        }
+    }
+
+    // The levels are the point: they are what says which row a value belongs to
+    // and how deeply it nests, and they are decoded from the page rather than
+    // the schema, so a corrupt file controls them.
+    static void DrainNested<T>(NestedRowGroupColumn<T> buffers)
+    {
+        foreach (var buffer in buffers)
+        {
+            _ = buffer.RowCount;
+            _ = buffer.StartsWithContinuation;
+            var repetition = buffer.RepetitionLevels;
+            for (var i = 0; i < repetition.Length; i++)
+                _ = repetition[i];
+            var definition = buffer.DefinitionLevels;
+            for (var i = 0; i < definition.Length; i++)
+                _ = definition[i];
+            var values = buffer.Values.Values;
+            for (var i = 0; i < values.Length; i++)
+                _ = values[i];
         }
     }
 
