@@ -26,6 +26,11 @@ public static class CorpusGenerator
     // Even selector = bind the file's own schema, which is what these exercise.
     const byte FileSchemaSelector = 0;
 
+    // The target routes a selector whose low two bits are 2 to the row-oriented
+    // reader. Seeds carry that byte, so without a variant that spells it the row
+    // API is only reached if a mutation happens to guess it.
+    const byte RowApiSelector = 2;
+
     public static int Generate(string outputDirectory)
     {
         ArgumentException.ThrowIfNullOrEmpty(outputDirectory);
@@ -34,14 +39,25 @@ public static class CorpusGenerator
         var written = 0;
         foreach (var (name, bytes) in BuildCases())
         {
-            var payload = new byte[bytes.Length + 1];
-            payload[0] = FileSchemaSelector;
-            bytes.CopyTo(payload, 1);
-            File.WriteAllBytes(Path.Combine(outputDirectory, $"gen-{name}.bin"), payload);
-            written++;
+            written += WriteSeed(outputDirectory, $"gen-{name}", FileSchemaSelector, bytes);
+
+            // Uncompressed cases get a row-API twin. Repeating it per codec would
+            // add files without adding paths: the row reader sits above the
+            // decompressor and cannot tell them apart.
+            if (name.EndsWith("-none", StringComparison.Ordinal) || !name.Contains('-', StringComparison.Ordinal))
+                written += WriteSeed(outputDirectory, $"gen-rowapi-{name}", RowApiSelector, bytes);
         }
 
         return written;
+    }
+
+    static int WriteSeed(string directory, string name, byte selector, byte[] bytes)
+    {
+        var payload = new byte[bytes.Length + 1];
+        payload[0] = selector;
+        bytes.CopyTo(payload, 1);
+        File.WriteAllBytes(Path.Combine(directory, $"{name}.bin"), payload);
+        return 1;
     }
 
     static IEnumerable<(string Name, byte[] Bytes)> BuildCases()

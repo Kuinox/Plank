@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Plank.Reading;
 using Plank.Reading.Logical;
+using Plank.RowApi;
 using Plank.Schema;
 
 namespace Plank.Fuzzing;
@@ -36,7 +37,16 @@ public static class PlankReaderFuzzTarget
     {
         var source = new MemoryReadSource(fileBytes);
 
-        // Half the inputs bind the file's own schema. Reading through a fixed
+        // A quarter of the inputs go through the row-oriented API. It is a
+        // separate public reader with its own buffering and projection, and it
+        // measured 0% over a 14k-input corpus — neither fuzz target drove it.
+        if ((selector & 3) == 2)
+        {
+            DrainRowApi(source);
+            return;
+        }
+
+        // Of the rest, half bind the file's own schema. Reading through a fixed
         // requested schema — the only thing this target used to do — can never
         // reach a decoder for a type that schema does not name, so FLOAT, INT96,
         // FIXED_LEN_BYTE_ARRAY, every logical type and every compression codec
@@ -99,6 +109,55 @@ public static class PlankReaderFuzzTarget
     {
         for (var i = 0; i < bytes.Length; i++)
             _ = bytes[i];
+    }
+
+    // RowReaderCore is normally reached through source-generated row types, but
+    // it is public and takes the schema and descriptors directly, so the fuzzer
+    // can drive it over whatever schema the file declares.
+    static void DrainRowApi(IParquetReadSource source)
+    {
+        ParquetSchema schema;
+        using (var probe = new ParquetReader())
+        {
+            probe.Reset(source);
+            schema = probe.Schema;
+        }
+
+        var descriptors = new RowApiColumnDescriptor[schema.LeafColumns.Length];
+        for (var i = 0; i < descriptors.Length; i++)
+        {
+            var leaf = schema.LeafColumns[i];
+            // A descriptor is typed and the row API rejects one whose type does
+            // not match the leaf, so the physical type picks the instantiation.
+            descriptors[i] = leaf.PhysicalType switch
+            {
+                ParquetPhysicalType.Boolean => new RowApiColumnDescriptor<bool>($"p{i}", leaf),
+                ParquetPhysicalType.Int32 => new RowApiColumnDescriptor<int>($"p{i}", leaf),
+                ParquetPhysicalType.Int64 => new RowApiColumnDescriptor<long>($"p{i}", leaf),
+                ParquetPhysicalType.Float => new RowApiColumnDescriptor<float>($"p{i}", leaf),
+                ParquetPhysicalType.Double => new RowApiColumnDescriptor<double>($"p{i}", leaf),
+                _ => new RowApiColumnDescriptor<byte>($"p{i}", leaf)
+            };
+        }
+
+        using var rows = new RowReaderCore(source, schema, descriptors, projection: null,
+            RowReaderOptions.Default, schemaEvolution: null);
+        while (rows.MoveNext())
+            for (var i = 0; i < descriptors.Length; i++)
+                ReadCurrent(rows, descriptors[i]);
+    }
+
+    static void ReadCurrent(RowReaderCore rows, RowApiColumnDescriptor descriptor)
+    {
+        switch (descriptor)
+        {
+            case RowApiColumnDescriptor<bool> typed: _ = rows.GetCurrent(typed); break;
+            case RowApiColumnDescriptor<int> typed: _ = rows.GetCurrent(typed); break;
+            case RowApiColumnDescriptor<long> typed: _ = rows.GetCurrent(typed); break;
+            case RowApiColumnDescriptor<float> typed: _ = rows.GetCurrent(typed); break;
+            case RowApiColumnDescriptor<double> typed: _ = rows.GetCurrent(typed); break;
+            case RowApiColumnDescriptor<byte> typed: Consume(rows.GetCurrentBinary(typed).Value); break;
+        }
     }
 
     static ParquetReader OpenWithFileSchema(IParquetReadSource source)
