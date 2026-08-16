@@ -302,6 +302,10 @@ static class DeltaBinaryPackedEncoding
         {
             PackNarrowDeltaBlock(ref deltas, bitWidths, ref Unsafe.Add(ref output, outputOffset));
         }
+        else if (Contains9To12BitWidth(bitWidths))
+        {
+            PackMediumDeltaBlock(ref deltas, bitWidths, ref Unsafe.Add(ref output, outputOffset));
+        }
         else
         {
             PackGenericDeltaBlock(ref deltas, bitWidths, ref Unsafe.Add(ref output, outputOffset));
@@ -326,6 +330,195 @@ static class DeltaBinaryPackedEncoding
                 width,
                 ref Unsafe.Add(ref output, outputOffset));
             outputOffset += byteCount;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    static void PackMediumDeltaBlock(ref long deltas, uint bitWidths, ref byte output)
+    {
+        var outputOffset = 0;
+        for (var block = 0; block < MiniBlockCount; block++)
+        {
+            ref var blockInput = ref Unsafe.Add(ref deltas, block * MiniBlockSize);
+            var width = (byte)(bitWidths >> (block * 8));
+            if (width == 0)
+                continue;
+
+            var byteCount = width * 4;
+            ref var blockOutput = ref Unsafe.Add(ref output, outputOffset);
+            switch (width)
+            {
+                case 1:
+                    PackInt64Width1(ref blockInput, ref blockOutput);
+                    break;
+                case 2:
+                    PackInt64Width2(ref blockInput, ref blockOutput);
+                    break;
+                case 3:
+                    PackInt64Width3(ref blockInput, ref blockOutput);
+                    break;
+                case 4:
+                    PackInt64Width4(ref blockInput, ref blockOutput);
+                    break;
+                case 9:
+                    Pack9BitUnsignedValues(ref blockInput, ref blockOutput);
+                    break;
+                case 10:
+                    Pack10BitUnsignedValues(ref blockInput, ref blockOutput);
+                    break;
+                case 11 or 12:
+                    Pack9To12BitUnsignedValues(ref blockInput, width, ref blockOutput);
+                    break;
+                case 13:
+                    Pack13BitUnsignedValues(ref blockInput, ref blockOutput);
+                    break;
+                default:
+                    PackUnsignedValues(ref blockInput, width, ref blockOutput);
+                    break;
+            }
+            outputOffset += byteCount;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static bool Contains9To12BitWidth(uint bitWidths)
+    {
+        const uint byteHighBits = 0x80808080;
+        var biasedWidths = bitWidths | byteHighBits;
+        var atLeast9 = (biasedWidths - 0x09090909) & byteHighBits;
+        var below13 = ~(biasedWidths - 0x0D0D0D0D) & byteHighBits;
+        return (atLeast9 & below13) != 0;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void Pack9BitUnsignedValues(ref long input, ref byte output)
+    {
+        const ulong mask = (1UL << 9) - 1;
+        for (var group = 0; group < 4; group++)
+        {
+            var inputOffset = group * 8;
+            var value0 = (ulong)Unsafe.Add(ref input, inputOffset) & mask;
+            var value1 = (ulong)Unsafe.Add(ref input, inputOffset + 1) & mask;
+            var value2 = (ulong)Unsafe.Add(ref input, inputOffset + 2) & mask;
+            var value3 = (ulong)Unsafe.Add(ref input, inputOffset + 3) & mask;
+            var value4 = (ulong)Unsafe.Add(ref input, inputOffset + 4) & mask;
+            var value5 = (ulong)Unsafe.Add(ref input, inputOffset + 5) & mask;
+            var value6 = (ulong)Unsafe.Add(ref input, inputOffset + 6) & mask;
+            var value7 = (ulong)Unsafe.Add(ref input, inputOffset + 7) & mask;
+
+            var low = value0 |
+                      value1 << 9 |
+                      value2 << 18 |
+                      value3 << 27 |
+                      value4 << 36 |
+                      value5 << 45 |
+                      value6 << 54 |
+                      value7 << 63;
+            if (!BitConverter.IsLittleEndian)
+                low = BinaryPrimitives.ReverseEndianness(low);
+
+            var outputOffset = group * 9;
+            Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, outputOffset), low);
+            Unsafe.Add(ref output, outputOffset + 8) = (byte)(value7 >> 1);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void Pack10BitUnsignedValues(ref long input, ref byte output)
+    {
+        const ulong mask = (1UL << 10) - 1;
+        for (var group = 0; group < 4; group++)
+        {
+            var inputOffset = group * 8;
+            var value0 = (ulong)Unsafe.Add(ref input, inputOffset) & mask;
+            var value1 = (ulong)Unsafe.Add(ref input, inputOffset + 1) & mask;
+            var value2 = (ulong)Unsafe.Add(ref input, inputOffset + 2) & mask;
+            var value3 = (ulong)Unsafe.Add(ref input, inputOffset + 3) & mask;
+            var value4 = (ulong)Unsafe.Add(ref input, inputOffset + 4) & mask;
+            var value5 = (ulong)Unsafe.Add(ref input, inputOffset + 5) & mask;
+            var value6 = (ulong)Unsafe.Add(ref input, inputOffset + 6) & mask;
+            var value7 = (ulong)Unsafe.Add(ref input, inputOffset + 7) & mask;
+
+            var low = value0 |
+                      value1 << 10 |
+                      value2 << 20 |
+                      value3 << 30 |
+                      value4 << 40 |
+                      value5 << 50 |
+                      value6 << 60;
+            var high = (ushort)(value6 >> 4 | value7 << 6);
+            if (!BitConverter.IsLittleEndian)
+            {
+                low = BinaryPrimitives.ReverseEndianness(low);
+                high = BinaryPrimitives.ReverseEndianness(high);
+            }
+
+            var outputOffset = group * 10;
+            Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, outputOffset), low);
+            Unsafe.WriteUnaligned(ref Unsafe.Add(ref output, outputOffset + 8), high);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void Pack9To12BitUnsignedValues(ref long input, int bitWidth, ref byte output)
+    {
+        for (var group = 0; group < 4; group++)
+        {
+            ref var groupInput = ref Unsafe.Add(ref input, group * 8);
+            UInt128 packed = (ulong)groupInput;
+            packed |= (UInt128)(ulong)Unsafe.Add(ref groupInput, 1) << bitWidth;
+            packed |= (UInt128)(ulong)Unsafe.Add(ref groupInput, 2) << (bitWidth * 2);
+            packed |= (UInt128)(ulong)Unsafe.Add(ref groupInput, 3) << (bitWidth * 3);
+            packed |= (UInt128)(ulong)Unsafe.Add(ref groupInput, 4) << (bitWidth * 4);
+            packed |= (UInt128)(ulong)Unsafe.Add(ref groupInput, 5) << (bitWidth * 5);
+            packed |= (UInt128)(ulong)Unsafe.Add(ref groupInput, 6) << (bitWidth * 6);
+            packed |= (UInt128)(ulong)Unsafe.Add(ref groupInput, 7) << (bitWidth * 7);
+
+            ref var groupOutput = ref Unsafe.Add(ref output, group * bitWidth);
+            var low = (ulong)packed;
+            if (!BitConverter.IsLittleEndian)
+                low = BinaryPrimitives.ReverseEndianness(low);
+            Unsafe.WriteUnaligned(ref groupOutput, low);
+            WriteLittleEndianBytes((ulong)(packed >> 64), bitWidth - sizeof(ulong),
+                ref Unsafe.Add(ref groupOutput, sizeof(ulong)));
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void WriteLittleEndianBytes(ulong value, int byteCount, ref byte output)
+    {
+        switch (byteCount)
+        {
+            case 1:
+                output = (byte)value;
+                return;
+            case 2:
+            {
+                var word = (ushort)value;
+                if (!BitConverter.IsLittleEndian)
+                    word = BinaryPrimitives.ReverseEndianness(word);
+                Unsafe.WriteUnaligned(ref output, word);
+                return;
+            }
+            case 3:
+            {
+                var word = (ushort)value;
+                if (!BitConverter.IsLittleEndian)
+                    word = BinaryPrimitives.ReverseEndianness(word);
+                Unsafe.WriteUnaligned(ref output, word);
+                Unsafe.Add(ref output, 2) = (byte)(value >> 16);
+                return;
+            }
+            case 4:
+            {
+                var word = (uint)value;
+                if (!BitConverter.IsLittleEndian)
+                    word = BinaryPrimitives.ReverseEndianness(word);
+                Unsafe.WriteUnaligned(ref output, word);
+                return;
+            }
+            default:
+                throw new InvalidOperationException($"Unexpected byte count {byteCount}.");
         }
     }
 

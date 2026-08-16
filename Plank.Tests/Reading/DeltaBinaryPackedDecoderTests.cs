@@ -162,6 +162,8 @@ internal sealed class DeltaBinaryPackedDecoderTests
             [4, 3, 2, 1],
             [4, 5, 4, 4],
             [5, 6, 7, 8],
+            [9, 10, 11, 12],
+            [4, 9, 13, 10],
             [13, 4, 13, 5],
             [12, 13, 14, 13]
         ];
@@ -231,6 +233,8 @@ internal sealed class DeltaBinaryPackedDecoderTests
             [4, 3, 2, 1],
             [4, 5, 4, 4],
             [5, 6, 7, 8],
+            [9, 10, 11, 12],
+            [4, 9, 13, 10],
             [13, 4, 13, 5],
             [12, 13, 14, 13],
             [64, 0, 1, 4]
