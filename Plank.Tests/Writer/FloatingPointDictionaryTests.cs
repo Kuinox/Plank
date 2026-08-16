@@ -40,6 +40,33 @@ internal sealed class FloatingPointDictionaryTests
         AssertBitsEqual(expected, actual);
     }
 
+    [Test]
+    public void OptionalDoubleDictionaryPreservesDistinctBitPatternsAcrossUnsortedRowGroups()
+    {
+        var first = new double?[]
+        {
+            3d,
+            null,
+            BitConverter.Int64BitsToDouble(unchecked((long)0x8000000000000000)),
+            1d,
+            BitConverter.Int64BitsToDouble(0x7FF8000000000001),
+            3d
+        };
+        var second = new double?[]
+        {
+            BitConverter.Int64BitsToDouble(0x7FF8000000000002),
+            0d,
+            null,
+            BitConverter.Int64BitsToDouble(unchecked((long)0x8000000000000000)),
+            3d,
+            BitConverter.Int64BitsToDouble(0x7FF8000000000002)
+        };
+
+        var actual = RoundTripOptionalBatches(first, second);
+
+        AssertNullableBitsEqual([.. first, .. second], actual);
+    }
+
     static T[] RoundTrip<T>(T[] values, ParquetPhysicalType physicalType)
         where T : struct
     {
@@ -67,6 +94,35 @@ internal sealed class FloatingPointDictionaryTests
         return actual.ToArray();
     }
 
+    static double?[] RoundTripOptionalBatches(params double?[][] batches)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.Leaf("value", ParquetPhysicalType.Double,
+                new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.RleDictionary]),
+                pageStrategy: ForceDictionaryPageStrategy.Shared)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None
+        });
+        var serialized = writer.CreateSerializedColumn<double?>(schema.LeafColumns[0]);
+        foreach (var batch in batches)
+        {
+            serialized.Serialize(batch);
+            writer.StartRowGroup().Write(serialized);
+        }
+        writer.CloseFile();
+
+        using var readStream = new MemoryStream(stream.ToArray(), writable: false);
+        using var reader = schema.CreateReader(readStream);
+        var actual = new List<double?>(batches.Sum(static batch => batch.Length));
+        foreach (var rowGroup in reader.RowGroups)
+            foreach (var buffer in rowGroup.Column<double?>(schema.LeafColumns[0]))
+                actual.AddRange(buffer.Values);
+        return actual.ToArray();
+    }
+
     static void AssertBitsEqual(float[] expected, float[] actual)
     {
         if (actual.Length != expected.Length)
@@ -89,5 +145,28 @@ internal sealed class FloatingPointDictionaryTests
                 throw new InvalidOperationException(
                     $"Double bit pattern mismatch at {i}: expected 0x{BitConverter.DoubleToInt64Bits(expected[i]):X16}, " +
                     $"got 0x{BitConverter.DoubleToInt64Bits(actual[i]):X16}.");
+    }
+
+    static void AssertNullableBitsEqual(double?[] expected, double?[] actual)
+    {
+        if (actual.Length != expected.Length)
+            throw new InvalidOperationException($"Expected {expected.Length} values, got {actual.Length}.");
+
+        for (var i = 0; i < expected.Length; i++)
+        {
+            if (!expected[i].HasValue || !actual[i].HasValue)
+            {
+                if (expected[i].HasValue != actual[i].HasValue)
+                    throw new InvalidOperationException($"Null mismatch at {i}.");
+                continue;
+            }
+
+            if (BitConverter.DoubleToInt64Bits(actual[i]!.Value)
+                != BitConverter.DoubleToInt64Bits(expected[i]!.Value))
+                throw new InvalidOperationException(
+                    $"Double bit pattern mismatch at {i}: expected " +
+                    $"0x{BitConverter.DoubleToInt64Bits(expected[i]!.Value):X16}, got " +
+                    $"0x{BitConverter.DoubleToInt64Bits(actual[i]!.Value):X16}.");
+        }
     }
 }
