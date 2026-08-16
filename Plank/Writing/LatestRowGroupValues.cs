@@ -82,7 +82,7 @@ sealed class LatestRowGroupValues
         }
 
         if (offset != result.Length)
-            throw new InvalidDataException(
+            throw new CorruptParquetException(
                 $"Column {columnOrdinal} ended after {offset} values; expected {result.Length}.");
         return result;
     }
@@ -96,7 +96,7 @@ sealed class LatestRowGroupValues
                 result[offset++] = buffer.IsNull(i) ? null! : buffer.GetValue(i).ToArray();
 
         if (offset != result.Length)
-            throw new InvalidDataException(
+            throw new CorruptParquetException(
                 $"Column {columnOrdinal} ended after {offset} values; expected {result.Length}.");
         return result;
     }

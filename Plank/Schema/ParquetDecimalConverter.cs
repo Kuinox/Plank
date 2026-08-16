@@ -67,7 +67,7 @@ static class ParquetDecimalConverter
     internal static decimal ReadBigEndian(ReadOnlySpan<byte> value, Column column)
     {
         if (value.IsEmpty)
-            throw new InvalidDataException($"Column '{column.Name}' contains an empty decimal payload.");
+            throw new CorruptParquetException($"Column '{column.Name}' contains an empty decimal payload.");
 
         var negative = (value[0] & 0x80) != 0;
         var extension = negative ? byte.MaxValue : (byte)0;
