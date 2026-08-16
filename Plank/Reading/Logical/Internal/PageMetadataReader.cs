@@ -99,7 +99,7 @@ static class PageMetadataReader
                     var (listCount, elementType) = reader.ReadListHeader();
                     if (elementType is not (CompactProtocolType.BooleanTrue or CompactProtocolType.BooleanFalse))
                         throw new CorruptParquetException("Column index null_pages must be a boolean list.");
-                    var itemCount = checked((int)listCount);
+                    var itemCount = ListCount(listCount, reader.Remaining, "Column index null_pages");
                     EnsureEntries(pool, ref entries, ref capacity, itemCount);
                     var destination = Entries(entries, itemCount);
                     for (var i = 0; i < itemCount; i++)
@@ -134,7 +134,7 @@ static class PageMetadataReader
                     var (listCount, elementType) = reader.ReadListHeader();
                     if (elementType != CompactProtocolType.I64)
                         throw new CorruptParquetException("Column index null_counts must be an i64 list.");
-                    var itemCount = checked((int)listCount);
+                    var itemCount = ListCount(listCount, reader.Remaining, "Column index null_counts");
                     EnsureEntries(pool, ref entries, ref capacity, itemCount);
                     var destination = Entries(entries, itemCount);
                     for (var i = 0; i < itemCount; i++)
@@ -181,7 +181,7 @@ static class PageMetadataReader
         var (listCount, elementType) = reader.ReadListHeader();
         if (elementType != CompactProtocolType.Binary)
             throw new CorruptParquetException("Column index bounds must be a binary list.");
-        var itemCount = checked((int)listCount);
+        var itemCount = ListCount(listCount, reader.Remaining, "Column index bounds");
         EnsureEntries(pool, ref entries, ref capacity, itemCount);
         var destination = Entries(entries, itemCount);
         for (var i = 0; i < itemCount; i++)
@@ -222,7 +222,7 @@ static class PageMetadataReader
             var (listCount, elementType) = reader.ReadListHeader();
             if (elementType != CompactProtocolType.Struct)
                 throw new CorruptParquetException("Offset index page_locations must be a struct list.");
-            var itemCount = checked((int)listCount);
+            var itemCount = ListCount(listCount, reader.Remaining, "Offset index page_locations");
             EnsureEntries(pool, ref entries, ref capacity, itemCount);
             var destination = Entries(entries, itemCount);
             for (var i = 0; i < itemCount; i++)
@@ -443,6 +443,20 @@ static class PageMetadataReader
             throw new CorruptParquetException(
                 $"{structure} contains inconsistent page counts ({current} and {next}).");
         return next;
+    }
+
+    // Every one of these counts comes off a Thrift list header in the file, and
+    // every list element costs at least one byte, so a count larger than what
+    // is left cannot be satisfied. Checking here rather than casting keeps a
+    // corrupt column or offset index from raising OverflowException at a
+    // reader instead of the CorruptParquetException callers are told to catch,
+    // and matches how PhysicalMetadataThriftReader bounds the footer's lists.
+    static int ListCount(uint listCount, uint remaining, string structure)
+    {
+        if (listCount > remaining)
+            throw new CorruptParquetException(
+                $"{structure} declares {listCount} entries, which exceeds the {remaining} bytes remaining.");
+        return (int)listCount;
     }
 
     static void EnsureEntries(IParquetBufferPool pool, ref ParquetBuffer buffer, ref int capacity, int required)
