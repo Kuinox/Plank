@@ -31,7 +31,7 @@ internal sealed class DeltaByteArrayEncodingTests
 
             var optionalValues = CreateOptionalValues(values);
             var denseValues = optionalValues.Where(static value => value is not null).ToArray()!;
-            var optionalExpected = denseValues.Length == 0 ? [] : EncodeDeltaByteArrayReference(denseValues);
+            var optionalExpected = EncodeDeltaByteArrayReference(denseValues);
             AssertEqual(optionalExpected, EncodeOptionalByteArrays(optionalValues, EncodingKind.DeltaByteArray),
                 $"optional byte[] count={count}, prefix={prefixLength}");
 
@@ -60,7 +60,7 @@ internal sealed class DeltaByteArrayEncodingTests
 
             var optionalValues = CreateOptionalValues(values);
             var denseValues = optionalValues.Where(static value => value is not null).ToArray()!;
-            var optionalExpected = denseValues.Length == 0 ? [] : EncodeDeltaLengthByteArrayReference(denseValues);
+            var optionalExpected = EncodeDeltaLengthByteArrayReference(denseValues);
             AssertEqual(optionalExpected,
                 EncodeOptionalByteArrays(optionalValues, EncodingKind.DeltaLengthByteArray),
                 $"optional byte[] count={count}");
@@ -73,15 +73,22 @@ internal sealed class DeltaByteArrayEncodingTests
     }
 
     [Test]
-    public void OptionalAllNullValuesWriteNoBytes()
+    public void OptionalAllNullValuesStillWriteTheEncodingHeader()
     {
         var byteArrays = new byte[31][];
         var memory = new ReadOnlyMemory<byte>?[31];
 
+        // This used to assert that an all-null page writes nothing at all. It is
+        // not what the format allows: every DELTA_* encoding opens with a
+        // mandatory header, and a page missing it cannot be decoded — by Plank,
+        // or by arrow-cpp, which rejects such a file with
+        // "Unexpected end of stream: InitHeader EOF". The expected bytes are the
+        // same headers the required path emits for an empty input.
         foreach (var encoding in new[] { EncodingKind.DeltaByteArray, EncodingKind.DeltaLengthByteArray })
         {
-            AssertEqual([], EncodeOptionalByteArrays(byteArrays, encoding), $"all-null byte[] {encoding}");
-            AssertEqual([], EncodeOptionalMemory(memory, encoding), $"all-null memory {encoding}");
+            var expected = EncodeRequiredByteArrays([], encoding);
+            AssertEqual(expected, EncodeOptionalByteArrays(byteArrays, encoding), $"all-null byte[] {encoding}");
+            AssertEqual(expected, EncodeOptionalMemory(memory, encoding), $"all-null memory {encoding}");
         }
     }
 

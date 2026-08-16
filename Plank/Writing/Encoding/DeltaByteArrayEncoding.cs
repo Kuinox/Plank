@@ -104,12 +104,14 @@ static class DeltaByteArrayEncoding
         for (var i = 0; i < values.Length; i++)
             if (values[i] is not null)
                 presentCount++;
-        if (presentCount == 0)
-            return;
+        // Every DELTA_* encoding begins with a mandatory header, so a page with
+        // nothing present still has to emit one. Writing nothing produced a data
+        // section that neither Plank nor arrow-cpp can decode
+        // ("Unexpected end of stream: InitHeader EOF").
 
         var byteLength = checked(presentCount * sizeof(int));
-        var rentedPrefixLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
-        var rentedSuffixLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
+        var rentedPrefixLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
+        var rentedSuffixLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
         var prefixLengths = MemoryMarshal.Cast<byte, int>(rentedPrefixLengthsBytes.Span[..byteLength]);
         var suffixLengths = MemoryMarshal.Cast<byte, int>(rentedSuffixLengthsBytes.Span[..byteLength]);
         var totalSuffixBytes = 0;
@@ -173,10 +175,10 @@ static class DeltaByteArrayEncoding
         where TRowAccess : IByteArrayRow<TRow>
     {
         var presentCount = ByteArrayRows.CountPresent<TRow, TRowAccess>(rows);
-        // An optional page with no present value writes nothing at all, while a required page always
-        // emits the two length headers even when they are empty.
-        if (!TRowAccess.ValueRequired && presentCount == 0)
-            return;
+        // Every DELTA_* encoding begins with a mandatory header, so a page with
+        // nothing present still has to emit one. Writing nothing produced a data
+        // section that neither Plank nor arrow-cpp can decode
+        // ("Unexpected end of stream: InitHeader EOF").
 
         var byteLength = checked(presentCount * sizeof(int));
         var rentedPrefixLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));

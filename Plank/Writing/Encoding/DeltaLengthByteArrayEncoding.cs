@@ -91,11 +91,12 @@ static class DeltaLengthByteArrayEncoding
         for (var i = 0; i < values.Length; i++)
             if (values[i] is not null)
                 presentCount++;
-        if (presentCount == 0)
-            return;
-
+        // Every DELTA_* encoding begins with a mandatory header, so a page with
+        // nothing present still has to emit one. Writing nothing produced a data
+        // section that neither Plank nor arrow-cpp can decode
+        // ("Unexpected end of stream: InitHeader EOF").
         var byteLength = checked(presentCount * sizeof(int));
-        var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
+        var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
         var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.Span[..byteLength]);
         var totalPayloadBytes = 0;
 
@@ -144,10 +145,10 @@ static class DeltaLengthByteArrayEncoding
         where TRowAccess : IByteArrayRow<TRow>
     {
         var presentCount = ByteArrayRows.CountPresent<TRow, TRowAccess>(rows);
-        // An optional page with no present value writes nothing at all, while a required page always
-        // emits the length header even when it is empty.
-        if (!TRowAccess.ValueRequired && presentCount == 0)
-            return;
+        // Every DELTA_* encoding begins with a mandatory header, so a page with
+        // nothing present still has to emit one. Writing nothing produced a data
+        // section that neither Plank nor arrow-cpp can decode
+        // ("Unexpected end of stream: InitHeader EOF").
 
         var byteLength = checked(presentCount * sizeof(int));
         var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
