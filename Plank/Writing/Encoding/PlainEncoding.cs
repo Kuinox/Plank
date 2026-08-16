@@ -388,6 +388,72 @@ static class PlainEncoding
     }
 
     /// <summary>
+    /// Writes as many required byte[] payloads as fit in <paramref name="targetPageBytes"/>, and
+    /// returns how many rows that was.
+    /// </summary>
+    /// <remarks>
+    /// The caller reserves the page budget instead of an exact byte count, so a single pass can read
+    /// each value's length once, decide whether the value still fits, and copy it. The row that
+    /// overflows the budget is left for the next page. A first row larger than the whole budget still
+    /// gets written, on a page of its own, which is the rule the split sizing pass used.
+    /// </remarks>
+    internal static int WriteRequiredByteArrayPage(Column column, ReadOnlySpan<byte[]> values,
+        int targetPageBytes, ref BufferWriter writer)
+    {
+        var first = values[0];
+        if (first is null)
+            ByteArrayRows.ThrowNullValue(column);
+        var destination = writer.GetSpan(Math.Max(targetPageBytes, checked(sizeof(int) + first!.Length)));
+        var offset = 0;
+        var rowCount = 0;
+        for (; rowCount < values.Length; rowCount++)
+        {
+            var value = values[rowCount];
+            if (value is null)
+                ByteArrayRows.ThrowNullValue(column);
+            var rowBytes = checked(sizeof(int) + value!.Length);
+            // Subtract rather than add: offset can exceed the budget after an oversized first row.
+            if (rowCount > 0 && rowBytes > targetPageBytes - offset)
+                break;
+
+            BinaryPrimitives.WriteInt32LittleEndian(destination[offset..], value.Length);
+            offset += sizeof(int);
+            value.CopyTo(destination[offset..]);
+            offset += value.Length;
+        }
+
+        writer.Advance(offset);
+        return rowCount;
+    }
+
+    /// <summary>
+    /// The <see cref="ReadOnlyMemory{T}"/> row shape of <see cref="WriteRequiredByteArrayPage"/>. A
+    /// required memory row is always present, so this one has no null check to make.
+    /// </summary>
+    internal static int WriteRequiredMemoryPage(ReadOnlySpan<ReadOnlyMemory<byte>> values, int targetPageBytes,
+        ref BufferWriter writer)
+    {
+        var destination = writer.GetSpan(Math.Max(targetPageBytes, checked(sizeof(int) + values[0].Length)));
+        var offset = 0;
+        var rowCount = 0;
+        for (; rowCount < values.Length; rowCount++)
+        {
+            var value = values[rowCount].Span;
+            var rowBytes = checked(sizeof(int) + value.Length);
+            if (rowCount > 0 && rowBytes > targetPageBytes - offset)
+                break;
+
+            BinaryPrimitives.WriteInt32LittleEndian(destination[offset..], value.Length);
+            offset += sizeof(int);
+            value.CopyTo(destination[offset..]);
+            offset += value.Length;
+        }
+
+        writer.Advance(offset);
+        return rowCount;
+    }
+
+    /// <summary>
     /// Plain BYTE_ARRAY layout: each present value as a little-endian int32 length followed by its
     /// bytes. Absent rows contribute nothing, so this serves the required and optional shapes alike.
     /// </summary>

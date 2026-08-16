@@ -176,9 +176,75 @@ static class Encoding
         if (!TryGetPlainEncodedValueSize(column, typeof(T), out _))
             return false;
 
-        WriteVariableByteArrayDataPages(bufferWriters, column, values, dataEncoding, pages,
-            checked((int)targetPageBytes));
+        WritePlainByteArrayDataPages(bufferWriters, column, values, pages, checked((int)targetPageBytes));
         return true;
+    }
+
+    /// <summary>
+    /// Plain BYTE_ARRAY pages, filled one page per pass over the values.
+    /// </summary>
+    /// <remarks>
+    /// The delta encodings still need <see cref="WriteVariableByteArrayDataPages"/>, because their
+    /// encoded size is not the plain size the page budget is measured in. Plain does not: the page
+    /// writer knows exactly how many bytes each value contributes as it copies it, so it can reserve
+    /// the page budget up front and advance by what it actually wrote. That removes the separate
+    /// sizing walk over the value array, and with it the second walk
+    /// <see cref="PlainEncoding.WriteRequiredByteArrayPayloads"/> needed to size its own destination.
+    /// The page boundary rule is unchanged, so the encoded bytes are identical.
+    /// </remarks>
+    static void WritePlainByteArrayDataPages<T>(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<T> values, PageList pages, int targetPageBytes)
+        where T : notnull
+    {
+        // TryGetPlainEncodedValueSize admits exactly these two row shapes for a BYTE_ARRAY column.
+        if (typeof(T) == typeof(byte[]))
+        {
+            WritePlainByteArrayDataPagesCore(bufferWriters, column,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), pages, targetPageBytes);
+            return;
+        }
+
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+        {
+            WritePlainMemoryDataPagesCore(bufferWriters, column,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>>>(ref values), pages, targetPageBytes);
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Column '{column.Name}' cannot plain encode BYTE_ARRAY values of type '{typeof(T)}'.");
+    }
+
+    // byte[] is a shared-generic reference-type instantiation, so the row-shape dispatch above only
+    // folds away once the loop is concrete. Keep this and the ReadOnlyMemory<byte> variant separate.
+    static void WritePlainByteArrayDataPagesCore(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<byte[]> values, PageList pages, int targetPageBytes)
+    {
+        var rowsWritten = 0;
+        while (rowsWritten < values.Length)
+        {
+            var pageIndex = AddNewDataPage(bufferWriters, pages);
+            ref var page = ref pages[pageIndex];
+            var pageRowCount = PlainEncoding.WriteRequiredByteArrayPage(column, values[rowsWritten..],
+                targetPageBytes, ref page.Content);
+            rowsWritten += pageRowCount;
+            WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0, EncodingKind.Plain);
+        }
+    }
+
+    static void WritePlainMemoryDataPagesCore(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<ReadOnlyMemory<byte>> values, PageList pages, int targetPageBytes)
+    {
+        var rowsWritten = 0;
+        while (rowsWritten < values.Length)
+        {
+            var pageIndex = AddNewDataPage(bufferWriters, pages);
+            ref var page = ref pages[pageIndex];
+            var pageRowCount = PlainEncoding.WriteRequiredMemoryPage(values[rowsWritten..], targetPageBytes,
+                ref page.Content);
+            rowsWritten += pageRowCount;
+            WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0, EncodingKind.Plain);
+        }
     }
 
     static void WriteVariableByteArrayDataPages<T>(BufferWriterFactory bufferWriters, Column column,
