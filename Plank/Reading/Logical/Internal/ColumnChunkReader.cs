@@ -2213,9 +2213,27 @@ static class ColumnChunkReader
         return false;
     }
 
+    // ByteStreamSplit stores each byte of a value in its own lane, so decoding
+    // value i reads payload[i], payload[count + i], ... one per byte of width.
+    // The int32/int64 decoders validate that the payload actually holds those
+    // lanes; the branches for the narrower CLR projections (byte, ushort, uint,
+    // decimal, temporal) indexed them directly and read past the end of a short
+    // payload, which surfaced as IndexOutOfRangeException.
+    static void RequireByteStreamSplitLanes(ReadOnlySpan<byte> payload, uint valueCount, int width,
+        Column column)
+    {
+        var required = (long)valueCount * width;
+        if (required > payload.Length)
+            throw new CorruptParquetException(
+                $"ByteStreamSplit payload ({payload.Length} bytes) is too short for {valueCount} " +
+                $"{width}-byte values in column '{column.Name}'.");
+    }
+
     static bool TryDecodeByteStreamSplitIntoNative<T>(ReadOnlySpan<byte> payload, Column column,
         uint valueCount, Span<T> destination)
     {
+        RequireByteStreamSplitLanes(payload, valueCount,
+            column.PhysicalType == ParquetPhysicalType.Int64 ? sizeof(long) : sizeof(int), column);
         switch (column.PhysicalType)
         {
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(int):
@@ -3094,6 +3112,8 @@ static class ColumnChunkReader
     static bool TryDecodeByteStreamSplitIntoBuffer<T>(ReadOnlySpan<byte> payload, Column column, uint valueCount,
         ref T[]? valuesBuffer, out ReadOnlyMemory<T> values)
     {
+        RequireByteStreamSplitLanes(payload, valueCount,
+            column.PhysicalType == ParquetPhysicalType.Int64 ? sizeof(long) : sizeof(int), column);
         switch (column.PhysicalType)
         {
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(int):
@@ -4394,6 +4414,8 @@ static class ColumnChunkReader
 
     static Array DecodeByteStreamSplit(ReadOnlySpan<byte> payload, Column column, uint valueCount, Type targetType)
     {
+        RequireByteStreamSplitLanes(payload, valueCount,
+            column.PhysicalType == ParquetPhysicalType.Int64 ? sizeof(long) : sizeof(int), column);
         if (targetType == typeof(decimal))
         {
             var values = new decimal[checked((int)valueCount)];
