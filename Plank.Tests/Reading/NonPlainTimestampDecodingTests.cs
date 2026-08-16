@@ -200,7 +200,9 @@ internal sealed class NonPlainTimestampDecodingTests
                     RepetitionLevelEncoding: EncodingKind.Rle,
                     DefinitionLevelEncoding: EncodingKind.Rle, RowCount: 1);
 
-                Assert.Throws<OverflowException>(() =>
+                // An out-of-range raw timestamp is corrupt file data; it used to
+                // surface as the OverflowException from the tick scaling.
+                Assert.Throws<CorruptParquetException>(() =>
                     ColumnChunkReader.TryDecodeRequiredPageIntoNative(
                         header, payload, column, rowCount: 1, ref buffers,
                         DefaultParquetBufferPool.Shared, out _));

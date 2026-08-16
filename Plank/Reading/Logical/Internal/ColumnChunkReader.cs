@@ -1279,8 +1279,7 @@ static class ColumnChunkReader
             throw new CorruptParquetException(
                 $"Payload ({payload.Length} bytes) is too short to decode timestamp value {physicalIndex}.");
         var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(offset, sizeof(long)));
-        var ticks = ticksPerUnit == 0 ? raw / 100 : checked(raw * ticksPerUnit);
-        return new DateTime(checked(DateTime.UnixEpoch.Ticks + ticks), kind);
+        return new DateTime(TimestampTicksScaled(raw, ticksPerUnit), kind);
     }
 
     static bool TryDecodeNullableValues<T, TValue>(ReadOnlySpan<byte> payload,
@@ -1425,60 +1424,26 @@ static class ColumnChunkReader
 
         var timestamp = GetTimestampLogicalType(logicalType);
         var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
-        var epochTicks = DateTime.UnixEpoch.Ticks;
-        switch (timestamp.Unit)
+        for (var i = 0; i < destination.Length; i++)
         {
-            case TimeUnit.Millis:
-                for (var i = 0; i < destination.Length; i++)
-                {
-                    var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long)));
-                    destination[i] = new DateTime(
-                        checked(epochTicks + checked(raw * TimeSpan.TicksPerMillisecond)), kind);
-                }
-                break;
-            case TimeUnit.Micros:
-                for (var i = 0; i < destination.Length; i++)
-                {
-                    var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long)));
-                    destination[i] = new DateTime(checked(epochTicks + checked(raw * 10)), kind);
-                }
-                break;
-            case TimeUnit.Nanos:
-                for (var i = 0; i < destination.Length; i++)
-                {
-                    var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long)));
-                    destination[i] = new DateTime(checked(epochTicks + (raw / 100)), kind);
-                }
-                break;
-            default:
-                throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.");
+            var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long)));
+            destination[i] = new DateTime(TimestampTicks(raw, timestamp.Unit), kind);
         }
     }
 
     static void MaterializeDateTimes(ReadOnlySpan<long> raw, Span<DateTime> destination,
         LogicalType? logicalType)
     {
+        // This is the bulk twin of DecodeDateTime and has to reject the same
+        // values: building the DateTime inline threw ArgumentOutOfRangeException
+        // for a raw timestamp outside the representable range, and the checked
+        // arithmetic threw OverflowException before that. Both bypass the
+        // CorruptParquetException a reader is documented to throw, so the range
+        // checking lives in TimestampTicks and both paths go through it.
         var timestamp = GetTimestampLogicalType(logicalType);
         var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
-        var epochTicks = DateTime.UnixEpoch.Ticks;
-        switch (timestamp.Unit)
-        {
-            case TimeUnit.Millis:
-                for (var i = 0; i < destination.Length; i++)
-                    destination[i] = new DateTime(
-                        checked(epochTicks + checked(raw[i] * TimeSpan.TicksPerMillisecond)), kind);
-                break;
-            case TimeUnit.Micros:
-                for (var i = 0; i < destination.Length; i++)
-                    destination[i] = new DateTime(checked(epochTicks + checked(raw[i] * 10)), kind);
-                break;
-            case TimeUnit.Nanos:
-                for (var i = 0; i < destination.Length; i++)
-                    destination[i] = new DateTime(checked(epochTicks + raw[i] / 100), kind);
-                break;
-            default:
-                throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.");
-        }
+        for (var i = 0; i < destination.Length; i++)
+            destination[i] = new DateTime(TimestampTicks(raw[i], timestamp.Unit), kind);
     }
 
     static LogicalType.Timestamp GetTimestampLogicalType(LogicalType? logicalType)
@@ -2486,26 +2451,8 @@ static class ColumnChunkReader
                     "Timestamp projection requires a timestamp logical type.");
 
             var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
-            var epochTicks = DateTime.UnixEpoch.Ticks;
-            switch (timestamp.Unit)
-            {
-                case TimeUnit.Millis:
-                    for (var i = 0; i < typed.Length; i++)
-                        typed[i] = new DateTime(
-                            checked(epochTicks + checked(raw[i] * TimeSpan.TicksPerMillisecond)), kind);
-                    break;
-                case TimeUnit.Micros:
-                    for (var i = 0; i < typed.Length; i++)
-                        typed[i] = new DateTime(checked(epochTicks + checked(raw[i] * 10)), kind);
-                    break;
-                case TimeUnit.Nanos:
-                    for (var i = 0; i < typed.Length; i++)
-                        typed[i] = new DateTime(checked(epochTicks + raw[i] / 100), kind);
-                    break;
-                default:
-                    throw new CorruptParquetException(
-                        "Timestamp projection requires a timestamp logical type.");
-            }
+            for (var i = 0; i < typed.Length; i++)
+                typed[i] = new DateTime(TimestampTicks(raw[i], timestamp.Unit), kind);
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTimeOffset))
@@ -2520,17 +2467,44 @@ static class ColumnChunkReader
         return false;
     }
 
+    // Every temporal value below is a raw number out of the file, and the .NET
+    // types they build reject out-of-range input with ArgumentOutOfRangeException
+    // — or overflow first, with OverflowException. Neither is what callers of the
+    // reader are told to catch, so each conversion is range-checked here and a
+    // value that cannot be represented is reported as the corrupt data it is.
     static DateOnly DecodeDate(int days)
-        => DateOnly.FromDayNumber(checked(UnixEpochDate.DayNumber + days));
+    {
+        var dayNumber = (long)UnixEpochDate.DayNumber + days;
+        if (dayNumber < 0 || dayNumber > DateOnly.MaxValue.DayNumber)
+            throw new CorruptParquetException(
+                $"Date value {days} is outside the range representable by a date.");
+        return DateOnly.FromDayNumber((int)dayNumber);
+    }
 
     static TimeOnly DecodeTime(long raw, LogicalType? logicalType)
-        => logicalType switch
+    {
+        var ticks = logicalType switch
         {
-            LogicalType.Time { Unit: TimeUnit.Millis } => new TimeOnly(checked(raw * TimeSpan.TicksPerMillisecond)),
-            LogicalType.Time { Unit: TimeUnit.Micros } => new TimeOnly(checked(raw * 10)),
-            LogicalType.Time { Unit: TimeUnit.Nanos } => new TimeOnly(raw / 100),
+            LogicalType.Time { Unit: TimeUnit.Millis } => ScaleTicks(raw, TimeSpan.TicksPerMillisecond, "Time"),
+            LogicalType.Time { Unit: TimeUnit.Micros } => ScaleTicks(raw, 10, "Time"),
+            LogicalType.Time { Unit: TimeUnit.Nanos } => raw / 100,
             _ => throw new CorruptParquetException("TimeOnly projection requires a time logical type.")
         };
+
+        if (ticks < 0 || ticks > TimeOnly.MaxValue.Ticks)
+            throw new CorruptParquetException(
+                $"Time value {raw} is outside the range representable by a time of day.");
+        return new TimeOnly(ticks);
+    }
+
+    // The scaling itself can overflow before the range check ever runs.
+    static long ScaleTicks(long raw, long multiplier, string what)
+    {
+        var ticks = raw * multiplier;
+        if (raw != 0 && (ticks / raw != multiplier || (raw == -1 && ticks == long.MinValue)))
+            throw new CorruptParquetException($"{what} value {raw} overflows when scaled to ticks.");
+        return ticks;
+    }
 
     static DateTimeOffset DecodeTimestamp(long raw, LogicalType? logicalType)
     {
@@ -2542,28 +2516,50 @@ static class ColumnChunkReader
     }
 
     static DateTimeOffset DecodeTimestampValue(long raw, LogicalType? logicalType)
-        => logicalType switch
-        {
-            LogicalType.Timestamp { Unit: TimeUnit.Millis } => DateTimeOffset.FromUnixTimeMilliseconds(raw),
-            LogicalType.Timestamp { Unit: TimeUnit.Micros } => DateTimeOffset.UnixEpoch.AddTicks(checked(raw * 10)),
-            LogicalType.Timestamp { Unit: TimeUnit.Nanos } => DateTimeOffset.UnixEpoch.AddTicks(raw / 100),
-            _ => throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.")
-        };
+    {
+        var unit = logicalType is LogicalType.Timestamp timestamp
+            ? timestamp.Unit
+            : throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.");
+        return new DateTimeOffset(TimestampTicks(raw, unit), TimeSpan.Zero);
+    }
 
     static DateTime DecodeDateTime(long raw, LogicalType? logicalType)
     {
         if (logicalType is not LogicalType.Timestamp timestamp)
             throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.");
 
-        var ticks = timestamp.Unit switch
+        return new DateTime(TimestampTicks(raw, timestamp.Unit),
+            timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified);
+    }
+
+    // Some call sites precompute the multiplier, with 0 standing for nanos.
+    static long TimestampTicksScaled(long raw, long ticksPerUnit)
+        => TimestampTicks(raw, ticksPerUnit switch
         {
-            TimeUnit.Millis => checked(raw * TimeSpan.TicksPerMillisecond),
-            TimeUnit.Micros => checked(raw * 10),
+            0 => TimeUnit.Nanos,
+            10 => TimeUnit.Micros,
+            _ => TimeUnit.Millis
+        });
+
+    static long TimestampTicks(long raw, TimeUnit unit)
+    {
+        var offset = unit switch
+        {
+            TimeUnit.Millis => ScaleTicks(raw, TimeSpan.TicksPerMillisecond, "Timestamp"),
+            TimeUnit.Micros => ScaleTicks(raw, 10, "Timestamp"),
             TimeUnit.Nanos => raw / 100,
             _ => throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.")
         };
-        return new DateTime(checked(DateTime.UnixEpoch.Ticks + ticks),
-            timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified);
+
+        var epoch = DateTime.UnixEpoch.Ticks;
+        if (offset > long.MaxValue - epoch)
+            throw new CorruptParquetException($"Timestamp value {raw} overflows when offset from the epoch.");
+
+        var ticks = epoch + offset;
+        if (ticks < DateTime.MinValue.Ticks || ticks > DateTime.MaxValue.Ticks)
+            throw new CorruptParquetException(
+                $"Timestamp value {raw} is outside the range representable by a date and time.");
+        return ticks;
     }
 
     internal static bool TryDecodePage<T>(PageHeader header, ReadOnlySpan<byte> payload, Column column,
