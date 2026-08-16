@@ -183,6 +183,13 @@ public static class PlankReaderFuzzTarget
             return;
         }
 
+        // Reading an annotated column as its physical type skips the conversion
+        // entirely — that is why seeding logical-type files changed nothing on
+        // its own, and why ParquetDecimalConverter stayed at 0% with decimal
+        // files in the corpus. The logical type has to pick the CLR type.
+        if (column.LogicalType is not null && TryDrainLogicalColumn(rowGroup, column))
+            return;
+
         // A non-zero max definition level means the value can be absent, whether
         // because the leaf itself is optional or because an ancestor group is.
         var optional = column.MaxDefinitionLevel > 0;
@@ -214,6 +221,58 @@ public static class PlankReaderFuzzTarget
             case ParquetPhysicalType.Int96:
                 DrainBinaryBuffers(rowGroup.Column<byte>(column));
                 break;
+        }
+    }
+
+    // Returns false when the annotation has no distinct CLR representation, so
+    // the caller falls back to the physical type. A mismatch between the
+    // annotation and the physical type is a corrupt file rather than a target
+    // bug, so those surface as the exceptions the harness already expects.
+    static bool TryDrainLogicalColumn(RowGroup rowGroup, LeafColumn column)
+    {
+        var optional = column.MaxDefinitionLevel > 0;
+        switch (column.LogicalType)
+        {
+            case LogicalType.Date:
+                if (optional) DrainBuffers(rowGroup.Column<DateOnly?>(column));
+                else DrainBuffers(rowGroup.Column<DateOnly>(column));
+                return true;
+            case LogicalType.Time:
+                if (optional) DrainBuffers(rowGroup.Column<TimeOnly?>(column));
+                else DrainBuffers(rowGroup.Column<TimeOnly>(column));
+                return true;
+            case LogicalType.Timestamp:
+                if (optional) DrainBuffers(rowGroup.Column<DateTime?>(column));
+                else DrainBuffers(rowGroup.Column<DateTime>(column));
+                return true;
+            case LogicalType.Decimal:
+                if (optional) DrainBuffers(rowGroup.Column<decimal?>(column));
+                else DrainBuffers(rowGroup.Column<decimal>(column));
+                return true;
+            case LogicalType.Uuid:
+                if (optional) DrainBuffers(rowGroup.Column<Guid?>(column));
+                else DrainBuffers(rowGroup.Column<Guid>(column));
+                return true;
+            case LogicalType.Int { BitWidth: 8, IsSigned: false }:
+                if (optional) DrainBuffers(rowGroup.Column<byte?>(column));
+                else DrainBuffers(rowGroup.Column<byte>(column));
+                return true;
+            case LogicalType.Int { BitWidth: 16, IsSigned: false }:
+                if (optional) DrainBuffers(rowGroup.Column<ushort?>(column));
+                else DrainBuffers(rowGroup.Column<ushort>(column));
+                return true;
+            case LogicalType.Int { BitWidth: 32, IsSigned: false }:
+                if (optional) DrainBuffers(rowGroup.Column<uint?>(column));
+                else DrainBuffers(rowGroup.Column<uint>(column));
+                return true;
+            case LogicalType.Int { BitWidth: 64, IsSigned: false }:
+                if (optional) DrainBuffers(rowGroup.Column<ulong?>(column));
+                else DrainBuffers(rowGroup.Column<ulong>(column));
+                return true;
+            default:
+                // String, Json, Bson, Enum and the rest stay byte spans, which
+                // the physical path already drains.
+                return false;
         }
     }
 
