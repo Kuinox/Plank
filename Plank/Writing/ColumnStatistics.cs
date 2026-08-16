@@ -1454,6 +1454,10 @@ internal readonly struct ColumnStatistics
         => new(ColumnStatisticsValueKind.Double, BitConverter.DoubleToInt64Bits(min),
             BitConverter.DoubleToInt64Bits(max), nullCount, true, nanCount);
 
+    internal static ColumnStatistics FromDoubleAccumulation(double min, double max, long nullCount,
+        long nanCount, bool hasValue)
+        => hasValue ? FromDouble(min, max, nullCount, nanCount) : EmptyFloating(nullCount, nanCount);
+
     static int CompareBinary(Column column, ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
         => column.LogicalType is LogicalType.Decimal
             ? CompareDecimalBytes(left, right)
