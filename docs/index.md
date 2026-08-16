@@ -12,8 +12,8 @@ Writing Parquet should not be the slow part of your pipeline. These results incl
 
 <link rel="stylesheet" href="benchmarks/write-benchmarks-v10.css">
 <div id="write-benchmarks" class="write-benchmarks"
-     data-write-results="benchmarks/write-v1.json?v=13"
-     data-read-results="benchmarks/read-v1.json?v=6">
+     data-write-results="benchmarks/write-v1.json?v=14"
+     data-read-results="benchmarks/read-v1.json?v=7">
   <p class="benchmark-loading" role="status">Loading benchmark results…</p>
 </div>
 <script src="benchmarks/write-benchmarks-v12.js" defer></script>
