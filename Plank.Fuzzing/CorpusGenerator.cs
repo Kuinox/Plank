@@ -100,6 +100,16 @@ public static class CorpusGenerator
                     yield return file;
             }
 
+            // Logical types route through a whole parallel decode family — the
+            // converted/buffer path — that the physical-only cases never enter.
+            // TryDecodePlainIntoBuffer, DecodeNullablePlainDateTimes and
+            // TryDecodeConvertedRequiredByPhysicalType all measured 0%.
+            foreach (var (logicalName, column, writer) in LogicalTypeColumns())
+            {
+                if (TryBuild(logicalName, compression, column, writer, out var file))
+                    yield return file;
+            }
+
             // Nested shapes are the only source of repetition levels, and those
             // levels come off the page rather than the schema, so a corrupt file
             // controls them. Nothing generated a nested file, so none of that
@@ -180,6 +190,72 @@ public static class CorpusGenerator
             (w, g, c) => Write<byte[]>(w, g, c, [[1], [2], [3], [4], [5]]));
     }
 
+    static IEnumerable<(string, ColumnDefinition, Action<ParquetWriter, RowGroupWriter, LeafColumn>)> LogicalTypeColumns()
+    {
+        yield return ("logical-date", Annotated("c", ParquetPhysicalType.Int32, new LogicalType.Date()),
+            (w, g, c) => Write<DateOnly>(w, g, c,
+                [new(1970, 1, 1), new(2000, 2, 29), new(2026, 7, 27), DateOnly.MinValue, DateOnly.MaxValue]));
+
+        yield return ("logical-time-micros",
+            Annotated("c", ParquetPhysicalType.Int64, new LogicalType.Time(TimeUnit.Micros, IsAdjustedToUtc: false)),
+            (w, g, c) => Write<TimeOnly>(w, g, c,
+                [TimeOnly.MinValue, new(1, 2, 3, 4), new(12, 34, 56), TimeOnly.MaxValue, new(0, 0, 1)]));
+
+        yield return ("logical-timestamp-micros",
+            Annotated("c", ParquetPhysicalType.Int64, new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true)),
+            (w, g, c) => Write<DateTime>(w, g, c,
+                [DateTime.UnixEpoch, new(2026, 7, 27, 1, 2, 3, DateTimeKind.Utc),
+                 new(1999, 12, 31, 23, 59, 59, DateTimeKind.Utc), DateTime.UnixEpoch.AddTicks(1),
+                 new(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc)]));
+
+        yield return ("logical-timestamp-nanos",
+            Annotated("c", ParquetPhysicalType.Int64, new LogicalType.Timestamp(TimeUnit.Nanos, IsAdjustedToUtc: true)),
+            (w, g, c) => Write<DateTime>(w, g, c,
+                [DateTime.UnixEpoch, DateTime.UnixEpoch.AddTicks(7), new(2020, 5, 5, 5, 5, 5, DateTimeKind.Utc),
+                 DateTime.UnixEpoch.AddSeconds(1), DateTime.UnixEpoch.AddDays(1)]));
+
+        // Decimal is backed by four different physical types, each with its own
+        // conversion, and ParquetDecimalConverter measured 0%.
+        yield return ("logical-decimal-i32",
+            Annotated("c", ParquetPhysicalType.Int32, new LogicalType.Decimal(9, 2)),
+            (w, g, c) => Write<decimal>(w, g, c, [0m, 1.23m, -1.23m, 9999999.99m, -9999999.99m]));
+
+        yield return ("logical-decimal-i64",
+            Annotated("c", ParquetPhysicalType.Int64, new LogicalType.Decimal(18, 4)),
+            (w, g, c) => Write<decimal>(w, g, c, [0m, 1.2345m, -1.2345m, 99999999999999.9999m, 0.0001m]));
+
+        yield return ("logical-decimal-flba",
+            AnnotatedFixed("c", 16, new LogicalType.Decimal(28, 6)),
+            (w, g, c) => Write<decimal>(w, g, c, [0m, 1.234567m, -1.234567m, 1000000m, -0.000001m]));
+
+        yield return ("logical-uuid", AnnotatedFixed("c", 16, new LogicalType.Uuid()),
+            (w, g, c) => Write<Guid>(w, g, c,
+                [Guid.Empty, new("00000000-0000-0000-0000-000000000001"),
+                 new("ffffffff-ffff-ffff-ffff-ffffffffffff"), new("12345678-1234-5678-1234-567812345678"),
+                 new("87654321-4321-8765-4321-876543218765")]));
+
+        yield return ("logical-string", Annotated("c", ParquetPhysicalType.ByteArray, new LogicalType.String()),
+            (w, g, c) => Write<string>(w, g, c, ["", "a", "hello", "\u00e9\u00e8\u00ea", new string('x', 40)]));
+
+        yield return ("logical-json", Annotated("c", ParquetPhysicalType.ByteArray, new LogicalType.Json()),
+            (w, g, c) => Write<byte[]>(w, g, c, [[123, 125], [91, 93], [110, 117, 108, 108], [], [34, 34]]));
+
+        // Plank does not support sbyte or short as CLR value types, so the
+        // signed narrow widths have no direct representation here; the unsigned
+        // ones do.
+        yield return ("logical-uint8", Annotated("c", ParquetPhysicalType.Int32, new LogicalType.Int(8, false)),
+            (w, g, c) => Write<byte>(w, g, c, [0, 1, 255, 128, 42]));
+
+        yield return ("logical-uint32", Annotated("c", ParquetPhysicalType.Int32, new LogicalType.Int(32, false)),
+            (w, g, c) => Write<uint>(w, g, c, [0u, 1u, uint.MaxValue, 2147483648u, 12345u]));
+
+        yield return ("logical-uint64", Annotated("c", ParquetPhysicalType.Int64, new LogicalType.Int(64, false)),
+            (w, g, c) => Write<ulong>(w, g, c, [0ul, 1ul, ulong.MaxValue, 9223372036854775808ul, 12345ul]));
+
+        yield return ("logical-uint16", Annotated("c", ParquetPhysicalType.Int32, new LogicalType.Int(16, false)),
+            (w, g, c) => Write<ushort>(w, g, c, [0, 1, 65535, 32768, 12345]));
+    }
+
     static IEnumerable<(string, ColumnDefinition, Action<ParquetWriter, RowGroupWriter, LeafColumn>)> NestedColumns()
     {
         // A top-level repeated leaf: one repetition level, no wrapping group.
@@ -257,6 +333,15 @@ public static class CorpusGenerator
     static ColumnDefinition LeafOptional(string name, ParquetPhysicalType type, EncodingKind encoding)
         => ColumnDefinition.Leaf(name, type,
             new ColumnOptions(ParquetRepetition.Optional, encodings: ImmutableArray.Create(encoding)));
+
+    static ColumnDefinition Annotated(string name, ParquetPhysicalType type, LogicalType logicalType)
+        => ColumnDefinition.RequiredLeaf(name, type,
+            new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)), logicalType);
+
+    static ColumnDefinition AnnotatedFixed(string name, uint length, LogicalType logicalType)
+        => ColumnDefinition.RequiredLeaf(name, ParquetPhysicalType.FixedLenByteArray,
+            new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain), typeLength: length),
+            logicalType);
 
     static ColumnDefinition LeafBloom(string name, ParquetPhysicalType type)
         => ColumnDefinition.Leaf(name, type,
