@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Plank.Writing.Encoding;
 
 namespace Plank.Tests.Writer;
@@ -129,6 +130,27 @@ internal sealed class ReusableDictionaryStateTests
         var state = new ReusableDictionaryState<CollidingKey>();
         PopulateCollisions(state);
         PopulateCollisions(state);
+    }
+
+    [Test]
+    public void ShortByteHashDoesNotCollapseWhenTheLeadingWordMatchesTheMixSecret()
+    {
+        const ulong mixSecret = 0xe7037ed1a0b428dbUL;
+        var hashes = new HashSet<int>();
+        for (var i = 0; i < 512; i++)
+        {
+            var value = new byte[i < 256 ? 9 : 10];
+            BinaryPrimitives.WriteUInt64LittleEndian(value, mixSecret);
+            if (value.Length == 9)
+                value[8] = (byte)i;
+            else
+                BinaryPrimitives.WriteUInt16LittleEndian(value.AsSpan(8), (ushort)i);
+            hashes.Add(WyHashing.Hash(value));
+        }
+
+        if (hashes.Count < 500)
+            throw new InvalidOperationException(
+                $"The structural short-key family collapsed to only {hashes.Count} hashes.");
     }
 
     static WeakReference[] Populate(ReusableDictionaryState<object> state, int count)
