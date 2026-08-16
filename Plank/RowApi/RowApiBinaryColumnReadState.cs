@@ -59,7 +59,7 @@ sealed class RowApiBinaryColumnReadState : RowApiColumnReadState
         while ((uint)CurrentIndex >= (uint)_buffer.ValueCount)
         {
             if (!_buffers.MoveNext())
-                throw new InvalidDataException($"Column '{PropertyName}' ended before the row group was complete.");
+                throw new CorruptParquetException($"Column '{PropertyName}' ended before the row group was complete.");
 
             _buffer = _buffers.Current;
             CurrentIndex = 0;

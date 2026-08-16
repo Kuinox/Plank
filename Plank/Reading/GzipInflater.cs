@@ -17,7 +17,7 @@ unsafe static class GzipInflater
             var initCode = ZlibNative.InflateInit2(stream, ZlibNative.WindowBitsGzip, (byte*)version,
                 ZlibNative.StreamStateSize);
             if (initCode != ZlibNative.ResultOk)
-                throw new InvalidDataException($"zlib inflateInit2_ failed with code {initCode}.");
+                throw new CorruptParquetException($"zlib inflateInit2_ failed with code {initCode}.");
 
             try
             {
@@ -26,11 +26,11 @@ unsafe static class GzipInflater
 
                 var resultCode = ZlibNative.Inflate(stream, ZlibNative.FlushFinish);
                 if (resultCode != ZlibNative.ResultStreamEnd)
-                    throw new InvalidDataException($"zlib inflate failed with code {resultCode}.");
+                    throw new CorruptParquetException($"zlib inflate failed with code {resultCode}.");
 
                 var written = outputBuffer.Length - checked((int)ZlibNative.GetAvailableOutput(stream));
                 if (ZlibNative.GetAvailableInput(stream) != 0)
-                    throw new InvalidDataException("Gzip payload contains trailing compressed bytes.");
+                    throw new CorruptParquetException("Gzip payload contains trailing compressed bytes.");
                 return written;
             }
             finally

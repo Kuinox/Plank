@@ -33,7 +33,7 @@ static class Lz4LegacyDecompressor
                 continue;
             }
             if (magic != FrameMagic)
-                throw new InvalidDataException("An LZ4 frame sequence contains an invalid frame magic value.");
+                throw new CorruptParquetException("An LZ4 frame sequence contains an invalid frame magic value.");
 
             var written = DecompressFrame(source[sourceOffset..], destination[destinationOffset..], out var consumed);
             sourceOffset += consumed;
@@ -51,11 +51,11 @@ static class Lz4LegacyDecompressor
         var flags = source[offset++];
         var blockDescriptor = source[offset++];
         if ((flags & 0xC0) != 0x40)
-            throw new InvalidDataException("The LZ4 frame version is not supported.");
+            throw new CorruptParquetException("The LZ4 frame version is not supported.");
         if ((flags & 0x02) != 0)
-            throw new InvalidDataException("The LZ4 frame descriptor has a reserved flag set.");
+            throw new CorruptParquetException("The LZ4 frame descriptor has a reserved flag set.");
         if ((blockDescriptor & 0x8F) != 0)
-            throw new InvalidDataException("The LZ4 frame block descriptor has reserved bits set.");
+            throw new CorruptParquetException("The LZ4 frame block descriptor has reserved bits set.");
 
         var blockMaximum = ((blockDescriptor >> 4) & 0x07) switch
         {
@@ -63,7 +63,7 @@ static class Lz4LegacyDecompressor
             5 => 256 * 1024,
             6 => 1024 * 1024,
             7 => 4 * 1024 * 1024,
-            _ => throw new InvalidDataException("The LZ4 frame block maximum size is invalid.")
+            _ => throw new CorruptParquetException("The LZ4 frame block maximum size is invalid.")
         };
         var independentBlocks = (flags & 0x20) != 0;
         var blockChecksum = (flags & 0x10) != 0;
@@ -78,7 +78,7 @@ static class Lz4LegacyDecompressor
             declaredContentSize = BinaryPrimitives.ReadUInt64LittleEndian(source[offset..]);
             offset += sizeof(ulong);
             if (declaredContentSize > (ulong)destination.Length)
-                throw new InvalidDataException("The LZ4 frame content does not fit the destination buffer.");
+                throw new CorruptParquetException("The LZ4 frame content does not fit the destination buffer.");
         }
         if (hasDictionary)
         {
@@ -89,7 +89,7 @@ static class Lz4LegacyDecompressor
         EnsureAvailable(source, offset, 1, "LZ4 frame header checksum");
         var expectedHeaderChecksum = (byte)(XxHash32.Compute(source[descriptorOffset..offset]) >> 8);
         if (source[offset++] != expectedHeaderChecksum)
-            throw new InvalidDataException("The LZ4 frame header checksum is invalid.");
+            throw new CorruptParquetException("The LZ4 frame header checksum is invalid.");
         if (hasDictionary)
             throw new NotSupportedException("LZ4 frames that require an external dictionary are not supported.");
 
@@ -105,7 +105,7 @@ static class Lz4LegacyDecompressor
             var uncompressed = (blockHeader & 0x80000000) != 0;
             var storedLength = blockHeader & 0x7FFFFFFF;
             if (storedLength == 0 || storedLength > blockMaximum)
-                throw new InvalidDataException("The LZ4 frame block length is invalid.");
+                throw new CorruptParquetException("The LZ4 frame block length is invalid.");
             EnsureAvailable(source, offset, checked((int)storedLength), "LZ4 frame block payload");
             var storedBlock = source.Slice(offset, (int)storedLength);
             offset += (int)storedLength;
@@ -116,13 +116,13 @@ static class Lz4LegacyDecompressor
                 var expectedBlockChecksum = BinaryPrimitives.ReadUInt32LittleEndian(source[offset..]);
                 offset += sizeof(uint);
                 if (XxHash32.Compute(storedBlock) != expectedBlockChecksum)
-                    throw new InvalidDataException("The LZ4 frame block checksum is invalid.");
+                    throw new CorruptParquetException("The LZ4 frame block checksum is invalid.");
             }
 
             if (uncompressed)
             {
                 if (storedLength > (uint)(destination.Length - written))
-                    throw new InvalidDataException("The LZ4 frame output exceeds the destination buffer.");
+                    throw new CorruptParquetException("The LZ4 frame output exceeds the destination buffer.");
                 storedBlock.CopyTo(destination[written..]);
                 written += (int)storedLength;
                 continue;
@@ -130,24 +130,24 @@ static class Lz4LegacyDecompressor
 
             var maximumOutput = Math.Min(blockMaximum, destination.Length - written);
             if (maximumOutput == 0)
-                throw new InvalidDataException("The LZ4 frame output exceeds the destination buffer.");
+                throw new CorruptParquetException("The LZ4 frame output exceeds the destination buffer.");
             var dictionaryLength = independentBlocks ? 0 : Math.Min(written, DictionarySize);
             var dictionary = destination.Slice(written - dictionaryLength, dictionaryLength);
             var blockWritten = DecodeBlock(storedBlock, destination.Slice(written, maximumOutput), dictionary);
             if (blockWritten <= 0)
-                throw new InvalidDataException("An LZ4 frame block could not be decompressed.");
+                throw new CorruptParquetException("An LZ4 frame block could not be decompressed.");
             written += blockWritten;
         }
 
         if (hasContentSize && (ulong)written != declaredContentSize)
-            throw new InvalidDataException("The LZ4 frame content size does not match its decoded length.");
+            throw new CorruptParquetException("The LZ4 frame content size does not match its decoded length.");
         if (contentChecksum)
         {
             EnsureAvailable(source, offset, sizeof(uint), "LZ4 frame content checksum");
             var expectedContentChecksum = BinaryPrimitives.ReadUInt32LittleEndian(source[offset..]);
             offset += sizeof(uint);
             if (XxHash32.Compute(destination[..written]) != expectedContentChecksum)
-                throw new InvalidDataException("The LZ4 frame content checksum is invalid.");
+                throw new CorruptParquetException("The LZ4 frame content checksum is invalid.");
         }
 
         consumed = offset;
@@ -169,12 +169,12 @@ static class Lz4LegacyDecompressor
             if (uncompressedLength == 0 || storedLength == 0 ||
                 uncompressedLength > (uint)(destination.Length - written) ||
                 storedLength > (uint)(source.Length - sourceOffset))
-                throw new InvalidDataException("A Hadoop LZ4 block has invalid lengths.");
+                throw new CorruptParquetException("A Hadoop LZ4 block has invalid lengths.");
 
             var blockWritten = DecodeBlock(source.Slice(sourceOffset, (int)storedLength),
                 destination.Slice(written, (int)uncompressedLength), default);
             if (blockWritten != (int)uncompressedLength)
-                throw new InvalidDataException("A Hadoop LZ4 block decoded to an unexpected length.");
+                throw new CorruptParquetException("A Hadoop LZ4 block decoded to an unexpected length.");
             sourceOffset += (int)storedLength;
             written += blockWritten;
         }
@@ -225,7 +225,7 @@ static class Lz4LegacyDecompressor
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
-            throw new InvalidDataException("An LZ4 block could not be decompressed.", exception);
+            throw new CorruptParquetException("An LZ4 block could not be decompressed.", exception);
         }
     }
 
@@ -243,13 +243,13 @@ static class Lz4LegacyDecompressor
         var length = BinaryPrimitives.ReadUInt32LittleEndian(source[(offset + sizeof(uint))..]);
         offset += sizeof(uint) * 2;
         if (length > (uint)(source.Length - offset))
-            throw new InvalidDataException("A skippable LZ4 frame is truncated.");
+            throw new CorruptParquetException("A skippable LZ4 frame is truncated.");
         offset += (int)length;
     }
 
     static void EnsureAvailable(ReadOnlySpan<byte> source, int offset, int length, string component)
     {
         if (length > source.Length || offset > source.Length - length)
-            throw new InvalidDataException($"The {component} is truncated.");
+            throw new CorruptParquetException($"The {component} is truncated.");
     }
 }

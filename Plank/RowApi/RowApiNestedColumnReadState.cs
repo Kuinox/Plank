@@ -87,9 +87,9 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
         _values.Clear();
 
         if (!EnsureEntry())
-            throw new InvalidDataException($"Column '{PropertyName}' ended before the row group was complete.");
+            throw new CorruptParquetException($"Column '{PropertyName}' ended before the row group was complete.");
         if (CurrentRepetitionLevel != 0)
-            throw new InvalidDataException(
+            throw new CorruptParquetException(
                 $"Column '{PropertyName}' begins a generated row at repetition level {CurrentRepetitionLevel}.");
 
         do
@@ -103,7 +103,7 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
         var value = Materialize(typeof(TShape), depth: 0, start: 0, _definitionLevels.Count,
             ref denseValueIndex);
         if (denseValueIndex != _values.Count)
-            throw new InvalidDataException(
+            throw new CorruptParquetException(
                 $"Column '{PropertyName}' materialized {denseValueIndex} dense values but decoded {_values.Count}.");
 
         Current = value is null ? default! : (TShape)value;
@@ -128,23 +128,23 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
         if (depth == _descriptor.CollectionLevels.Length)
         {
             if (end - start != 1)
-                throw new InvalidDataException(
+                throw new CorruptParquetException(
                     $"Column '{PropertyName}' has {end - start} entries for one materialized leaf value.");
             if (_definitionLevels[start] == Descriptor.Column.MaxDefinitionLevel)
             {
                 if (denseValueIndex >= _values.Count)
-                    throw new InvalidDataException($"Column '{PropertyName}' has fewer dense values than levels.");
+                    throw new CorruptParquetException($"Column '{PropertyName}' has fewer dense values than levels.");
                 return _values[denseValueIndex++];
             }
 
             if (shapeType.IsValueType && Nullable.GetUnderlyingType(shapeType) is null)
-                throw new InvalidDataException(
+                throw new CorruptParquetException(
                     $"Column '{PropertyName}' contains a null leaf that cannot be materialized as {shapeType}.");
             return null;
         }
 
         if (!shapeType.IsArray)
-            throw new InvalidDataException(
+            throw new CorruptParquetException(
                 $"Column '{PropertyName}' expected an array at nested collection depth {depth + 1}.");
 
         var level = _descriptor.CollectionLevels[depth];
@@ -218,14 +218,14 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
         if (_binary)
         {
             if ((uint)_valueIndex >= (uint)_binaryBuffer.Values.Count)
-                throw new InvalidDataException($"Column '{PropertyName}' has fewer binary values than levels.");
+                throw new CorruptParquetException($"Column '{PropertyName}' has fewer binary values than levels.");
             var bytes = _binaryBuffer.Values.GetValue(_valueIndex++).ToArray();
             _values.Add((TElement)(object)bytes);
             return;
         }
 
         if ((uint)_valueIndex >= (uint)_buffer.Values.Count)
-            throw new InvalidDataException($"Column '{PropertyName}' has fewer dense values than levels.");
+            throw new CorruptParquetException($"Column '{PropertyName}' has fewer dense values than levels.");
         _values.Add(_buffer.Values.Values[_valueIndex++]);
     }
 
