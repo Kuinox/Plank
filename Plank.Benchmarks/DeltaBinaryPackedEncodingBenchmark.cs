@@ -14,7 +14,8 @@ public class DeltaBinaryPackedEncodingBenchmark
     [Params(4_096, 65_536)]
     public int Rows { get; set; }
 
-    [Params("constant-delta", "narrow-delta", "small-random-delta", "timestamp-like-13-bit", "random")]
+    [Params("constant-delta", "narrow-delta", "small-random-delta", "small-domain-random",
+        "timestamp-like-13-bit", "random")]
     public string Distribution { get; set; } = "constant-delta";
 
     [GlobalSetup]
@@ -74,6 +75,10 @@ public class DeltaBinaryPackedEncodingBenchmark
 
                 return values;
             }
+            case "small-domain-random":
+                for (var i = 0; i < values.Length; i++)
+                    values[i] = random.Next(1, 266);
+                return values;
             case "timestamp-like-13-bit":
                 for (var i = 0; i < values.Length; i++)
                     values[i] = checked(i * 3_000 + i % 7 * 1_000);
@@ -112,6 +117,10 @@ public class DeltaBinaryPackedEncodingBenchmark
 
                 return values;
             }
+            case "small-domain-random":
+                for (var i = 0; i < values.Length; i++)
+                    values[i] = random.Next(1, 266);
+                return values;
             case "timestamp-like-13-bit":
                 for (var i = 0; i < values.Length; i++)
                     values[i] = i * 3_000L + i % 7 * 1_000L;
