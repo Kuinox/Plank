@@ -484,86 +484,100 @@ static class Encoding
             var initialUniqueCapacity = dictionaryMode == DictionaryMode.Forced
                 ? GetInitialForcedDictionaryCapacity(values.Length)
                 : Math.Max(256, values.Length / 2);
-            var comparer = GetDictionaryComparer<T>();
             var knownSortOrder = (DictionarySortOrder)Volatile.Read(ref strategyContext.DictionarySortOrder);
-            dictionaryState.Reset(initialUniqueCapacity, knownSortOrder == DictionarySortOrder.Unsorted);
-            indexes[0] = dictionaryState.AddFirst(values[0]);
+            if (dictionaryMode == DictionaryMode.Forced
+                && knownSortOrder == DictionarySortOrder.Unsorted)
+            {
+                dictionaryState.Reset(initialUniqueCapacity, useMap: true);
+                BuildForcedDictionaryIndexes(values, indexes, dictionaryState);
+            }
+            else
+            {
+                dictionaryState.Reset(initialUniqueCapacity, knownSortOrder == DictionarySortOrder.Unsorted);
+                var comparer = GetDictionaryComparer<T>();
+                indexes[0] = dictionaryState.AddFirst(values[0]);
 
-            var currentSortedIndex = 0;
-            var sortedDirection = knownSortOrder switch
-            {
-                DictionarySortOrder.Ascending => 1,
-                DictionarySortOrder.Descending => -1,
-                _ => 0
-            };
-            if (!dictionaryState.IsMapEnabled && values.Length > 1 && sortedDirection == 0
-                && TryCompareForSort(values[0], values[1], out var firstComparison)
-                && firstComparison != 0)
-                sortedDirection = firstComparison < 0 ? 1 : -1;
-            var nextDropCheckRow = dictionaryMode == DictionaryMode.Maybe
-                ? Math.Min(DictionaryDropCheckPeriodRows, values.Length)
-                : 0;
-            for (var i = 1; i < values.Length; i++)
-            {
-                var value = values[i];
-                if (!dictionaryState.IsMapEnabled)
+                var currentSortedIndex = 0;
+                var sortedDirection = knownSortOrder switch
                 {
-                    var previous = values[i - 1];
-                    if (comparer.Equals(value, previous))
+                    DictionarySortOrder.Ascending => 1,
+                    DictionarySortOrder.Descending => -1,
+                    _ => 0
+                };
+                if (!dictionaryState.IsMapEnabled && values.Length > 1 && sortedDirection == 0
+                    && TryCompareForSort(values[0], values[1], out var firstComparison)
+                    && firstComparison != 0)
+                    sortedDirection = firstComparison < 0 ? 1 : -1;
+                var nextDropCheckRow = dictionaryMode == DictionaryMode.Maybe
+                    ? Math.Min(DictionaryDropCheckPeriodRows, values.Length)
+                    : 0;
+                for (var i = 1; i < values.Length; i++)
+                {
+                    var value = values[i];
+                    if (!dictionaryState.IsMapEnabled)
                     {
-                        indexes[i] = currentSortedIndex;
-                    }
-                    else if (TryCompareForSort(previous, value, out var comparison)
-                             && IsSortedStep(comparison, ref sortedDirection))
-                    {
-                        currentSortedIndex = dictionaryState.AddSortedUnique(value);
-                        indexes[i] = currentSortedIndex;
+                        var previous = values[i - 1];
+                        if (comparer.Equals(value, previous))
+                        {
+                            indexes[i] = currentSortedIndex;
+                        }
+                        else if (TryCompareForSort(previous, value, out var comparison)
+                                 && IsSortedStep(comparison, ref sortedDirection))
+                        {
+                            currentSortedIndex = dictionaryState.AddSortedUnique(value);
+                            indexes[i] = currentSortedIndex;
+                        }
+                        else
+                        {
+                            if (knownSortOrder != DictionarySortOrder.Unsorted)
+                            {
+                                Volatile.Write(ref strategyContext.DictionarySortOrder,
+                                    (int)DictionarySortOrder.Unsorted);
+                                knownSortOrder = DictionarySortOrder.Unsorted;
+                            }
+                            dictionaryState.EnableMap();
+                            if (dictionaryMode == DictionaryMode.Forced)
+                            {
+                                BuildForcedDictionaryIndexes(values[i..], indexes[i..], dictionaryState);
+                                break;
+                            }
+                            indexes[i] = dictionaryState.GetOrAddIndex(value);
+                        }
                     }
                     else
                     {
-                        if (knownSortOrder != DictionarySortOrder.Unsorted)
-                        {
-                            Volatile.Write(ref strategyContext.DictionarySortOrder,
-                                (int)DictionarySortOrder.Unsorted);
-                            knownSortOrder = DictionarySortOrder.Unsorted;
-                        }
-                        dictionaryState.EnableMap();
                         indexes[i] = dictionaryState.GetOrAddIndex(value);
                     }
-                }
-                else
-                {
-                    indexes[i] = dictionaryState.GetOrAddIndex(value);
-                }
 
-                if (dictionaryMode != DictionaryMode.Maybe)
-                    continue;
-                var rowsSeen = i + 1;
-                if (rowsSeen != nextDropCheckRow && rowsSeen != values.Length)
-                    continue;
-                if (strategy.ShouldDropDictionary(checked((uint)dictionaryState.Count), checked((uint)values.Length),
-                        checked((uint)rowsSeen)))
-                {
-                    dictionaryPage.Header.Reset();
-                    dictionaryPage.Content.Reset();
-                    pages.RemoveLast();
-                    rentedIndexesBuffer.Dispose();
-                    return false;
+                    if (dictionaryMode != DictionaryMode.Maybe)
+                        continue;
+                    var rowsSeen = i + 1;
+                    if (rowsSeen != nextDropCheckRow && rowsSeen != values.Length)
+                        continue;
+                    if (strategy.ShouldDropDictionary(checked((uint)dictionaryState.Count),
+                            checked((uint)values.Length), checked((uint)rowsSeen)))
+                    {
+                        dictionaryPage.Header.Reset();
+                        dictionaryPage.Content.Reset();
+                        pages.RemoveLast();
+                        rentedIndexesBuffer.Dispose();
+                        return false;
+                    }
+
+                    nextDropCheckRow = Math.Min(values.Length, rowsSeen + DictionaryDropCheckPeriodRows);
                 }
 
-                nextDropCheckRow = Math.Min(values.Length, rowsSeen + DictionaryDropCheckPeriodRows);
-            }
-
-            if (!dictionaryState.IsMapEnabled)
-            {
-                var discoveredSortOrder = sortedDirection switch
+                if (!dictionaryState.IsMapEnabled)
                 {
-                    1 => DictionarySortOrder.Ascending,
-                    -1 => DictionarySortOrder.Descending,
-                    _ => DictionarySortOrder.Unknown
-                };
-                if (discoveredSortOrder != knownSortOrder)
-                    Volatile.Write(ref strategyContext.DictionarySortOrder, (int)discoveredSortOrder);
+                    var discoveredSortOrder = sortedDirection switch
+                    {
+                        1 => DictionarySortOrder.Ascending,
+                        -1 => DictionarySortOrder.Descending,
+                        _ => DictionarySortOrder.Unknown
+                    };
+                    if (discoveredSortOrder != knownSortOrder)
+                        Volatile.Write(ref strategyContext.DictionarySortOrder, (int)discoveredSortOrder);
+                }
             }
 
             if (timestamp is null)
@@ -591,6 +605,19 @@ static class Encoding
         {
             rentedIndexesBuffer.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Builds indexes after a forced-dictionary column has already been identified as unsorted.
+    /// This map-only loop avoids repeating the sorted-run and dictionary-mode branches for every
+    /// value in subsequent batches.
+    /// </summary>
+    static void BuildForcedDictionaryIndexes<T>(ReadOnlySpan<T> values, Span<int> indexes,
+        ReusableDictionaryState<T> dictionaryState)
+        where T : notnull
+    {
+        for (var i = 0; i < values.Length; i++)
+            indexes[i] = dictionaryState.GetOrAddIndex(values[i]);
     }
 
     static void EncodeOptionalFlatValues<T, TSource>(BufferWriterFactory bufferWriters, Column column,
