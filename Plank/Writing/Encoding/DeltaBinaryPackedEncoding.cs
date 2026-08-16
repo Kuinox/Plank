@@ -185,10 +185,9 @@ static class DeltaBinaryPackedEncoding
 
     static long GetMinimum(Vector512<long> values)
     {
-        var result = values.GetElement(0);
-        for (var i = 1; i < Vector512<long>.Count; i++)
-            result = Math.Min(result, values.GetElement(i));
-        return result;
+        var lowerWidth = Vector256.Min(values.GetLower(), values.GetUpper());
+        var lowestWidth = Vector128.Min(lowerWidth.GetLower(), lowerWidth.GetUpper());
+        return Math.Min(lowestWidth.GetElement(0), lowestWidth.GetElement(1));
     }
 
     static void WriteInt32Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
@@ -503,10 +502,9 @@ static class DeltaBinaryPackedEncoding
 
     static ulong GetMaximum(Vector512<ulong> values)
     {
-        var result = values.GetElement(0);
-        for (var i = 1; i < Vector512<ulong>.Count; i++)
-            result = Math.Max(result, values.GetElement(i));
-        return result;
+        var lowerWidth = Vector256.Max(values.GetLower(), values.GetUpper());
+        var lowestWidth = Vector128.Max(lowerWidth.GetLower(), lowerWidth.GetUpper());
+        return Math.Max(lowestWidth.GetElement(0), lowestWidth.GetElement(1));
     }
 
     internal static void WritePackedUnsignedValues(ReadOnlySpan<long> values, int bitWidth, ref BufferWriter writer)
