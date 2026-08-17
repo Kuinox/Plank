@@ -40,6 +40,10 @@ public static class PlankWriterFuzzTarget
     // a stream. See PlankDatasetFuzzTarget.
     const byte DatasetMarker = 0xFE;
 
+    // 0xFD routes to the file merger: the one write path that does not
+    // re-encode, splicing column chunks across and rewriting their offsets.
+    const byte MergerMarker = 0xFD;
+
     public static void Execute(ReadOnlySpan<byte> data)
     {
         if (!data.IsEmpty && data[0] == RowApiMarker)
@@ -51,6 +55,12 @@ public static class PlankWriterFuzzTarget
         if (!data.IsEmpty && data[0] == DatasetMarker)
         {
             PlankDatasetFuzzTarget.Execute(data[1..]);
+            return;
+        }
+
+        if (!data.IsEmpty && data[0] == MergerMarker)
+        {
+            PlankMergerFuzzTarget.Execute(data[1..]);
             return;
         }
 
