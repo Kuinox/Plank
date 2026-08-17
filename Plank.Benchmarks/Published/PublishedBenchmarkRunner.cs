@@ -198,13 +198,35 @@ public static class PublishedBenchmarkRunner
         try
         {
             var commit = RunGit("rev-parse HEAD");
-            var status = RunGit("status --porcelain --untracked-files=no");
-            return status.Length == 0 ? commit : $"{commit}-dirty";
+            if (commit == "unknown")
+                return "unknown";
+            return HasUncommittedChanges() ? $"{commit}-dirty" : commit;
         }
         catch
         {
             return "unknown";
         }
+    }
+
+    /// <summary>
+    /// Deliberately not routed through <see cref="RunGit"/>. A clean tree prints nothing, and RunGit
+    /// reports empty output as "unknown", which is indistinguishable from a real modification — so the
+    /// clean branch was unreachable and every snapshot claimed a dirty tree, including ones taken from
+    /// a fresh checkout. A tree that cannot be inspected counts as modified.
+    /// </summary>
+    static bool HasUncommittedChanges()
+    {
+        using var process = Process.Start(new ProcessStartInfo("git", "status --porcelain --untracked-files=no")
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+        if (process is null)
+            return true;
+        var changes = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        return process.ExitCode != 0 || changes.Length != 0;
     }
 
     static string RunGit(string arguments)
