@@ -139,9 +139,12 @@ public static class CorpusGenerator
             }
 
             // Logical types route through a whole parallel decode family — the
-            // converted/buffer path — that the physical-only cases never enter.
-            // TryDecodePlainIntoBuffer, DecodeNullablePlainDateTimes and
-            // TryDecodeConvertedRequiredByPhysicalType all measured 0%.
+            // converted path — that the physical-only cases never enter.
+            // DecodeNullablePlainDateTimes and
+            // TryDecodeConvertedRequiredByPhysicalType both measured 0%.
+            // (This used to cite TryDecodePlainIntoBuffer too. That one turned
+            // out to be unreachable rather than merely unseeded, and has since
+            // been deleted — no seed could ever have moved it.)
             foreach (var (logicalName, column, writer) in LogicalTypeColumns())
             {
                 if (TryBuild(logicalName, compression, column, writer, out var file))
