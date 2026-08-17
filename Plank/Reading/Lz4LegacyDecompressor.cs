@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO.Hashing;
 using K4os.Compression.LZ4;
 
 namespace Plank.Reading;
@@ -87,7 +88,7 @@ static class Lz4LegacyDecompressor
         }
 
         EnsureAvailable(source, offset, 1, "LZ4 frame header checksum");
-        var expectedHeaderChecksum = (byte)(XxHash32.Compute(source[descriptorOffset..offset]) >> 8);
+        var expectedHeaderChecksum = (byte)(XxHash32.HashToUInt32(source[descriptorOffset..offset]) >> 8);
         if (source[offset++] != expectedHeaderChecksum)
             throw new CorruptParquetException("The LZ4 frame header checksum is invalid.");
         if (hasDictionary)
@@ -115,7 +116,7 @@ static class Lz4LegacyDecompressor
                 EnsureAvailable(source, offset, sizeof(uint), "LZ4 frame block checksum");
                 var expectedBlockChecksum = BinaryPrimitives.ReadUInt32LittleEndian(source[offset..]);
                 offset += sizeof(uint);
-                if (XxHash32.Compute(storedBlock) != expectedBlockChecksum)
+                if (XxHash32.HashToUInt32(storedBlock) != expectedBlockChecksum)
                     throw new CorruptParquetException("The LZ4 frame block checksum is invalid.");
             }
 
@@ -146,7 +147,7 @@ static class Lz4LegacyDecompressor
             EnsureAvailable(source, offset, sizeof(uint), "LZ4 frame content checksum");
             var expectedContentChecksum = BinaryPrimitives.ReadUInt32LittleEndian(source[offset..]);
             offset += sizeof(uint);
-            if (XxHash32.Compute(destination[..written]) != expectedContentChecksum)
+            if (XxHash32.HashToUInt32(destination[..written]) != expectedContentChecksum)
                 throw new CorruptParquetException("The LZ4 frame content checksum is invalid.");
         }
 
