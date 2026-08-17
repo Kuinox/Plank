@@ -1398,8 +1398,8 @@ static class Encoding
         try
         {
             var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
-            for (var i = 0; i < values.Length; i++)
-                converted[i] = TimestampConversion.FromDateTimeTicks(values[i].Ticks, timestamp.Unit);
+            var expectedKind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+            TimestampConversion.ConvertDateTimes(values, converted, timestamp.Unit, expectedKind);
             PlainEncoding.WriteValues(column, converted, ref destination);
         }
         finally

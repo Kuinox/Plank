@@ -651,44 +651,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         {
             var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
             var expectedKind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
-            switch (timestamp.Unit)
-            {
-                case TimeUnit.Millis:
-                    for (var i = 0; i < values.Length; i++)
-                    {
-                        var value = values[i];
-                        if (value.Kind != expectedKind)
-                            throw new InvalidOperationException(
-                                $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
-                        converted[i] = TimestampConversion.DivideFloor(
-                            value.Ticks - DateTime.UnixEpoch.Ticks, TimeSpan.TicksPerMillisecond);
-                    }
-                    break;
-                case TimeUnit.Micros:
-                    for (var i = 0; i < values.Length; i++)
-                    {
-                        var value = values[i];
-                        if (value.Kind != expectedKind)
-                            throw new InvalidOperationException(
-                                $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
-                        converted[i] = TimestampConversion.DivideFloor(
-                            value.Ticks - DateTime.UnixEpoch.Ticks, 10);
-                    }
-                    break;
-                case TimeUnit.Nanos:
-                    for (var i = 0; i < values.Length; i++)
-                    {
-                        var value = values[i];
-                        if (value.Kind != expectedKind)
-                            throw new InvalidOperationException(
-                                $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
-                        converted[i] = checked((value.Ticks - DateTime.UnixEpoch.Ticks) * 100);
-                    }
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(timestamp), timestamp.Unit,
-                        "Time unit must be a defined TimeUnit value.");
-            }
+            TimestampConversion.ConvertDateTimes(values, converted, timestamp.Unit, expectedKind);
             SerializeTyped(converted);
         }
         finally
