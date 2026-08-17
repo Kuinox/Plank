@@ -463,10 +463,19 @@ public static class PlankWriterFuzzTarget
 
         ColumnSpec CreateByteArrayColumn(int columnIndex)
         {
+            // The dictionary encodings were missing here while the int32, int64
+            // and double columns all had them. A byte[] dictionary is a
+            // different implementation from a fixed-width one — it hashes the
+            // bytes with wyhash and compares them for equality, rather than
+            // hashing a value type — so leaving them out left WyHashing (0/88)
+            // and ByteArrayComparer (0/22) both entirely unwritten, and with
+            // nothing writing them nothing read them back either.
             var encoding = PickEncoding([
                 EncodingKind.Plain,
                 EncodingKind.DeltaLengthByteArray,
-                EncodingKind.DeltaByteArray
+                EncodingKind.DeltaByteArray,
+                EncodingKind.PlainDictionary,
+                EncodingKind.RleDictionary
             ]);
             var optional = NextOptional();
             return new ColumnSpec(Plank.Schema.ColumnDefinition.Leaf($"c{columnIndex}_bin", ParquetPhysicalType.ByteArray,
@@ -566,14 +575,40 @@ public static class PlankWriterFuzzTarget
         {
             var values = new byte[rowCount][];
             var prefix = CreateRandomBytes(_cursor.NextInt(0, 7));
+
+            // A dictionary only forms if values repeat. All-distinct values make
+            // one pointless and the writer correctly falls back to plain, which
+            // is what asking for a dictionary encoding over random bytes gets
+            // you — the encoding would be requested and never exercised. So the
+            // dictionary cases draw from a small pool, and the pool size is
+            // fuzzed too: it decides the index bit width, and a pool of one
+            // collapses the whole column to a single entry.
+            var dictionary = encoding is EncodingKind.PlainDictionary or EncodingKind.RleDictionary
+                ? CreateByteArrayDictionary(_cursor.NextInt(1, 9))
+                : null;
+
             for (var i = 0; i < values.Length; i++)
                 values[i] = optional && _cursor.NextInt(0, 4) == 0 ? null! : encoding switch
                 {
                     EncodingKind.DeltaByteArray => CreateBytesWithPrefix(prefix),
                     EncodingKind.DeltaLengthByteArray => CreateRandomBytes(_cursor.NextInt(0, MaxByteArrayLength + 1)),
+                    EncodingKind.PlainDictionary or EncodingKind.RleDictionary =>
+                        dictionary![_cursor.NextInt(0, dictionary.Length)],
                     _ => CreateRandomBytes(_cursor.NextInt(0, MaxByteArrayLength + 1))
                 };
             return values;
+        }
+
+        // Entries share prefixes and include an empty one, because the hash and
+        // the equality comparison are what a byte[] dictionary does differently
+        // from a fixed-width one, and near-identical keys are what tests them.
+        byte[][] CreateByteArrayDictionary(int count)
+        {
+            var entries = new byte[count][];
+            var shared = CreateRandomBytes(_cursor.NextInt(0, 5));
+            for (var i = 0; i < entries.Length; i++)
+                entries[i] = i == 0 ? [] : CreateBytesWithPrefix(shared);
+            return entries;
         }
 
         int[] CreateInt32Dictionary()
