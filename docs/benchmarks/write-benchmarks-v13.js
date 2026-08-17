@@ -1,4 +1,4 @@
-// Benchmark result matrix UI, schema v1.
+// Benchmark result matrix UI, schema v1, one snapshot pair per CPU.
 (() => {
   const root = document.querySelector("#write-benchmarks");
   if (!root) return;
@@ -20,15 +20,30 @@
     "byte_stream_split"
   ];
 
-  Promise.all([loadResults(root.dataset.writeResults), loadResults(root.dataset.readResults)])
-    .then(([writeReport, readReport]) => render(writeReport, readReport))
-    .catch(error => {
-      root.innerHTML = "";
-      const message = element("p", "benchmark-error");
-      message.setAttribute("role", "alert");
-      message.textContent = `Benchmark results could not be loaded (${error.message}).`;
-      root.append(message);
-    });
+  // Which CPU the reader is looking at, and which operation, both survive a switch
+  // of the other. Snapshots are fetched per machine and kept, so going back to a
+  // CPU already viewed costs nothing.
+  const indexUrl = root.dataset.machines;
+  const snapshots = new Map();
+  let machineIndex = null;
+  let selectedMachineId = null;
+  let writeSelected = true;
+
+  loadResults(indexUrl)
+    .then(index => {
+      machineIndex = index;
+      selectedMachineId = index.defaultMachine;
+      return renderShell();
+    })
+    .catch(showError);
+
+  function showError(error) {
+    root.innerHTML = "";
+    const message = element("p", "benchmark-error");
+    message.setAttribute("role", "alert");
+    message.textContent = `Benchmark results could not be loaded (${error.message}).`;
+    root.append(message);
+  }
 
   function loadResults(url) {
     return fetch(url).then(response => {
@@ -37,8 +52,112 @@
     });
   }
 
-  function render(writeReport, readReport) {
+  function machineById(id) {
+    return machineIndex.machines.find(machine => machine.id === id);
+  }
+
+  // Per-machine snapshots sit next to the index, so they resolve against its URL
+  // rather than against the page.
+  function resolveSnapshot(name) {
+    return new URL(name, new URL(indexUrl, document.baseURI)).href;
+  }
+
+  function loadSnapshots(id) {
+    if (snapshots.has(id)) return Promise.resolve(snapshots.get(id));
+    const machine = machineById(id);
+    return Promise.all([
+      loadResults(resolveSnapshot(machine.write)),
+      loadResults(resolveSnapshot(machine.read))
+    ]).then(([write, read]) => {
+      const pair = { write, read };
+      snapshots.set(id, pair);
+      return pair;
+    });
+  }
+
+  function renderShell() {
     root.innerHTML = "";
+    const body = element("div", "benchmark-machine-panel");
+    root.append(renderMachinePicker(body), body);
+    return showMachine(selectedMachineId, body);
+  }
+
+  function renderMachinePicker(body) {
+    const wrapper = element("div", "benchmark-machines");
+    const caption = element("p", "benchmark-machines-label");
+    caption.id = "benchmark-machine-label";
+    caption.textContent = machineIndex.machines.length > 1
+      ? "Results depend on the machine. Pick a CPU:"
+      : "Measured on:";
+    const tabs = element("div", "benchmark-tabs benchmark-machine-tabs");
+    tabs.setAttribute("role", "tablist");
+    tabs.setAttribute("aria-labelledby", caption.id);
+
+    const buttons = machineIndex.machines.map((machine, index) => {
+      const button = element("button", "benchmark-tab benchmark-machine-tab");
+      const selected = machine.id === selectedMachineId;
+      button.type = "button";
+      button.id = `benchmark-machine-tab-${machine.id}`;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-selected", selected ? "true" : "false");
+      button.tabIndex = selected ? 0 : -1;
+      button.title = `${machine.environment.cpu} · ${machine.environment.logicalProcessors} logical processors`;
+      const name = element("span", "benchmark-machine-name");
+      name.textContent = machine.label;
+      const detail = element("span", "benchmark-machine-detail");
+      detail.textContent = `${machine.environment.logicalProcessors} threads`;
+      button.append(name, detail);
+      button.addEventListener("click", () => select(index));
+      button.addEventListener("keydown", event => navigate(event, index));
+      tabs.append(button);
+      return button;
+    });
+
+    wrapper.append(caption, tabs);
+    return wrapper;
+
+    function select(index) {
+      const machine = machineIndex.machines[index];
+      if (machine.id === selectedMachineId) return;
+      selectedMachineId = machine.id;
+      buttons.forEach((button, buttonIndex) => {
+        const selected = buttonIndex === index;
+        button.setAttribute("aria-selected", selected ? "true" : "false");
+        button.tabIndex = selected ? 0 : -1;
+      });
+      showMachine(machine.id, body);
+    }
+
+    function navigate(event, index) {
+      let next = index;
+      if (event.key === "ArrowRight") next = (index + 1) % buttons.length;
+      else if (event.key === "ArrowLeft") next = (index - 1 + buttons.length) % buttons.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = buttons.length - 1;
+      else return;
+      event.preventDefault();
+      select(next);
+      buttons[next].focus();
+    }
+  }
+
+  function showMachine(id, body) {
+    body.innerHTML = "";
+    const loading = element("p", "benchmark-loading");
+    loading.setAttribute("role", "status");
+    loading.textContent = "Loading benchmark results…";
+    body.append(loading);
+    return loadSnapshots(id)
+      .then(({ write, read }) => {
+        if (id !== selectedMachineId) return;
+        body.innerHTML = "";
+        body.append(render(write, read));
+      })
+      .catch(showError);
+  }
+
+  function render(writeReport, readReport) {
+    const container = element("div", "benchmark-operations");
     const operationTabs = element("div", "benchmark-tabs benchmark-operation-tabs");
     const writeTab = element("button", "benchmark-tab");
     const readTab = element("button", "benchmark-tab");
@@ -46,24 +165,26 @@
     const readPanel = element("div", "benchmark-operation-panel");
     operationTabs.setAttribute("role", "tablist");
     operationTabs.setAttribute("aria-label", "Benchmark operation");
-    configureOperationTab(writeTab, "write", "Write", true);
-    configureOperationTab(readTab, "read", "Read", false);
+    configureOperationTab(writeTab, "write", "Write", writeSelected);
+    configureOperationTab(readTab, "read", "Read", !writeSelected);
     writePanel.id = "benchmark-operation-write";
     writePanel.setAttribute("role", "tabpanel");
     writePanel.setAttribute("aria-labelledby", writeTab.id);
     readPanel.id = "benchmark-operation-read";
     readPanel.setAttribute("role", "tabpanel");
     readPanel.setAttribute("aria-labelledby", readTab.id);
-    readPanel.hidden = true;
+    writePanel.hidden = !writeSelected;
+    readPanel.hidden = writeSelected;
 
     operationTabs.append(writeTab, readTab);
     writePanel.append(renderReport(writeReport, "write"));
     readPanel.append(renderReport(readReport, "read"));
-    root.append(operationTabs, writePanel, readPanel);
+    container.append(operationTabs, writePanel, readPanel);
     writeTab.addEventListener("click", () => selectOperation(true));
     readTab.addEventListener("click", () => selectOperation(false));
     writeTab.addEventListener("keydown", event => navigateOperation(event, true));
     readTab.addEventListener("keydown", event => navigateOperation(event, false));
+    return container;
 
     function configureOperationTab(button, id, label, selected) {
       button.type = "button";
@@ -75,19 +196,22 @@
       button.textContent = label;
     }
 
-    function selectOperation(writeSelected) {
-      writeTab.setAttribute("aria-selected", writeSelected ? "true" : "false");
-      readTab.setAttribute("aria-selected", writeSelected ? "false" : "true");
-      writeTab.tabIndex = writeSelected ? 0 : -1;
-      readTab.tabIndex = writeSelected ? -1 : 0;
-      writePanel.hidden = !writeSelected;
-      readPanel.hidden = writeSelected;
+    // Recorded on the outer state so that switching CPU keeps the reader on the
+    // operation they were looking at.
+    function selectOperation(selectWrite) {
+      writeSelected = selectWrite;
+      writeTab.setAttribute("aria-selected", selectWrite ? "true" : "false");
+      readTab.setAttribute("aria-selected", selectWrite ? "false" : "true");
+      writeTab.tabIndex = selectWrite ? 0 : -1;
+      readTab.tabIndex = selectWrite ? -1 : 0;
+      writePanel.hidden = !selectWrite;
+      readPanel.hidden = selectWrite;
     }
 
-    function navigateOperation(event, writeSelected) {
+    function navigateOperation(event, isWriteTab) {
       if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
       event.preventDefault();
-      const nextWriteSelected = event.key === "Home" ? true : event.key === "End" ? false : !writeSelected;
+      const nextWriteSelected = event.key === "Home" ? true : event.key === "End" ? false : !isWriteTab;
       selectOperation(nextWriteSelected);
       (nextWriteSelected ? writeTab : readTab).focus();
     }

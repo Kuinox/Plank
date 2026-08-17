@@ -362,3 +362,37 @@
     transition: width .25s ease-out;
   }
 }
+
+/* CPU picker. The matrix carries one snapshot pair per machine, because which
+   library wins depends on vector width, core count and memory bandwidth. */
+.benchmark-machines {
+  margin-bottom: 1.5rem;
+}
+
+.benchmark-machines-label {
+  margin: 0 0 .5rem;
+  font-weight: 600;
+}
+
+.benchmark-machine-tabs {
+  flex-wrap: wrap;
+  margin-bottom: 0;
+}
+
+.benchmark-machine-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .1rem;
+  text-align: left;
+}
+
+.benchmark-machine-detail {
+  font-size: .8em;
+  font-weight: 500;
+  opacity: .75;
+}
+
+.benchmark-machine-tab[aria-selected="true"] .benchmark-machine-detail {
+  opacity: .9;
+}

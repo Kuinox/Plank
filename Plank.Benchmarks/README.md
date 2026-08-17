@@ -74,3 +74,37 @@ Changing how values are mixed changes every published fingerprint, so a snapshot
 a change cannot be compared against one generated after it.
 
 Use `--data-dir`, `--output`, `--warmups`, `--iterations`, `--workers`, `--synthetic-rows`, or `--synthetic-width` to override the defaults.
+
+## One snapshot per CPU
+
+A run measures one machine. Publishing a single machine's numbers hides the cases where the ranking
+depends on the hardware — vector width, core count and memory bandwidth all move the results, and a
+24-thread desktop says nothing about how the multithreaded rows behave on 8 cores. So the homepage
+carries one snapshot pair per CPU and lets the reader pick.
+
+Run both suites on each machine, collect the six files, then publish them together:
+
+```bash
+python3 Plank.Benchmarks/scripts/publish_matrix.py \
+  --machine "ryzen-9-7900x:AMD Ryzen 9 7900X:desktop-write.json:desktop-read.json" \
+  --machine "xeon-e3-1230-v6:Intel Xeon E3-1230 v6:server-a-write.json:server-a-read.json" \
+  --default ryzen-9-7900x
+```
+
+That copies each pair to `docs/benchmarks/{write,read}-<id>-v1.json` and writes the
+`docs/benchmarks/machines-v1.json` index the page reads. It refuses a machine whose write and read
+halves came from different commits or different CPUs, and warns when the machines are not all at the
+same commit — either one makes the matrix compare things that were never comparable.
+
+**Idle the machine first.** Stop anything else that runs on it, including the fuzz fleet
+(`pkill -9 -f afl-fuzz`), and check with `ps -eo pcpu,args --sort=-pcpu | head`. A background service
+taking a few cores does not show up as high in-run variation; it just makes that CPU look slow.
+
+## How much these numbers move
+
+Intra-run `variationPercent` understates reproducibility, because it only sees jitter within one run.
+Across separate runs on the same idle machine and the same commit, read cases drift by a median of
+1.5%, but write cases drift 12–30%, and `synthetic/string · plain` swings by 2x — that one is a
+warmup artifact, costing ~506 ms on its first call and ~178 ms once warm, which the suite's two
+warmups do not always reach. Treat a single write row moving by less than ~30% as noise, and re-run
+before believing it.

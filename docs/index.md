@@ -10,10 +10,9 @@ Declare schemas as C# types. Source generators create type-safe readers and writ
 
 Writing Parquet should not be the slow part of your pipeline. These results include the complete in-memory file write, from writer creation to the footer and close.
 
-<link rel="stylesheet" href="benchmarks/write-benchmarks-v10.css">
+<link rel="stylesheet" href="benchmarks/write-benchmarks-v11.css">
 <div id="write-benchmarks" class="write-benchmarks"
-     data-write-results="benchmarks/write-v1.json?v=16"
-     data-read-results="benchmarks/read-v1.json?v=9">
+     data-machines="benchmarks/machines-v1.json?v=1">
   <p class="benchmark-loading" role="status">Loading benchmark results…</p>
 </div>
-<script src="benchmarks/write-benchmarks-v12.js" defer></script>
+<script src="benchmarks/write-benchmarks-v13.js" defer></script>
