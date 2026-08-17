@@ -46,8 +46,16 @@ public static class PublishedBenchmarkCommand
     {
         for (var directory = new DirectoryInfo(Environment.CurrentDirectory); directory is not null;
              directory = directory.Parent)
-            if (Directory.Exists(Path.Combine(directory.FullName, ".git")))
+        {
+            // A linked worktree has a .git *file* holding a gitdir pointer, not a
+            // directory, so testing only for a directory made the published
+            // benchmarks refuse to run from any worktree — which is exactly where
+            // you run them when the primary checkout is busy doing something else.
+            var marker = Path.Combine(directory.FullName, ".git");
+            if (Directory.Exists(marker) || File.Exists(marker))
                 return directory.FullName;
+        }
+
         throw new DirectoryNotFoundException("Could not find the Plank repository root.");
     }
 
