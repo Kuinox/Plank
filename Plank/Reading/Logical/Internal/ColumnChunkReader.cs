@@ -752,11 +752,7 @@ static class ColumnChunkReader
             if (column.PhysicalType == ParquetPhysicalType.Boolean)
             {
                 var booleans = Unsafe.As<Span<TValue>, Span<bool>>(ref destination);
-                for (var i = 0; i < booleans.Length; i++)
-                {
-                    var bitIndex = checked(physicalOffset + i);
-                    booleans[i] = ((payload[bitIndex >> 3] >> (bitIndex & 7)) & 1) != 0;
-                }
+                BooleanBitUnpacker.Unpack(payload, physicalOffset, booleans);
                 return;
             }
             var offset = checked(physicalOffset * GetEncodedFixedWidth(column));
@@ -2049,8 +2045,7 @@ static class ColumnChunkReader
                 throw new CorruptParquetException(
                     $"Payload ({payload.Length} bytes) is too short to decode {valueCount} plain boolean values.");
             var typed = Unsafe.As<Span<T>, Span<bool>>(ref destination);
-            for (var i = 0; i < typed.Length; i++)
-                typed[i] = ((payload[i >> 3] >> (i & 7)) & 1) != 0;
+            BooleanBitUnpacker.Unpack(payload, 0, typed);
             return true;
         }
 
