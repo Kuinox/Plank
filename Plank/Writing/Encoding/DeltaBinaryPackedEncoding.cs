@@ -121,6 +121,10 @@ static class DeltaBinaryPackedEncoding
 
             minDelta = GetMinimum(vectorMin);
         }
+        else if (Avx2.IsSupported)
+        {
+            i = PrepareInt32BlockAvx2(ref input, inputOffset, count, ref deltas, out minDelta);
+        }
 
         for (; i < count; i++)
         {
@@ -154,6 +158,10 @@ static class DeltaBinaryPackedEncoding
 
             minDelta = GetMinimum(vectorMin);
         }
+        else if (Vector256.IsHardwareAccelerated)
+        {
+            i = PrepareInt64BlockVector256(ref input, inputOffset, count, ref deltas, out minDelta);
+        }
 
         for (; i < count; i++)
         {
@@ -178,9 +186,73 @@ static class DeltaBinaryPackedEncoding
             for (; i <= BlockSize - Vector512<long>.Count; i += Vector512<long>.Count)
                 fill.StoreUnsafe(ref deltas, (nuint)i);
         }
+        else if (Vector256.IsHardwareAccelerated)
+        {
+            var fill = Vector256.Create(minDelta);
+            for (; i <= BlockSize - Vector256<long>.Count; i += Vector256<long>.Count)
+                fill.StoreUnsafe(ref deltas, (nuint)i);
+        }
 
         for (; i < BlockSize; i++)
             Unsafe.Add(ref deltas, i) = minDelta;
+    }
+
+    /// <summary>
+    /// Widening eight Int32s to Int64 has no AVX2 equivalent of the AVX-512 convert, so the block is
+    /// walked four values at a time with <c>vpmovsxdq</c> instead. Kept out of line so that adding it
+    /// leaves the AVX-512 loop's code generation alone.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static int PrepareInt32BlockAvx2(ref int input, int inputOffset, int count, ref long deltas,
+        out long minDelta)
+    {
+        var vectorMin = Vector256.Create(long.MaxValue);
+        var i = 0;
+        for (; i <= count - Vector256<long>.Count; i += Vector256<long>.Count)
+        {
+            var current = Avx2.ConvertToVector256Int64(
+                Vector128.LoadUnsafe(ref input, (nuint)(inputOffset + i)));
+            var previous = Avx2.ConvertToVector256Int64(
+                Vector128.LoadUnsafe(ref input, (nuint)(inputOffset + i - 1)));
+            var delta = Vector256.Subtract(current, previous);
+            delta.StoreUnsafe(ref deltas, (nuint)i);
+            vectorMin = Vector256.Min(vectorMin, delta);
+        }
+
+        minDelta = i == 0 ? long.MaxValue : GetMinimum(vectorMin);
+        return i;
+    }
+
+    /// <inheritdoc cref="PrepareInt32BlockAvx2" />
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static int PrepareInt64BlockVector256(ref long input, int inputOffset, int count, ref long deltas,
+        out long minDelta)
+    {
+        var vectorMin = Vector256.Create(long.MaxValue);
+        var i = 0;
+        for (; i <= count - Vector256<long>.Count; i += Vector256<long>.Count)
+        {
+            var current = Vector256.LoadUnsafe(ref input, (nuint)(inputOffset + i));
+            var previous = Vector256.LoadUnsafe(ref input, (nuint)(inputOffset + i - 1));
+            var delta = Vector256.Subtract(current, previous);
+            delta.StoreUnsafe(ref deltas, (nuint)i);
+            vectorMin = Vector256.Min(vectorMin, delta);
+        }
+
+        minDelta = i == 0 ? long.MaxValue : GetMinimum(vectorMin);
+        return i;
+    }
+
+    static long GetMinimum(Vector256<long> values)
+    {
+        var lower = Vector128.Min(values.GetLower(), values.GetUpper());
+        return Math.Min(lower.GetElement(0), lower.GetElement(1));
+    }
+
+    static ulong GetMaximum(Vector256<ulong> values)
+    {
+        var lower = Vector128.Max(values.GetLower(), values.GetUpper());
+        return Math.Max(lower.GetElement(0), lower.GetElement(1));
     }
 
     static long GetMinimum(Vector512<long> values)
@@ -282,7 +354,9 @@ static class DeltaBinaryPackedEncoding
     {
         var bitWidths = Avx512F.IsSupported
             ? NormalizeDeltasVectorized(ref deltas, minDelta, out var packedByteCount)
-            : NormalizeDeltasScalar(ref deltas, minDelta, out packedByteCount);
+            : Vector256.IsHardwareAccelerated
+                ? NormalizeDeltasVector256(ref deltas, minDelta, out packedByteCount)
+                : NormalizeDeltasScalar(ref deltas, minDelta, out packedByteCount);
 
         var encodedMinDelta = ZigZag64(minDelta);
         var outputLength = EncodingPrimitives.GetUnsignedVarIntByteCount(encodedMinDelta) + MiniBlockCount + packedByteCount;
@@ -658,6 +732,33 @@ static class DeltaBinaryPackedEncoding
                 var normalized = Vector512.Subtract(delta, vectorMinDelta).AsUInt64();
                 normalized.AsInt64().StoreUnsafe(ref deltas, (nuint)(start + i));
                 vectorMax = Vector512.Max(vectorMax, normalized);
+            }
+
+            var width = EncodingPrimitives.GetBitWidth(GetMaximum(vectorMax));
+            bitWidths |= (uint)width << (block * 8);
+            packedByteCount += width * 4;
+        }
+
+        return bitWidths;
+    }
+
+    /// <inheritdoc cref="PrepareInt32BlockAvx2" />
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static uint NormalizeDeltasVector256(ref long deltas, long minDelta, out int packedByteCount)
+    {
+        uint bitWidths = 0;
+        packedByteCount = 0;
+        var vectorMinDelta = Vector256.Create(minDelta);
+        for (var block = 0; block < MiniBlockCount; block++)
+        {
+            var start = block * MiniBlockSize;
+            var vectorMax = Vector256<ulong>.Zero;
+            for (var i = 0; i < MiniBlockSize; i += Vector256<long>.Count)
+            {
+                var delta = Vector256.LoadUnsafe(ref deltas, (nuint)(start + i));
+                var normalized = Vector256.Subtract(delta, vectorMinDelta).AsUInt64();
+                normalized.AsInt64().StoreUnsafe(ref deltas, (nuint)(start + i));
+                vectorMax = Vector256.Max(vectorMax, normalized);
             }
 
             var width = EncodingPrimitives.GetBitWidth(GetMaximum(vectorMax));
