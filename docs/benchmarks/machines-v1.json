@@ -10,9 +10,9 @@
         "logicalProcessors": 24,
         "operatingSystem": "CachyOS",
         "dotNetVersion": ".NET 10.0.10",
-        "commit": "0fba018c18328b36f6b5b75fb680fa8b79e79144-dirty"
+        "commit": "b47066de3c922e98a4de49ac99b27ec04efbb70d"
       },
-      "generatedAt": "2026-08-17T19:28:58.3404991+00:00",
+      "generatedAt": "2026-08-17T22:52:34.8634047+00:00",
       "write": "write-ryzen-9-7900x-v1.json",
       "read": "read-ryzen-9-7900x-v1.json"
     },
@@ -24,9 +24,9 @@
         "logicalProcessors": 8,
         "operatingSystem": "Debian GNU/Linux 12 (bookworm)",
         "dotNetVersion": ".NET 10.0.7",
-        "commit": "0fba018c18328b36f6b5b75fb680fa8b79e79144-dirty"
+        "commit": "b47066de3c922e98a4de49ac99b27ec04efbb70d"
       },
-      "generatedAt": "2026-08-17T18:57:03.4741681+00:00",
+      "generatedAt": "2026-08-17T22:50:51.7609282+00:00",
       "write": "write-xeon-e3-1230-v6-v1.json",
       "read": "read-xeon-e3-1230-v6-v1.json"
     },
@@ -38,9 +38,9 @@
         "logicalProcessors": 16,
         "operatingSystem": "Debian GNU/Linux 12 (bookworm)",
         "dotNetVersion": ".NET 10.0.3",
-        "commit": "0fba018c18328b36f6b5b75fb680fa8b79e79144-dirty"
+        "commit": "b47066de3c922e98a4de49ac99b27ec04efbb70d"
       },
-      "generatedAt": "2026-08-17T18:57:45.2808363+00:00",
+      "generatedAt": "2026-08-17T22:51:53.8320076+00:00",
       "write": "write-xeon-e-2288g-v1.json",
       "read": "read-xeon-e-2288g-v1.json"
     }
