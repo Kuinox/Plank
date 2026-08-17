@@ -19,6 +19,7 @@ public static class PlankWriterFuzzTarget
     const int MaxRowGroupCount = 3;
     const int MaxRowCount = 64;
     const int MaxByteArrayLength = 32;
+    const int MaxFixedLength = 16;
 
     public static FuzzCase Decode(ReadOnlySpan<byte> data)
         => new Decoder(data).Decode();
@@ -89,6 +90,8 @@ public static class PlankWriterFuzzTarget
         : spec.ClrType == typeof(long?) ? writer.CreateSerializedColumn<long?>(column)
         : spec.ClrType == typeof(double) ? writer.CreateSerializedColumn<double>(column)
         : spec.ClrType == typeof(double?) ? writer.CreateSerializedColumn<double?>(column)
+        : spec.ClrType == typeof(float) ? writer.CreateSerializedColumn<float>(column)
+        : spec.ClrType == typeof(float?) ? writer.CreateSerializedColumn<float?>(column)
         : writer.CreateSerializedColumn<byte[]>(column);
 
     static void SerializeColumn(object serializedColumn, Array values)
@@ -118,6 +121,12 @@ public static class PlankWriterFuzzTarget
                 return;
             case SerializedColumn<double?> typed:
                 typed.Serialize((double?[])values);
+                return;
+            case SerializedColumn<float> typed:
+                typed.Serialize((float[])values);
+                return;
+            case SerializedColumn<float?> typed:
+                typed.Serialize((float?[])values);
                 return;
             case SerializedColumn<byte[]> typed:
                 typed.Serialize((byte[][])values);
@@ -153,6 +162,12 @@ public static class PlankWriterFuzzTarget
                 rowGroup.Write(typed);
                 return;
             case SerializedColumn<double?> typed:
+                rowGroup.Write(typed);
+                return;
+            case SerializedColumn<float> typed:
+                rowGroup.Write(typed);
+                return;
+            case SerializedColumn<float?> typed:
                 rowGroup.Write(typed);
                 return;
             case SerializedColumn<byte[]> typed:
@@ -193,6 +208,8 @@ public static class PlankWriterFuzzTarget
         : spec.ClrType == typeof(long?) ? ReadAllBuffers(rowGroup.Column<long?>(column))
         : spec.ClrType == typeof(double) ? ReadAllBuffers(rowGroup.Column<double>(column))
         : spec.ClrType == typeof(double?) ? ReadAllBuffers(rowGroup.Column<double?>(column))
+        : spec.ClrType == typeof(float) ? ReadAllBuffers(rowGroup.Column<float>(column))
+        : spec.ClrType == typeof(float?) ? ReadAllBuffers(rowGroup.Column<float?>(column))
         : ReadAllBinaryBuffers(rowGroup.Column<byte>(column));
 
     static void AssertParquetSharpCanRead(Stream stream, FuzzCase fuzzCase)
@@ -214,12 +231,33 @@ public static class PlankWriterFuzzTarget
 
             for (var columnIndex = 0; columnIndex < fuzzCase.Columns.Count; columnIndex++)
             {
+                if (!CanParquetSharpRead(fuzzCase.Columns[columnIndex]))
+                    continue;
                 var actual = ReadParquetSharpColumn(rowGroup, fuzzCase.Columns[columnIndex], rowCount, columnIndex);
                 AssertArraysEqual("ParquetSharp", fuzzCase, rowGroupIndex, columnIndex,
                     fuzzCase.RowGroups[rowGroupIndex][columnIndex], actual);
             }
         }
     }
+
+    // ParquetSharp is the second opinion on everything this target writes, so a
+    // column it cannot represent has to be named rather than quietly mismatched.
+    //
+    // An unannotated FIXED_LEN_BYTE_ARRAY is the one case: its default
+    // LogicalTypeFactory maps a descriptor to CLR types by logical type, and for
+    // FLBA with no annotation it throws "unsupported logical type None with
+    // physical type FixedLenByteArray". LogicalReaderOverride does not help — it
+    // renames the element type but goes through the same mapping — and a custom
+    // factory would additionally need a FixedLenByteArray-to-byte[] read
+    // converter, which ParquetSharp does not ship. A hand-rolled oracle there
+    // would be more likely to be wrong than to catch anything.
+    //
+    // These columns keep Plank's own round-trip check, which still compares every
+    // value written against every value read. They lose only the
+    // cross-implementation comparison.
+    static bool CanParquetSharpRead(ColumnSpec spec)
+        => spec.Column.PhysicalType != ParquetPhysicalType.FixedLenByteArray
+            || spec.Column.LogicalType is not null;
 
     static Array ReadParquetSharpColumn(ParquetSharp.RowGroupReader rowGroup, ColumnSpec spec, int rowCount,
         int columnIndex)
@@ -269,6 +307,18 @@ public static class PlankWriterFuzzTarget
         if (spec.ClrType == typeof(double?))
         {
             using var nullableReader = rowGroup.Column(columnIndex).LogicalReader<double?>();
+            return nullableReader.ReadAll(rowCount);
+        }
+
+        if (spec.ClrType == typeof(float))
+        {
+            using var valueReader = rowGroup.Column(columnIndex).LogicalReader<float>();
+            return valueReader.ReadAll(rowCount);
+        }
+
+        if (spec.ClrType == typeof(float?))
+        {
+            using var nullableReader = rowGroup.Column(columnIndex).LogicalReader<float?>();
             return nullableReader.ReadAll(rowCount);
         }
 
@@ -405,13 +455,20 @@ public static class PlankWriterFuzzTarget
             return columns;
         }
 
+        // Five of the eight physical types were writable and three were not, so
+        // the encoders and statistics for FLOAT and FIXED_LEN_BYTE_ARRAY were
+        // never written by anything: PlainEncoding.WriteFloatValues 0/15,
+        // WriteFixedLengthByteArrayValues 0/41, and every float path in
+        // ColumnStatistics — the vectorized min/max included — flat at zero.
         ColumnSpec CreateColumn(int columnIndex)
-            => _cursor.NextInt(0, 5) switch
+            => _cursor.NextInt(0, 7) switch
             {
                 0 => CreateBooleanColumn(columnIndex),
                 1 => CreateInt32Column(columnIndex),
                 2 => CreateInt64Column(columnIndex),
                 3 => CreateDoubleColumn(columnIndex),
+                4 => CreateFloatColumn(columnIndex),
+                5 => CreateFixedLenByteArrayColumn(columnIndex),
                 _ => CreateByteArrayColumn(columnIndex)
             };
 
@@ -477,6 +534,41 @@ public static class PlankWriterFuzzTarget
                 Options(ParquetPhysicalType.Double, encoding, optional)), optional ? typeof(double?) : typeof(double));
         }
 
+        ColumnSpec CreateFloatColumn(int columnIndex)
+        {
+            var encoding = PickEncoding([
+                EncodingKind.Plain,
+                EncodingKind.ByteStreamSplit
+            ]);
+            var optional = NextOptional();
+            return new ColumnSpec(Plank.Schema.ColumnDefinition.Leaf($"c{columnIndex}_flt", ParquetPhysicalType.Float,
+                Options(ParquetPhysicalType.Float, encoding, optional)), optional ? typeof(float?) : typeof(float));
+        }
+
+        // A fixed-length column is still byte[] on both sides, so it shares every
+        // dispatch with the variable-length one; the width is what differs, and it
+        // is fuzzed because the encoder's stride arithmetic depends on it. Widths
+        // stay small: the point is the bookkeeping, not the payload.
+        ColumnSpec CreateFixedLenByteArrayColumn(int columnIndex)
+        {
+            var encoding = PickEncoding([
+                EncodingKind.Plain,
+                EncodingKind.PlainDictionary,
+                EncodingKind.RleDictionary
+            ]);
+            var optional = NextOptional();
+            var length = (uint)_cursor.NextInt(1, MaxFixedLength + 1);
+            var options = new ColumnOptions(
+                optional ? ParquetRepetition.Optional : ParquetRepetition.Required,
+                encodings: SingleEncoding(encoding),
+                typeLength: length,
+                bloomFilter: NextBloomFilter(ParquetPhysicalType.FixedLenByteArray));
+            return new ColumnSpec(
+                Plank.Schema.ColumnDefinition.Leaf($"c{columnIndex}_flba",
+                    ParquetPhysicalType.FixedLenByteArray, options),
+                typeof(byte[]));
+        }
+
         ColumnSpec CreateByteArrayColumn(int columnIndex)
         {
             // The dictionary encodings were missing here while the int32, int64
@@ -525,7 +617,14 @@ public static class PlankWriterFuzzTarget
             : spec.ClrType == typeof(long?) ? Nullable(CreateInt64Values(spec.Encoding, rowCount))
             : spec.ClrType == typeof(double) ? CreateDoubleValues(rowCount)
             : spec.ClrType == typeof(double?) ? Nullable(CreateDoubleValues(rowCount))
-            : CreateByteArrayValues(spec.Encoding, rowCount, spec.Optional);
+            : spec.ClrType == typeof(float) ? CreateFloatValues(rowCount)
+            : spec.ClrType == typeof(float?) ? Nullable(CreateFloatValues(rowCount))
+            // Both byte[] columns land here; only the fixed-width one constrains
+            // the length, and writing the wrong length is a caller error rather
+            // than something the writer should have to survive.
+            : spec.Column.PhysicalType == ParquetPhysicalType.FixedLenByteArray
+                ? CreateFixedLengthValues(checked((int)spec.Column.Options!.TypeLength), rowCount, spec.Optional)
+                : CreateByteArrayValues(spec.Encoding, rowCount, spec.Optional);
 
         // Punch holes in an already-generated column. Doing it here rather than
         // in each generator keeps the value distributions identical between the
@@ -583,7 +682,51 @@ public static class PlankWriterFuzzTarget
         {
             var values = new double[rowCount];
             for (var i = 0; i < values.Length; i++)
-                values[i] = (_cursor.NextInt(-1_000_000, 1_000_001) / 128d) + _cursor.NextDouble();
+                values[i] = _cursor.NextInt(0, 8) == 0
+                    ? SpecialDouble()
+                    : (_cursor.NextInt(-1_000_000, 1_000_001) / 128d) + _cursor.NextDouble();
+            return values;
+        }
+
+        float[] CreateFloatValues(int rowCount)
+        {
+            var values = new float[rowCount];
+            for (var i = 0; i < values.Length; i++)
+                values[i] = _cursor.NextInt(0, 8) == 0
+                    ? (float)SpecialDouble()
+                    : (_cursor.NextInt(-1_000_000, 1_000_001) / 128f) + (float)_cursor.NextDouble();
+            return values;
+        }
+
+        // Statistics track a minimum and a maximum, and these are the values that
+        // make that ordering awkward: NaN is unordered against everything, the
+        // infinities bound it, and negative zero compares equal to zero while
+        // encoding differently. Every float and double value the target wrote was
+        // an ordinary finite number, so the NaN and signed-zero branches in
+        // ColumnStatistics — including the vectorized min/max — never ran.
+        double SpecialDouble()
+            => _cursor.NextInt(0, 6) switch
+            {
+                0 => double.NaN,
+                1 => double.PositiveInfinity,
+                2 => double.NegativeInfinity,
+                3 => -0d,
+                4 => double.Epsilon,
+                _ => 0d
+            };
+
+        byte[]?[] CreateFixedLengthValues(int length, int rowCount, bool optional)
+        {
+            var values = new byte[]?[rowCount];
+            // A dictionary over fixed-width values needs repeats for the same
+            // reason the variable-width one does.
+            var dictionary = new byte[_cursor.NextInt(1, 6)][];
+            for (var i = 0; i < dictionary.Length; i++)
+                dictionary[i] = CreateRandomBytes(length);
+            for (var i = 0; i < values.Length; i++)
+                values[i] = optional && _cursor.NextInt(0, 4) == 0
+                    ? null
+                    : dictionary[_cursor.NextInt(0, dictionary.Length)];
             return values;
         }
 
