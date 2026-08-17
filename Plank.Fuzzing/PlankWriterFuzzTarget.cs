@@ -5,6 +5,9 @@ using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing;
 using PlankColumn = Plank.Schema.ColumnDefinition;
+using PlankDataPageVersion = Plank.Writing.ParquetDataPageVersion;
+using PlankFileVersion = Plank.Writing.ParquetFileVersion;
+using PlankKeyValueMetadata = Plank.Writing.ParquetKeyValueMetadata;
 using PlankReader = Plank.Reading.Logical.ParquetReader;
 using PlankRowGroup = Plank.Reading.Logical.RowGroup;
 using PlankRowGroupWriter = Plank.Writing.RowGroupWriter;
@@ -59,9 +62,19 @@ public static class PlankWriterFuzzTarget
 
     static void WriteToStream(FuzzCase fuzzCase, Stream stream)
     {
+        var settings = fuzzCase.Settings;
         var writer = fuzzCase.Schema.CreateWriter(stream, new ParquetWriterOptions
         {
-            Compression = fuzzCase.Compression
+            Compression = fuzzCase.Compression,
+            DataPageVersion = settings.DataPageVersion,
+            WritePageCrc = settings.WritePageCrc,
+            WritePageIndexes = settings.WritePageIndexes,
+            FileVersion = settings.FileVersion,
+            TargetDataPageSizeBytes = settings.TargetDataPageSizeBytes,
+            BufferChunkSizeBytes = settings.BufferChunkSizeBytes,
+            KeyValueMetadata = settings.WithKeyValueMetadata
+                ? [new PlankKeyValueMetadata("fuzz", "1"), new PlankKeyValueMetadata("empty", "")]
+                : []
         });
         var serializedColumns = new object[fuzzCase.Columns.Count];
         for (var columnIndex = 0; columnIndex < serializedColumns.Length; columnIndex++)
@@ -384,11 +397,13 @@ public static class PlankWriterFuzzTarget
 
     public sealed class FuzzCase
     {
-        internal FuzzCase(ColumnSpec[] columns, Array[][] rowGroups, CompressionKind compression)
+        internal FuzzCase(ColumnSpec[] columns, Array[][] rowGroups, CompressionKind compression,
+            WriterSettings settings)
         {
             Columns = columns;
             RowGroups = rowGroups;
             Compression = compression;
+            Settings = settings;
             Schema = new PlankSchema(columns.Select(static c => c.Column).ToImmutableArray());
         }
 
@@ -400,8 +415,34 @@ public static class PlankWriterFuzzTarget
 
         public CompressionKind Compression { get; }
 
+        public WriterSettings Settings { get; }
+
         public string Describe()
-            => $"Columns=[{string.Join(", ", Columns.Select(static c => $"{c.Column.Name}:{c.Describe()}"))}], RowGroups={RowGroups.Count}, Compression={Compression}";
+            => $"Columns=[{string.Join(", ", Columns.Select(static c => $"{c.Column.Name}:{c.Describe()}"))}], "
+               + $"RowGroups={RowGroups.Count}, Compression={Compression}, {Settings.Describe()}";
+    }
+
+    /// <summary>The writer options a case asks for, beyond the codec.</summary>
+    /// <remarks>
+    /// Every one of these was pinned to its default, and each default skips code.
+    /// The page size matters most: it defaults to 1 MiB while a case writes at
+    /// most 64 rows, so every column the target ever produced fit in a single
+    /// page. Page splitting, per-page statistics, the page index and the
+    /// multi-page read path were therefore unreachable no matter how long it ran.
+    /// </remarks>
+    public readonly record struct WriterSettings(
+        PlankDataPageVersion DataPageVersion,
+        bool WritePageCrc,
+        bool WritePageIndexes,
+        PlankFileVersion FileVersion,
+        uint TargetDataPageSizeBytes,
+        uint BufferChunkSizeBytes,
+        bool WithKeyValueMetadata)
+    {
+        public string Describe()
+            => $"{DataPageVersion}/{FileVersion}/page={TargetDataPageSizeBytes}B/chunk={BufferChunkSizeBytes}B"
+               + $"{(WritePageCrc ? "/crc" : "")}{(WritePageIndexes ? "/pageindex" : "")}"
+               + $"{(WithKeyValueMetadata ? "/kv" : "")}";
     }
 
     public readonly record struct ColumnSpec(PlankColumn Column, Type ClrType)
@@ -427,9 +468,10 @@ public static class PlankWriterFuzzTarget
         public FuzzCase Decode()
         {
             var compression = PickCompression();
+            var settings = PickWriterSettings();
             var columns = CreateColumns();
             var rowGroups = CreateRowGroups(columns);
-            return new FuzzCase(columns, rowGroups, compression);
+            return new FuzzCase(columns, rowGroups, compression, settings);
         }
 
         // Compression used to be pinned to None, which left every codec — and
@@ -445,6 +487,40 @@ public static class PlankWriterFuzzTarget
                 4 => CompressionKind.Lz4,
                 _ => CompressionKind.Brotli
             };
+
+        WriterSettings PickWriterSettings()
+            => new(
+                // V1 pages carry their levels inside the payload; V2 keeps them in
+                // the header. Only V2 was ever written.
+                DataPageVersion: _cursor.NextInt(0, 2) == 0
+                    ? PlankDataPageVersion.V2
+                    : PlankDataPageVersion.V1,
+                WritePageCrc: _cursor.NextInt(0, 3) == 0,
+                // Defaults to on, so the "no page index" footer shape was never
+                // written and the reader never had to cope with its absence.
+                WritePageIndexes: _cursor.NextInt(0, 4) != 0,
+                FileVersion: _cursor.NextInt(0, 4) == 0
+                    ? PlankFileVersion.V2
+                    : PlankFileVersion.V1,
+                // Small enough to force several pages out of a 64-row column, which
+                // is the only way to reach page splitting and per-page statistics.
+                // The large value keeps the single-page shape in rotation.
+                TargetDataPageSizeBytes: _cursor.NextInt(0, 4) switch
+                {
+                    0 => 64,
+                    1 => 256,
+                    2 => 4096,
+                    _ => 1024 * 1024
+                },
+                // Drives the buffer growth and segment-spanning paths in
+                // BufferWriter, which a single large chunk never exercises.
+                BufferChunkSizeBytes: _cursor.NextInt(0, 3) switch
+                {
+                    0 => 64,
+                    1 => 1024,
+                    _ => 64 * 1024
+                },
+                WithKeyValueMetadata: _cursor.NextInt(0, 4) == 0);
 
         ColumnSpec[] CreateColumns()
         {
