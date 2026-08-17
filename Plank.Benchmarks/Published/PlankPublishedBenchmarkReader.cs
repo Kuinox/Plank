@@ -85,33 +85,34 @@ sealed class PlankPublishedBenchmarkReader : IPublishedBenchmarkReader
 
     static PublishedReadResult ReadFixed<T>(RowGroup rowGroup, int columnIndex, int rowCount)
     {
-        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroup.Index, rowCount);
+        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroup.Index, rowCount);
         var offset = 0;
         foreach (var buffer in rowGroup.Column<T>(columnIndex))
         {
             var values = buffer.Values;
             for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
-                fingerprint = PublishedReadFingerprint.AddValue(fingerprint, values[valueIndex]);
+                fingerprint.AddValue(values[valueIndex]);
             offset = checked(offset + buffer.Count);
         }
         ValidateCount(columnIndex, rowCount, offset);
-        return new PublishedReadResult(offset, fingerprint);
+        return new PublishedReadResult(offset, fingerprint.Finish());
     }
 
     static PublishedReadResult ReadBinary(RowGroup rowGroup, int columnIndex, int rowCount)
     {
-        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroup.Index, rowCount);
+        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroup.Index, rowCount);
         var offset = 0;
         foreach (var buffer in rowGroup.Column<byte>(columnIndex))
         {
             for (var localIndex = 0; localIndex < buffer.Count; localIndex++)
-                fingerprint = buffer.IsNull(localIndex)
-                    ? PublishedReadFingerprint.AddNull(fingerprint)
-                    : PublishedReadFingerprint.AddBytes(fingerprint, buffer.GetValue(localIndex));
+                if (buffer.IsNull(localIndex))
+                    fingerprint.AddNull();
+                else
+                    fingerprint.AddBytes(buffer.GetValue(localIndex));
             offset = checked(offset + buffer.Count);
         }
         ValidateCount(columnIndex, rowCount, offset);
-        return new PublishedReadResult(offset, fingerprint);
+        return new PublishedReadResult(offset, fingerprint.Finish());
     }
 
     static void ValidateCount(int columnIndex, int expected, int actual)

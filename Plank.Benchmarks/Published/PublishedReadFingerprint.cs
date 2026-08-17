@@ -4,10 +4,160 @@ using System.Text;
 
 namespace Plank.Benchmarks.Published;
 
+/// <summary>
+/// The order-sensitive hash every timed reader folds its decoded values into, so that no reader can
+/// skip work the benchmark claims it did.
+/// </summary>
+/// <remarks>
+/// The hash sits inside the timed region, so its own cost is charged to every implementation equally
+/// — but only up to a point. A single FNV chain is one multiply deep per word and each multiply waits
+/// on the last, so hashing 24M values used to cost more than a plain int32 column took to decode, and
+/// the decoders it was meant to compare all measured the same. <see cref="Accumulator"/> keeps the
+/// same per-value discrimination and spreads it across four lanes, so four multiplies are in flight at
+/// once and the hash stops being the thing under measurement.
+/// </remarks>
 static class PublishedReadFingerprint
 {
     const ulong Offset = 14695981039346656037UL;
     const ulong Prime = 1099511628211UL;
+
+    /// <summary>
+    /// A second odd multiplier, used only for absent values. Distinguishing null from present by which
+    /// constant mixes it — rather than by an extra round — keeps a null and a value apart without
+    /// paying for two multiplies on every value.
+    /// </summary>
+    const ulong AbsentPrime = 11400714819323198485UL;
+
+    /// <summary>
+    /// Four independent FNV lanes fed round-robin. A value's lane is decided by its position in the
+    /// piece, so a reader that returns its values in differently sized chunks still lands on the same
+    /// fingerprint, while reordering values across any distance still changes it.
+    /// </summary>
+    public struct Accumulator
+    {
+        ulong _lane0;
+        ulong _lane1;
+        ulong _lane2;
+        ulong _lane3;
+
+        public static Accumulator StartPiece(int columnIndex, int rowGroupIndex, int valueCount)
+        {
+            var accumulator = new Accumulator
+            {
+                _lane0 = Offset,
+                _lane1 = Offset,
+                _lane2 = Offset,
+                _lane3 = Offset
+            };
+            accumulator.AddWord(unchecked((uint)columnIndex));
+            accumulator.AddWord(unchecked((uint)rowGroupIndex));
+            accumulator.AddWord(unchecked((uint)valueCount));
+            return accumulator;
+        }
+
+        public ulong Finish()
+        {
+            var hash = Mix(_lane0, _lane1, Prime);
+            hash = Mix(hash, _lane2, Prime);
+            return Mix(hash, _lane3, Prime);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void AddWord(ulong value)
+            => Rotate(Mix(_lane3, value, Prime));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void AddNull()
+            => Rotate(Mix(_lane3, 0, AbsentPrime));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void AddValue<T>(T value)
+        {
+            if (typeof(T) == typeof(bool))
+                AddWord(Unsafe.As<T, bool>(ref value) ? 1UL : 0UL);
+            else if (typeof(T) == typeof(bool?))
+                AddNullable(Unsafe.As<T, bool?>(ref value));
+            else if (typeof(T) == typeof(int))
+                AddWord(unchecked((uint)Unsafe.As<T, int>(ref value)));
+            else if (typeof(T) == typeof(int?))
+                AddNullable(Unsafe.As<T, int?>(ref value));
+            else if (typeof(T) == typeof(long))
+                AddWord(unchecked((ulong)Unsafe.As<T, long>(ref value)));
+            else if (typeof(T) == typeof(long?))
+                AddNullable(Unsafe.As<T, long?>(ref value));
+            else if (typeof(T) == typeof(double))
+                AddWord(unchecked((ulong)BitConverter.DoubleToInt64Bits(Unsafe.As<T, double>(ref value))));
+            else if (typeof(T) == typeof(double?))
+                AddNullable(Unsafe.As<T, double?>(ref value));
+            else if (typeof(T) == typeof(DateTime))
+                AddWord(unchecked((ulong)Unsafe.As<T, DateTime>(ref value).Ticks));
+            else if (typeof(T) == typeof(DateTime?))
+                AddNullable(Unsafe.As<T, DateTime?>(ref value));
+            else if (typeof(T) == typeof(DateTimeOffset))
+                AddWord(unchecked((ulong)Unsafe.As<T, DateTimeOffset>(ref value).UtcTicks));
+            else if (typeof(T) == typeof(DateTimeOffset?))
+                AddNullable(Unsafe.As<T, DateTimeOffset?>(ref value));
+            else
+                throw new NotSupportedException($"Unsupported fingerprint value '{typeof(T)}'.");
+        }
+
+        public void AddBytes(ReadOnlySpan<byte> value)
+        {
+            AddWord(unchecked((uint)value.Length));
+            for (var index = 0; index < value.Length; index++)
+                AddWord(value[index]);
+        }
+
+        public void AddString(string value)
+        {
+            var maximumByteCount = Encoding.UTF8.GetMaxByteCount(value.Length);
+            byte[]? rented = null;
+            Span<byte> bytes = maximumByteCount <= 256
+                ? stackalloc byte[maximumByteCount]
+                : (rented = ArrayPool<byte>.Shared.Rent(maximumByteCount));
+            try
+            {
+                var byteCount = Encoding.UTF8.GetBytes(value, bytes);
+                AddBytes(bytes[..byteCount]);
+            }
+            finally
+            {
+                if (rented is not null)
+                    ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        void AddNullable<T>(T? value)
+            where T : struct
+        {
+            if (value.HasValue)
+                AddValue(value.Value);
+            else
+                AddNull();
+        }
+
+        /// <summary>
+        /// Shifts the freshly mixed lane to the front. The next value therefore mixes into the lane
+        /// four positions back, which is what leaves the multiplies room to overlap.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        void Rotate(ulong next)
+        {
+            _lane3 = _lane2;
+            _lane2 = _lane1;
+            _lane1 = _lane0;
+            _lane0 = next;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static ulong Mix(ulong lane, ulong value, ulong multiplier)
+        {
+            lane ^= value;
+            lane *= multiplier;
+            return lane ^ (lane >> 29);
+        }
+    }
 
     public static PublishedReadResult Expected(PublishedBenchmarkDataSet dataSet)
     {
@@ -18,9 +168,9 @@ static class PublishedReadFingerprint
             {
                 var column = dataSet.Columns[columnIndex];
                 var values = column.Values[rowGroupIndex];
-                var fingerprint = StartPiece(columnIndex, rowGroupIndex, values.Length);
-                fingerprint = AddExpectedValues(fingerprint, column, rowGroupIndex);
-                var piece = new PublishedReadResult(values.Length, fingerprint);
+                var fingerprint = Accumulator.StartPiece(columnIndex, rowGroupIndex, values.Length);
+                AddExpectedValues(ref fingerprint, column, rowGroupIndex);
+                var piece = new PublishedReadResult(values.Length, fingerprint.Finish());
                 aggregate = Combine(aggregate, piece);
                 valueCount = checked(valueCount + values.Length);
             }
@@ -30,164 +180,74 @@ static class PublishedReadFingerprint
     public static ulong Start()
         => Offset;
 
-    public static ulong StartPiece(int columnIndex, int rowGroupIndex, int valueCount)
-    {
-        var hash = AddUInt64(Offset, unchecked((uint)columnIndex));
-        hash = AddUInt64(hash, unchecked((uint)rowGroupIndex));
-        return AddUInt64(hash, unchecked((uint)valueCount));
-    }
-
+    /// <summary>
+    /// Folds one column piece into the run-wide aggregate. This runs once per column per row group, so
+    /// it stays on the plain chain.
+    /// </summary>
     public static ulong Combine(ulong aggregate, PublishedReadResult piece)
     {
         aggregate = AddUInt64(aggregate, unchecked((ulong)piece.ValueCount));
         return AddUInt64(aggregate, piece.Fingerprint);
     }
 
-    static ulong AddExpectedValues(ulong hash, PublishedBenchmarkDataSet.Column column, int rowGroupIndex)
-        => (column.Kind, column.Nullable) switch
+    static void AddExpectedValues(ref Accumulator fingerprint, PublishedBenchmarkDataSet.Column column,
+        int rowGroupIndex)
+    {
+        switch (column.Kind, column.Nullable)
         {
-            (BenchmarkColumnKind.Boolean, false) => AddValues(hash, (bool[])column.Values[rowGroupIndex]),
-            (BenchmarkColumnKind.Boolean, true) => AddValues(hash, (bool?[])column.Values[rowGroupIndex]),
-            (BenchmarkColumnKind.Int32, false) => AddValues(hash, (int[])column.Values[rowGroupIndex]),
-            (BenchmarkColumnKind.Int32, true) => AddValues(hash, (int?[])column.Values[rowGroupIndex]),
-            (BenchmarkColumnKind.Int64, false) => AddValues(hash, (long[])column.Values[rowGroupIndex]),
-            (BenchmarkColumnKind.Int64, true) => AddValues(hash, (long?[])column.Values[rowGroupIndex]),
-            (BenchmarkColumnKind.Double, false) => AddValues(hash, (double[])column.Values[rowGroupIndex]),
-            (BenchmarkColumnKind.Double, true) => AddValues(hash, (double?[])column.Values[rowGroupIndex]),
-            (BenchmarkColumnKind.Timestamp, false) => AddValues(hash, (DateTime[])column.Values[rowGroupIndex]),
-            (BenchmarkColumnKind.Timestamp, true) => AddValues(hash, (DateTime?[])column.Values[rowGroupIndex]),
-            (BenchmarkColumnKind.String, _) => AddBinaryValues(hash,
-                (byte[]?[])(column.Utf8Values
+            case (BenchmarkColumnKind.Boolean, false):
+                AddValues(ref fingerprint, (bool[])column.Values[rowGroupIndex]);
+                break;
+            case (BenchmarkColumnKind.Boolean, true):
+                AddValues(ref fingerprint, (bool?[])column.Values[rowGroupIndex]);
+                break;
+            case (BenchmarkColumnKind.Int32, false):
+                AddValues(ref fingerprint, (int[])column.Values[rowGroupIndex]);
+                break;
+            case (BenchmarkColumnKind.Int32, true):
+                AddValues(ref fingerprint, (int?[])column.Values[rowGroupIndex]);
+                break;
+            case (BenchmarkColumnKind.Int64, false):
+                AddValues(ref fingerprint, (long[])column.Values[rowGroupIndex]);
+                break;
+            case (BenchmarkColumnKind.Int64, true):
+                AddValues(ref fingerprint, (long?[])column.Values[rowGroupIndex]);
+                break;
+            case (BenchmarkColumnKind.Double, false):
+                AddValues(ref fingerprint, (double[])column.Values[rowGroupIndex]);
+                break;
+            case (BenchmarkColumnKind.Double, true):
+                AddValues(ref fingerprint, (double?[])column.Values[rowGroupIndex]);
+                break;
+            case (BenchmarkColumnKind.Timestamp, false):
+                AddValues(ref fingerprint, (DateTime[])column.Values[rowGroupIndex]);
+                break;
+            case (BenchmarkColumnKind.Timestamp, true):
+                AddValues(ref fingerprint, (DateTime?[])column.Values[rowGroupIndex]);
+                break;
+            case (BenchmarkColumnKind.String, _):
+                AddBinaryValues(ref fingerprint, (byte[]?[])(column.Utf8Values
                     ?? throw new InvalidOperationException($"Column '{column.Name}' has no UTF-8 values."))[
-                        rowGroupIndex]),
-            _ => throw new NotSupportedException($"Unsupported column kind '{column.Kind}'.")
-        };
+                        rowGroupIndex]);
+                break;
+            default:
+                throw new NotSupportedException($"Unsupported column kind '{column.Kind}'.");
+        }
+    }
 
-    static ulong AddValues<T>(ulong hash, ReadOnlySpan<T> values)
+    static void AddValues<T>(ref Accumulator fingerprint, ReadOnlySpan<T> values)
     {
         for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
-            hash = AddValue(hash, values[valueIndex]);
-        return hash;
+            fingerprint.AddValue(values[valueIndex]);
     }
 
-    static ulong AddBinaryValues(ulong hash, ReadOnlySpan<byte[]?> values)
+    static void AddBinaryValues(ref Accumulator fingerprint, ReadOnlySpan<byte[]?> values)
     {
         for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
-            hash = values[valueIndex] is { } value ? AddBytes(hash, value) : AddNull(hash);
-        return hash;
-    }
-
-    public static ulong AddValue(ulong hash, object? value)
-        => value switch
-        {
-            null => AddNull(hash),
-            bool boolean => AddValue(hash, boolean),
-            int integer => AddValue(hash, integer),
-            long integer => AddValue(hash, integer),
-            double number => AddValue(hash, number),
-            DateTime timestamp => AddValue(hash, timestamp),
-            DateTimeOffset timestamp => AddValue(hash, timestamp),
-            string text => AddString(hash, text),
-            byte[] bytes => AddBytes(hash, bytes),
-            _ => throw new NotSupportedException($"Unsupported fingerprint value '{value.GetType()}'.")
-        };
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ulong AddValue<T>(ulong hash, T value)
-    {
-        if (typeof(T) == typeof(bool))
-            return AddValue(hash, Unsafe.As<T, bool>(ref value));
-        if (typeof(T) == typeof(bool?))
-            return AddValue(hash, Unsafe.As<T, bool?>(ref value));
-        if (typeof(T) == typeof(int))
-            return AddValue(hash, Unsafe.As<T, int>(ref value));
-        if (typeof(T) == typeof(int?))
-            return AddValue(hash, Unsafe.As<T, int?>(ref value));
-        if (typeof(T) == typeof(long))
-            return AddValue(hash, Unsafe.As<T, long>(ref value));
-        if (typeof(T) == typeof(long?))
-            return AddValue(hash, Unsafe.As<T, long?>(ref value));
-        if (typeof(T) == typeof(double))
-            return AddValue(hash, Unsafe.As<T, double>(ref value));
-        if (typeof(T) == typeof(double?))
-            return AddValue(hash, Unsafe.As<T, double?>(ref value));
-        if (typeof(T) == typeof(DateTime))
-            return AddValue(hash, Unsafe.As<T, DateTime>(ref value));
-        if (typeof(T) == typeof(DateTime?))
-            return AddValue(hash, Unsafe.As<T, DateTime?>(ref value));
-        throw new NotSupportedException($"Unsupported fingerprint value '{typeof(T)}'.");
-    }
-
-    public static ulong AddNull(ulong hash)
-        => AddUInt64(hash, 0);
-
-    static ulong AddPresent(ulong hash)
-        => AddUInt64(hash, 1);
-
-    public static ulong AddValue(ulong hash, bool value)
-        => AddUInt64(AddPresent(hash), value ? 1UL : 0UL);
-
-    public static ulong AddValue(ulong hash, bool? value)
-        => value.HasValue ? AddValue(hash, value.Value) : AddNull(hash);
-
-    public static ulong AddValue(ulong hash, int value)
-        => AddUInt64(AddPresent(hash), unchecked((uint)value));
-
-    public static ulong AddValue(ulong hash, int? value)
-        => value.HasValue ? AddValue(hash, value.Value) : AddNull(hash);
-
-    public static ulong AddValue(ulong hash, long value)
-        => AddUInt64(AddPresent(hash), unchecked((ulong)value));
-
-    public static ulong AddValue(ulong hash, long? value)
-        => value.HasValue ? AddValue(hash, value.Value) : AddNull(hash);
-
-    public static ulong AddValue(ulong hash, double value)
-        => AddUInt64(AddPresent(hash), unchecked((ulong)BitConverter.DoubleToInt64Bits(value)));
-
-    public static ulong AddValue(ulong hash, double? value)
-        => value.HasValue ? AddValue(hash, value.Value) : AddNull(hash);
-
-    public static ulong AddValue(ulong hash, DateTime value)
-        => AddUInt64(AddPresent(hash), unchecked((ulong)value.Ticks));
-
-    public static ulong AddValue(ulong hash, DateTime? value)
-        => value.HasValue ? AddValue(hash, value.Value) : AddNull(hash);
-
-    public static ulong AddValue(ulong hash, DateTimeOffset value)
-        => AddUInt64(AddPresent(hash), unchecked((ulong)value.UtcTicks));
-
-    public static ulong AddValue(ulong hash, DateTimeOffset? value)
-        => value.HasValue ? AddValue(hash, value.Value) : AddNull(hash);
-
-    public static ulong AddString(ulong hash, string value)
-    {
-        var maximumByteCount = Encoding.UTF8.GetMaxByteCount(value.Length);
-        byte[]? rented = null;
-        Span<byte> bytes = maximumByteCount <= 256
-            ? stackalloc byte[maximumByteCount]
-            : (rented = ArrayPool<byte>.Shared.Rent(maximumByteCount));
-        try
-        {
-            var byteCount = Encoding.UTF8.GetBytes(value, bytes);
-            return AddBytes(hash, bytes[..byteCount]);
-        }
-        finally
-        {
-            if (rented is not null)
-                ArrayPool<byte>.Shared.Return(rented);
-        }
-    }
-
-    public static ulong AddBytes(ulong hash, ReadOnlySpan<byte> value)
-    {
-        hash = AddUInt64(AddPresent(hash), unchecked((uint)value.Length));
-        for (var index = 0; index < value.Length; index++)
-        {
-            hash ^= value[index];
-            hash *= Prime;
-        }
-        return hash;
+            if (values[valueIndex] is { } value)
+                fingerprint.AddBytes(value);
+            else
+                fingerprint.AddNull();
     }
 
     static ulong AddUInt64(ulong hash, ulong value)

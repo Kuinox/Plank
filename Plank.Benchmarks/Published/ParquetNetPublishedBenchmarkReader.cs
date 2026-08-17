@@ -110,19 +110,20 @@ sealed class ParquetNetPublishedBenchmarkReader : IPublishedBenchmarkReader
     {
         var values = new string?[rowCount];
         await rowGroup.ReadAsync(field, values, null, cancellationToken).ConfigureAwait(false);
-        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, values.Length);
+        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, values.Length);
         for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
-            fingerprint = values[valueIndex] is { } value
-                ? PublishedReadFingerprint.AddString(fingerprint, value)
-                : PublishedReadFingerprint.AddNull(fingerprint);
-        return new PublishedReadResult(values.Length, fingerprint);
+            if (values[valueIndex] is { } value)
+                fingerprint.AddString(value);
+            else
+                fingerprint.AddNull();
+        return new PublishedReadResult(values.Length, fingerprint.Finish());
     }
 
     static PublishedReadResult Consume<T>(ReadOnlySpan<T> values, int columnIndex, int rowGroupIndex)
     {
-        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, values.Length);
+        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, values.Length);
         for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
-            fingerprint = PublishedReadFingerprint.AddValue(fingerprint, values[valueIndex]);
-        return new PublishedReadResult(values.Length, fingerprint);
+            fingerprint.AddValue(values[valueIndex]);
+        return new PublishedReadResult(values.Length, fingerprint.Finish());
     }
 }
