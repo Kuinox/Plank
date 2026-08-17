@@ -59,6 +59,18 @@ internal sealed class RequiredPlainTimestampDecodingTests
             AssertRejected([253_402_300_800_000], TimeUnit.Millis, adjustedToUtc, pageType);
             AssertRejected([-62_135_596_800_000_001], TimeUnit.Micros, adjustedToUtc, pageType);
             AssertRejected([253_402_300_800_000_000], TimeUnit.Micros, adjustedToUtc, pageType);
+
+            // Values so large that scaling to ticks wraps, rather than merely landing outside the
+            // representable range. These take the overflow check itself rather than the range check
+            // that follows it, on both sides of zero and at the exact first value that overflows.
+            foreach (var unit in (ReadOnlySpan<TimeUnit>)[TimeUnit.Millis, TimeUnit.Micros])
+            {
+                var multiplier = unit == TimeUnit.Millis ? TimeSpan.TicksPerMillisecond : 10;
+                AssertRejected([long.MaxValue], unit, adjustedToUtc, pageType);
+                AssertRejected([long.MinValue], unit, adjustedToUtc, pageType);
+                AssertRejected([(long.MaxValue / multiplier) + 1], unit, adjustedToUtc, pageType);
+                AssertRejected([(long.MinValue / multiplier) - 1], unit, adjustedToUtc, pageType);
+            }
         }
     }
 
