@@ -47,7 +47,17 @@ public static class PlankReaderFuzzTarget
             return;
         }
 
-        var source = new MemoryReadSource(fileBytes);
+        // Bit 6 picks the read source, and it decides more than the 54 lines of
+        // StreamReadSource. ParquetFileReader.TryBorrowSource hard-tests for
+        // MemoryReadSource, so with the memory source every page read borrows a
+        // span straight out of the input — and the other side of both borrow
+        // branches in ParquetPageCursor, the ones that rent a buffer and copy
+        // into it, had never run. A stream source is also the only one that can
+        // fail a read part-way, which is a different failure mode from a span
+        // that is simply too short.
+        using var source = (selector & 0x40) != 0
+            ? new StreamReadSource(new MemoryStream(fileBytes, writable: false))
+            : (IParquetReadSource)new MemoryReadSource(fileBytes);
 
         // Bits 4 and 5 pick the reader options. Both were pinned to their
         // defaults, and both defaults skip code:
@@ -71,7 +81,7 @@ public static class PlankReaderFuzzTarget
         // measured 0% over a 14k-input corpus — neither fuzz target drove it.
         if ((selector & 3) == 2)
         {
-            DrainRowApi(source, options.VerifyPageCrc, binaryAsFixedWidth: (selector & 0x40) != 0);
+            DrainRowApi(source, options.VerifyPageCrc, binaryAsFixedWidth: (selector & 4) != 0);
             return;
         }
 
@@ -189,8 +199,9 @@ public static class PlankReaderFuzzTarget
             return CreateNestedDescriptor(leaf, name);
 
         // A binary leaf has two legitimate descriptions and they reach different
-        // read states, so the selector picks between them rather than the target
-        // settling on one:
+        // read states, so selector bit 2 picks between them rather than the
+        // target settling on one. Bit 2 because this path leaves it unused —
+        // bits 1-3 only index the requested schema, which the row API ignores:
         //
         //   byte[] -> RowApiBinaryColumnReadState, the variable-length state.
         //             This is the one the target could never reach: it used to
