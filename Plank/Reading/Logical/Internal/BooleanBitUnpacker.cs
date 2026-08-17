@@ -21,6 +21,8 @@ static class BooleanBitUnpacker
 
     internal static void Unpack(ReadOnlySpan<byte> payload, int bitOffset, Span<bool> destination)
     {
+        // Checking the last bit index once is what lets every step below add unchecked.
+        _ = checked(bitOffset + destination.Length);
         var index = 0;
 
         // Align to a byte boundary first: every wide path below reads whole packed bytes.
