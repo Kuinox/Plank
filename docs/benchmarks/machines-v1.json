@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "defaultMachine": "ryzen-9-7900x",
+  "machines": [
+    {
+      "id": "ryzen-9-7900x",
+      "label": "AMD Ryzen 9 7900X",
+      "environment": {
+        "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
+        "logicalProcessors": 24,
+        "operatingSystem": "CachyOS",
+        "dotNetVersion": ".NET 10.0.10",
+        "commit": "0fba018c18328b36f6b5b75fb680fa8b79e79144-dirty"
+      },
+      "generatedAt": "2026-08-17T19:28:58.3404991+00:00",
+      "write": "write-ryzen-9-7900x-v1.json",
+      "read": "read-ryzen-9-7900x-v1.json"
+    },
+    {
+      "id": "xeon-e3-1230-v6",
+      "label": "Intel Xeon E3-1230 v6",
+      "environment": {
+        "cpu": "Intel(R) Xeon(R) CPU E3-1230 v6 @ 3.50GHz",
+        "logicalProcessors": 8,
+        "operatingSystem": "Debian GNU/Linux 12 (bookworm)",
+        "dotNetVersion": ".NET 10.0.7",
+        "commit": "0fba018c18328b36f6b5b75fb680fa8b79e79144-dirty"
+      },
+      "generatedAt": "2026-08-17T18:57:03.4741681+00:00",
+      "write": "write-xeon-e3-1230-v6-v1.json",
+      "read": "read-xeon-e3-1230-v6-v1.json"
+    },
+    {
+      "id": "xeon-e-2288g",
+      "label": "Intel Xeon E-2288G",
+      "environment": {
+        "cpu": "Intel(R) Xeon(R) E-2288G CPU @ 3.70GHz",
+        "logicalProcessors": 16,
+        "operatingSystem": "Debian GNU/Linux 12 (bookworm)",
+        "dotNetVersion": ".NET 10.0.3",
+        "commit": "0fba018c18328b36f6b5b75fb680fa8b79e79144-dirty"
+      },
+      "generatedAt": "2026-08-17T18:57:45.2808363+00:00",
+      "write": "write-xeon-e-2288g-v1.json",
+      "read": "read-xeon-e-2288g-v1.json"
+    }
+  ]
+}
