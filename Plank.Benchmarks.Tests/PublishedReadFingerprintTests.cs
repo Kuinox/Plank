@@ -1,4 +1,5 @@
 using Plank.Benchmarks.Published;
+using Accumulator = Plank.Benchmarks.Published.PublishedReadFingerprint.Accumulator;
 
 namespace Plank.Benchmarks.Tests;
 
@@ -14,27 +15,61 @@ internal sealed class PublishedReadFingerprintTests
             .IsNotEqualTo(PublishedReadFingerprint.Expected(original).Fingerprint);
     }
 
+    /// <summary>
+    /// The accumulator spreads consecutive values over four independent lanes, so a swap has to be
+    /// caught at every distance — including the multiples of four that land both values back in the
+    /// lane they came from.
+    /// </summary>
+    [Test]
+    public async Task SwappingValuesAtAnyDistanceChangesFullReadFingerprint()
+    {
+        long[] values = [10L, 20L, 30L, 40L, 50L, 60L, 70L, 80L, 90L, 100L, 110L, 120L];
+        var baseline = PublishedReadFingerprint.Expected(DataSet(values)).Fingerprint;
+
+        for (var first = 0; first < values.Length; first++)
+            for (var second = first + 1; second < values.Length; second++)
+            {
+                var swapped = (long[])values.Clone();
+                (swapped[first], swapped[second]) = (swapped[second], swapped[first]);
+
+                await Assert.That(PublishedReadFingerprint.Expected(DataSet(swapped)).Fingerprint)
+                    .IsNotEqualTo(baseline);
+            }
+    }
+
     [Test]
     public async Task NullAndEmptyBinaryValuesHaveDistinctFingerprints()
     {
-        var start = PublishedReadFingerprint.Start();
+        await Assert.That(Fingerprint((ref Accumulator x) => x.AddNull()))
+            .IsNotEqualTo(Fingerprint((ref Accumulator x) => x.AddBytes([])));
+    }
 
-        await Assert.That(PublishedReadFingerprint.AddNull(start))
-            .IsNotEqualTo(PublishedReadFingerprint.AddBytes(start, []));
+    /// <summary>
+    /// Nulls are mixed with a different multiplier rather than an extra round, so a null still has to
+    /// stay distinct from the value whose word is zero.
+    /// </summary>
+    [Test]
+    public async Task NullAndZeroValuedEntriesHaveDistinctFingerprints()
+    {
+        var absent = Fingerprint((ref Accumulator x) => x.AddNull());
+
+        await Assert.That(absent).IsNotEqualTo(Fingerprint((ref Accumulator x) => x.AddValue(0L)));
+        await Assert.That(absent).IsNotEqualTo(Fingerprint((ref Accumulator x) => x.AddValue(0)));
+        await Assert.That(absent).IsNotEqualTo(Fingerprint((ref Accumulator x) => x.AddValue(false)));
+        await Assert.That(absent).IsEqualTo(Fingerprint((ref Accumulator x) => x.AddValue((long?)null)));
     }
 
     [Test]
     public async Task SignedZeroAndNanPayloadsRemainObservable()
     {
-        var start = PublishedReadFingerprint.Start();
         var negativeZero = BitConverter.Int64BitsToDouble(unchecked((long)0x8000_0000_0000_0000UL));
         var firstNaN = BitConverter.Int64BitsToDouble(unchecked((long)0x7ff8_0000_0000_0001UL));
         var secondNaN = BitConverter.Int64BitsToDouble(unchecked((long)0x7ff8_0000_0000_0002UL));
 
-        await Assert.That(PublishedReadFingerprint.AddValue(start, 0.0))
-            .IsNotEqualTo(PublishedReadFingerprint.AddValue(start, negativeZero));
-        await Assert.That(PublishedReadFingerprint.AddValue(start, firstNaN))
-            .IsNotEqualTo(PublishedReadFingerprint.AddValue(start, secondNaN));
+        await Assert.That(Fingerprint((ref Accumulator x) => x.AddValue(0.0)))
+            .IsNotEqualTo(Fingerprint((ref Accumulator x) => x.AddValue(negativeZero)));
+        await Assert.That(Fingerprint((ref Accumulator x) => x.AddValue(firstNaN)))
+            .IsNotEqualTo(Fingerprint((ref Accumulator x) => x.AddValue(secondNaN)));
     }
 
     [Test]
@@ -52,7 +87,6 @@ internal sealed class PublishedReadFingerprintTests
             DateTime.MaxValue.Ticks
         ];
         DateTimeKind[] kinds = [DateTimeKind.Unspecified, DateTimeKind.Utc, DateTimeKind.Local];
-        var start = PublishedReadFingerprint.Start();
 
         foreach (var tickCount in ticks)
             foreach (var kind in kinds)
@@ -60,8 +94,8 @@ internal sealed class PublishedReadFingerprintTests
                 var value = new DateTime(tickCount, kind);
                 var utcValue = new DateTimeOffset(DateTime.SpecifyKind(value, DateTimeKind.Utc));
 
-                await Assert.That(PublishedReadFingerprint.AddValue(start, value))
-                    .IsEqualTo(PublishedReadFingerprint.AddValue(start, utcValue));
+                await Assert.That(Fingerprint((ref Accumulator x) => x.AddValue(value)))
+                    .IsEqualTo(Fingerprint((ref Accumulator x) => x.AddValue(utcValue)));
             }
     }
 
@@ -69,17 +103,23 @@ internal sealed class PublishedReadFingerprintTests
     public async Task DateTimeFingerprintIgnoresKindAndPreservesTickPrecision()
     {
         const long ticks = 638_591_653_234_567_890L;
-        var start = PublishedReadFingerprint.Start();
-        var unspecified = PublishedReadFingerprint.AddValue(start,
-            new DateTime(ticks, DateTimeKind.Unspecified));
-        var utc = PublishedReadFingerprint.AddValue(start, new DateTime(ticks, DateTimeKind.Utc));
-        var local = PublishedReadFingerprint.AddValue(start, new DateTime(ticks, DateTimeKind.Local));
-        var adjacent = PublishedReadFingerprint.AddValue(start,
-            new DateTime(ticks + 1, DateTimeKind.Unspecified));
+        var unspecified = Fingerprint((ref Accumulator x) => x.AddValue(new DateTime(ticks, DateTimeKind.Unspecified)));
+        var utc = Fingerprint((ref Accumulator x) => x.AddValue(new DateTime(ticks, DateTimeKind.Utc)));
+        var local = Fingerprint((ref Accumulator x) => x.AddValue(new DateTime(ticks, DateTimeKind.Local)));
+        var adjacent = Fingerprint((ref Accumulator x) => x.AddValue(new DateTime(ticks + 1, DateTimeKind.Unspecified)));
 
         await Assert.That(utc).IsEqualTo(unspecified);
         await Assert.That(local).IsEqualTo(unspecified);
         await Assert.That(adjacent).IsNotEqualTo(unspecified);
+    }
+
+    delegate void FingerprintStep(ref Accumulator accumulator);
+
+    static ulong Fingerprint(FingerprintStep step)
+    {
+        var accumulator = Accumulator.StartPiece(0, 0, 1);
+        step(ref accumulator);
+        return accumulator.Finish();
     }
 
     static PublishedBenchmarkDataSet DataSet(long[] values)
