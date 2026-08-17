@@ -22,4 +22,5 @@ riderModule.iml
 __pycache__
 /fuzz/findings/
 /fuzz/findings-noninstru/
+/fuzz/coverage/
 core.*
