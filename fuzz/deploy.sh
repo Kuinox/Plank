@@ -54,6 +54,13 @@ pkill -9 -f afl-fuzz 2>/dev/null || true
 pkill -9 -f Plank.Fuzzing 2>/dev/null || true
 sleep 2
 
+# kill -9 leaves each worker's .cur_input behind, and AFL refuses to start with
+# one present: "AFL_TMPDIR already has an existing temporary input file". The
+# respawn loop retries five seconds later so the fleet recovers, but every
+# restart burns a cycle per worker and logs a PROGRAM ABORT that looks identical
+# to a real one -- 16 of them, once, buried the abort log during one rollout.
+rm -f fuzz/.tmp/*/.cur_input
+
 for project in Plank.Fuzzing.Reader.Target Plank.Fuzzing.Target; do
   if ! output=$(dotnet build -c Release "$project/$project.csproj" -v q --nologo 2>&1); then
     echo "  BUILD FAILED: $project" >&2
