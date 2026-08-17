@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO.Hashing;
 using K4os.Compression.LZ4;
 using K4os.Compression.LZ4.Streams;
 using K4os.Hash.xxHash;
@@ -177,12 +178,12 @@ internal sealed class LegacyLz4Tests
     [Test]
     public void XxHash32MatchesPublishedVectors()
     {
-        if (XxHash32.Compute([]) != 0x02CC5D05)
+        if (XxHash32.HashToUInt32([]) != 0x02CC5D05)
             throw new InvalidOperationException("The empty XXH32 vector did not match.");
-        if (XxHash32.Compute("abc"u8) != 0x32D153FF)
+        if (XxHash32.HashToUInt32("abc"u8) != 0x32D153FF)
             throw new InvalidOperationException("The 'abc' XXH32 vector did not match.");
         var input = CreateLinkedBlockInput();
-        if (XxHash32.Compute(input) != XXH32.DigestOf(input))
+        if (XxHash32.HashToUInt32(input) != XXH32.DigestOf(input))
             throw new InvalidOperationException("XXH32 did not match the independent implementation.");
     }
 

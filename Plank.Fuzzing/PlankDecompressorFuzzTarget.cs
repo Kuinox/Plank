@@ -11,9 +11,10 @@ namespace Plank.Fuzzing;
 /// Every other reader path reaches a decompressor through a Parquet file, which
 /// means the corpus can only contain codecs the *writer* can produce. It cannot
 /// produce Lz4Legacy at all, so the deprecated-LZ4 reader — a hand-rolled parser
-/// for three different framings, with its own length arithmetic and XxHash32
-/// checksums — had no input that reached past its first validity check:
-/// Lz4LegacyDecompressor sat at 82/326 lines and XxHash32 at 0/66.
+/// for three different framings, with its own length arithmetic — had no input
+/// that reached past its first validity check: Lz4LegacyDecompressor sat at
+/// 82/326 lines. (Its checksums were hand-written too, at 0/66 lines covered;
+/// they are System.IO.Hashing's job now.)
 ///
 /// Fed directly, there is no envelope to satisfy: the fuzzer mutates the
 /// compressed bytes and nothing else, which is exactly the shape of input these
