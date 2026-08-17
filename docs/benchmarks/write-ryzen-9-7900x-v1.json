@@ -1,0 +1,4898 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-17T19:28:58.3404991+00:00",
+  "environment": {
+    "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
+    "logicalProcessors": 24,
+    "operatingSystem": "CachyOS",
+    "dotNetVersion": ".NET 10.0.10",
+    "commit": "0fba018c18328b36f6b5b75fb680fa8b79e79144-dirty",
+    "libraries": {
+      "Plank": "1.0.0\u002B0fba018c18328b36f6b5b75fb680fa8b79e79144",
+      "ParquetSharp": "24.0.0\u002Be13c7c73d1395078ca31ce5fbd0fa71ac719276e",
+      "Parquet.Net": "6.0.3\u002Be2a1c4da7f10d668233746f3b32d64e117693487",
+      "Apache.Arrow": "18.0.0\u002Bd0e7d07dfdcbf5382932292e512d7b9013b29cb6"
+    }
+  },
+  "configuration": {
+    "warmups": 2,
+    "iterations": 7,
+    "compression": "none",
+    "dataPageVersion": "V1",
+    "pageIndexes": false,
+    "bloomFilters": false,
+    "rowGroupBoundaries": "Identical for every writer and preserved from the source taxi file.",
+    "timingBoundary": "Writer creation through complete in-memory output, metadata, footer, and close. Input loading is excluded. Timestamp columns are handed to every writer as logical DateTime values, so the conversion each library performs is timed. String columns are handed to Plank and ParquetSharp pre-encoded; Parquet.Net has no pre-encoded entry point and encodes inside the timed region.",
+    "quick": false
+  },
+  "suites": [
+    {
+      "id": "real-world",
+      "label": "Real-world data",
+      "cases": [
+        {
+          "id": "taxi-plain",
+          "label": "Complete taxi file",
+          "encoding": "plain",
+          "dataTypes": [
+            "int32",
+            "timestamp",
+            "int64",
+            "double",
+            "string"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 56327856,
+          "columnCount": 19,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 183.8535,
+              "p25Milliseconds": 180.3746,
+              "p75Milliseconds": 195.18405,
+              "variationPercent": 8.055027508315058,
+              "throughput": 16.124925552137977,
+              "outputBytes": 400988140,
+              "samplesMilliseconds": [
+                195.0918,
+                183.1235,
+                183.8535,
+                176.1913,
+                177.6257,
+                210.2232,
+                195.2763
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 127.8582,
+              "p25Milliseconds": 124.19335000000001,
+              "p75Milliseconds": 129.33935000000002,
+              "variationPercent": 4.024771191835968,
+              "throughput": 23.18681163976968,
+              "outputBytes": 400988140,
+              "samplesMilliseconds": [
+                127.8582,
+                129.8367,
+                132.9213,
+                120.1165,
+                121.6472,
+                126.7395,
+                128.842
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 310.3608,
+              "p25Milliseconds": 296.2088,
+              "p75Milliseconds": 340.06915000000004,
+              "variationPercent": 14.132052114828946,
+              "throughput": 9.552185714175245,
+              "outputBytes": 401180291,
+              "samplesMilliseconds": [
+                285.4538,
+                314.7529,
+                291.1773,
+                310.3608,
+                365.3854,
+                430.8219,
+                301.2403
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 185.6758,
+              "p25Milliseconds": 183.8808,
+              "p75Milliseconds": 243.0698,
+              "variationPercent": 31.877606020816923,
+              "throughput": 15.966668785054381,
+              "outputBytes": 401180291,
+              "samplesMilliseconds": [
+                184.3105,
+                192.9982,
+                181.6957,
+                183.4511,
+                293.1414,
+                314.7228,
+                185.6758
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 304.9347,
+              "p25Milliseconds": 303.1669,
+              "p75Milliseconds": 308.7844,
+              "variationPercent": 1.8421976901940011,
+              "throughput": 9.722160187082677,
+              "outputBytes": 400977694,
+              "samplesMilliseconds": [
+                309.5355,
+                304.9347,
+                304.58,
+                300.1453,
+                308.0333,
+                683.107,
+                301.7538
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.452200953869208
+        },
+        {
+          "id": "taxi-dictionary",
+          "label": "Complete taxi file",
+          "encoding": "dictionary",
+          "dataTypes": [
+            "int32",
+            "timestamp",
+            "int64",
+            "double",
+            "string"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 56327856,
+          "columnCount": 19,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 400.5393,
+              "p25Milliseconds": 398.30625,
+              "p75Milliseconds": 401.20235,
+              "variationPercent": 0.7230501476384581,
+              "throughput": 7.401580818661239,
+              "outputBytes": 74661272,
+              "samplesMilliseconds": [
+                400.7955,
+                434.5526,
+                400.5393,
+                401.6092,
+                395.3446,
+                398.4616,
+                398.1509
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 119.1802,
+              "p25Milliseconds": 113.76315,
+              "p75Milliseconds": 129.45755,
+              "variationPercent": 13.168630359740966,
+              "throughput": 24.875138655582052,
+              "outputBytes": 74661272,
+              "samplesMilliseconds": [
+                111.5183,
+                160.282,
+                130.498,
+                109.0904,
+                128.4171,
+                116.008,
+                119.1802
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 656.3778,
+              "p25Milliseconds": 652.1582000000001,
+              "p75Milliseconds": 669.9205,
+              "variationPercent": 2.7061091950397875,
+              "throughput": 4.516642701809842,
+              "outputBytes": 72275680,
+              "samplesMilliseconds": [
+                673.0917,
+                819.8191,
+                656.3778,
+                653.7813,
+                666.7493,
+                649.2363,
+                650.5351
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 234.644,
+              "p25Milliseconds": 229.52415000000002,
+              "p75Milliseconds": 253.1571,
+              "variationPercent": 10.071832222430572,
+              "throughput": 12.634561292852151,
+              "outputBytes": 72275680,
+              "samplesMilliseconds": [
+                266.8438,
+                268.6504,
+                226.9399,
+                239.4704,
+                234.644,
+                227.6543,
+                231.394
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request dictionary without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.9688169679191678
+        },
+        {
+          "id": "int32-plain",
+          "label": "int32",
+          "encoding": "plain",
+          "dataTypes": [
+            "int32"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 8893872,
+          "columnCount": 3,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 14.6676,
+              "p25Milliseconds": 14.22165,
+              "p75Milliseconds": 15.007200000000001,
+              "variationPercent": 5.3556819111511125,
+              "throughput": 202.1205923259429,
+              "outputBytes": 35577869,
+              "samplesMilliseconds": [
+                14.6676,
+                15.2866,
+                14.249,
+                14.172,
+                15.3821,
+                14.7278,
+                14.1943
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 7.8323,
+              "p25Milliseconds": 7.7247,
+              "p75Milliseconds": 7.97045,
+              "variationPercent": 3.13764794504806,
+              "throughput": 378.5125697432427,
+              "outputBytes": 35577869,
+              "samplesMilliseconds": [
+                7.8083,
+                7.967,
+                7.6411,
+                7.9739,
+                7.387,
+                7.8323,
+                8.0432
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 22.9578,
+              "p25Milliseconds": 22.57085,
+              "p75Milliseconds": 23.3642,
+              "variationPercent": 3.4556882628126404,
+              "throughput": 129.1336277866346,
+              "outputBytes": 35603993,
+              "samplesMilliseconds": [
+                22.9578,
+                23.5337,
+                23.1947,
+                22.5999,
+                22.4442,
+                23.6835,
+                22.5418
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 14.2179,
+              "p25Milliseconds": 14.06565,
+              "p75Milliseconds": 14.285499999999999,
+              "variationPercent": 1.5462902397681741,
+              "throughput": 208.51349355390036,
+              "outputBytes": 35603993,
+              "samplesMilliseconds": [
+                14.6573,
+                14.2179,
+                14.314,
+                13.6901,
+                14.171,
+                13.9603,
+                14.257
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 18.8467,
+              "p25Milliseconds": 18.56195,
+              "p75Milliseconds": 18.88635,
+              "variationPercent": 1.7212562411456684,
+              "throughput": 157.30202104347183,
+              "outputBytes": 35576981,
+              "samplesMilliseconds": [
+                18.8964,
+                19.206,
+                18.8467,
+                18.8763,
+                18.3362,
+                18.5749,
+                18.549
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.815290527686631
+        },
+        {
+          "id": "int32-dictionary",
+          "label": "int32",
+          "encoding": "dictionary",
+          "dataTypes": [
+            "int32"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 8893872,
+          "columnCount": 3,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 39.5499,
+              "p25Milliseconds": 39.19965,
+              "p75Milliseconds": 42.86225,
+              "variationPercent": 9.2607060953378,
+              "throughput": 74.95907701410118,
+              "outputBytes": 6876004,
+              "samplesMilliseconds": [
+                44.6416,
+                39.1046,
+                39.1641,
+                39.5499,
+                39.2352,
+                43.9065,
+                41.818
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 17.6919,
+              "p25Milliseconds": 17.53465,
+              "p75Milliseconds": 18.6194,
+              "variationPercent": 6.131336939503386,
+              "throughput": 167.56956573347125,
+              "outputBytes": 6876004,
+              "samplesMilliseconds": [
+                17.2718,
+                21.0512,
+                17.452,
+                17.7121,
+                19.5267,
+                17.6173,
+                17.6919
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 63.7426,
+              "p25Milliseconds": 63.618700000000004,
+              "p75Milliseconds": 63.8655,
+              "variationPercent": 0.3871821984041963,
+              "throughput": 46.50930460947624,
+              "outputBytes": 6695889,
+              "samplesMilliseconds": [
+                63.5884,
+                63.9025,
+                63.5655,
+                63.8285,
+                63.649,
+                64.8165,
+                63.7426
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 25.1736,
+              "p25Milliseconds": 25.017049999999998,
+              "p75Milliseconds": 25.4389,
+              "variationPercent": 1.6757634982680374,
+              "throughput": 117.76718466965393,
+              "outputBytes": 6695889,
+              "samplesMilliseconds": [
+                25.16,
+                25.4127,
+                24.8741,
+                25.1736,
+                25.8687,
+                24.1804,
+                25.4651
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request dictionary without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.4228884404727586
+        },
+        {
+          "id": "int32-delta-binary-packed",
+          "label": "int32",
+          "encoding": "delta_binary_packed",
+          "dataTypes": [
+            "int32"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 8893872,
+          "columnCount": 3,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 34.935,
+              "p25Milliseconds": 34.9026,
+              "p75Milliseconds": 35.1012,
+              "variationPercent": 0.5684843280377816,
+              "throughput": 84.86114212108201,
+              "outputBytes": 7806934,
+              "samplesMilliseconds": [
+                34.4986,
+                35.0969,
+                34.9267,
+                34.8785,
+                35.1055,
+                35.1597,
+                34.935
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 14.2006,
+              "p25Milliseconds": 13.7088,
+              "p75Milliseconds": 14.37415,
+              "variationPercent": 4.6853654070954756,
+              "throughput": 208.76751686548457,
+              "outputBytes": 7806934,
+              "samplesMilliseconds": [
+                14.571,
+                14.3688,
+                14.3795,
+                14.2006,
+                14.1966,
+                13.0237,
+                13.221
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 39.4697,
+              "p25Milliseconds": 39.404700000000005,
+              "p75Milliseconds": 40.74715,
+              "variationPercent": 3.4012166294651145,
+              "throughput": 75.11138924288757,
+              "outputBytes": 7839135,
+              "samplesMilliseconds": [
+                39.4168,
+                39.3493,
+                39.4719,
+                39.3926,
+                39.4697,
+                42.0224,
+                42.2028
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 16.21,
+              "p25Milliseconds": 16.1806,
+              "p75Milliseconds": 16.346249999999998,
+              "variationPercent": 1.021900061690311,
+              "throughput": 182.88858729179518,
+              "outputBytes": 7839135,
+              "samplesMilliseconds": [
+                16.2658,
+                15.6037,
+                16.5131,
+                16.1984,
+                16.4267,
+                16.1628,
+                16.21
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 44.434,
+              "p25Milliseconds": 44.28189999999999,
+              "p75Milliseconds": 45.1729,
+              "variationPercent": 2.005221226988354,
+              "throughput": 66.71971913399649,
+              "outputBytes": 7714479,
+              "samplesMilliseconds": [
+                44.434,
+                43.7364,
+                44.693,
+                44.2713,
+                44.2925,
+                45.6528,
+                46.2706
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.1415010633353522
+        },
+        {
+          "id": "int32-byte-stream-split",
+          "label": "int32",
+          "encoding": "byte_stream_split",
+          "dataTypes": [
+            "int32"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 8893872,
+          "columnCount": 3,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 15.1041,
+              "p25Milliseconds": 14.99045,
+              "p75Milliseconds": 15.588650000000001,
+              "variationPercent": 3.9605140326136747,
+              "throughput": 196.27942081951258,
+              "outputBytes": 35577869,
+              "samplesMilliseconds": [
+                15.0892,
+                15.1041,
+                14.8388,
+                15.2542,
+                15.9231,
+                16.0996,
+                14.8917
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 8.1318,
+              "p25Milliseconds": 7.7854,
+              "p75Milliseconds": 9.16695,
+              "variationPercent": 16.989473425317886,
+              "throughput": 364.57168154652106,
+              "outputBytes": 35577869,
+              "samplesMilliseconds": [
+                7.8337,
+                8.1318,
+                8.4995,
+                7.2875,
+                7.7371,
+                9.8962,
+                9.8344
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 30.4003,
+              "p25Milliseconds": 28.072499999999998,
+              "p75Milliseconds": 31.3954,
+              "variationPercent": 10.930484238642384,
+              "throughput": 97.51956395167153,
+              "outputBytes": 35603993,
+              "samplesMilliseconds": [
+                27.6867,
+                27.6827,
+                28.4583,
+                30.4003,
+                30.6684,
+                32.1224,
+                32.7728
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 17.1937,
+              "p25Milliseconds": 16.66235,
+              "p75Milliseconds": 18.24145,
+              "variationPercent": 9.184177925635554,
+              "throughput": 172.42501613963256,
+              "outputBytes": 35603993,
+              "samplesMilliseconds": [
+                16.206,
+                16.5884,
+                17.1937,
+                16.7363,
+                19.2731,
+                18.6229,
+                17.86
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 39.6829,
+              "p25Milliseconds": 35.2821,
+              "p75Milliseconds": 40.846599999999995,
+              "variationPercent": 14.022412676492888,
+              "throughput": 74.70784645275421,
+              "outputBytes": 35576549,
+              "samplesMilliseconds": [
+                38.0654,
+                43.0363,
+                40.9112,
+                39.6829,
+                40.782,
+                32.4988,
+                30.6935
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 2.1143781204653336
+        },
+        {
+          "id": "int64-plain",
+          "label": "int64",
+          "encoding": "plain",
+          "dataTypes": [
+            "int64"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 8893872,
+          "columnCount": 3,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 23.153,
+              "p25Milliseconds": 23.022750000000002,
+              "p75Milliseconds": 23.6968,
+              "variationPercent": 2.9112857944974633,
+              "throughput": 128.04491858506458,
+              "outputBytes": 68911902,
+              "samplesMilliseconds": [
+                26.6376,
+                22.79,
+                22.952,
+                23.9464,
+                23.0935,
+                23.4472,
+                23.153
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 16.4902,
+              "p25Milliseconds": 15.91445,
+              "p75Milliseconds": 16.6541,
+              "variationPercent": 4.485391323331428,
+              "throughput": 179.780960813089,
+              "outputBytes": 68911902,
+              "samplesMilliseconds": [
+                16.4902,
+                16.1659,
+                16.605,
+                15.2473,
+                17.1728,
+                16.7032,
+                15.663
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 51.8177,
+              "p25Milliseconds": 45.7555,
+              "p75Milliseconds": 53.637299999999996,
+              "variationPercent": 15.210632660268592,
+              "throughput": 57.21257408182918,
+              "outputBytes": 68943653,
+              "samplesMilliseconds": [
+                66.091,
+                39.8889,
+                40.67,
+                50.841,
+                52.1011,
+                55.1735,
+                51.8177
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 26.5821,
+              "p25Milliseconds": 25.39145,
+              "p75Milliseconds": 39.58245,
+              "variationPercent": 53.38554892201897,
+              "throughput": 111.52708025325313,
+              "outputBytes": 68943653,
+              "samplesMilliseconds": [
+                26.5821,
+                25.348,
+                25.3337,
+                25.4349,
+                39.2074,
+                40.9521,
+                39.9575
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 26.7904,
+              "p25Milliseconds": 26.458,
+              "p75Milliseconds": 28.14315,
+              "variationPercent": 6.290126313903488,
+              "throughput": 110.65993788819875,
+              "outputBytes": 68910201,
+              "samplesMilliseconds": [
+                31.6608,
+                26.5498,
+                29.4491,
+                26.114,
+                26.8372,
+                26.3662,
+                26.7904
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.6119937902511796
+        },
+        {
+          "id": "int64-dictionary",
+          "label": "int64",
+          "encoding": "dictionary",
+          "dataTypes": [
+            "int64"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 8893872,
+          "columnCount": 3,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 48.3883,
+              "p25Milliseconds": 48.15775,
+              "p75Milliseconds": 48.95625,
+              "variationPercent": 1.6501922985515032,
+              "throughput": 61.26737248467088,
+              "outputBytes": 2600893,
+              "samplesMilliseconds": [
+                49.269,
+                48.1185,
+                49.3147,
+                48.1397,
+                48.6435,
+                48.1758,
+                48.3883
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 23.2302,
+              "p25Milliseconds": 22.42715,
+              "p75Milliseconds": 23.57515,
+              "variationPercent": 4.941842945820525,
+              "throughput": 127.61939199834698,
+              "outputBytes": 2600893,
+              "samplesMilliseconds": [
+                22.4948,
+                23.5671,
+                22.3595,
+                23.5832,
+                23.2302,
+                21.5553,
+                24.4009
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 64.9302,
+              "p25Milliseconds": 64.41565,
+              "p75Milliseconds": 65.5531,
+              "variationPercent": 1.7518042451740503,
+              "throughput": 45.65863034458542,
+              "outputBytes": 2392979,
+              "samplesMilliseconds": [
+                64.1704,
+                63.7061,
+                64.9302,
+                65.0823,
+                66.0239,
+                66.3085,
+                64.6609
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 26.4556,
+              "p25Milliseconds": 26.1725,
+              "p75Milliseconds": 27.21085,
+              "variationPercent": 3.9248779086469456,
+              "throughput": 112.06035773144438,
+              "outputBytes": 2392979,
+              "samplesMilliseconds": [
+                26.0932,
+                27.555,
+                28.2713,
+                26.8667,
+                25.7413,
+                26.4556,
+                26.2518
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request dictionary without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.1388451240195951
+        },
+        {
+          "id": "int64-delta-binary-packed",
+          "label": "int64",
+          "encoding": "delta_binary_packed",
+          "dataTypes": [
+            "int64"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 8893872,
+          "columnCount": 3,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 37.2815,
+              "p25Milliseconds": 37.1378,
+              "p75Milliseconds": 37.54,
+              "variationPercent": 1.0788192535171615,
+              "throughput": 79.51997639579952,
+              "outputBytes": 3894032,
+              "samplesMilliseconds": [
+                36.7921,
+                37.1571,
+                37.8447,
+                37.3897,
+                37.1185,
+                37.2815,
+                37.6903
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 16.1836,
+              "p25Milliseconds": 16.07425,
+              "p75Milliseconds": 16.5282,
+              "variationPercent": 2.8050001235818915,
+              "throughput": 183.18692997849675,
+              "outputBytes": 3894032,
+              "samplesMilliseconds": [
+                16.2477,
+                16.8087,
+                16.1535,
+                15.995,
+                15.8111,
+                16.1836,
+                16.8952
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 41.4148,
+              "p25Milliseconds": 41.3945,
+              "p75Milliseconds": 41.5367,
+              "variationPercent": 0.34335551541961457,
+              "throughput": 71.58368505944735,
+              "outputBytes": 4287651,
+              "samplesMilliseconds": [
+                41.4148,
+                41.377,
+                41.5305,
+                41.3164,
+                43.7066,
+                41.412,
+                41.5429
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 17.986,
+              "p25Milliseconds": 17.86055,
+              "p75Milliseconds": 18.517400000000002,
+              "variationPercent": 3.652007116646292,
+              "throughput": 164.82953408206382,
+              "outputBytes": 4287651,
+              "samplesMilliseconds": [
+                18.7046,
+                17.986,
+                17.9623,
+                17.7588,
+                19.668,
+                18.3302,
+                16.6843
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 44.1752,
+              "p25Milliseconds": 43.656400000000005,
+              "p75Milliseconds": 44.267799999999994,
+              "variationPercent": 1.3840344808851779,
+              "throughput": 67.11059599051052,
+              "outputBytes": 4780021,
+              "samplesMilliseconds": [
+                44.3567,
+                44.3848,
+                43.5576,
+                44.1789,
+                43.7552,
+                44.1752,
+                43.4679
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.1113720062285277
+        },
+        {
+          "id": "int64-byte-stream-split",
+          "label": "int64",
+          "encoding": "byte_stream_split",
+          "dataTypes": [
+            "int64"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 8893872,
+          "columnCount": 3,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 39.5412,
+              "p25Milliseconds": 38.96935,
+              "p75Milliseconds": 39.982699999999994,
+              "variationPercent": 2.5627699715739416,
+              "throughput": 74.97556978543896,
+              "outputBytes": 68909717,
+              "samplesMilliseconds": [
+                39.5481,
+                39.5412,
+                40.534,
+                40.4173,
+                38.8296,
+                39.0638,
+                38.8749
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 21.4353,
+              "p25Milliseconds": 20.76995,
+              "p75Milliseconds": 22.202849999999998,
+              "variationPercent": 6.684767649624668,
+              "throughput": 138.30569201270802,
+              "outputBytes": 68909717,
+              "samplesMilliseconds": [
+                21.2588,
+                22.3968,
+                23.2106,
+                21.4353,
+                20.2811,
+                20.0986,
+                22.0089
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 47.7453,
+              "p25Milliseconds": 47.20755,
+              "p75Milliseconds": 48.01475000000001,
+              "variationPercent": 1.6906376124980023,
+              "throughput": 62.09247821251516,
+              "outputBytes": 68943653,
+              "samplesMilliseconds": [
+                47.5913,
+                48.2702,
+                47.7453,
+                46.6649,
+                47.7593,
+                46.8238,
+                49.611
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 28.1757,
+              "p25Milliseconds": 27.9603,
+              "p75Milliseconds": 28.76645,
+              "variationPercent": 2.8611534052392624,
+              "throughput": 105.21917822804758,
+              "outputBytes": 68943653,
+              "samplesMilliseconds": [
+                28.1603,
+                26.846,
+                30.1885,
+                28.5029,
+                29.03,
+                28.1757,
+                27.7603
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 64.6773,
+              "p25Milliseconds": 58.78515,
+              "p75Milliseconds": 66.08395,
+              "variationPercent": 11.28494850589001,
+              "throughput": 45.83716388903061,
+              "outputBytes": 68909481,
+              "samplesMilliseconds": [
+                64.6773,
+                67.9933,
+                64.7029,
+                67.465,
+                61.1556,
+                56.4147,
+                50.8558
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.3144532616758338
+        },
+        {
+          "id": "timestamps-plain",
+          "label": "Timestamps",
+          "encoding": "plain",
+          "dataTypes": [
+            "timestamp"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 5929248,
+          "columnCount": 2,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 25.2535,
+              "p25Milliseconds": 25.1924,
+              "p75Milliseconds": 25.271749999999997,
+              "variationPercent": 0.3142138713445583,
+              "throughput": 117.3945789692518,
+              "outputBytes": 47436483,
+              "samplesMilliseconds": [
+                25.7674,
+                25.2535,
+                25.2855,
+                25.258,
+                25.1636,
+                25.2034,
+                25.1814
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 15.3112,
+              "p25Milliseconds": 14.977450000000001,
+              "p75Milliseconds": 15.7136,
+              "variationPercent": 4.807918386540562,
+              "throughput": 193.62453628716236,
+              "outputBytes": 47436483,
+              "samplesMilliseconds": [
+                15.9153,
+                17.4996,
+                15.3112,
+                14.9367,
+                15.5119,
+                14.8108,
+                15.0182
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 67.8208,
+              "p25Milliseconds": 67.6426,
+              "p75Milliseconds": 72.34245,
+              "variationPercent": 6.929806195149567,
+              "throughput": 43.712607341700476,
+              "outputBytes": 47458029,
+              "samplesMilliseconds": [
+                76.6272,
+                80.5783,
+                67.5014,
+                67.8208,
+                68.0577,
+                67.4665,
+                67.7838
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 63.1951,
+              "p25Milliseconds": 62.72725,
+              "p75Milliseconds": 65.39225,
+              "variationPercent": 4.217099110532314,
+              "throughput": 46.91224477847175,
+              "outputBytes": 47458029,
+              "samplesMilliseconds": [
+                66.233,
+                67.8027,
+                63.1951,
+                64.5515,
+                62.0414,
+                62.8363,
+                62.6182
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 88.7397,
+              "p25Milliseconds": 88.64895000000001,
+              "p75Milliseconds": 209.70635,
+              "variationPercent": 136.41853646113293,
+              "throughput": 33.40809130524444,
+              "outputBytes": 47435288,
+              "samplesMilliseconds": [
+                458.7646,
+                330.4619,
+                88.5644,
+                88.7335,
+                88.7397,
+                88.9508,
+                88.4494
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 4.127377344688855
+        },
+        {
+          "id": "timestamps-dictionary",
+          "label": "Timestamps",
+          "encoding": "dictionary",
+          "dataTypes": [
+            "timestamp"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 5929248,
+          "columnCount": 2,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 108.5916,
+              "p25Milliseconds": 107.2074,
+              "p75Milliseconds": 108.99199999999999,
+              "variationPercent": 1.6434051989288152,
+              "throughput": 27.300675190346215,
+              "outputBytes": 40902599,
+              "samplesMilliseconds": [
+                108.5916,
+                116.0707,
+                109.1965,
+                106.4011,
+                102.9543,
+                108.7875,
+                108.0137
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 77.6715,
+              "p25Milliseconds": 70.66295,
+              "p75Milliseconds": 80.47470000000001,
+              "variationPercent": 12.632368371925375,
+              "throughput": 38.168749155095504,
+              "outputBytes": 40902599,
+              "samplesMilliseconds": [
+                73.7917,
+                80.5528,
+                67.5342,
+                63.7859,
+                77.6715,
+                80.3966,
+                82.0797
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 266.2078,
+              "p25Milliseconds": 265.49995,
+              "p75Milliseconds": 267.1585,
+              "variationPercent": 0.6230283259919472,
+              "throughput": 11.136503137774326,
+              "outputBytes": 39812829,
+              "samplesMilliseconds": [
+                265.277,
+                267.6405,
+                266.6765,
+                265.7229,
+                264.033,
+                269.0874,
+                266.2078
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 200.1783,
+              "p25Milliseconds": 194.3197,
+              "p75Milliseconds": 204.62869999999998,
+              "variationPercent": 5.149908856254633,
+              "throughput": 14.809916959031023,
+              "outputBytes": 39812829,
+              "samplesMilliseconds": [
+                207.4955,
+                197.7983,
+                208.9336,
+                190.8411,
+                201.7619,
+                200.1783,
+                181.7726
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request dictionary without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 2.577242617948669
+        },
+        {
+          "id": "timestamps-delta-binary-packed",
+          "label": "Timestamps",
+          "encoding": "delta_binary_packed",
+          "dataTypes": [
+            "timestamp"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 5929248,
+          "columnCount": 2,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 34.1836,
+              "p25Milliseconds": 34.1592,
+              "p75Milliseconds": 34.479299999999995,
+              "variationPercent": 0.9364139528896797,
+              "throughput": 86.72650042710539,
+              "outputBytes": 25103213,
+              "samplesMilliseconds": [
+                34.007,
+                34.1417,
+                34.1836,
+                34.2619,
+                34.1767,
+                35.7479,
+                34.6967
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 18.3532,
+              "p25Milliseconds": 18.19735,
+              "p75Milliseconds": 18.60005,
+              "variationPercent": 2.194167774557022,
+              "throughput": 161.53172198853605,
+              "outputBytes": 25103213,
+              "samplesMilliseconds": [
+                18.1443,
+                18.5365,
+                18.1703,
+                18.2244,
+                18.3532,
+                18.6636,
+                18.8459
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 93.2961,
+              "p25Milliseconds": 90.99510000000001,
+              "p75Milliseconds": 93.6821,
+              "variationPercent": 2.880077516637885,
+              "throughput": 31.77650512722397,
+              "outputBytes": 25138895,
+              "samplesMilliseconds": [
+                93.8782,
+                90.6969,
+                95.5821,
+                91.2933,
+                90.1413,
+                93.2961,
+                93.486
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 71.0693,
+              "p25Milliseconds": 70.8551,
+              "p75Milliseconds": 72.05885,
+              "variationPercent": 1.6937693209304352,
+              "throughput": 41.714551852909764,
+              "outputBytes": 25138895,
+              "samplesMilliseconds": [
+                71.0351,
+                71.0693,
+                70.6751,
+                74.9566,
+                72.4899,
+                69.9147,
+                71.6278
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request delta_binary_packed without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 3.872311095612754
+        },
+        {
+          "id": "timestamps-byte-stream-split",
+          "label": "Timestamps",
+          "encoding": "byte_stream_split",
+          "dataTypes": [
+            "timestamp"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 5929248,
+          "columnCount": 2,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 32.9517,
+              "p25Milliseconds": 31.3709,
+              "p75Milliseconds": 33.64435,
+              "variationPercent": 6.899340549956463,
+              "throughput": 89.96877247607863,
+              "outputBytes": 47434985,
+              "samplesMilliseconds": [
+                31.2066,
+                32.9807,
+                31.3597,
+                32.9517,
+                31.3821,
+                34.5727,
+                34.308
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 18.7711,
+              "p25Milliseconds": 18.499699999999997,
+              "p75Milliseconds": 19.606749999999998,
+              "variationPercent": 5.897629867189461,
+              "throughput": 157.93554986122282,
+              "outputBytes": 47434985,
+              "samplesMilliseconds": [
+                17.4841,
+                18.508,
+                18.7711,
+                19.8912,
+                18.4914,
+                19.3223,
+                22.1512
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 80.9532,
+              "p25Milliseconds": 79.3708,
+              "p75Milliseconds": 86.0769,
+              "variationPercent": 8.28392206855318,
+              "throughput": 36.62145535939284,
+              "outputBytes": 47458029,
+              "samplesMilliseconds": [
+                76.1461,
+                78.1855,
+                82.8426,
+                80.5561,
+                80.9532,
+                92.589,
+                89.3112
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 71.2018,
+              "p25Milliseconds": 70.37275,
+              "p75Milliseconds": 72.34995,
+              "variationPercent": 2.776896089705612,
+              "throughput": 41.636924909201724,
+              "outputBytes": 47458029,
+              "samplesMilliseconds": [
+                71.2018,
+                72.2816,
+                69.1071,
+                70.5848,
+                70.1607,
+                81.1518,
+                72.4183
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request byte_stream_split without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 3.793160763087939
+        },
+        {
+          "id": "doubles-plain",
+          "label": "Doubles",
+          "encoding": "plain",
+          "dataTypes": [
+            "double"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 29646240,
+          "columnCount": 10,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 83.4605,
+              "p25Milliseconds": 79.94805,
+              "p75Milliseconds": 84.58345,
+              "variationPercent": 5.554004588997195,
+              "throughput": 35.5212825228701,
+              "outputBytes": 234939010,
+              "samplesMilliseconds": [
+                77.5941,
+                76.4178,
+                83.5004,
+                82.302,
+                85.6665,
+                83.4605,
+                92.5638
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 60.5441,
+              "p25Milliseconds": 60.089650000000006,
+              "p75Milliseconds": 61.4455,
+              "variationPercent": 2.239441993522072,
+              "throughput": 48.9663567548283,
+              "outputBytes": 234939010,
+              "samplesMilliseconds": [
+                59.752,
+                61.6555,
+                62.9195,
+                59.2937,
+                61.2355,
+                60.5441,
+                60.4273
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 182.0462,
+              "p25Milliseconds": 179.51319999999998,
+              "p75Milliseconds": 184.5753,
+              "variationPercent": 2.780667764556478,
+              "throughput": 16.28500897025041,
+              "outputBytes": 235045986,
+              "samplesMilliseconds": [
+                179.8525,
+                179.1739,
+                173.9654,
+                192.3142,
+                182.5264,
+                186.6242,
+                182.0462
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 130.6865,
+              "p25Milliseconds": 128.31245,
+              "p75Milliseconds": 133.43625,
+              "variationPercent": 3.920680406928021,
+              "throughput": 22.685005719795086,
+              "outputBytes": 235045986,
+              "samplesMilliseconds": [
+                130.6865,
+                127.8734,
+                122.9539,
+                128.7515,
+                138.5656,
+                133.0957,
+                133.7768
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 97.4146,
+              "p25Milliseconds": 95.91015,
+              "p75Milliseconds": 99.46835,
+              "variationPercent": 3.652635231269234,
+              "throughput": 30.43305623592357,
+              "outputBytes": 234932916,
+              "samplesMilliseconds": [
+                98.5059,
+                89.0669,
+                100.4308,
+                94.661,
+                97.4146,
+                106.5876,
+                97.1593
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.6089858466803535
+        },
+        {
+          "id": "doubles-dictionary",
+          "label": "Doubles",
+          "encoding": "dictionary",
+          "dataTypes": [
+            "double"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 29646240,
+          "columnCount": 10,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 181.2038,
+              "p25Milliseconds": 178.92015,
+              "p75Milliseconds": 187.1103,
+              "variationPercent": 4.519855543868279,
+              "throughput": 16.360716497115405,
+              "outputBytes": 24242233,
+              "samplesMilliseconds": [
+                186.1871,
+                181.2038,
+                180.4995,
+                188.0335,
+                177.3408,
+                188.534,
+                175.8225
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 29.0715,
+              "p25Milliseconds": 28.561799999999998,
+              "p75Milliseconds": 30.207,
+              "variationPercent": 5.659150714617418,
+              "throughput": 101.97698777152881,
+              "outputBytes": 24242233,
+              "samplesMilliseconds": [
+                30.3115,
+                31.2818,
+                28.4868,
+                28.6368,
+                27.1306,
+                30.1025,
+                29.0715
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 234.0419,
+              "p25Milliseconds": 230.9823,
+              "p75Milliseconds": 243.52765,
+              "variationPercent": 5.3603008692033285,
+              "throughput": 12.66706517080916,
+              "outputBytes": 23328198,
+              "samplesMilliseconds": [
+                234.0419,
+                248.8933,
+                226.0662,
+                233.474,
+                244.7347,
+                242.3206,
+                228.4906
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 48.6646,
+              "p25Milliseconds": 44.6425,
+              "p75Milliseconds": 49.6077,
+              "variationPercent": 10.20289902721897,
+              "throughput": 60.919518500100686,
+              "outputBytes": 23328198,
+              "samplesMilliseconds": [
+                49.084,
+                48.6646,
+                45.527,
+                55.4913,
+                50.1314,
+                41.8416,
+                43.758
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request dictionary without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.6739624718366786
+        },
+        {
+          "id": "doubles-byte-stream-split",
+          "label": "Doubles",
+          "encoding": "byte_stream_split",
+          "dataTypes": [
+            "double"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 29646240,
+          "columnCount": 10,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 143.2325,
+              "p25Milliseconds": 142.0927,
+              "p75Milliseconds": 143.9536,
+              "variationPercent": 1.2992163091477054,
+              "throughput": 20.697984046916726,
+              "outputBytes": 234931582,
+              "samplesMilliseconds": [
+                170.5631,
+                144.6463,
+                141.4583,
+                141.2449,
+                143.2609,
+                143.2325,
+                142.7271
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 61.1775,
+              "p25Milliseconds": 60.718199999999996,
+              "p75Milliseconds": 65.969,
+              "variationPercent": 8.582894037840706,
+              "throughput": 48.45938457766336,
+              "outputBytes": 234931582,
+              "samplesMilliseconds": [
+                76.1644,
+                70.4155,
+                61.5225,
+                60.5595,
+                61.1775,
+                59.6065,
+                60.8769
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 181.4216,
+              "p25Milliseconds": 158.39350000000002,
+              "p75Milliseconds": 198.4965,
+              "variationPercent": 22.104865131825527,
+              "throughput": 16.34107515312399,
+              "outputBytes": 235045986,
+              "samplesMilliseconds": [
+                208.5267,
+                205.5075,
+                161.6286,
+                181.4216,
+                191.4855,
+                155.1584,
+                149.8158
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 90.0943,
+              "p25Milliseconds": 81.1382,
+              "p75Milliseconds": 140.61815,
+              "variationPercent": 66.01965940131619,
+              "throughput": 32.90578871249346,
+              "outputBytes": 235045986,
+              "samplesMilliseconds": [
+                204.039,
+                117.8619,
+                163.3744,
+                77.1242,
+                81.395,
+                90.0943,
+                80.8814
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 174.2992,
+              "p25Milliseconds": 172.7835,
+              "p75Milliseconds": 179.20415,
+              "variationPercent": 3.6836944747881772,
+              "throughput": 17.008821612491623,
+              "outputBytes": 234930516,
+              "samplesMilliseconds": [
+                192.9437,
+                176.6187,
+                173.4537,
+                171.7523,
+                172.1133,
+                181.7896,
+                174.2992
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.4726705079481837
+        },
+        {
+          "id": "strings-plain",
+          "label": "Strings",
+          "encoding": "plain",
+          "dataTypes": [
+            "string"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 2964624,
+          "columnCount": 1,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 27.0445,
+              "p25Milliseconds": 26.67915,
+              "p75Milliseconds": 27.19865,
+              "variationPercent": 1.9209081328920878,
+              "throughput": 109.62021852872118,
+              "outputBytes": 14123237,
+              "samplesMilliseconds": [
+                27.5606,
+                27.2589,
+                26.6481,
+                27.0445,
+                27.1384,
+                26.7102,
+                26.5921
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 27.4479,
+              "p25Milliseconds": 27.056199999999997,
+              "p75Milliseconds": 27.568350000000002,
+              "variationPercent": 1.8658986662003483,
+              "throughput": 108.00913731105112,
+              "outputBytes": 14123237,
+              "samplesMilliseconds": [
+                27.1757,
+                26.8252,
+                27.6121,
+                29.5629,
+                27.5246,
+                27.4479,
+                26.9367
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 34.8913,
+              "p25Milliseconds": 34.60895,
+              "p75Milliseconds": 35.452349999999996,
+              "variationPercent": 2.41722148501201,
+              "throughput": 84.96742741027133,
+              "outputBytes": 14129135,
+              "samplesMilliseconds": [
+                34.8913,
+                35.0927,
+                35.812,
+                34.6813,
+                34.5366,
+                34.3704,
+                39.0274
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 38.0706,
+              "p25Milliseconds": 36.822,
+              "p75Milliseconds": 41.103849999999994,
+              "variationPercent": 11.247130331541904,
+              "throughput": 77.87174355014106,
+              "outputBytes": 14129135,
+              "samplesMilliseconds": [
+                42.8194,
+                42.6521,
+                36.5116,
+                36.0521,
+                38.0706,
+                39.5556,
+                37.1324
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 68.5788,
+              "p25Milliseconds": 68.4387,
+              "p75Milliseconds": 69.18385,
+              "variationPercent": 1.0865602781034511,
+              "throughput": 43.22945283382037,
+              "outputBytes": 14122874,
+              "samplesMilliseconds": [
+                68.834,
+                68.3758,
+                69.5337,
+                68.5016,
+                71.0416,
+                68.5788,
+                68.0413
+              ]
+            }
+          ],
+          "winnerId": "plank-single",
+          "plankSpeedup": 1.2901440218898483
+        },
+        {
+          "id": "strings-dictionary",
+          "label": "Strings",
+          "encoding": "dictionary",
+          "dataTypes": [
+            "string"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 2964624,
+          "columnCount": 1,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 36.3558,
+              "p25Milliseconds": 35.790850000000006,
+              "p75Milliseconds": 36.6973,
+              "variationPercent": 2.4932748007195342,
+              "throughput": 81.54473288993778,
+              "outputBytes": 39902,
+              "samplesMilliseconds": [
+                36.3558,
+                36.7045,
+                131.299,
+                35.917,
+                36.6901,
+                35.6647,
+                35.6204
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 36.2095,
+              "p25Milliseconds": 36.020399999999995,
+              "p75Milliseconds": 36.28245,
+              "variationPercent": 0.7237051050138834,
+              "throughput": 81.87420428340629,
+              "outputBytes": 39902,
+              "samplesMilliseconds": [
+                35.884,
+                36.2095,
+                36.3462,
+                35.7744,
+                36.2187,
+                36.5217,
+                36.1568
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 49.8317,
+              "p25Milliseconds": 48.8852,
+              "p75Milliseconds": 50.53945,
+              "variationPercent": 3.3196740227606214,
+              "throughput": 59.49273253772197,
+              "outputBytes": 46288,
+              "samplesMilliseconds": [
+                49.9465,
+                49.4988,
+                51.4386,
+                48.2716,
+                49.8317,
+                45.8711,
+                51.1324
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 51.1773,
+              "p25Milliseconds": 50.154399999999995,
+              "p75Milliseconds": 52.24445,
+              "variationPercent": 4.083939559140488,
+              "throughput": 57.928495641622355,
+              "outputBytes": 46288,
+              "samplesMilliseconds": [
+                53.5739,
+                50.8216,
+                51.1773,
+                52.4516,
+                49.4872,
+                45.4122,
+                52.0373
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 55.214,
+              "p25Milliseconds": 54.308499999999995,
+              "p75Milliseconds": 58.791250000000005,
+              "variationPercent": 8.118864780671588,
+              "throughput": 53.69333864599558,
+              "outputBytes": 41937,
+              "samplesMilliseconds": [
+                59.4804,
+                59.4831,
+                54.1386,
+                53.1177,
+                55.214,
+                54.4784,
+                58.1021
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.3762051395352048
+        },
+        {
+          "id": "strings-delta-length-byte-array",
+          "label": "Strings",
+          "encoding": "delta_length_byte_array",
+          "dataTypes": [
+            "string"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 2964624,
+          "columnCount": 1,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 26.8117,
+              "p25Milliseconds": 26.469549999999998,
+              "p75Milliseconds": 27.2744,
+              "variationPercent": 3.0018611277912326,
+              "throughput": 110.57202639146344,
+              "outputBytes": 2935909,
+              "samplesMilliseconds": [
+                27.7223,
+                28.3863,
+                26.5454,
+                26.2896,
+                26.8117,
+                26.8265,
+                26.3937
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 27.448,
+              "p25Milliseconds": 27.25805,
+              "p75Milliseconds": 28.1784,
+              "variationPercent": 3.3530676187700346,
+              "throughput": 108.0087438064704,
+              "outputBytes": 2935909,
+              "samplesMilliseconds": [
+                28.5974,
+                28.7879,
+                27.3521,
+                27.7594,
+                27.164,
+                27.448,
+                26.4358
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 69.8772,
+              "p25Milliseconds": 69.03965,
+              "p75Milliseconds": 75.0475,
+              "variationPercent": 8.5977257245568,
+              "throughput": 42.42619910357026,
+              "outputBytes": 2943174,
+              "samplesMilliseconds": [
+                76.5975,
+                76.4539,
+                73.6411,
+                69.2327,
+                68.8466,
+                67.4646,
+                69.8772
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 71.8038,
+              "p25Milliseconds": 69.0887,
+              "p75Milliseconds": 74.43084999999999,
+              "variationPercent": 7.439926577702001,
+              "throughput": 41.28784270470365,
+              "outputBytes": 2943174,
+              "samplesMilliseconds": [
+                80.5758,
+                76.5663,
+                71.8038,
+                69.0185,
+                69.1589,
+                72.2954,
+                67.2588
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request delta_length_byte_array without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-single",
+          "plankSpeedup": 2.6062204186978075
+        },
+        {
+          "id": "strings-delta-byte-array",
+          "label": "Strings",
+          "encoding": "delta_byte_array",
+          "dataTypes": [
+            "string"
+          ],
+          "rowCount": 2964624,
+          "valueCount": 2964624,
+          "columnCount": 1,
+          "throughputUnit": "million rows/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 27.0145,
+              "p25Milliseconds": 26.506149999999998,
+              "p75Milliseconds": 27.19645,
+              "variationPercent": 2.555294378944643,
+              "throughput": 109.74195339539877,
+              "outputBytes": 524254,
+              "samplesMilliseconds": [
+                27.4225,
+                27.3729,
+                26.5058,
+                26.5065,
+                27.0145,
+                26.4448,
+                27.02
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 27.7262,
+              "p25Milliseconds": 27.6182,
+              "p75Milliseconds": 27.955849999999998,
+              "variationPercent": 1.2178012132928293,
+              "throughput": 106.92500234435299,
+              "outputBytes": 524254,
+              "samplesMilliseconds": [
+                27.5618,
+                27.0855,
+                27.7262,
+                27.6746,
+                28.0669,
+                28.0853,
+                27.8448
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 79.3594,
+              "p25Milliseconds": 79.0198,
+              "p75Milliseconds": 80.33834999999999,
+              "variationPercent": 1.6614918963600882,
+              "throughput": 37.356935662316,
+              "outputBytes": 535256,
+              "samplesMilliseconds": [
+                78.9822,
+                81.95,
+                79.0574,
+                79.3852,
+                78.7515,
+                79.3594,
+                81.2915
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 79.9958,
+              "p25Milliseconds": 79.29195,
+              "p75Milliseconds": 80.04915,
+              "variationPercent": 0.9465496938589243,
+              "throughput": 37.05974563664592,
+              "outputBytes": 535256,
+              "samplesMilliseconds": [
+                79.6182,
+                81.1402,
+                80.0732,
+                78.5172,
+                80.0251,
+                78.9657,
+                79.9958
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request delta_byte_array without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-single",
+          "plankSpeedup": 2.9376594051342795
+        }
+      ]
+    },
+    {
+      "id": "synthetic",
+      "label": "Synthetic",
+      "cases": [
+        {
+          "id": "boolean-plain",
+          "label": "boolean \u00B7 Plain",
+          "encoding": "plain",
+          "dataTypes": [
+            "boolean"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 0.9936,
+              "p25Milliseconds": 0.9799,
+              "p75Milliseconds": 1.05625,
+              "variationPercent": 7.684178743961343,
+              "throughput": 24154.589371980674,
+              "outputBytes": 3002403,
+              "samplesMilliseconds": [
+                0.9315,
+                1.0987,
+                0.9936,
+                0.9873,
+                0.9725,
+                1.0862,
+                1.0263
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 0.6881,
+              "p25Milliseconds": 0.5282,
+              "p75Milliseconds": 0.8960999999999999,
+              "variationPercent": 53.46606597878214,
+              "throughput": 34878.651358814124,
+              "outputBytes": 3002403,
+              "samplesMilliseconds": [
+                1.0673,
+                1.1909,
+                0.4538,
+                0.6881,
+                0.3732,
+                0.6026,
+                0.7249
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 64.1149,
+              "p25Milliseconds": 62.233549999999994,
+              "p75Milliseconds": 64.60445,
+              "variationPercent": 3.697892377590865,
+              "throughput": 374.327964326545,
+              "outputBytes": 3048927,
+              "samplesMilliseconds": [
+                72.8386,
+                64.1149,
+                64.7215,
+                64.4874,
+                62.6181,
+                61.849,
+                61.361
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 7.7353,
+              "p25Milliseconds": 7.395099999999999,
+              "p75Milliseconds": 9.636050000000001,
+              "variationPercent": 28.97043424301581,
+              "throughput": 3102.6592375214923,
+              "outputBytes": 3048927,
+              "samplesMilliseconds": [
+                11.0466,
+                10.9939,
+                6.9938,
+                7.6408,
+                7.7353,
+                8.2782,
+                7.1494
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 3.3885,
+              "p25Milliseconds": 3.35925,
+              "p75Milliseconds": 4.45795,
+              "variationPercent": 32.424376567802874,
+              "throughput": 7082.779991146525,
+              "outputBytes": 3002245,
+              "samplesMilliseconds": [
+                6.1034,
+                3.4653,
+                3.3783,
+                5.4506,
+                3.3885,
+                3.2948,
+                3.3402
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 4.924429588722569
+        },
+        {
+          "id": "boolean-rle",
+          "label": "boolean \u00B7 RLE",
+          "encoding": "rle",
+          "dataTypes": [
+            "boolean"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 10.9942,
+              "p25Milliseconds": 10.90715,
+              "p75Milliseconds": 11.0153,
+              "variationPercent": 0.9837004966254953,
+              "throughput": 2182.969201942843,
+              "outputBytes": 565030,
+              "samplesMilliseconds": [
+                12.3259,
+                10.8669,
+                10.8498,
+                11.0164,
+                11.0142,
+                10.9474,
+                10.9942
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 1.5553,
+              "p25Milliseconds": 1.4801,
+              "p75Milliseconds": 1.57355,
+              "variationPercent": 6.008487108596415,
+              "throughput": 15431.106538931397,
+              "outputBytes": 565030,
+              "samplesMilliseconds": [
+                1.5902,
+                1.7631,
+                1.5569,
+                1.4335,
+                1.5553,
+                1.4059,
+                1.5267
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 91.3963,
+              "p25Milliseconds": 89.36330000000001,
+              "p75Milliseconds": 93.39285000000001,
+              "variationPercent": 4.408876508129979,
+              "throughput": 262.5926870124939,
+              "outputBytes": 618574,
+              "samplesMilliseconds": [
+                97.9613,
+                93.5309,
+                90.1449,
+                91.3963,
+                93.2548,
+                88.0586,
+                88.5817
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 8.4191,
+              "p25Milliseconds": 8.056799999999999,
+              "p75Milliseconds": 8.60825,
+              "variationPercent": 6.549987528358148,
+              "throughput": 2850.6609970186832,
+              "outputBytes": 618574,
+              "samplesMilliseconds": [
+                8.0145,
+                8.4985,
+                8.0991,
+                8.731,
+                8.4191,
+                8.718,
+                6.6559
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request rle without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 5.413167877579889
+        },
+        {
+          "id": "int32-plain",
+          "label": "int32 \u00B7 Plain",
+          "encoding": "plain",
+          "dataTypes": [
+            "int32"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 13.9167,
+              "p25Milliseconds": 13.7224,
+              "p75Milliseconds": 14.68585,
+              "variationPercent": 6.922977429994178,
+              "throughput": 1724.5467675526527,
+              "outputBytes": 96004547,
+              "samplesMilliseconds": [
+                14.7725,
+                13.5324,
+                13.9167,
+                13.4885,
+                13.9124,
+                14.5992,
+                16.3439
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 13.705,
+              "p25Milliseconds": 13.5678,
+              "p75Milliseconds": 14.4045,
+              "variationPercent": 6.1050711419190105,
+              "throughput": 1751.1856986501277,
+              "outputBytes": 96004547,
+              "samplesMilliseconds": [
+                14.7171,
+                13.705,
+                13.3503,
+                13.5337,
+                15.6153,
+                13.6019,
+                14.0919
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 40.1164,
+              "p25Milliseconds": 38.74685,
+              "p75Milliseconds": 50.4182,
+              "variationPercent": 29.093712297215095,
+              "throughput": 598.2590661175979,
+              "outputBytes": 96066071,
+              "samplesMilliseconds": [
+                40.1164,
+                47.9745,
+                61.4881,
+                38.4784,
+                38.7494,
+                52.8619,
+                38.7443
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 28.3455,
+              "p25Milliseconds": 25.9469,
+              "p75Milliseconds": 66.32130000000001,
+              "variationPercent": 142.43671835035545,
+              "throughput": 846.6952426311054,
+              "outputBytes": 96066071,
+              "samplesMilliseconds": [
+                25.8344,
+                23.6355,
+                77.6903,
+                74.1126,
+                26.0594,
+                28.3455,
+                58.53
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 18.0529,
+              "p25Milliseconds": 17.988300000000002,
+              "p75Milliseconds": 18.25415,
+              "variationPercent": 1.472616587916605,
+              "throughput": 1329.426297160013,
+              "outputBytes": 96003725,
+              "samplesMilliseconds": [
+                18.6117,
+                18.3436,
+                17.8779,
+                17.9297,
+                18.0469,
+                18.0529,
+                18.1647
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.3172491791317038
+        },
+        {
+          "id": "int32-dictionary",
+          "label": "int32 \u00B7 Dictionary",
+          "encoding": "dictionary",
+          "dataTypes": [
+            "int32"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 72.3741,
+              "p25Milliseconds": 70.27015,
+              "p75Milliseconds": 75.9075,
+              "variationPercent": 7.7891814889580635,
+              "throughput": 331.61034126849245,
+              "outputBytes": 33200074,
+              "samplesMilliseconds": [
+                66.6088,
+                68.6148,
+                72.3741,
+                71.9255,
+                74.5564,
+                77.4537,
+                77.2586
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 12.1374,
+              "p25Milliseconds": 11.9611,
+              "p75Milliseconds": 12.320599999999999,
+              "variationPercent": 2.9619193566991187,
+              "throughput": 1977.3592367393346,
+              "outputBytes": 33200074,
+              "samplesMilliseconds": [
+                12.1374,
+                11.7686,
+                12.0699,
+                12.477,
+                12.1642,
+                11.8523,
+                13.0615
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 159.7662,
+              "p25Milliseconds": 157.39655,
+              "p75Milliseconds": 162.08055000000002,
+              "variationPercent": 2.9317840694715316,
+              "throughput": 150.21950825643972,
+              "outputBytes": 33312646,
+              "samplesMilliseconds": [
+                164.09,
+                181.1886,
+                157.3446,
+                159.7662,
+                157.3262,
+                157.4485,
+                160.0711
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 27.8588,
+              "p25Milliseconds": 22.593850000000003,
+              "p75Milliseconds": 29.66715,
+              "variationPercent": 25.38982296437749,
+              "throughput": 861.4872140939308,
+              "outputBytes": 33312646,
+              "samplesMilliseconds": [
+                52.4187,
+                18.7082,
+                27.8588,
+                23.3851,
+                21.8026,
+                29.633,
+                29.7013
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request dictionary without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 2.2952856460197406
+        },
+        {
+          "id": "int32-delta-binary-packed",
+          "label": "int32 \u00B7 Delta binary packed",
+          "encoding": "delta_binary_packed",
+          "dataTypes": [
+            "int32"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 25.9062,
+              "p25Milliseconds": 25.837899999999998,
+              "p75Milliseconds": 26.0074,
+              "variationPercent": 0.6542835305834236,
+              "throughput": 926.4191583481947,
+              "outputBytes": 9940521,
+              "samplesMilliseconds": [
+                25.5054,
+                25.8071,
+                25.8687,
+                26.0216,
+                25.9932,
+                26.7286,
+                25.9062
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 5.3222,
+              "p25Milliseconds": 5.2412,
+              "p75Milliseconds": 5.443300000000001,
+              "variationPercent": 3.797301867648729,
+              "throughput": 4509.413400473489,
+              "outputBytes": 9940521,
+              "samplesMilliseconds": [
+                5.3222,
+                5.2766,
+                5.514,
+                5.3726,
+                5.2058,
+                5.6291,
+                5.1439
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 83.9966,
+              "p25Milliseconds": 82.79605,
+              "p75Milliseconds": 84.83935,
+              "variationPercent": 2.4325984623187153,
+              "throughput": 285.72585080824695,
+              "outputBytes": 10021221,
+              "samplesMilliseconds": [
+                83.7721,
+                81.82,
+                85.4065,
+                84.2722,
+                90.7448,
+                83.9966,
+                80.7377
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 12.1821,
+              "p25Milliseconds": 10.60285,
+              "p75Milliseconds": 14.100200000000001,
+              "variationPercent": 28.708925390532013,
+              "throughput": 1970.1036767059868,
+              "outputBytes": 10021221,
+              "samplesMilliseconds": [
+                12.1821,
+                9.3284,
+                14.2128,
+                13.9876,
+                11.8773,
+                16.8057,
+                7.6648
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 128.771,
+              "p25Milliseconds": 119.08195,
+              "p75Milliseconds": 129.7944,
+              "variationPercent": 8.318992630328252,
+              "throughput": 186.3773675749975,
+              "outputBytes": 9777673,
+              "samplesMilliseconds": [
+                129.339,
+                128.1785,
+                130.2498,
+                134.8597,
+                128.771,
+                109.9854,
+                85.3393
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 2.288921874412837
+        },
+        {
+          "id": "int32-byte-stream-split",
+          "label": "int32 \u00B7 Byte stream split",
+          "encoding": "byte_stream_split",
+          "dataTypes": [
+            "int32"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 23.8939,
+              "p25Milliseconds": 23.83615,
+              "p75Milliseconds": 23.95625,
+              "variationPercent": 0.5026387488019988,
+              "throughput": 1004.4404638840875,
+              "outputBytes": 96002795,
+              "samplesMilliseconds": [
+                23.729,
+                23.8015,
+                23.9663,
+                23.8939,
+                24.1466,
+                23.8708,
+                23.9462
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 13.6795,
+              "p25Milliseconds": 13.5031,
+              "p75Milliseconds": 13.7531,
+              "variationPercent": 1.8275521766146423,
+              "throughput": 1754.4500895500564,
+              "outputBytes": 96002795,
+              "samplesMilliseconds": [
+                13.5476,
+                13.6795,
+                13.6841,
+                13.3841,
+                13.4586,
+                13.8221,
+                13.9458
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 48.605,
+              "p25Milliseconds": 48.34415,
+              "p75Milliseconds": 49.0605,
+              "variationPercent": 1.4738195658882802,
+              "throughput": 493.7763604567432,
+              "outputBytes": 96066071,
+              "samplesMilliseconds": [
+                48.0768,
+                48.605,
+                48.9374,
+                49.1836,
+                48.2009,
+                48.4874,
+                50.2948
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 22.5955,
+              "p25Milliseconds": 22.261499999999998,
+              "p75Milliseconds": 22.81895,
+              "variationPercent": 2.4670841539244663,
+              "throughput": 1062.1583943705605,
+              "outputBytes": 96066071,
+              "samplesMilliseconds": [
+                22.2395,
+                25.7581,
+                22.1992,
+                22.7738,
+                22.2835,
+                22.5955,
+                22.8641
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 35.0975,
+              "p25Milliseconds": 35.053349999999995,
+              "p75Milliseconds": 35.229150000000004,
+              "variationPercent": 0.500890376807492,
+              "throughput": 683.809388133058,
+              "outputBytes": 96002573,
+              "samplesMilliseconds": [
+                35.0975,
+                34.9875,
+                35.0926,
+                35.0141,
+                35.1101,
+                35.3482,
+                36.1562
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.6517782082678458
+        },
+        {
+          "id": "int64-plain",
+          "label": "int64 \u00B7 Plain",
+          "encoding": "plain",
+          "dataTypes": [
+            "int64"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 32.0206,
+              "p25Milliseconds": 31.17035,
+              "p75Milliseconds": 35.745450000000005,
+              "variationPercent": 14.287989606690713,
+              "throughput": 749.5174981105912,
+              "outputBytes": 192007340,
+              "samplesMilliseconds": [
+                30.9083,
+                29.7805,
+                37.9658,
+                33.5251,
+                38.8171,
+                32.0206,
+                31.4324
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 29.9333,
+              "p25Milliseconds": 27.89865,
+              "p75Milliseconds": 31.5369,
+              "variationPercent": 12.154523557375898,
+              "throughput": 801.7826300474723,
+              "outputBytes": 192007340,
+              "samplesMilliseconds": [
+                28.1135,
+                27.6838,
+                32.9735,
+                29.9333,
+                31.557,
+                27.6106,
+                31.5168
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 79.981,
+              "p25Milliseconds": 78.27305,
+              "p75Milliseconds": 99.3888,
+              "variationPercent": 26.400957727460277,
+              "throughput": 300.0712669258949,
+              "outputBytes": 192085664,
+              "samplesMilliseconds": [
+                140.6183,
+                79.8547,
+                90.1579,
+                79.981,
+                108.6197,
+                67.4776,
+                76.6914
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 58.2975,
+              "p25Milliseconds": 51.913,
+              "p75Milliseconds": 85.62,
+              "variationPercent": 57.818945923924716,
+              "throughput": 411.6814614691882,
+              "outputBytes": 192085664,
+              "samplesMilliseconds": [
+                141.6994,
+                59.6923,
+                111.5477,
+                58.2975,
+                50.3997,
+                50.5559,
+                53.2701
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 39.1339,
+              "p25Milliseconds": 35.7196,
+              "p75Milliseconds": 39.3475,
+              "variationPercent": 9.270479047577668,
+              "throughput": 613.2790240686464,
+              "outputBytes": 192004509,
+              "samplesMilliseconds": [
+                37.6528,
+                39.5313,
+                39.1339,
+                33.4085,
+                39.1637,
+                40.6225,
+                33.7864
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.3073700527506154
+        },
+        {
+          "id": "int64-dictionary",
+          "label": "int64 \u00B7 Dictionary",
+          "encoding": "dictionary",
+          "dataTypes": [
+            "int64"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 74.4545,
+              "p25Milliseconds": 73.2122,
+              "p75Milliseconds": 78.738,
+              "variationPercent": 7.421713932670294,
+              "throughput": 322.3445191358481,
+              "outputBytes": 33397066,
+              "samplesMilliseconds": [
+                73.0656,
+                73.3588,
+                73.0317,
+                78.6909,
+                81.4628,
+                78.7851,
+                74.4545
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 15.9381,
+              "p25Milliseconds": 15.629000000000001,
+              "p75Milliseconds": 16.9227,
+              "variationPercent": 8.1170277511121,
+              "throughput": 1505.8256630338624,
+              "outputBytes": 33397066,
+              "samplesMilliseconds": [
+                17.2443,
+                15.9381,
+                17.5593,
+                15.0237,
+                16.6011,
+                15.65,
+                15.608
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 167.3003,
+              "p25Milliseconds": 164.70735,
+              "p75Milliseconds": 168.28005000000002,
+              "variationPercent": 2.135501251342661,
+              "throughput": 143.45461424755368,
+              "outputBytes": 33528838,
+              "samplesMilliseconds": [
+                166.9767,
+                169.5191,
+                167.5051,
+                167.3003,
+                169.055,
+                161.4732,
+                162.438
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 23.2511,
+              "p25Milliseconds": 22.90065,
+              "p75Milliseconds": 24.4291,
+              "variationPercent": 6.573667482398679,
+              "throughput": 1032.2092288106799,
+              "outputBytes": 33528838,
+              "samplesMilliseconds": [
+                23.2511,
+                22.9339,
+                20.7512,
+                25.1197,
+                25.6518,
+                23.7385,
+                22.8674
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request dictionary without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.45883762807361
+        },
+        {
+          "id": "int64-delta-binary-packed",
+          "label": "int64 \u00B7 Delta binary packed",
+          "encoding": "delta_binary_packed",
+          "dataTypes": [
+            "int64"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 29.629,
+              "p25Milliseconds": 29.57355,
+              "p75Milliseconds": 29.6873,
+              "variationPercent": 0.3839144081811724,
+              "throughput": 810.0172128657733,
+              "outputBytes": 9940905,
+              "samplesMilliseconds": [
+                29.6884,
+                29.5986,
+                29.4198,
+                29.5485,
+                29.629,
+                29.7513,
+                29.6862
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 9.1195,
+              "p25Milliseconds": 8.9047,
+              "p75Milliseconds": 9.3347,
+              "variationPercent": 4.715170787872139,
+              "throughput": 2631.723230440265,
+              "outputBytes": 9940905,
+              "samplesMilliseconds": [
+                9.4927,
+                8.8176,
+                9.1195,
+                9.1767,
+                9.6087,
+                8.8727,
+                8.9367
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 90.1628,
+              "p25Milliseconds": 88.6267,
+              "p75Milliseconds": 91.2075,
+              "variationPercent": 2.862377832099265,
+              "throughput": 266.1851672751955,
+              "outputBytes": 9584805,
+              "samplesMilliseconds": [
+                90.8384,
+                88.34,
+                88.266,
+                88.9134,
+                90.1628,
+                91.5766,
+                91.766
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 11.4526,
+              "p25Milliseconds": 9.8357,
+              "p75Milliseconds": 11.7699,
+              "variationPercent": 16.888741421162013,
+              "throughput": 2095.5940135864344,
+              "outputBytes": 9584805,
+              "samplesMilliseconds": [
+                11.4526,
+                8.2507,
+                9.8743,
+                9.7971,
+                11.5502,
+                12.3248,
+                11.9896
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 88.0386,
+              "p25Milliseconds": 87.05695,
+              "p75Milliseconds": 89.0663,
+              "variationPercent": 2.2823511505180654,
+              "throughput": 272.607697078327,
+              "outputBytes": 9778441,
+              "samplesMilliseconds": [
+                133.0331,
+                88.0386,
+                87.8915,
+                85.3763,
+                88.4859,
+                89.6467,
+                86.2224
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.2558363945391742
+        },
+        {
+          "id": "int64-byte-stream-split",
+          "label": "int64 \u00B7 Byte stream split",
+          "encoding": "byte_stream_split",
+          "dataTypes": [
+            "int64"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 50.3049,
+              "p25Milliseconds": 48.138999999999996,
+              "p75Milliseconds": 51.9152,
+              "variationPercent": 7.506624603169875,
+              "throughput": 477.0907009058759,
+              "outputBytes": 192003188,
+              "samplesMilliseconds": [
+                45.6628,
+                48.1194,
+                48.1586,
+                50.3049,
+                53.7754,
+                50.4564,
+                53.374
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 27.8607,
+              "p25Milliseconds": 27.6446,
+              "p75Milliseconds": 29.74105,
+              "variationPercent": 7.524757095119651,
+              "throughput": 861.4284637500134,
+              "outputBytes": 192003188,
+              "samplesMilliseconds": [
+                27.4844,
+                27.8607,
+                28.414,
+                27.7241,
+                31.0681,
+                27.5651,
+                31.652
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 103.0152,
+              "p25Milliseconds": 95.50215,
+              "p75Milliseconds": 109.78415000000001,
+              "variationPercent": 13.863973471876006,
+              "throughput": 232.97532791277405,
+              "outputBytes": 192085664,
+              "samplesMilliseconds": [
+                91.6794,
+                93.3014,
+                97.7029,
+                103.0152,
+                106.0835,
+                113.4848,
+                115.2826
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 51.0984,
+              "p25Milliseconds": 50.6436,
+              "p75Milliseconds": 57.085899999999995,
+              "variationPercent": 12.607635464124115,
+              "throughput": 469.682025268893,
+              "outputBytes": 192085664,
+              "samplesMilliseconds": [
+                47.71,
+                57.5335,
+                51.0984,
+                63.1955,
+                50.8834,
+                50.4038,
+                56.6383
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 105.2761,
+              "p25Milliseconds": 104.76339999999999,
+              "p75Milliseconds": 110.3694,
+              "variationPercent": 5.325045285682134,
+              "throughput": 227.97197084618446,
+              "outputBytes": 192002589,
+              "samplesMilliseconds": [
+                95.3379,
+                105.2761,
+                104.9636,
+                111.5321,
+                109.2067,
+                117.5466,
+                104.5632
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.8340673421701532
+        },
+        {
+          "id": "timestamp-plain",
+          "label": "timestamp \u00B7 Plain",
+          "encoding": "plain",
+          "dataTypes": [
+            "timestamp"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 33.1493,
+              "p25Milliseconds": 32.96445,
+              "p75Milliseconds": 33.6652,
+              "variationPercent": 2.113920957606946,
+              "throughput": 723.9971884775847,
+              "outputBytes": 192007604,
+              "samplesMilliseconds": [
+                33.0357,
+                33.1493,
+                32.8637,
+                34.0696,
+                32.8932,
+                34.2717,
+                33.2608
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 39.6929,
+              "p25Milliseconds": 38.975899999999996,
+              "p75Milliseconds": 39.93925,
+              "variationPercent": 2.4270083566582574,
+              "throughput": 604.6421400300809,
+              "outputBytes": 192007604,
+              "samplesMilliseconds": [
+                38.1159,
+                39.9878,
+                39.8907,
+                39.6727,
+                38.2791,
+                44.8984,
+                39.6929
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 240.9197,
+              "p25Milliseconds": 239.38035,
+              "p75Milliseconds": 250.31305,
+              "variationPercent": 4.537902047860765,
+              "throughput": 99.61825454705448,
+              "outputBytes": 192085928,
+              "samplesMilliseconds": [
+                239.2455,
+                240.9197,
+                238.5283,
+                252.8345,
+                248.0937,
+                252.5324,
+                239.5152
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 223.5589,
+              "p25Milliseconds": 220.32580000000002,
+              "p75Milliseconds": 229.67989999999998,
+              "variationPercent": 4.184176966338607,
+              "throughput": 107.35425876581071,
+              "outputBytes": 192085928,
+              "samplesMilliseconds": [
+                223.5589,
+                218.6764,
+                229.4166,
+                221.9752,
+                233.2719,
+                229.9432,
+                217.2563
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 333.6954,
+              "p25Milliseconds": 319.93015,
+              "p75Milliseconds": 350.0078,
+              "variationPercent": 9.013504531378,
+              "throughput": 71.9218784556215,
+              "outputBytes": 192004341,
+              "samplesMilliseconds": [
+                333.6954,
+                321.8317,
+                1700.1638,
+                316.7483,
+                318.0286,
+                342.5705,
+                357.4451
+              ]
+            }
+          ],
+          "winnerId": "plank-single",
+          "plankSpeedup": 6.74400062746423
+        },
+        {
+          "id": "timestamp-dictionary",
+          "label": "timestamp \u00B7 Dictionary",
+          "encoding": "dictionary",
+          "dataTypes": [
+            "timestamp"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 118.1302,
+              "p25Milliseconds": 112.95054999999999,
+              "p75Milliseconds": 134.26805000000002,
+              "variationPercent": 18.04576645091604,
+              "throughput": 203.16565958577908,
+              "outputBytes": 33397330,
+              "samplesMilliseconds": [
+                110.4078,
+                110.5369,
+                139.0379,
+                129.4982,
+                144.5779,
+                118.1302,
+                115.3642
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 21.7387,
+              "p25Milliseconds": 21.03145,
+              "p75Milliseconds": 23.165399999999998,
+              "variationPercent": 9.816364364014401,
+              "throughput": 1104.0218596328207,
+              "outputBytes": 33397330,
+              "samplesMilliseconds": [
+                19.3671,
+                20.3762,
+                21.7387,
+                22.6106,
+                21.6867,
+                26.5449,
+                23.7202
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 346.5799,
+              "p25Milliseconds": 337.72389999999996,
+              "p75Milliseconds": 362.4365,
+              "variationPercent": 7.130419277055612,
+              "throughput": 69.24810123149092,
+              "outputBytes": 33529102,
+              "samplesMilliseconds": [
+                338.6649,
+                336.7829,
+                346.5799,
+                368.7836,
+                374.912,
+                333.5012,
+                356.0894
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 211.62,
+              "p25Milliseconds": 202.626,
+              "p75Milliseconds": 220.12615,
+              "variationPercent": 8.269610622814474,
+              "throughput": 113.41083073433512,
+              "outputBytes": 33529102,
+              "samplesMilliseconds": [
+                193.8281,
+                192.3638,
+                220.5202,
+                224.7706,
+                219.7321,
+                211.62,
+                211.4239
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request dictionary without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 9.734712747312397
+        },
+        {
+          "id": "timestamp-delta-binary-packed",
+          "label": "timestamp \u00B7 Delta binary packed",
+          "encoding": "delta_binary_packed",
+          "dataTypes": [
+            "timestamp"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 39.0859,
+              "p25Milliseconds": 38.9307,
+              "p75Milliseconds": 39.2459,
+              "variationPercent": 0.8064289168216601,
+              "throughput": 614.0321701687822,
+              "outputBytes": 40128793,
+              "samplesMilliseconds": [
+                38.9762,
+                39.0859,
+                38.8601,
+                39.2208,
+                38.8852,
+                39.271,
+                39.4375
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 22.8524,
+              "p25Milliseconds": 22.698349999999998,
+              "p75Milliseconds": 22.988100000000003,
+              "variationPercent": 1.2679193432637494,
+              "throughput": 1050.2179202184454,
+              "outputBytes": 40128793,
+              "samplesMilliseconds": [
+                22.2872,
+                22.9597,
+                23.0165,
+                22.7134,
+                23.4745,
+                22.8524,
+                22.6833
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 286.7296,
+              "p25Milliseconds": 282.9728,
+              "p75Milliseconds": 290.41625,
+              "variationPercent": 2.595982416883358,
+              "throughput": 83.70255460196644,
+              "outputBytes": 39731226,
+              "samplesMilliseconds": [
+                289.5154,
+                286.7296,
+                280.8231,
+                281.1008,
+                292.7268,
+                291.3171,
+                284.8448
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 190.0947,
+              "p25Milliseconds": 187.54395,
+              "p75Milliseconds": 191.75965,
+              "variationPercent": 2.2176841332241235,
+              "throughput": 126.2528623891145,
+              "outputBytes": 39731226,
+              "samplesMilliseconds": [
+                187.7013,
+                194.5116,
+                190.0947,
+                190.3955,
+                184.4972,
+                187.3866,
+                193.1238
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request delta_binary_packed without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 8.31836918660622
+        },
+        {
+          "id": "timestamp-byte-stream-split",
+          "label": "timestamp \u00B7 Byte stream split",
+          "encoding": "byte_stream_split",
+          "dataTypes": [
+            "timestamp"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 41.6267,
+              "p25Milliseconds": 41.2247,
+              "p75Milliseconds": 43.008449999999996,
+              "variationPercent": 4.28511027777844,
+              "throughput": 576.5530296660556,
+              "outputBytes": 192003452,
+              "samplesMilliseconds": [
+                49.9389,
+                44.0212,
+                41.6267,
+                41.134,
+                41.9957,
+                41.3154,
+                40.8273
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 38.3121,
+              "p25Milliseconds": 36.83345,
+              "p75Milliseconds": 38.580349999999996,
+              "variationPercent": 4.559656087763387,
+              "throughput": 626.4339464555584,
+              "outputBytes": 192003452,
+              "samplesMilliseconds": [
+                38.6722,
+                38.9068,
+                36.6211,
+                37.0458,
+                36.5601,
+                38.4885,
+                38.3121
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 274.0589,
+              "p25Milliseconds": 268.07845,
+              "p75Milliseconds": 276.99235,
+              "variationPercent": 3.2525489958545455,
+              "throughput": 87.57241600254545,
+              "outputBytes": 192085928,
+              "samplesMilliseconds": [
+                296.8051,
+                274.0589,
+                279.7528,
+                262.9786,
+                267.9197,
+                274.2319,
+                268.2372
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 226.3208,
+              "p25Milliseconds": 223.13665,
+              "p75Milliseconds": 234.4573,
+              "variationPercent": 5.002036931647467,
+              "throughput": 106.044163859442,
+              "outputBytes": 192085928,
+              "samplesMilliseconds": [
+                234.987,
+                235.6538,
+                233.9276,
+                226.1166,
+                215.9209,
+                220.1567,
+                226.3208
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request byte_stream_split without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 5.907292996207464
+        },
+        {
+          "id": "double-plain",
+          "label": "double \u00B7 Plain",
+          "encoding": "plain",
+          "dataTypes": [
+            "double"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 31.4382,
+              "p25Milliseconds": 30.7851,
+              "p75Milliseconds": 32.21445,
+              "variationPercent": 4.546538923984196,
+              "throughput": 763.4024848750884,
+              "outputBytes": 192007388,
+              "samplesMilliseconds": [
+                31.6806,
+                31.4382,
+                32.7483,
+                30.4946,
+                36.8157,
+                30.7897,
+                30.7805
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 28.4032,
+              "p25Milliseconds": 28.16235,
+              "p75Milliseconds": 31.547449999999998,
+              "variationPercent": 11.918023321315902,
+              "throughput": 844.9752140603877,
+              "outputBytes": 192007388,
+              "samplesMilliseconds": [
+                28.0688,
+                28.4032,
+                31.5718,
+                28.2559,
+                33.7098,
+                27.7395,
+                31.5231
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 74.6994,
+              "p25Milliseconds": 71.23140000000001,
+              "p75Milliseconds": 78.09965,
+              "variationPercent": 9.194518295997009,
+              "throughput": 321.28772118651557,
+              "outputBytes": 192085664,
+              "samplesMilliseconds": [
+                68.8631,
+                70.2381,
+                72.2247,
+                74.6994,
+                76.7295,
+                79.4698,
+                81.8665
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 49.9362,
+              "p25Milliseconds": 49.42845,
+              "p75Milliseconds": 50.9407,
+              "variationPercent": 3.028364192709901,
+              "throughput": 480.6132625229793,
+              "outputBytes": 192085664,
+              "samplesMilliseconds": [
+                49.9362,
+                50.8046,
+                49.5407,
+                48.593,
+                49.3162,
+                51.2453,
+                51.0768
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 32.5965,
+              "p25Milliseconds": 32.1626,
+              "p75Milliseconds": 37.26105,
+              "variationPercent": 15.641096436734006,
+              "throughput": 736.2753669872532,
+              "outputBytes": 192004293,
+              "samplesMilliseconds": [
+                32.4535,
+                31.7271,
+                31.8717,
+                32.5965,
+                39.1556,
+                43.0225,
+                35.3665
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.1476347735466428
+        },
+        {
+          "id": "double-dictionary",
+          "label": "double \u00B7 Dictionary",
+          "encoding": "dictionary",
+          "dataTypes": [
+            "double"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 102.649,
+              "p25Milliseconds": 102.54325,
+              "p75Milliseconds": 103.979,
+              "variationPercent": 1.3986984773353843,
+              "throughput": 233.80646669719138,
+              "outputBytes": 33397114,
+              "samplesMilliseconds": [
+                102.649,
+                107.3099,
+                104.4887,
+                102.5772,
+                102.3424,
+                103.4693,
+                102.5093
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 22.3889,
+              "p25Milliseconds": 21.97465,
+              "p75Milliseconds": 23.29455,
+              "variationPercent": 5.895332061869947,
+              "throughput": 1071.9597657767913,
+              "outputBytes": 33397114,
+              "samplesMilliseconds": [
+                23.446,
+                23.4348,
+                23.1543,
+                21.4764,
+                21.6274,
+                22.3889,
+                22.3219
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 176.1404,
+              "p25Milliseconds": 175.40425,
+              "p75Milliseconds": 182.2218,
+              "variationPercent": 3.8705203349146537,
+              "throughput": 136.25494208029502,
+              "outputBytes": 33528838,
+              "samplesMilliseconds": [
+                174.8506,
+                176.1404,
+                175.9579,
+                174.6431,
+                181.4527,
+                182.9909,
+                184.0676
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 24.2792,
+              "p25Milliseconds": 23.9087,
+              "p75Milliseconds": 30.318199999999997,
+              "variationPercent": 26.399140004612992,
+              "throughput": 988.5004448252001,
+              "outputBytes": 33528838,
+              "samplesMilliseconds": [
+                23.9944,
+                23.823,
+                24.2792,
+                21.6114,
+                31.7638,
+                29.7628,
+                30.8736
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request dictionary without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.0844302310519947
+        },
+        {
+          "id": "double-byte-stream-split",
+          "label": "double \u00B7 Byte stream split",
+          "encoding": "byte_stream_split",
+          "dataTypes": [
+            "double"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 49.4925,
+              "p25Milliseconds": 46.7013,
+              "p75Milliseconds": 50.91525,
+              "variationPercent": 8.514320351568413,
+              "throughput": 484.92195787240485,
+              "outputBytes": 192003236,
+              "samplesMilliseconds": [
+                46.5103,
+                46.456,
+                46.8923,
+                50.3974,
+                49.4925,
+                51.604,
+                51.4331
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 28.7007,
+              "p25Milliseconds": 28.076549999999997,
+              "p75Milliseconds": 29.086599999999997,
+              "variationPercent": 3.5192521436759368,
+              "throughput": 836.2165382725856,
+              "outputBytes": 192003236,
+              "samplesMilliseconds": [
+                26.8917,
+                29.1955,
+                28.1227,
+                28.7007,
+                28.9777,
+                28.0304,
+                32.6691
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 96.2113,
+              "p25Milliseconds": 92.24940000000001,
+              "p75Milliseconds": 103.62815,
+              "variationPercent": 11.826833230608043,
+              "throughput": 249.4509480695095,
+              "outputBytes": 192085664,
+              "samplesMilliseconds": [
+                91.6071,
+                92.4901,
+                92.0087,
+                96.2113,
+                102.9046,
+                114.6878,
+                104.3517
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 51.944,
+              "p25Milliseconds": 48.9957,
+              "p75Milliseconds": 52.9203,
+              "variationPercent": 7.555444324657319,
+              "throughput": 462.03603881102725,
+              "outputBytes": 192085664,
+              "samplesMilliseconds": [
+                48.6664,
+                49.0555,
+                48.9359,
+                53.1563,
+                51.944,
+                52.8842,
+                52.9564
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 102.7061,
+              "p25Milliseconds": 97.1933,
+              "p75Milliseconds": 108.39315,
+              "variationPercent": 10.904756387400564,
+              "throughput": 233.67648075430765,
+              "outputBytes": 192002373,
+              "samplesMilliseconds": [
+                96.7593,
+                97.6273,
+                95.0471,
+                106.8212,
+                102.7061,
+                112.6698,
+                109.9651
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.8098513276679662
+        },
+        {
+          "id": "string-plain",
+          "label": "string \u00B7 Plain",
+          "encoding": "plain",
+          "dataTypes": [
+            "string"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 535.6751,
+              "p25Milliseconds": 402.6834,
+              "p75Milliseconds": 546.84005,
+              "variationPercent": 26.911209798626068,
+              "throughput": 44.803277210383676,
+              "outputBytes": 912025641,
+              "samplesMilliseconds": [
+                287.6709,
+                555.3091,
+                255.2939,
+                543.4905,
+                517.6959,
+                535.6751,
+                550.1896
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 236.2528,
+              "p25Milliseconds": 224.78525000000002,
+              "p75Milliseconds": 247.3284,
+              "variationPercent": 9.541960984166101,
+              "throughput": 101.58609760392258,
+              "outputBytes": 912025641,
+              "samplesMilliseconds": [
+                581.3135,
+                236.2528,
+                228.6528,
+                236.2859,
+                220.9177,
+                258.3709,
+                198.9212
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 1244.8678,
+              "p25Milliseconds": 1166.8561,
+              "p75Milliseconds": 1469.0737,
+              "variationPercent": 24.27708387991078,
+              "throughput": 19.27915558583811,
+              "outputBytes": 912125253,
+              "samplesMilliseconds": [
+                3698.9308,
+                889.9807,
+                1684.7595,
+                1163.5943,
+                1170.1179,
+                1244.8678,
+                1253.3879
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 654.4152,
+              "p25Milliseconds": 592.2301,
+              "p75Milliseconds": 813.4289,
+              "variationPercent": 33.80098750762513,
+              "throughput": 36.67396478565902,
+              "outputBytes": 912125253,
+              "samplesMilliseconds": [
+                11877.9678,
+                665.7394,
+                961.1184,
+                654.4152,
+                575.4916,
+                571.8323,
+                608.9686
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 1208.9778,
+              "p25Milliseconds": 1160.07535,
+              "p75Milliseconds": 1719.11015,
+              "variationPercent": 46.24028662891907,
+              "throughput": 19.85148114382249,
+              "outputBytes": 912009647,
+              "samplesMilliseconds": [
+                1189.36,
+                1122.3348,
+                1258.3185,
+                2179.9018,
+                1130.7907,
+                2489.1717,
+                1208.9778
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 2.7699785991954378
+        },
+        {
+          "id": "string-dictionary",
+          "label": "string \u00B7 Dictionary",
+          "encoding": "dictionary",
+          "dataTypes": [
+            "string"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 295.4622,
+              "p25Milliseconds": 290.87715000000003,
+              "p75Milliseconds": 303.9814,
+              "variationPercent": 4.43516971037242,
+              "throughput": 81.22866478351546,
+              "outputBytes": 33665482,
+              "samplesMilliseconds": [
+                309.391,
+                289.044,
+                288.96,
+                292.7103,
+                313.1084,
+                295.4622,
+                298.5718
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 54.0546,
+              "p25Milliseconds": 53.88365,
+              "p75Milliseconds": 70.0272,
+              "variationPercent": 29.865265860814787,
+              "throughput": 443.99551564529196,
+              "outputBytes": 33665482,
+              "samplesMilliseconds": [
+                61.1687,
+                54.0546,
+                53.9589,
+                53.6722,
+                78.8857,
+                53.8084,
+                90.4828
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 466.599,
+              "p25Milliseconds": 464.77840000000003,
+              "p75Milliseconds": 473.20765,
+              "variationPercent": 1.806529803964425,
+              "throughput": 51.43602965287109,
+              "outputBytes": 33773038,
+              "samplesMilliseconds": [
+                478.4566,
+                465.1305,
+                474.4099,
+                472.0054,
+                454.8515,
+                466.599,
+                464.4263
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 60.7241,
+              "p25Milliseconds": 59.306799999999996,
+              "p75Milliseconds": 63.6811,
+              "variationPercent": 7.20356497667319,
+              "throughput": 395.2302298428466,
+              "outputBytes": 33773038,
+              "samplesMilliseconds": [
+                47.3438,
+                59.7377,
+                66.9763,
+                65.424,
+                61.9382,
+                58.8759,
+                60.7241
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 666.8392,
+              "p25Milliseconds": 610.7710999999999,
+              "p75Milliseconds": 678.51275,
+              "variationPercent": 10.158618449545266,
+              "throughput": 35.990685610563986,
+              "outputBytes": 72666557,
+              "samplesMilliseconds": [
+                614.9334,
+                599.6862,
+                606.6088,
+                682.7051,
+                666.8392,
+                674.3204,
+                740.8521
+              ]
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.1233845038165113
+        },
+        {
+          "id": "string-delta-length-byte-array",
+          "label": "string \u00B7 Delta length byte array",
+          "encoding": "delta_length_byte_array",
+          "dataTypes": [
+            "string"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 647.5134,
+              "p25Milliseconds": 547.28355,
+              "p75Milliseconds": 670.44835,
+              "variationPercent": 19.021197090284154,
+              "throughput": 37.06487000886777,
+              "outputBytes": 1078166008,
+              "samplesMilliseconds": [
+                460.0784,
+                690.4569,
+                438.4988,
+                650.4398,
+                733.0371,
+                647.5134,
+                634.4887
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 343.4347,
+              "p25Milliseconds": 326.90959999999995,
+              "p75Milliseconds": 361.90895,
+              "variationPercent": 10.190976625250753,
+              "throughput": 69.88228038692654,
+              "outputBytes": 1078166008,
+              "samplesMilliseconds": [
+                316.5712,
+                380.1319,
+                343.4347,
+                329.9247,
+                450.4961,
+                343.686,
+                323.8945
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 1179.3988,
+              "p25Milliseconds": 1120.0985999999998,
+              "p75Milliseconds": 1422.9834999999998,
+              "variationPercent": 25.681296267216823,
+              "throughput": 20.349350872664953,
+              "outputBytes": 1078266920,
+              "samplesMilliseconds": [
+                1948.3104,
+                1267.1822,
+                1578.7848,
+                1057.3909,
+                1179.3988,
+                1068.6252,
+                1171.572
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 835.5274,
+              "p25Milliseconds": 579.5297,
+              "p75Milliseconds": 1010.5672,
+              "variationPercent": 51.58867321406814,
+              "throughput": 28.72437217498792,
+              "outputBytes": 1078266920,
+              "samplesMilliseconds": [
+                1031.7283,
+                989.4061,
+                835.5274,
+                1520.3844,
+                585.6338,
+                562.6753,
+                573.4256
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request delta_length_byte_array without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 2.4328566682399884
+        },
+        {
+          "id": "string-delta-byte-array",
+          "label": "string \u00B7 Delta byte array",
+          "encoding": "delta_byte_array",
+          "dataTypes": [
+            "string"
+          ],
+          "rowCount": 1000000,
+          "valueCount": 24000000,
+          "columnCount": 24,
+          "throughputUnit": "million values/s",
+          "measurements": [
+            {
+              "implementationId": "plank-single",
+              "label": "Plank (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 597.2161,
+              "p25Milliseconds": 572.5594,
+              "p75Milliseconds": 606.31345,
+              "variationPercent": 5.6518988687679395,
+              "throughput": 40.18645846955566,
+              "outputBytes": 473034054,
+              "samplesMilliseconds": [
+                555.5532,
+                597.2161,
+                474.223,
+                656.8518,
+                611.3274,
+                589.5656,
+                601.2995
+              ]
+            },
+            {
+              "implementationId": "plank-multi",
+              "label": "Plank (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 289.048,
+              "p25Milliseconds": 288.22085000000004,
+              "p75Milliseconds": 294.076,
+              "variationPercent": 2.025667017242804,
+              "throughput": 83.0311920511472,
+              "outputBytes": 473034054,
+              "samplesMilliseconds": [
+                287.7448,
+                289.048,
+                294.4772,
+                295.0507,
+                293.6748,
+                288.6969,
+                286.0225
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-single",
+              "label": "ParquetSharp (1 thread)",
+              "threads": 1,
+              "available": true,
+              "medianMilliseconds": 1170.2985,
+              "p25Milliseconds": 1064.6480999999999,
+              "p75Milliseconds": 1383.1504,
+              "variationPercent": 27.21547536803645,
+              "throughput": 20.507588448588113,
+              "outputBytes": 473154978,
+              "samplesMilliseconds": [
+                1401.7483,
+                987.5591,
+                973.9382,
+                1364.5525,
+                1423.2216,
+                1170.2985,
+                1141.7371
+              ]
+            },
+            {
+              "implementationId": "parquetsharp-multi",
+              "label": "ParquetSharp (24 threads)",
+              "threads": 24,
+              "available": true,
+              "medianMilliseconds": 327.9238,
+              "p25Milliseconds": 238.0282,
+              "p75Milliseconds": 402.90455,
+              "variationPercent": 50.278860515766155,
+              "throughput": 73.18773446758057,
+              "outputBytes": 473154978,
+              "samplesMilliseconds": [
+                227.1524,
+                240.6307,
+                235.4257,
+                327.9238,
+                424.4565,
+                413.0482,
+                392.7609
+              ]
+            },
+            {
+              "implementationId": "parquetnet-single",
+              "label": "Parquet.Net (1 thread)",
+              "threads": 1,
+              "available": false,
+              "unavailableReason": "Parquet.Net 6.0.3 cannot request delta_byte_array without falling back.",
+              "samplesMilliseconds": []
+            }
+          ],
+          "winnerId": "plank-multi",
+          "plankSpeedup": 1.1344960006642495
+        }
+      ]
+    }
+  ]
+}
