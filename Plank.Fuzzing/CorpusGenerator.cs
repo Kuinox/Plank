@@ -37,6 +37,9 @@ public static class CorpusGenerator
     // mutation to find it.
     const byte VerifyCrcSelector = 0x10;
 
+    // Bit 7 sends the input to a decompressor instead of the Parquet reader.
+    const byte DecompressorSelector = 0x80;
+
     public static int Generate(string outputDirectory)
     {
         ArgumentException.ThrowIfNullOrEmpty(outputDirectory);
@@ -56,6 +59,12 @@ public static class CorpusGenerator
                 written += WriteSeed(outputDirectory, $"gen-rowapi-{name}",
                     (byte)(RowApiSelector | (selector & VerifyCrcSelector)), bytes);
         }
+
+        // The decompressors get fed directly rather than through a file, because
+        // a file can only carry a codec the writer can produce and it cannot
+        // produce Lz4Legacy at all.
+        foreach (var (name, bytes) in DecompressorCorpus.BuildCases())
+            written += WriteSeed(outputDirectory, $"gen-codec-{name}", DecompressorSelector, bytes);
 
         return written;
     }

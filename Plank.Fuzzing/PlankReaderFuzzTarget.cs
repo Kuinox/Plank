@@ -35,6 +35,18 @@ public static class PlankReaderFuzzTarget
 
     static void Run(byte selector, byte[] fileBytes)
     {
+        // Bit 7 routes the input to a decompressor instead of the Parquet reader.
+        // It is a separate target sharing this one's harness and corpus, because
+        // the codecs cannot be reached through a file: the corpus can only
+        // contain codecs the writer can produce, and it cannot produce Lz4Legacy.
+        // Checked before anything else so the payload is untouched by the
+        // reader's own selector bits.
+        if ((selector & 0x80) != 0)
+        {
+            PlankDecompressorFuzzTarget.Execute(fileBytes);
+            return;
+        }
+
         var source = new MemoryReadSource(fileBytes);
 
         // Bits 4 and 5 pick the reader options. Both were pinned to their
