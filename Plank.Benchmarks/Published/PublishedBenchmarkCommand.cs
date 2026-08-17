@@ -44,10 +44,16 @@ public static class PublishedBenchmarkCommand
 
     internal static string FindRepositoryRoot()
     {
+        // In a linked worktree .git is a file holding "gitdir: ...", not a directory, so testing only
+        // for a directory makes every benchmark command fail from a worktree.
         for (var directory = new DirectoryInfo(Environment.CurrentDirectory); directory is not null;
              directory = directory.Parent)
-            if (Directory.Exists(Path.Combine(directory.FullName, ".git")))
+        {
+            var git = Path.Combine(directory.FullName, ".git");
+            if (Directory.Exists(git) || File.Exists(git))
                 return directory.FullName;
+        }
+
         throw new DirectoryNotFoundException("Could not find the Plank repository root.");
     }
 
