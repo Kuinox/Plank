@@ -119,38 +119,39 @@ sealed class ParquetSharpPublishedBenchmarkReader : IPublishedBenchmarkReader
     static PublishedReadResult Consume<T>(PrimitiveArray<T> array, int columnIndex, int rowGroupIndex)
         where T : struct, IEquatable<T>
     {
-        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, array.Length);
+        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
         for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
-            fingerprint = PublishedReadFingerprint.AddValue(fingerprint, array.GetValue(valueIndex));
-        return new PublishedReadResult(array.Length, fingerprint);
+            fingerprint.AddValue(array.GetValue(valueIndex));
+        return new PublishedReadResult(array.Length, fingerprint.Finish());
     }
 
     static PublishedReadResult Consume(BooleanArray array, int columnIndex, int rowGroupIndex)
     {
-        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, array.Length);
+        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
         for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
-            fingerprint = PublishedReadFingerprint.AddValue(fingerprint, array.GetValue(valueIndex));
-        return new PublishedReadResult(array.Length, fingerprint);
+            fingerprint.AddValue(array.GetValue(valueIndex));
+        return new PublishedReadResult(array.Length, fingerprint.Finish());
     }
 
     static PublishedReadResult Consume(TimestampArray array, int columnIndex, int rowGroupIndex)
     {
-        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, array.Length);
+        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
         for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
-            fingerprint = PublishedReadFingerprint.AddValue(fingerprint, array.GetTimestamp(valueIndex));
-        return new PublishedReadResult(array.Length, fingerprint);
+            fingerprint.AddValue(array.GetTimestamp(valueIndex));
+        return new PublishedReadResult(array.Length, fingerprint.Finish());
     }
 
     static PublishedReadResult Consume(StringArray array, int columnIndex, int rowGroupIndex)
     {
-        var fingerprint = PublishedReadFingerprint.StartPiece(columnIndex, rowGroupIndex, array.Length);
+        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
         for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
         {
             var bytes = array.GetBytes(valueIndex, out var isNull);
-            fingerprint = isNull
-                ? PublishedReadFingerprint.AddNull(fingerprint)
-                : PublishedReadFingerprint.AddBytes(fingerprint, bytes);
+            if (isNull)
+                fingerprint.AddNull();
+            else
+                fingerprint.AddBytes(bytes);
         }
-        return new PublishedReadResult(array.Length, fingerprint);
+        return new PublishedReadResult(array.Length, fingerprint.Finish());
     }
 }

@@ -65,4 +65,12 @@ deterministic fingerprint. The fingerprint is validated after the timer, so the 
 decoded buffers that a real consumer would observe. Multithreaded readers consume independent columns
 in parallel and combine their fingerprints in schema order.
 
+**The fingerprint is inside the timed region, so it has to stay cheap.** It is charged to every
+implementation equally, but a hash that costs more than a decode makes every reader measure the same
+and the comparison says nothing. A single FNV chain hashing each value byte by byte cost ~11.9 ns per
+value — around 88% of a plain int32 read — so the fingerprint spreads its work over four independent
+lanes fed round-robin, which keeps four multiplies in flight and drops it to ~1.4 ns per value.
+Changing how values are mixed changes every published fingerprint, so a snapshot generated before such
+a change cannot be compared against one generated after it.
+
 Use `--data-dir`, `--output`, `--warmups`, `--iterations`, `--workers`, `--synthetic-rows`, or `--synthetic-width` to override the defaults.
