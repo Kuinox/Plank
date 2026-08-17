@@ -752,7 +752,7 @@ static class ColumnChunkReader
             if (column.PhysicalType == ParquetPhysicalType.Boolean)
             {
                 var booleans = Unsafe.As<Span<TValue>, Span<bool>>(ref destination);
-                BooleanBitUnpacker.Unpack(payload, checked(physicalOffset), booleans);
+                BooleanBitUnpacker.Unpack(payload, physicalOffset, booleans);
                 return;
             }
             var offset = checked(physicalOffset * GetEncodedFixedWidth(column));
