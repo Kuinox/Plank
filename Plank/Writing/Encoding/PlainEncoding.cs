@@ -396,19 +396,29 @@ static class PlainEncoding
     /// each value's length once, decide whether the value still fits, and copy it. The row that
     /// overflows the budget is left for the next page. A first row larger than the whole budget still
     /// gets written, on a page of its own, which is the rule the split sizing pass used.
+    /// <para>
+    /// The same pass tracks the column's min and max in <paramref name="minMax"/>, which spares the
+    /// statistics pass a walk of its own over the value references. Values are ordered unsigned
+    /// lexicographically; see <see cref="PlainBinaryMinMax"/> for who may use the result.
+    /// </para>
     /// </remarks>
-    internal static int WriteRequiredByteArrayPage(Column column, ReadOnlySpan<byte[]> values,
-        int targetPageBytes, ref BufferWriter writer)
+    internal static int WriteRequiredByteArrayPage(Column column, ReadOnlySpan<byte[]> values, int startIndex,
+        int targetPageBytes, ref BufferWriter writer, ref PlainBinaryMinMax minMax)
     {
-        var first = values[0];
+        var first = values[startIndex];
         if (first is null)
             ByteArrayRows.ThrowNullValue(column);
         var destination = writer.GetSpan(Math.Max(targetPageBytes, checked(sizeof(int) + first!.Length)));
+        var minIndex = minMax.Found ? minMax.MinIndex : -1;
+        var maxIndex = minMax.Found ? minMax.MaxIndex : -1;
+        var min = minIndex < 0 ? null : values[minIndex];
+        var max = maxIndex < 0 ? null : values[maxIndex];
         var offset = 0;
         var rowCount = 0;
-        for (; rowCount < values.Length; rowCount++)
+        for (; startIndex + rowCount < values.Length; rowCount++)
         {
-            var value = values[rowCount];
+            var index = startIndex + rowCount;
+            var value = values[index];
             if (value is null)
                 ByteArrayRows.ThrowNullValue(column);
             var rowBytes = checked(sizeof(int) + value!.Length);
@@ -420,9 +430,31 @@ static class PlainEncoding
             offset += sizeof(int);
             value.CopyTo(destination[offset..]);
             offset += value.Length;
+
+            if (min is null)
+            {
+                min = value;
+                max = value;
+                minIndex = index;
+                maxIndex = index;
+            }
+            // A value below the running min cannot also be above the running max, so the second
+            // comparison only runs when the first one did not claim the value.
+            else if (value.AsSpan().SequenceCompareTo(min) < 0)
+            {
+                min = value;
+                minIndex = index;
+            }
+            else if (value.AsSpan().SequenceCompareTo(max) > 0)
+            {
+                max = value;
+                maxIndex = index;
+            }
         }
 
         writer.Advance(offset);
+        if (min is not null)
+            minMax = new PlainBinaryMinMax { Found = true, MinIndex = minIndex, MaxIndex = maxIndex };
         return rowCount;
     }
 
@@ -430,15 +462,22 @@ static class PlainEncoding
     /// The <see cref="ReadOnlyMemory{T}"/> row shape of <see cref="WriteRequiredByteArrayPage"/>. A
     /// required memory row is always present, so this one has no null check to make.
     /// </summary>
-    internal static int WriteRequiredMemoryPage(ReadOnlySpan<ReadOnlyMemory<byte>> values, int targetPageBytes,
-        ref BufferWriter writer)
+    internal static int WriteRequiredMemoryPage(ReadOnlySpan<ReadOnlyMemory<byte>> values, int startIndex,
+        int targetPageBytes, ref BufferWriter writer, ref PlainBinaryMinMax minMax)
     {
-        var destination = writer.GetSpan(Math.Max(targetPageBytes, checked(sizeof(int) + values[0].Length)));
+        var destination = writer.GetSpan(
+            Math.Max(targetPageBytes, checked(sizeof(int) + values[startIndex].Length)));
+        var found = minMax.Found;
+        var minIndex = found ? minMax.MinIndex : 0;
+        var maxIndex = found ? minMax.MaxIndex : 0;
+        var min = found ? values[minIndex].Span : default;
+        var max = found ? values[maxIndex].Span : default;
         var offset = 0;
         var rowCount = 0;
-        for (; rowCount < values.Length; rowCount++)
+        for (; startIndex + rowCount < values.Length; rowCount++)
         {
-            var value = values[rowCount].Span;
+            var index = startIndex + rowCount;
+            var value = values[index].Span;
             var rowBytes = checked(sizeof(int) + value.Length);
             if (rowCount > 0 && rowBytes > targetPageBytes - offset)
                 break;
@@ -447,9 +486,30 @@ static class PlainEncoding
             offset += sizeof(int);
             value.CopyTo(destination[offset..]);
             offset += value.Length;
+
+            if (!found)
+            {
+                found = true;
+                min = value;
+                max = value;
+                minIndex = index;
+                maxIndex = index;
+            }
+            else if (value.SequenceCompareTo(min) < 0)
+            {
+                min = value;
+                minIndex = index;
+            }
+            else if (value.SequenceCompareTo(max) > 0)
+            {
+                max = value;
+                maxIndex = index;
+            }
         }
 
         writer.Advance(offset);
+        if (found)
+            minMax = new PlainBinaryMinMax { Found = true, MinIndex = minIndex, MaxIndex = maxIndex };
         return rowCount;
     }
 

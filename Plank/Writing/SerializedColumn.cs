@@ -1042,7 +1042,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var dictionaryState = GetOrCreateDictionaryState<TValue>();
         var hasDictionaryStatistics = Plank.Writing.Encoding.Encoding.Encode(_owner.BufferWriters, _column, values,
             strategyContext, Pages, _owner.DataPageVersion,
-            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], dictionaryState);
+            _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], dictionaryState, out var binaryMinMax);
         _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && TryAssignInt32ColumnAndPageStatistics(values))
@@ -1052,8 +1052,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             && typeof(TValue) != typeof(double)
             ? dictionaryState.AsSpan()
             : values;
-        Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, statisticsValues, 0,
-            ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
+        // A plain BYTE_ARRAY encode already compared every value on its way into the page buffer, so
+        // take its answer rather than walking the value references again for the same result.
+        Statistics = binaryMinMax.Found && ColumnStatistics.OrdersBinaryValuesLexicographically(_column)
+            ? ColumnStatistics.CreateBinaryFromKnownExtremes(_column, values, binaryMinMax.MinIndex,
+                binaryMinMax.MaxIndex, ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer,
+                _owner.BufferWriters.BufferPool)
+            : ColumnStatistics.CreateWithReusableBinaryBuffers(_column, statisticsValues, 0,
+                ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
             AssignPageStatistics(values);
     }

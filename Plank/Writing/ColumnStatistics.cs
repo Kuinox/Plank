@@ -144,6 +144,55 @@ internal readonly struct ColumnStatistics
         return Create(column, values, nullCount);
     }
 
+    /// <summary>
+    /// Builds binary statistics from the min and max a plain BYTE_ARRAY encode pass already found,
+    /// instead of walking the values again.
+    /// </summary>
+    /// <remarks>
+    /// The encoder orders values unsigned lexicographically, which is what
+    /// <see cref="CompareBinary"/> does for every BYTE_ARRAY column except a decimal one. Callers must
+    /// check <see cref="OrdersBinaryValuesLexicographically"/> before using an encoder-supplied result.
+    /// </remarks>
+    internal static ColumnStatistics CreateBinaryFromKnownExtremes<T>(Column column, ReadOnlySpan<T> values,
+        int minIndex, int maxIndex, ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer,
+        IParquetBufferPool bufferPool)
+        where T : notnull
+    {
+        ReadOnlySpan<byte> min;
+        ReadOnlySpan<byte> max;
+        if (typeof(T) == typeof(byte[]))
+        {
+            var byteArrays = AsAnySpan<T, byte[]>(values);
+            min = byteArrays[minIndex];
+            max = byteArrays[maxIndex];
+        }
+        else if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+        {
+            var memories = AsAnySpan<T, ReadOnlyMemory<byte>>(values);
+            min = memories[minIndex].Span;
+            max = memories[maxIndex].Span;
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' cannot take binary statistics from values of type '{typeof(T)}'.");
+        }
+
+        CopyToReusableBuffer(min, ref minBuffer, bufferPool);
+        CopyToReusableBuffer(max, ref maxBuffer, bufferPool);
+        return new ColumnStatistics(minBuffer, min.Length, maxBuffer, max.Length, 0, true);
+    }
+
+    /// <summary>
+    /// Whether the column's BYTE_ARRAY values compare as plain unsigned byte sequences. Decimals do
+    /// not: their bytes are a two's complement number, so they are ordered by sign and magnitude.
+    /// </summary>
+    internal static bool OrdersBinaryValuesLexicographically(Column column)
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        return column.LogicalType is not LogicalType.Decimal;
+    }
+
     static ColumnStatistics CreateRepeated<T>(Column column, ReadOnlySpan<T> values, long nullCount)
     {
         var accumulator = new RepeatedAccumulator(column);

@@ -14,7 +14,8 @@ static class Encoding
 
     internal static bool Encode<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         PageStrategyContext strategyContext, PageList pages, ParquetDataPageVersion dataPageVersion,
-        LeafProjectionInfo leafProjectionInfo, ReusableDictionaryState<T> dictionaryState)
+        LeafProjectionInfo leafProjectionInfo, ReusableDictionaryState<T> dictionaryState,
+        out PlainBinaryMinMax binaryMinMax)
         where T : notnull
     {
         ArgumentNullException.ThrowIfNull(column);
@@ -22,6 +23,7 @@ static class Encoding
         ArgumentNullException.ThrowIfNull(pages);
         var strategy = strategyContext.Strategy;
 
+        binaryMinMax = default;
         pages.Clear();
         if (values.Length == 0)
             return false;
@@ -54,7 +56,8 @@ static class Encoding
 
             if (TryWriteFixedWidthDataPages(bufferWriters, column, values, dataEncoding, strategy, pages))
                 return false;
-            if (TryWriteSizeBoundedDataPages(bufferWriters, column, values, dataEncoding, strategy, pages))
+            if (TryWriteSizeBoundedDataPages(bufferWriters, column, values, dataEncoding, strategy, pages,
+                    ref binaryMinMax))
                 return false;
 
             WriteStrategyDataPages(bufferWriters, column, values, dataEncoding, strategy, pages);
@@ -150,7 +153,7 @@ static class Encoding
 
     static bool TryWriteSizeBoundedDataPages<T>(BufferWriterFactory bufferWriters, Column column,
         ReadOnlySpan<T> values,
-        EncodingKind dataEncoding, IPageStrategy strategy, PageList pages)
+        EncodingKind dataEncoding, IPageStrategy strategy, PageList pages, ref PlainBinaryMinMax binaryMinMax)
         where T : notnull
     {
         if (!strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytes))
@@ -176,7 +179,8 @@ static class Encoding
         if (!TryGetPlainEncodedValueSize(column, typeof(T), out _))
             return false;
 
-        WritePlainByteArrayDataPages(bufferWriters, column, values, pages, checked((int)targetPageBytes));
+        WritePlainByteArrayDataPages(bufferWriters, column, values, pages, checked((int)targetPageBytes),
+            ref binaryMinMax);
         return true;
     }
 
@@ -190,24 +194,28 @@ static class Encoding
     /// the page budget up front and advance by what it actually wrote. That removes the separate
     /// sizing walk over the value array, and with it the second walk
     /// <see cref="PlainEncoding.WriteRequiredByteArrayPayloads"/> needed to size its own destination.
-    /// The page boundary rule is unchanged, so the encoded bytes are identical.
+    /// The page boundary rule is unchanged, so the encoded bytes are identical. The pass also reports
+    /// the column's min and max through <paramref name="binaryMinMax"/>, so the statistics that follow
+    /// do not have to walk the values a second time.
     /// </remarks>
     static void WritePlainByteArrayDataPages<T>(BufferWriterFactory bufferWriters, Column column,
-        ReadOnlySpan<T> values, PageList pages, int targetPageBytes)
+        ReadOnlySpan<T> values, PageList pages, int targetPageBytes, ref PlainBinaryMinMax binaryMinMax)
         where T : notnull
     {
         // TryGetPlainEncodedValueSize admits exactly these two row shapes for a BYTE_ARRAY column.
         if (typeof(T) == typeof(byte[]))
         {
             WritePlainByteArrayDataPagesCore(bufferWriters, column,
-                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), pages, targetPageBytes);
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), pages, targetPageBytes,
+                ref binaryMinMax);
             return;
         }
 
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
         {
             WritePlainMemoryDataPagesCore(bufferWriters, column,
-                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>>>(ref values), pages, targetPageBytes);
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>>>(ref values), pages, targetPageBytes,
+                ref binaryMinMax);
             return;
         }
 
@@ -218,30 +226,31 @@ static class Encoding
     // byte[] is a shared-generic reference-type instantiation, so the row-shape dispatch above only
     // folds away once the loop is concrete. Keep this and the ReadOnlyMemory<byte> variant separate.
     static void WritePlainByteArrayDataPagesCore(BufferWriterFactory bufferWriters, Column column,
-        ReadOnlySpan<byte[]> values, PageList pages, int targetPageBytes)
+        ReadOnlySpan<byte[]> values, PageList pages, int targetPageBytes, ref PlainBinaryMinMax binaryMinMax)
     {
         var rowsWritten = 0;
         while (rowsWritten < values.Length)
         {
             var pageIndex = AddNewDataPage(bufferWriters, pages);
             ref var page = ref pages[pageIndex];
-            var pageRowCount = PlainEncoding.WriteRequiredByteArrayPage(column, values[rowsWritten..],
-                targetPageBytes, ref page.Content);
+            var pageRowCount = PlainEncoding.WriteRequiredByteArrayPage(column, values, rowsWritten,
+                targetPageBytes, ref page.Content, ref binaryMinMax);
             rowsWritten += pageRowCount;
             WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0, EncodingKind.Plain);
         }
     }
 
     static void WritePlainMemoryDataPagesCore(BufferWriterFactory bufferWriters, Column column,
-        ReadOnlySpan<ReadOnlyMemory<byte>> values, PageList pages, int targetPageBytes)
+        ReadOnlySpan<ReadOnlyMemory<byte>> values, PageList pages, int targetPageBytes,
+        ref PlainBinaryMinMax binaryMinMax)
     {
         var rowsWritten = 0;
         while (rowsWritten < values.Length)
         {
             var pageIndex = AddNewDataPage(bufferWriters, pages);
             ref var page = ref pages[pageIndex];
-            var pageRowCount = PlainEncoding.WriteRequiredMemoryPage(values[rowsWritten..], targetPageBytes,
-                ref page.Content);
+            var pageRowCount = PlainEncoding.WriteRequiredMemoryPage(values, rowsWritten, targetPageBytes,
+                ref page.Content, ref binaryMinMax);
             rowsWritten += pageRowCount;
             WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0, EncodingKind.Plain);
         }
