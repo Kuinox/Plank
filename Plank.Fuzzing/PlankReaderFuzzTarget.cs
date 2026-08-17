@@ -59,7 +59,7 @@ public static class PlankReaderFuzzTarget
         // measured 0% over a 14k-input corpus — neither fuzz target drove it.
         if ((selector & 3) == 2)
         {
-            DrainRowApi(source, options.VerifyPageCrc);
+            DrainRowApi(source, options.VerifyPageCrc, binaryAsFixedWidth: (selector & 0x40) != 0);
             return;
         }
 
@@ -131,7 +131,7 @@ public static class PlankReaderFuzzTarget
     // RowReaderCore is normally reached through source-generated row types, but
     // it is public and takes the schema and descriptors directly, so the fuzzer
     // can drive it over whatever schema the file declares.
-    static void DrainRowApi(IParquetReadSource source, bool verifyPageCrc)
+    static void DrainRowApi(IParquetReadSource source, bool verifyPageCrc, bool binaryAsFixedWidth)
     {
         ParquetSchema schema;
         using (var probe = new ParquetReader())
@@ -143,18 +143,14 @@ public static class PlankReaderFuzzTarget
         var descriptors = new RowApiColumnDescriptor[schema.LeafColumns.Length];
         for (var i = 0; i < descriptors.Length; i++)
         {
-            var leaf = schema.LeafColumns[i];
-            // A descriptor is typed and the row API rejects one whose type does
-            // not match the leaf, so the physical type picks the instantiation.
-            descriptors[i] = leaf.PhysicalType switch
-            {
-                ParquetPhysicalType.Boolean => new RowApiColumnDescriptor<bool>($"p{i}", leaf),
-                ParquetPhysicalType.Int32 => new RowApiColumnDescriptor<int>($"p{i}", leaf),
-                ParquetPhysicalType.Int64 => new RowApiColumnDescriptor<long>($"p{i}", leaf),
-                ParquetPhysicalType.Float => new RowApiColumnDescriptor<float>($"p{i}", leaf),
-                ParquetPhysicalType.Double => new RowApiColumnDescriptor<double>($"p{i}", leaf),
-                _ => new RowApiColumnDescriptor<byte>($"p{i}", leaf)
-            };
+            var descriptor = CreateRowApiDescriptor(schema.LeafColumns[i], i, binaryAsFixedWidth);
+            // A leaf the fuzzer cannot describe (nesting deeper than two levels,
+            // or a repeated binary leaf) would otherwise abort the whole file:
+            // RowReaderCore requires one descriptor per leaf, in leaf order, so
+            // there is no way to describe the rest of the columns without it.
+            if (descriptor is null)
+                return;
+            descriptors[i] = descriptor;
         }
 
         // The row reader has its own page cursor and so its own CRC call sites,
@@ -167,6 +163,92 @@ public static class PlankReaderFuzzTarget
                 ReadCurrent(rows, descriptors[i]);
     }
 
+    // Returns null when the leaf has no describable shape, which the caller
+    // treats as "skip this file's row-API pass".
+    static RowApiColumnDescriptor? CreateRowApiDescriptor(LeafColumn leaf, int index, bool binaryAsFixedWidth)
+    {
+        var name = $"p{index}";
+
+        // A repeated leaf needs a nested descriptor; a flat one is rejected, and
+        // that rejection is an InvalidOperationException the target swallows —
+        // which is why every nested file silently skipped its row-API pass and
+        // RowApiNestedColumnReadState measured 0/282 lines.
+        if (leaf.MaxRepetitionLevel > 0)
+            return CreateNestedDescriptor(leaf, name);
+
+        // A binary leaf has two legitimate descriptions and they reach different
+        // read states, so the selector picks between them rather than the target
+        // settling on one:
+        //
+        //   byte[] -> RowApiBinaryColumnReadState, the variable-length state.
+        //             This is the one the target could never reach: it used to
+        //             pass byte, whose CreateState builds a fixed-width state,
+        //             so GetCurrentBinary threw "not a variable-length byte
+        //             column" — caught and swallowed — and the whole row-API
+        //             pass aborted on every binary file. 0/82 lines.
+        //   byte   -> RowApiColumnReadState<byte>, the fixed-width state over
+        //             the same column. Odd but supported, and it enumerates
+        //             buffers through a different ColumnChunkReader entry point.
+        return leaf.PhysicalType switch
+        {
+            ParquetPhysicalType.Boolean => new RowApiColumnDescriptor<bool>(name, leaf),
+            ParquetPhysicalType.Int32 => new RowApiColumnDescriptor<int>(name, leaf),
+            ParquetPhysicalType.Int64 => new RowApiColumnDescriptor<long>(name, leaf),
+            ParquetPhysicalType.Float => new RowApiColumnDescriptor<float>(name, leaf),
+            ParquetPhysicalType.Double => new RowApiColumnDescriptor<double>(name, leaf),
+            _ => binaryAsFixedWidth
+                ? new RowApiColumnDescriptor<byte>(name, leaf)
+                : new RowApiColumnDescriptor<byte[]>(name, leaf)
+        };
+    }
+
+    // The generated code computes its collection thresholds from the row type it
+    // was generated for; the fuzzer only has the leaf, so it reconstructs them:
+    // the innermost collection has an element at the leaf's maximum definition
+    // level, and each enclosing one sits a level above. That is the correct
+    // reading for the shapes the corpus generates, and for anything else it is
+    // still a well-formed descriptor — a corrupt file can present any levels it
+    // likes, which is the point.
+    static RowApiColumnDescriptor? CreateNestedDescriptor(LeafColumn leaf, string name)
+    {
+        var repetition = leaf.MaxRepetitionLevel;
+        var definition = leaf.MaxDefinitionLevel;
+
+        // TShape has to be a closed generic, so only the depths spelled out here
+        // are reachable. One and two cover every shape the corpus writes.
+        if (repetition is not (1 or 2) || definition < repetition)
+            return null;
+
+        var levels = new RowApiCollectionLevel[repetition];
+        for (var i = 0; i < repetition; i++)
+        {
+            var element = definition - (repetition - 1 - i);
+            levels[i] = new RowApiCollectionLevel(i + 1, element - 1, element);
+        }
+
+        // A nested binary leaf decodes into byte[] dense elements — the read
+        // state requires exactly that type and rejects anything else.
+        return repetition == 1
+            ? leaf.PhysicalType switch
+            {
+                ParquetPhysicalType.Boolean => new RowApiNestedColumnDescriptor<bool?[], bool>(name, leaf, levels),
+                ParquetPhysicalType.Int32 => new RowApiNestedColumnDescriptor<int?[], int>(name, leaf, levels),
+                ParquetPhysicalType.Int64 => new RowApiNestedColumnDescriptor<long?[], long>(name, leaf, levels),
+                ParquetPhysicalType.Float => new RowApiNestedColumnDescriptor<float?[], float>(name, leaf, levels),
+                ParquetPhysicalType.Double => new RowApiNestedColumnDescriptor<double?[], double>(name, leaf, levels),
+                _ => new RowApiNestedColumnDescriptor<byte[][], byte[]>(name, leaf, levels)
+            }
+            : leaf.PhysicalType switch
+            {
+                ParquetPhysicalType.Boolean => new RowApiNestedColumnDescriptor<bool?[][], bool>(name, leaf, levels),
+                ParquetPhysicalType.Int32 => new RowApiNestedColumnDescriptor<int?[][], int>(name, leaf, levels),
+                ParquetPhysicalType.Int64 => new RowApiNestedColumnDescriptor<long?[][], long>(name, leaf, levels),
+                ParquetPhysicalType.Float => new RowApiNestedColumnDescriptor<float?[][], float>(name, leaf, levels),
+                ParquetPhysicalType.Double => new RowApiNestedColumnDescriptor<double?[][], double>(name, leaf, levels),
+                _ => new RowApiNestedColumnDescriptor<byte[][][], byte[]>(name, leaf, levels)
+            };
+    }
+
     static void ReadCurrent(RowReaderCore rows, RowApiColumnDescriptor descriptor)
     {
         switch (descriptor)
@@ -176,8 +258,65 @@ public static class PlankReaderFuzzTarget
             case RowApiColumnDescriptor<long> typed: _ = rows.GetCurrent(typed); break;
             case RowApiColumnDescriptor<float> typed: _ = rows.GetCurrent(typed); break;
             case RowApiColumnDescriptor<double> typed: _ = rows.GetCurrent(typed); break;
-            case RowApiColumnDescriptor<byte> typed: Consume(rows.GetCurrentBinary(typed).Value); break;
+            case RowApiColumnDescriptor<byte[]> typed: Consume(rows.GetCurrentBinary(typed).Value); break;
+            case RowApiColumnDescriptor<byte> typed: _ = rows.GetCurrent(typed); break;
+
+            // The materialized shape is what the repetition-level bookkeeping
+            // produces, so walking it is what checks that bookkeeping.
+            case RowApiNestedColumnDescriptor<bool?[], bool> typed: Consume(rows.GetCurrentNested(typed)); break;
+            case RowApiNestedColumnDescriptor<int?[], int> typed: Consume(rows.GetCurrentNested(typed)); break;
+            case RowApiNestedColumnDescriptor<long?[], long> typed: Consume(rows.GetCurrentNested(typed)); break;
+            case RowApiNestedColumnDescriptor<float?[], float> typed: Consume(rows.GetCurrentNested(typed)); break;
+            case RowApiNestedColumnDescriptor<double?[], double> typed: Consume(rows.GetCurrentNested(typed)); break;
+
+            case RowApiNestedColumnDescriptor<bool?[][], bool> typed: Consume(rows.GetCurrentNested(typed)); break;
+            case RowApiNestedColumnDescriptor<int?[][], int> typed: Consume(rows.GetCurrentNested(typed)); break;
+            case RowApiNestedColumnDescriptor<long?[][], long> typed: Consume(rows.GetCurrentNested(typed)); break;
+            case RowApiNestedColumnDescriptor<float?[][], float> typed: Consume(rows.GetCurrentNested(typed)); break;
+            case RowApiNestedColumnDescriptor<double?[][], double> typed: Consume(rows.GetCurrentNested(typed)); break;
+
+            case RowApiNestedColumnDescriptor<byte[][], byte[]> typed: ConsumeBinaryShape(rows.GetCurrentNested(typed)); break;
+            case RowApiNestedColumnDescriptor<byte[][][], byte[]> typed:
+            {
+                var shape = rows.GetCurrentNested(typed);
+                if (shape is not null)
+                    for (var i = 0; i < shape.Length; i++)
+                        ConsumeBinaryShape(shape[i]);
+                break;
+            }
         }
+    }
+
+    static void ConsumeBinaryShape(byte[][]? shape)
+    {
+        if (shape is null)
+            return;
+        for (var i = 0; i < shape.Length; i++)
+            Consume(shape[i]);
+    }
+
+    static void Consume(byte[]? value)
+    {
+        if (value is null)
+            return;
+        for (var i = 0; i < value.Length; i++)
+            _ = value[i];
+    }
+
+    static void Consume<T>(T?[]? shape) where T : struct
+    {
+        if (shape is null)
+            return;
+        for (var i = 0; i < shape.Length; i++)
+            _ = shape[i];
+    }
+
+    static void Consume<T>(T?[][]? shape) where T : struct
+    {
+        if (shape is null)
+            return;
+        for (var i = 0; i < shape.Length; i++)
+            Consume(shape[i]);
     }
 
     static ParquetReader OpenWithFileSchema(IParquetReadSource source, ParquetReaderOptions options)

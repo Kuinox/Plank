@@ -60,13 +60,25 @@ public static class CorpusGenerator
         return written;
     }
 
-    // Codec-free names (the bloom, logical and nested cases) are uncompressed by
-    // construction; the rest carry their codec in the name. Matching "-none"
-    // anywhere rather than only at the end keeps this working now that names
-    // also carry a page-version suffix.
+    // A case is uncompressed unless its name carries a codec tag. Testing for the
+    // absence of a compressed tag rather than the presence of "-none" matters:
+    // the bloom, logical and nested families are built only for CompressionKind
+    // .None and so have no tag at all, and the old check (EndsWith("-none") or
+    // no dash at all) matched none of them — every one of those families went
+    // without a row-API twin, which is part of why the nested row reader was
+    // never driven.
     static bool IsUncompressed(string name)
-        => name.Contains("-none", StringComparison.Ordinal)
-            || !name.Contains('-', StringComparison.Ordinal);
+    {
+        foreach (var compression in Compressions())
+        {
+            if (compression == CompressionKind.None)
+                continue;
+            if (name.Contains($"-{compression.ToString().ToLowerInvariant()}", StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
+    }
 
     static int WriteSeed(string directory, string name, byte selector, byte[] bytes)
     {
