@@ -31,25 +31,42 @@ public static class CorpusGenerator
     // API is only reached if a mutation happens to guess it.
     const byte RowApiSelector = 2;
 
+    // Bit 4 turns on VerifyPageCrc in the target. A CRC-bearing file read with
+    // verification off is just a normal file — the reader never hashes it — so
+    // the CRC seeds have to spell the bit themselves rather than wait for a
+    // mutation to find it.
+    const byte VerifyCrcSelector = 0x10;
+
     public static int Generate(string outputDirectory)
     {
         ArgumentException.ThrowIfNullOrEmpty(outputDirectory);
         Directory.CreateDirectory(outputDirectory);
 
         var written = 0;
-        foreach (var (name, bytes) in BuildCases())
+        foreach (var (name, selector, bytes) in BuildCases())
         {
-            written += WriteSeed(outputDirectory, $"gen-{name}", FileSchemaSelector, bytes);
+            written += WriteSeed(outputDirectory, $"gen-{name}", selector, bytes);
 
             // Uncompressed cases get a row-API twin. Repeating it per codec would
             // add files without adding paths: the row reader sits above the
-            // decompressor and cannot tell them apart.
-            if (name.EndsWith("-none", StringComparison.Ordinal) || !name.Contains('-', StringComparison.Ordinal))
-                written += WriteSeed(outputDirectory, $"gen-rowapi-{name}", RowApiSelector, bytes);
+            // decompressor and cannot tell them apart. The twin keeps whatever
+            // reader options the original asked for — the row reader has its own
+            // page cursor, so its CRC call sites are not the columnar ones.
+            if (IsUncompressed(name))
+                written += WriteSeed(outputDirectory, $"gen-rowapi-{name}",
+                    (byte)(RowApiSelector | (selector & VerifyCrcSelector)), bytes);
         }
 
         return written;
     }
+
+    // Codec-free names (the bloom, logical and nested cases) are uncompressed by
+    // construction; the rest carry their codec in the name. Matching "-none"
+    // anywhere rather than only at the end keeps this working now that names
+    // also carry a page-version suffix.
+    static bool IsUncompressed(string name)
+        => name.Contains("-none", StringComparison.Ordinal)
+            || !name.Contains('-', StringComparison.Ordinal);
 
     static int WriteSeed(string directory, string name, byte selector, byte[] bytes)
     {
@@ -60,7 +77,7 @@ public static class CorpusGenerator
         return 1;
     }
 
-    static IEnumerable<(string Name, byte[] Bytes)> BuildCases()
+    static IEnumerable<(string Name, byte Selector, byte[] Bytes)> BuildCases()
     {
         foreach (var compression in Compressions())
         {
@@ -120,6 +137,84 @@ public static class CorpusGenerator
                     yield return file;
             }
         }
+
+        // Every case above is a DataPageV2 page, because that is the writer's
+        // default and nothing ever overrode it. A V1 page is a different shape:
+        // its levels live inside the payload rather than in the header, and they
+        // are length-prefixed and encoded differently. The reader branches on
+        // header.Type in seven places to tell them apart, and no generated seed
+        // had ever taken the V1 side of any of them. V1 is also what parquet-mr
+        // wrote for years, so it is the shape most files in the wild have.
+        //
+        // Two codecs rather than seven: the page version and the codec are
+        // independent, and one uncompressed plus one compressed case already
+        // covers both sides of the "does the payload need inflating" branch.
+        foreach (var compression in (CompressionKind[])[CompressionKind.None, CompressionKind.Snappy])
+        {
+            var tag = compression.ToString().ToLowerInvariant();
+            foreach (var (name, column, writer) in AllColumnFamilies())
+            {
+                if (TryBuild($"{name}-{tag}-v1", compression, column, writer, out var file,
+                        ParquetDataPageVersion.V1))
+                    yield return file;
+            }
+        }
+
+        // Page CRCs are off by default in the writer, so no seed carried one,
+        // and the reader skips verification entirely when the header has no CRC
+        // field — ParquetCrc32 measured 0/54 lines. Verification has three
+        // distinct paths (uncompressed payload, compressed payload, and V2's
+        // separate level bytes), so seeds have to span both page versions and
+        // both compressed and uncompressed pages to reach all three.
+        foreach (var pageVersion in (ParquetDataPageVersion[])[ParquetDataPageVersion.V2, ParquetDataPageVersion.V1])
+        {
+            foreach (var compression in (CompressionKind[])[CompressionKind.None, CompressionKind.Snappy])
+            {
+                var tag = compression.ToString().ToLowerInvariant();
+                var suffix = pageVersion == ParquetDataPageVersion.V1 ? "v1" : "v2";
+                foreach (var (name, column, writer) in CrcColumns())
+                {
+                    if (TryBuild($"crc-{name}-{tag}-{suffix}", compression, column, writer, out var file,
+                            pageVersion, writePageCrc: true, selector: VerifyCrcSelector))
+                        yield return file;
+                }
+            }
+        }
+    }
+
+    // The V1 pass reuses every family rather than a hand-picked slice: the page
+    // version cuts across all of them, and a family that only ever appears as a
+    // V2 page leaves its V1 level-decoding untested.
+    static IEnumerable<(string, ColumnDefinition, Action<ParquetWriter, RowGroupWriter, LeafColumn>)> AllColumnFamilies()
+    {
+        foreach (var c in TypedColumns()) yield return c;
+        foreach (var c in EncodedColumns()) yield return c;
+        foreach (var c in NullableColumns()) yield return c;
+        foreach (var c in LogicalTypeColumns()) yield return c;
+        foreach (var c in NestedColumns()) yield return c;
+    }
+
+    // A small slice for the CRC pass: verification hashes the page bytes without
+    // caring what they encode, so what matters is the page *shape* — required vs
+    // optional (V2 stores levels separately, and those are hashed on their own),
+    // nested (repetition levels too) and a page big enough to span more than one
+    // buffer chunk.
+    static IEnumerable<(string, ColumnDefinition, Action<ParquetWriter, RowGroupWriter, LeafColumn>)> CrcColumns()
+    {
+        yield return ("i32", Leaf("c", ParquetPhysicalType.Int32, EncodingKind.Plain),
+            (w, g, c) => Write<int>(w, g, c, [0, 1, -1, int.MaxValue, int.MinValue]));
+        yield return ("bin", Leaf("c", ParquetPhysicalType.ByteArray, EncodingKind.Plain),
+            (w, g, c) => Write<byte[]>(w, g, c, [[], [1], [1, 2, 3], [255, 0, 255], [7]]));
+        yield return ("i32-opt", LeafOptional("c", ParquetPhysicalType.Int32, EncodingKind.Plain),
+            (w, g, c) => Write<int?>(w, g, c, [1, null, 3, null, 5]));
+        yield return ("i64-large", Leaf("c", ParquetPhysicalType.Int64, EncodingKind.Plain),
+            (w, g, c) => Write<long>(w, g, c, Ramp(5000)));
+        yield return ("list-i32",
+            ColumnDefinition.List("c",
+                ColumnDefinition.Leaf("element", ParquetPhysicalType.Int32,
+                    new ColumnOptions(ParquetRepetition.Optional,
+                        encodings: ImmutableArray.Create(EncodingKind.Plain)))),
+            (w, g, c) => WriteRows<int?[]>(g, c, [[1, null], [], [3]]));
     }
 
     static CompressionKind[] Compressions()
@@ -387,23 +482,35 @@ public static class CorpusGenerator
     }
 
     static bool TryBuild(string name, CompressionKind compression, ColumnDefinition column,
-        Action<ParquetWriter, RowGroupWriter, LeafColumn> write, out (string, byte[]) file)
+        Action<ParquetWriter, RowGroupWriter, LeafColumn> write, out (string, byte, byte[]) file,
+        ParquetDataPageVersion dataPageVersion = ParquetDataPageVersion.V2, bool writePageCrc = false,
+        byte selector = FileSchemaSelector)
     {
         try
         {
             var schema = new ParquetSchema([column]);
             using var stream = new MemoryStream();
-            var writer = schema.CreateWriter(stream, new ParquetWriterOptions { Compression = compression });
+            var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+            {
+                Compression = compression,
+                DataPageVersion = dataPageVersion,
+                WritePageCrc = writePageCrc
+            });
             var group = writer.StartRowGroup();
             write(writer, group, schema.LeafColumns[0]);
             writer.CloseFile();
-            file = (name, stream.ToArray());
+            file = (name, selector, stream.ToArray());
             return true;
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or ArgumentException)
         {
             // A codec the build does not support, or an encoding this type cannot
-            // use. Skipping keeps the generator honest about what it produced.
+            // use. Skipping is right, but skipping *silently* is how the
+            // Lz4Legacy gap hid: the codec is listed in Compressions(), the
+            // writer cannot emit it, and every one of its cases was dropped
+            // here — leaving a 326-line frame parser unseeded and nobody
+            // looking, because the generator still reported a healthy count.
+            Console.Error.WriteLine($"  skipped {name}: {ex.GetType().Name}: {ex.Message}");
             file = default;
             return false;
         }

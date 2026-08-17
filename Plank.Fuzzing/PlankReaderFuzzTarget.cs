@@ -37,12 +37,29 @@ public static class PlankReaderFuzzTarget
     {
         var source = new MemoryReadSource(fileBytes);
 
+        // Bits 4 and 5 pick the reader options. Both were pinned to their
+        // defaults, and both defaults skip code:
+        //
+        // VerifyPageCrc defaults off, and with it off the reader never hashes a
+        // page — ParquetCrc32 measured 0/54 lines, and the mismatch diagnostic
+        // had never run either. The corpus now carries CRC-bearing seeds
+        // (gen-crc-*), which are inert unless verification is on.
+        //
+        // Strict defaults on. Non-strict binding is a separate matching pass
+        // over the requested schema against the file's, so half the projection
+        // cases now take it.
+        var options = new ParquetReaderOptions
+        {
+            VerifyPageCrc = (selector & 0x10) != 0,
+            Strict = (selector & 0x20) == 0
+        };
+
         // A quarter of the inputs go through the row-oriented API. It is a
         // separate public reader with its own buffering and projection, and it
         // measured 0% over a 14k-input corpus — neither fuzz target drove it.
         if ((selector & 3) == 2)
         {
-            DrainRowApi(source);
+            DrainRowApi(source, options.VerifyPageCrc);
             return;
         }
 
@@ -54,8 +71,8 @@ public static class PlankReaderFuzzTarget
         // other half keeps exercising the strict projection path, which is where
         // the requested schema is matched against the file's.
         using var reader = (selector & 1) == 0
-            ? OpenWithFileSchema(source)
-            : Schemas[(selector >> 1) % Schemas.Length].CreateReader(source);
+            ? OpenWithFileSchema(source, options)
+            : Schemas[(selector >> 1) % Schemas.Length].CreateReader(source, options);
 
         foreach (var group in reader.RowGroups)
             foreach (var column in reader.Schema.LeafColumns)
@@ -114,7 +131,7 @@ public static class PlankReaderFuzzTarget
     // RowReaderCore is normally reached through source-generated row types, but
     // it is public and takes the schema and descriptors directly, so the fuzzer
     // can drive it over whatever schema the file declares.
-    static void DrainRowApi(IParquetReadSource source)
+    static void DrainRowApi(IParquetReadSource source, bool verifyPageCrc)
     {
         ParquetSchema schema;
         using (var probe = new ParquetReader())
@@ -140,8 +157,11 @@ public static class PlankReaderFuzzTarget
             };
         }
 
+        // The row reader has its own page cursor and so its own CRC call sites,
+        // separate from the columnar reader's.
+        var rowOptions = verifyPageCrc ? new RowReaderOptions { VerifyPageCrc = true } : RowReaderOptions.Default;
         using var rows = new RowReaderCore(source, schema, descriptors, projection: null,
-            RowReaderOptions.Default, schemaEvolution: null);
+            rowOptions, schemaEvolution: null);
         while (rows.MoveNext())
             for (var i = 0; i < descriptors.Length; i++)
                 ReadCurrent(rows, descriptors[i]);
@@ -160,9 +180,9 @@ public static class PlankReaderFuzzTarget
         }
     }
 
-    static ParquetReader OpenWithFileSchema(IParquetReadSource source)
+    static ParquetReader OpenWithFileSchema(IParquetReadSource source, ParquetReaderOptions options)
     {
-        var reader = new ParquetReader();
+        var reader = new ParquetReader(options);
         reader.Reset(source);
         return reader;
     }
