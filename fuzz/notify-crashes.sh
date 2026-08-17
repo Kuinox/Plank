@@ -80,6 +80,29 @@ ls -t /tmp/plank-*crash*.dmp 2>/dev/null | tail -n +51 | xargs -r rm -f
 
 [ -d "$CRASHES" ] || exit 0
 
+# Refuse to report anything while a target binary is not loadable.
+#
+# This notifier outlives the fleet: deploy.sh kills afl-fuzz and Plank.Fuzzing,
+# and this script's command line matches neither, so it keeps looping straight
+# through a rollout. Its probes spawn the target, and a build rewrites Plank.dll
+# in place (sharpfuzz instruments it after compiling), so a probe landing in that
+# window dies with BadImageFormatException. Because a commit change also resets
+# the seen-list, every stored input is re-tested right when that is most likely —
+# and it reported two of them as fresh crashes on a tree where nothing
+# reproduced.
+#
+# A healthy target is silent on a trivial input. If it is not, the build is
+# broken or mid-write and this cycle has nothing trustworthy to say, so it exits
+# without touching the seen-list and tries again in five minutes.
+for bin in "$READER" "$WRITER"; do
+  [ -x "$bin" ] || continue
+  if probe="$("$bin" < /dev/null 2>&1)" && [ -z "$probe" ]; then
+    continue
+  fi
+  echo "preflight failed for $(basename "$bin") — build broken or mid-write, skipping this cycle" >&2
+  exit 0
+done
+
 new=()
 for f in "$CRASHES"/*.bin; do
   [ -f "$f" ] || continue
@@ -103,6 +126,15 @@ for f in "${new[@]}"; do
   # An input that no longer reproduces is not worth waking anyone for, but it is
   # still recorded so it is not re-checked forever.
   if [ -n "$out" ]; then
+    # A loader failure says the assembly could not be read, never that this input
+    # is interesting. Left out of the seen-list on purpose, so it is re-tested on
+    # the next cycle rather than being written off as reported.
+    case "$out" in
+      *BadImageFormatException*|*FileLoadException*|*FileNotFoundException*|*TypeLoadException*|*MissingMethodException*|*MissingFieldException*)
+        echo "skipping $(basename "$f"): loader failure, not an input defect" >&2
+        continue
+        ;;
+    esac
     extype="$(printf '%s' "$out" | grep -oE 'Unhandled exception\. [A-Za-z0-9_.]+' | head -1 | sed 's/^Unhandled exception\. //')"
     frame="$(printf '%s' "$out" | grep -oE 'at Plank\.[A-Za-z0-9_.`<>+]+' | head -1 | sed 's/^at //')"
     sig="${extype:-unknown} @ ${frame:-unknown}"

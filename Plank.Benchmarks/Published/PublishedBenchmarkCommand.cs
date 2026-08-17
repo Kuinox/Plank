@@ -44,13 +44,15 @@ public static class PublishedBenchmarkCommand
 
     internal static string FindRepositoryRoot()
     {
-        // In a linked worktree .git is a file holding "gitdir: ...", not a directory, so testing only
-        // for a directory makes every benchmark command fail from a worktree.
         for (var directory = new DirectoryInfo(Environment.CurrentDirectory); directory is not null;
              directory = directory.Parent)
         {
-            var git = Path.Combine(directory.FullName, ".git");
-            if (Directory.Exists(git) || File.Exists(git))
+            // A linked worktree has a .git *file* holding a gitdir pointer, not a
+            // directory, so testing only for a directory made the published
+            // benchmarks refuse to run from any worktree — which is exactly where
+            // you run them when the primary checkout is busy doing something else.
+            var marker = Path.Combine(directory.FullName, ".git");
+            if (Directory.Exists(marker) || File.Exists(marker))
                 return directory.FullName;
         }
 
