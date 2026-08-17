@@ -52,6 +52,11 @@ echo "  at $(git log --oneline -1)"
 echo "  stopping fleets..."
 pkill -9 -f afl-fuzz 2>/dev/null || true
 pkill -9 -f Plank.Fuzzing 2>/dev/null || true
+# The crash notifier matches neither pattern above -- its command line names
+# notify-crashes.sh -- so it used to survive every rollout and keep probing the
+# target while the build rewrote Plank.dll underneath it, reporting the resulting
+# BadImageFormatException as a crash. run-fleet.sh starts a fresh one at the end.
+pkill -9 -f PLANK_FUZZ_NOTIFIER_LOOP 2>/dev/null || true
 sleep 2
 
 # kill -9 leaves each worker's .cur_input behind, and AFL refuses to start with
