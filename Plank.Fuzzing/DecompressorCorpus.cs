@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
+using System.IO.Hashing;
 using K4os.Compression.LZ4;
 using Plank.Reading;
 
@@ -202,7 +203,7 @@ static class DecompressorCorpus
         output.Write(descriptorBytes);
         // The header checksum is the second byte of the descriptor's XxHash32,
         // which is why a mutated frame practically never gets past the header.
-        output.WriteByte((byte)(XxHash32.Compute(descriptorBytes) >> 8));
+        output.WriteByte((byte)(XxHash32.HashToUInt32(descriptorBytes) >> 8));
 
         var chunk = (source.Length + splitInto - 1) / splitInto;
         for (var offset = 0; offset < source.Length; offset += chunk)
@@ -235,7 +236,7 @@ static class DecompressorCorpus
             if (blockChecksum)
             {
                 var checksum = new byte[4];
-                BinaryPrimitives.WriteUInt32LittleEndian(checksum, XxHash32.Compute(stored));
+                BinaryPrimitives.WriteUInt32LittleEndian(checksum, XxHash32.HashToUInt32(stored));
                 output.Write(checksum);
             }
         }
@@ -244,7 +245,7 @@ static class DecompressorCorpus
         if (contentChecksum)
         {
             var checksum = new byte[4];
-            BinaryPrimitives.WriteUInt32LittleEndian(checksum, XxHash32.Compute(source));
+            BinaryPrimitives.WriteUInt32LittleEndian(checksum, XxHash32.HashToUInt32(source));
             output.Write(checksum);
         }
 
