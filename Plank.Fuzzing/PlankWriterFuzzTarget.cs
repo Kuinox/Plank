@@ -23,8 +23,24 @@ public static class PlankWriterFuzzTarget
     public static FuzzCase Decode(ReadOnlySpan<byte> data)
         => new Decoder(data).Decode();
 
+    // A leading 0xFF routes the case to the row-oriented writer instead. That
+    // pipeline can only be driven through generated code, so it needs its own
+    // target rather than another axis of the column spec: see
+    // PlankRowApiFuzzTarget. The marker is a whole byte value rather than a bit
+    // so the existing corpus keeps decoding exactly as it did — every saved case
+    // whose first byte is not 0xFF still describes the same columns.
+    const byte RowApiMarker = 0xFF;
+
     public static void Execute(ReadOnlySpan<byte> data)
-        => Validate(Decode(data));
+    {
+        if (!data.IsEmpty && data[0] == RowApiMarker)
+        {
+            PlankRowApiFuzzTarget.Execute(data[1..]);
+            return;
+        }
+
+        Validate(Decode(data));
+    }
 
     public static void Validate(FuzzCase fuzzCase)
     {

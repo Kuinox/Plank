@@ -16,6 +16,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Plank\Plank.csproj" />
+    <!-- The row API is reached through generated code, so the fuzzer needs the
+         generator to have row types to drive at all: the writer pipeline is
+         generic over a generated slot type and abstract over four generated
+         methods, none of which a fuzzer can synthesize at runtime. -->
+    <ProjectReference Include="..\Plank.SourceGen\Plank.SourceGen.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>
