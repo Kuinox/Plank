@@ -35,11 +35,22 @@ public static class PlankWriterFuzzTarget
     // whose first byte is not 0xFF still describes the same columns.
     const byte RowApiMarker = 0xFF;
 
+    // 0xFE routes to the partitioned dataset writer, for the same reason: it is
+    // reachable only through generated code, and it owns files rather than taking
+    // a stream. See PlankDatasetFuzzTarget.
+    const byte DatasetMarker = 0xFE;
+
     public static void Execute(ReadOnlySpan<byte> data)
     {
         if (!data.IsEmpty && data[0] == RowApiMarker)
         {
             PlankRowApiFuzzTarget.Execute(data[1..]);
+            return;
+        }
+
+        if (!data.IsEmpty && data[0] == DatasetMarker)
+        {
+            PlankDatasetFuzzTarget.Execute(data[1..]);
             return;
         }
 
