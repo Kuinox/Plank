@@ -17,6 +17,76 @@ static class EncodingPrimitives
     /// <summary>Maximum bytes a 32-bit LEB128 varint can occupy.</summary>
     internal const int MaxVarIntByteCount = 5;
 
+    /// <summary>Longest payload <see cref="CopyPayload"/> copies without calling Memmove.</summary>
+    const int InlinePayloadCopyLength = 16;
+
+    /// <summary>
+    /// Copies one BYTE_ARRAY payload. <see cref="ReadOnlySpan{T}.CopyTo"/> hands every length it cannot
+    /// see through to Memmove, whose call and length dispatch cost far more than the copy itself once
+    /// values are a handful of bytes: on a column of one-byte flags Memmove was 16% of the write. Short
+    /// payloads go through the usual overlapping-load ladder instead, which stays inside the caller.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void CopyPayload(ReadOnlySpan<byte> source, Span<byte> destination)
+    {
+        var length = source.Length;
+        if (length > InlinePayloadCopyLength)
+        {
+            source.CopyTo(destination);
+            return;
+        }
+
+        ref var from = ref MemoryMarshal.GetReference(source);
+        // Slicing is the bounds check: a destination too short for the payload throws here, exactly
+        // as CopyTo would, and the writes below then stay inside it.
+        ref var to = ref MemoryMarshal.GetReference(destination[..length]);
+        if (length >= sizeof(ulong))
+        {
+            Unsafe.WriteUnaligned(ref to, Unsafe.ReadUnaligned<ulong>(ref from));
+            Unsafe.WriteUnaligned(ref Unsafe.Add(ref to, length - sizeof(ulong)),
+                Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref from, length - sizeof(ulong))));
+        }
+        else if (length >= sizeof(uint))
+        {
+            Unsafe.WriteUnaligned(ref to, Unsafe.ReadUnaligned<uint>(ref from));
+            Unsafe.WriteUnaligned(ref Unsafe.Add(ref to, length - sizeof(uint)),
+                Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref from, length - sizeof(uint))));
+        }
+        else if (length > 0)
+        {
+            to = from;
+            Unsafe.Add(ref to, length >> 1) = Unsafe.Add(ref from, length >> 1);
+            Unsafe.Add(ref to, length - 1) = Unsafe.Add(ref from, length - 1);
+        }
+    }
+
+    /// <summary>Longest common prefix <see cref="ComparePayload"/> compares without calling CoreLib.</summary>
+    const int InlinePayloadCompareLength = 8;
+
+    /// <summary>
+    /// Orders two BYTE_ARRAY payloads as unsigned byte sequences, the same order
+    /// <see cref="ReadOnlySpan{T}.SequenceCompareTo"/> gives. That method is a call whose setup costs
+    /// more than the comparison itself for the short values a statistics scan spends its time on -
+    /// comparing 2.9M one-byte flags against a running min and max was 16% of the write - so short
+    /// payloads are compared inline instead.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static int ComparePayload(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
+    {
+        var common = Math.Min(left.Length, right.Length);
+        if (common > InlinePayloadCompareLength)
+            return left.SequenceCompareTo(right);
+
+        for (var i = 0; i < common; i++)
+        {
+            var difference = left[i] - right[i];
+            if (difference != 0)
+                return difference;
+        }
+
+        return left.Length - right.Length;
+    }
+
     /// <summary>Writes an unsigned LEB128 varint, reserving the whole varint in one call.</summary>
     internal static void WriteUnsignedVarInt(uint value, ref BufferWriter writer)
     {

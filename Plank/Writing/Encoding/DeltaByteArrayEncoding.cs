@@ -151,7 +151,7 @@ static class DeltaByteArrayEncoding
                 var suffixLength = suffixLengths[denseIndex++];
                 if (suffixLength == 0)
                     continue;
-                current.AsSpan(prefixLength, suffixLength).CopyTo(destination[offset..]);
+                EncodingPrimitives.CopyPayload(current.AsSpan(prefixLength, suffixLength), destination[offset..]);
                 offset += suffixLength;
             }
 
