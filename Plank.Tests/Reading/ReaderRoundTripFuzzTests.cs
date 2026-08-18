@@ -104,7 +104,12 @@ internal sealed class ReaderRoundTripFuzzTests
         => random.NextInt(0, 2) == 0 ? EncodingKind.Plain : EncodingKind.DeltaBinaryPacked;
 
     static EncodingKind PickDoubleEncoding(DeterministicRng random)
-        => random.NextInt(0, 2) == 0 ? EncodingKind.Plain : EncodingKind.ByteStreamSplit;
+        => random.NextInt(0, 3) switch
+        {
+            0 => EncodingKind.Plain,
+            1 => EncodingKind.ByteStreamSplit,
+            _ => EncodingKind.Alp
+        };
 
     static EncodingKind PickByteArrayEncoding(DeterministicRng random)
         => random.NextInt(0, 3) switch
@@ -169,9 +174,12 @@ internal sealed class ReaderRoundTripFuzzTests
     {
         var values = new double[rowCount];
         for (var i = 0; i < values.Length; i++)
-            values[i] = encoding == EncodingKind.ByteStreamSplit
-                ? (random.NextInt(-1000, 1001) * 0.125) + random.NextDouble()
-                : (random.NextDouble() - 0.5) * 100_000d;
+            values[i] = encoding switch
+            {
+                EncodingKind.Alp => random.NextInt(-100_000, 100_001) / 100d,
+                EncodingKind.ByteStreamSplit => (random.NextInt(-1000, 1001) * 0.125) + random.NextDouble(),
+                _ => (random.NextDouble() - 0.5) * 100_000d
+            };
         return values;
     }
 

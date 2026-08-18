@@ -31,6 +31,9 @@ static class ValueEncodingDispatcher
             case EncodingKind.ByteStreamSplit:
                 ByteStreamSplitEncoding.WriteValues(column, values, ref writer);
                 return;
+            case EncodingKind.Alp:
+                AlpEncoding.WriteValues(column, values, bufferWriters, ref writer);
+                return;
             case EncodingKind.PlainDictionary:
             case EncodingKind.RleDictionary:
                 throw new InvalidOperationException(

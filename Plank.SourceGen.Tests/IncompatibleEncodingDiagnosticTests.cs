@@ -31,4 +31,35 @@ internal sealed class IncompatibleEncodingDiagnosticTests
 
         await Assert.That(hasEncodingError).IsTrue();
     }
+
+    [Test]
+    public async Task AlpAcceptsFloatAndRejectsIntegerColumns()
+    {
+        const string source = """
+            using Plank.Schema;
+
+            namespace Regression;
+
+            [ParquetSchema]
+            partial class AlpSchema
+            {
+                [ParquetColumn("measurement", Encodings = [EncodingKind.Alp])]
+                public double Measurement { get; set; }
+
+                [ParquetColumn("counter", Encodings = [EncodingKind.Alp])]
+                public long Counter { get; set; }
+            }
+            """;
+
+        var result = GeneratorTestHarness.Run(
+            new GeneratorTestHarness.SourceFile("AlpSchema.cs", source));
+        var encodingErrors = result.GeneratorDiagnostics
+            .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+            .Select(static diagnostic => diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture))
+            .Where(static message => message.Contains("Alp", StringComparison.Ordinal))
+            .ToArray();
+
+        await Assert.That(encodingErrors).Count().IsEqualTo(1);
+        await Assert.That(encodingErrors[0]).Contains("counter");
+    }
 }

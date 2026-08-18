@@ -29,6 +29,7 @@ static class ParquetThriftConversions
             7 => EncodingKind.DeltaByteArray,
             8 => EncodingKind.RleDictionary,
             9 => EncodingKind.ByteStreamSplit,
+            10 => EncodingKind.Alp,
             _ => throw new NotSupportedException($"Encoding '{encoding}' is not supported.")
         };
 }

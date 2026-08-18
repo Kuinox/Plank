@@ -283,6 +283,12 @@ public static class CorpusGenerator
             (w, g, c) => Write<double>(w, g, c, [1d, 2d, 3d, 4d, 5d]));
         yield return ("f32-bss", Leaf("c", ParquetPhysicalType.Float, EncodingKind.ByteStreamSplit),
             (w, g, c) => Write<float>(w, g, c, [1f, 2f, 3f, 4f, 5f]));
+        yield return ("f64-alp", Leaf("c", ParquetPhysicalType.Double, EncodingKind.Alp),
+            (w, g, c) => Write<double>(w, g, c,
+                [1.25d, 2.5d, -3.75d, -0d, double.NaN, double.PositiveInfinity]));
+        yield return ("f32-alp", Leaf("c", ParquetPhysicalType.Float, EncodingKind.Alp),
+            (w, g, c) => Write<float>(w, g, c,
+                [1.25f, 2.5f, -3.75f, -0f, float.NaN, float.NegativeInfinity]));
 
         yield return ("i32-bss", Leaf("c", ParquetPhysicalType.Int32, EncodingKind.ByteStreamSplit),
             (w, g, c) => Write<int>(w, g, c, [0, 1, -1, int.MaxValue, int.MinValue]));

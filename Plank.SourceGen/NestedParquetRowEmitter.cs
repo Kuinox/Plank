@@ -1314,6 +1314,7 @@ static class NestedParquetRowEmitter
             "DeltaLengthByteArray" or "DeltaByteArray" => physicalType == "ByteArray",
             "ByteStreamSplit" => physicalType is "Int32" or "Int64" or "Float" or "Double" or
                 "FixedLenByteArray",
+            "Alp" => physicalType is "Float" or "Double",
             _ => false
         };
 
@@ -1520,6 +1521,7 @@ static class NestedParquetRowEmitter
         {
             0 => "Plain", 1 => "PlainDictionary", 2 => "RleDictionary", 3 => "Rle", 4 => "BitPacked",
             5 => "DeltaBinaryPacked", 6 => "DeltaLengthByteArray", 7 => "DeltaByteArray", 8 => "ByteStreamSplit",
+            9 => "Alp",
             _ => string.Empty
         };
         return encoding.Length > 0;

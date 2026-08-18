@@ -1100,6 +1100,7 @@ static class ParquetMetadataThriftWriter
             EncodingKind.DeltaLengthByteArray => (int)ParquetEncoding.DeltaLengthByteArray,
             EncodingKind.DeltaByteArray => (int)ParquetEncoding.DeltaByteArray,
             EncodingKind.ByteStreamSplit => (int)ParquetEncoding.ByteStreamSplit,
+            EncodingKind.Alp => (int)ParquetEncoding.Alp,
             _ => throw new NotSupportedException($"Encoding '{encoding}' is not supported.")
         };
 
@@ -1159,7 +1160,8 @@ static class ParquetMetadataThriftWriter
         DeltaLengthByteArray = 6,
         DeltaByteArray = 7,
         RleDictionary = 8,
-        ByteStreamSplit = 9
+        ByteStreamSplit = 9,
+        Alp = 10
     }
 
     enum CompressionCodec
