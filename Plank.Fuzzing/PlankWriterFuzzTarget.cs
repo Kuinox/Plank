@@ -624,7 +624,8 @@ public static class PlankWriterFuzzTarget
         {
             var encoding = PickEncoding([
                 EncodingKind.Plain,
-                EncodingKind.ByteStreamSplit
+                EncodingKind.ByteStreamSplit,
+                EncodingKind.Alp
             ]);
             var optional = NextOptional();
             return new ColumnSpec(Plank.Schema.ColumnDefinition.Leaf($"c{columnIndex}_dbl", ParquetPhysicalType.Double,
@@ -635,7 +636,8 @@ public static class PlankWriterFuzzTarget
         {
             var encoding = PickEncoding([
                 EncodingKind.Plain,
-                EncodingKind.ByteStreamSplit
+                EncodingKind.ByteStreamSplit,
+                EncodingKind.Alp
             ]);
             var optional = NextOptional();
             return new ColumnSpec(Plank.Schema.ColumnDefinition.Leaf($"c{columnIndex}_flt", ParquetPhysicalType.Float,
@@ -712,10 +714,10 @@ public static class PlankWriterFuzzTarget
             : spec.ClrType == typeof(int?) ? Nullable(CreateInt32Values(spec.Encoding, rowCount))
             : spec.ClrType == typeof(long) ? CreateInt64Values(spec.Encoding, rowCount)
             : spec.ClrType == typeof(long?) ? Nullable(CreateInt64Values(spec.Encoding, rowCount))
-            : spec.ClrType == typeof(double) ? CreateDoubleValues(rowCount)
-            : spec.ClrType == typeof(double?) ? Nullable(CreateDoubleValues(rowCount))
-            : spec.ClrType == typeof(float) ? CreateFloatValues(rowCount)
-            : spec.ClrType == typeof(float?) ? Nullable(CreateFloatValues(rowCount))
+            : spec.ClrType == typeof(double) ? CreateDoubleValues(spec.Encoding, rowCount)
+            : spec.ClrType == typeof(double?) ? Nullable(CreateDoubleValues(spec.Encoding, rowCount))
+            : spec.ClrType == typeof(float) ? CreateFloatValues(spec.Encoding, rowCount)
+            : spec.ClrType == typeof(float?) ? Nullable(CreateFloatValues(spec.Encoding, rowCount))
             // Both byte[] columns land here; only the fixed-width one constrains
             // the length, and writing the wrong length is a caller error rather
             // than something the writer should have to survive.
@@ -775,23 +777,27 @@ public static class PlankWriterFuzzTarget
             return values;
         }
 
-        double[] CreateDoubleValues(int rowCount)
+        double[] CreateDoubleValues(EncodingKind encoding, int rowCount)
         {
             var values = new double[rowCount];
             for (var i = 0; i < values.Length; i++)
                 values[i] = _cursor.NextInt(0, 8) == 0
                     ? SpecialDouble()
-                    : (_cursor.NextInt(-1_000_000, 1_000_001) / 128d) + _cursor.NextDouble();
+                    : encoding == EncodingKind.Alp
+                        ? _cursor.NextInt(-1_000_000, 1_000_001) / 100d
+                        : (_cursor.NextInt(-1_000_000, 1_000_001) / 128d) + _cursor.NextDouble();
             return values;
         }
 
-        float[] CreateFloatValues(int rowCount)
+        float[] CreateFloatValues(EncodingKind encoding, int rowCount)
         {
             var values = new float[rowCount];
             for (var i = 0; i < values.Length; i++)
                 values[i] = _cursor.NextInt(0, 8) == 0
                     ? (float)SpecialDouble()
-                    : (_cursor.NextInt(-1_000_000, 1_000_001) / 128f) + (float)_cursor.NextDouble();
+                    : encoding == EncodingKind.Alp
+                        ? _cursor.NextInt(-1_000_000, 1_000_001) / 100f
+                        : (_cursor.NextInt(-1_000_000, 1_000_001) / 128f) + (float)_cursor.NextDouble();
             return values;
         }
 

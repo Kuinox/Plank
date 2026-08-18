@@ -1479,6 +1479,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             6 => "DeltaLengthByteArray",
             7 => "DeltaByteArray",
             8 => "ByteStreamSplit",
+            9 => "Alp",
             _ => string.Empty
         };
         return encoding.Length > 0;
@@ -1712,6 +1713,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             "DeltaBinaryPacked" => physicalType is "Int32" or "Int64",
             "DeltaLengthByteArray" or "DeltaByteArray" => physicalType == "ByteArray",
             "ByteStreamSplit" => physicalType is "Int32" or "Int64" or "Float" or "Double" or "FixedLenByteArray",
+            "Alp" => physicalType is "Float" or "Double",
             _ => false
         };
 

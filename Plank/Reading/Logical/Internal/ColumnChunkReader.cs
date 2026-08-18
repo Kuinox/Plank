@@ -2029,6 +2029,8 @@ static class ColumnChunkReader
             }
             case EncodingKind.ByteStreamSplit:
                 return TryDecodeByteStreamSplitIntoNative(payload, column, valueCount, destination);
+            case EncodingKind.Alp:
+                return AlpDecoder.TryDecode(payload, column, valueCount, destination);
             case EncodingKind.DeltaBinaryPacked:
                 return TryDecodeDeltaBinaryPackedIntoNative(payload, column, destination);
             default:

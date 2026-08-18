@@ -1,4 +1,5 @@
 #nullable enable
 Plank.Reading.MemoryReadSource.Dispose() -> void
 Plank.Reading.StreamReadSource.Dispose() -> void
+Plank.Schema.EncodingKind.Alp = 9 -> Plank.Schema.EncodingKind
 Plank.Writing.ParquetWriter.Dispose() -> void

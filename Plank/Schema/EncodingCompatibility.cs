@@ -28,6 +28,8 @@ static class EncodingCompatibility
                 physicalType is ParquetPhysicalType.Int32 or ParquetPhysicalType.Int64
                     or ParquetPhysicalType.Float or ParquetPhysicalType.Double
                     or ParquetPhysicalType.FixedLenByteArray,
+            EncodingKind.Alp =>
+                physicalType is ParquetPhysicalType.Float or ParquetPhysicalType.Double,
             _ => false
         };
 }

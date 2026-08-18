@@ -40,6 +40,13 @@ public byte[]? Name { get; init; }
 
 Plank validates that the selected options are compatible with the property type.
 
+### ALP encoding (Preview)
+
+[`EncodingKind.Alp`](xref:Plank.Schema.EncodingKind) provides lossless ALP encoding for `float` and
+`double` columns. The Parquet format currently classifies ALP as **Preview**: the layout is stable,
+but reader support across the ecosystem is still developing. Selecting `EncodingKind.Alp` is an
+explicit opt-in; use it only when every reader of the resulting files supports ALP.
+
 ## Supported types
 
 | C# type | Parquet type |
