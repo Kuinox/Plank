@@ -23,4 +23,10 @@ struct PlainBinaryMinMax
     internal int MinIndex;
 
     internal int MaxIndex;
+
+    /// <summary>
+    /// How many rows the pass found absent. Always zero for a required column, and only meaningful
+    /// when the pass that filled this struct visited every row of the column.
+    /// </summary>
+    internal long NullCount;
 }
