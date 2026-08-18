@@ -593,7 +593,7 @@ static class PlainEncoding
                 if (value.Length != valueLength)
                     throw new InvalidOperationException(
                         $"Column '{column.Name}' expects fixed-length values of {valueLength} bytes, but got {value.Length}.");
-                value.CopyTo(destination[offset..]);
+                EncodingPrimitives.CopyPayload(value, destination[offset..]);
                 offset += valueLength;
             }
 
@@ -618,7 +618,7 @@ static class PlainEncoding
                 continue;
             BinaryPrimitives.WriteInt32LittleEndian(lengthPrefixedDestination[lengthPrefixedOffset..], value.Length);
             lengthPrefixedOffset += sizeof(int);
-            value.CopyTo(lengthPrefixedDestination[lengthPrefixedOffset..]);
+            EncodingPrimitives.CopyPayload(value, lengthPrefixedDestination[lengthPrefixedOffset..]);
             lengthPrefixedOffset += value.Length;
         }
 

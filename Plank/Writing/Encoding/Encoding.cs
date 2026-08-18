@@ -1361,12 +1361,12 @@ static class Encoding
             }
             // A value below the running min cannot also be above the running max, so the second
             // comparison only runs when the first one did not claim the value.
-            else if (row.AsSpan().SequenceCompareTo(min) < 0)
+            else if (EncodingPrimitives.ComparePayload(row, min) < 0)
             {
                 min = row;
                 minIndex = i;
             }
-            else if (row.AsSpan().SequenceCompareTo(max) > 0)
+            else if (EncodingPrimitives.ComparePayload(row, max) > 0)
             {
                 max = row;
                 maxIndex = i;
