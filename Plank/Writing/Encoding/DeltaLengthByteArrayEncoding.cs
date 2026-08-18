@@ -123,7 +123,7 @@ static class DeltaLengthByteArrayEncoding
                 var value = values[i];
                 if (value is null)
                     continue;
-                value.CopyTo(destination[offset..]);
+                EncodingPrimitives.CopyPayload(value, destination[offset..]);
                 offset += value.Length;
             }
 

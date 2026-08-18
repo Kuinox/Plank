@@ -445,9 +445,10 @@ static class Encoding
 
             var memoryValues = Unsafe.As<ReadOnlySpan<T?>, ReadOnlySpan<ReadOnlyMemory<byte>?>>(ref values);
             var memoryDictionary = (ReusableDictionaryState<ReadOnlyMemory<byte>>)(object)dictionaryState;
+            var memoryMinMax = default(PlainBinaryMinMax);
             EncodeOptionalFlatByteArrays<ReadOnlyMemory<byte>?, ReadOnlyMemory<byte>,
                 NullableValueRow<ReadOnlyMemory<byte>>, OptionalMemoryRow>(bufferWriters, column, memoryValues,
-                strategyContext, pages, dataPageVersion, memoryDictionary);
+                strategyContext, pages, dataPageVersion, memoryDictionary, ref memoryMinMax);
             return;
         }
 
@@ -614,7 +615,8 @@ static class Encoding
 
     internal static void EncodeOptional<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         PageStrategyContext strategyContext, PageList pages, ParquetDataPageVersion dataPageVersion,
-        LeafProjectionInfo leafProjectionInfo, ReusableDictionaryState<T> dictionaryState)
+        LeafProjectionInfo leafProjectionInfo, ReusableDictionaryState<T> dictionaryState,
+        out PlainBinaryMinMax binaryMinMax)
         where T : class
     {
         ArgumentNullException.ThrowIfNull(column);
@@ -627,6 +629,7 @@ static class Encoding
             throw new NotSupportedException(
                 $"Column '{column.Name}' optional flat encoding requires a single optional leaf.");
 
+        binaryMinMax = default;
         pages.Clear();
         if (values.Length == 0)
             return;
@@ -637,7 +640,7 @@ static class Encoding
         var byteArrays = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
         var byteArrayDictionary = (ReusableDictionaryState<byte[]>)(object)dictionaryState;
         EncodeOptionalFlatByteArrays<byte[], byte[], ReferenceRow<byte[]>, OptionalByteArrayRow>(bufferWriters,
-            column, byteArrays, strategyContext, pages, dataPageVersion, byteArrayDictionary);
+            column, byteArrays, strategyContext, pages, dataPageVersion, byteArrayDictionary, ref binaryMinMax);
     }
 
     static bool TryWriteDictionaryPage<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
@@ -1151,7 +1154,8 @@ static class Encoding
     /// </summary>
     static void EncodeOptionalFlatByteArrays<TRow, TValue, TProbe, TRowAccess>(BufferWriterFactory bufferWriters,
         Column column, ReadOnlySpan<TRow> values, PageStrategyContext strategyContext, PageList pages,
-        ParquetDataPageVersion dataPageVersion, ReusableDictionaryState<TValue> dictionaryState)
+        ParquetDataPageVersion dataPageVersion, ReusableDictionaryState<TValue> dictionaryState,
+        ref PlainBinaryMinMax binaryMinMax)
         where TValue : notnull
         where TProbe : IOptionalRow<TRow, TValue>
         where TRowAccess : IByteArrayRow<TRow>
@@ -1159,7 +1163,11 @@ static class Encoding
         var strategy = strategyContext.Strategy;
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
-        var presentCount = CountPresentValues<TRow, TValue, TProbe>(values);
+        // Only the dictionary path consumes the present count, and counting it is a full extra pass over an
+        // array of references whose objects rarely fit in cache. Skip it when no dictionary can be built.
+        var presentCount = strategy.GetDictionaryMode() == DictionaryMode.Disabled
+            ? 0
+            : CountPresentValues<TRow, TValue, TProbe>(values);
         var useDictionary = TryWriteOptionalByteArrayDictionaryPage<TRow, TValue, TProbe>(bufferWriters, column,
             values, presentCount, strategyContext, pages, dictionaryState, out var dictionaryValueCount,
             out var dictionaryIndexesBuffer);
@@ -1172,40 +1180,29 @@ static class Encoding
         var useTargetPageBytes = TryGetOptionalPageSizer(column, dataEncoding, useDictionary, dictionaryBitWidth,
             strategy, out var targetPageBytes, out var presentValueBytes);
 
+        // A decimal column orders its bytes by sign and magnitude, so the lexicographic extremes this
+        // pass could collect would be the wrong answer and the statistics walk has to run anyway.
+        var trackMinMax = ColumnStatistics.OrdersBinaryValuesLexicographically(column);
         var rowsWritten = 0;
         var denseOffset = 0;
+        var totalNullCount = 0L;
         try
         {
             while (rowsWritten < values.Length)
             {
                 var pageStart = rowsWritten;
-                var pageRowCount = 0;
-                var pageBytes = 0;
-                if (!useTargetPageBytes)
+                int pageRowCount;
+                var pageBytes = -1;
+                if (useTargetPageBytes)
                 {
-                    pageRowCount = GetStrategyPageRowCount(strategy, values.Length, rowsWritten);
+                    pageRowCount = MeasureByteArrayPageRows<TRow, TValue, TProbe>(column, values, rowsWritten,
+                        presentValueBytes, targetPageBytes, trackMinMax, ref binaryMinMax, out pageBytes);
                     rowsWritten += pageRowCount;
                 }
                 else
                 {
-                    while (rowsWritten < values.Length)
-                    {
-                        var rowBytes = 0;
-                        if (useTargetPageBytes)
-                        {
-                            rowBytes = GetOptionalRowBytes<TRow, TValue, TProbe>(column, in values[rowsWritten],
-                                presentValueBytes);
-                            if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
-                                break;
-                        }
-
-                        rowsWritten++;
-                        pageRowCount++;
-                        if (useTargetPageBytes)
-                            pageBytes = checked(pageBytes + rowBytes);
-                        if (rowsWritten == values.Length)
-                            break;
-                    }
+                    pageRowCount = GetStrategyPageRowCount(strategy, values.Length, rowsWritten);
+                    rowsWritten += pageRowCount;
                 }
 
                 var pageIndex = AddNewDataPage(bufferWriters, pages);
@@ -1229,18 +1226,125 @@ static class Encoding
                 // reader accepts — Plank could not read it back and neither could
                 // arrow-cpp ("Unexpected end of stream: InitHeader EOF").
                 else
+                    // A variable-length row was measured as one definition-level byte plus its plain
+                    // length prefix and payload, so the budget the sizer arrived at already holds the
+                    // payload size and the writer does not have to walk the rows again to find it.
+                    // Fixed-width shapes are left to count for themselves: their rows were measured
+                    // without a length prefix the length-prefixed writer goes on to emit.
                     ValueEncodingDispatcher.WriteOptionalValues<TRow, TRowAccess>(dataEncoding, column, pageRows,
-                        bufferWriters, ref page.Content);
+                        bufferWriters, pageBytes >= 0 && presentValueBytes == 0 ? pageBytes - pageRowCount : -1,
+                        ref page.Content);
 
                 WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
                     useDictionary ? dictionaryEncoding : dataEncoding);
                 denseOffset += presentRows;
+                totalNullCount += nullCount;
             }
+
+            binaryMinMax.NullCount = totalNullCount;
         }
         finally
         {
             dictionaryIndexesBuffer.Dispose();
         }
+    }
+
+    /// <summary>
+    /// How many of <paramref name="rows"/> fit in one page of <paramref name="targetPageBytes"/>. At least one
+    /// row always goes in, however big it is.
+    /// </summary>
+    /// <remarks>
+    /// The byte[] instantiation of the caller is shared __Canon code, where <c>typeof(TValue) == typeof(byte[])</c>
+    /// is a runtime type-handle comparison and the static-abstract row probes are real out-of-line calls. Measuring
+    /// a page cost more than encoding it: the probes, the size switch and the loop around them were a quarter of an
+    /// optional plain BYTE_ARRAY column. Testing the row type once per page instead of once per row hands the work
+    /// to a concrete loop the JIT can see through.
+    /// </remarks>
+    static int MeasureByteArrayPageRows<TRow, TValue, TProbe>(Column column, ReadOnlySpan<TRow> rows, int startIndex,
+        int presentValueBytes, int targetPageBytes, bool trackMinMax, ref PlainBinaryMinMax binaryMinMax,
+        out int pageBytes)
+        where TValue : notnull
+        where TProbe : IOptionalRow<TRow, TValue>
+    {
+        if (typeof(TRow) == typeof(byte[]))
+            return MeasureByteArrayPageRows(
+                MemoryMarshal.CreateReadOnlySpan(
+                    ref Unsafe.As<TRow, byte[]>(ref MemoryMarshal.GetReference(rows)), rows.Length),
+                startIndex, presentValueBytes, targetPageBytes, trackMinMax, ref binaryMinMax, out pageBytes);
+
+        pageBytes = 0;
+        for (var i = startIndex; i < rows.Length; i++)
+        {
+            var rowBytes = GetOptionalRowBytes<TRow, TValue, TProbe>(column, in rows[i], presentValueBytes);
+            if (i > startIndex && pageBytes + rowBytes > targetPageBytes)
+                return i - startIndex;
+            pageBytes = checked(pageBytes + rowBytes);
+        }
+
+        return rows.Length - startIndex;
+    }
+
+    static int MeasureByteArrayPageRows(ReadOnlySpan<byte[]> rows, int startIndex, int presentValueBytes,
+        int targetPageBytes, bool trackMinMax, ref PlainBinaryMinMax binaryMinMax, out int pageBytes)
+    {
+        var minIndex = binaryMinMax.Found ? binaryMinMax.MinIndex : -1;
+        var maxIndex = binaryMinMax.Found ? binaryMinMax.MaxIndex : -1;
+        var min = minIndex < 0 ? null : rows[minIndex];
+        var max = maxIndex < 0 ? null : rows[maxIndex];
+        pageBytes = 0;
+        var i = startIndex;
+        for (; i < rows.Length; i++)
+        {
+            var row = rows[i];
+            if (row is null)
+            {
+                if (i > startIndex && 1 > targetPageBytes - pageBytes)
+                    break;
+                pageBytes = checked(pageBytes + 1);
+                continue;
+            }
+
+            var rowBytes = presentValueBytes > 0
+                ? 1 + presentValueBytes
+                : checked(1 + sizeof(int) + row.Length);
+            if (i > startIndex && rowBytes > targetPageBytes - pageBytes)
+                break;
+            pageBytes = checked(pageBytes + rowBytes);
+
+            if (!trackMinMax)
+            {
+                continue;
+            }
+
+            if (min is null)
+            {
+                min = row;
+                max = row;
+                minIndex = i;
+                maxIndex = i;
+            }
+            // A value below the running min cannot also be above the running max, so the second
+            // comparison only runs when the first one did not claim the value.
+            else if (EncodingPrimitives.ComparePayload(row, min) < 0)
+            {
+                min = row;
+                minIndex = i;
+            }
+            else if (EncodingPrimitives.ComparePayload(row, max) > 0)
+            {
+                max = row;
+                maxIndex = i;
+            }
+        }
+
+        if (min is not null)
+        {
+            binaryMinMax.Found = true;
+            binaryMinMax.MinIndex = minIndex;
+            binaryMinMax.MaxIndex = maxIndex;
+        }
+
+        return i - startIndex;
     }
 
     static bool TryGetOptionalPageSizer(Column column, EncodingKind dataEncoding, bool useDictionary,

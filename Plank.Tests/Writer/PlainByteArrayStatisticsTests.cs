@@ -119,6 +119,109 @@ internal sealed class PlainByteArrayStatisticsTests
         AssertMinMax(column.Statistics, [0xff], [0x7f]);
     }
 
+    [Test]
+    public void OptionalMinAndMaxSpanEveryPageOfTheColumn()
+    {
+        // Same two-rows-per-page split as the required case, with the extremes on different pages,
+        // plus the definition-level byte each row costs against the page budget.
+        var column = CreateOptionalByteArrayColumn(36);
+
+        column.Serialize([
+            "mmmmmmmmmmmm"u8.ToArray(),
+            null,
+            "zzzzzzzzzzzz"u8.ToArray(),
+            "qqqqqqqqqqqq"u8.ToArray(),
+            null,
+            "aaaaaaaaaaaa"u8.ToArray()
+        ]);
+
+        AssertMinMax(column.Statistics, "aaaaaaaaaaaa"u8, "zzzzzzzzzzzz"u8);
+        AssertNullCount(column.Statistics, 2);
+    }
+
+    [Test]
+    public void OptionalNullsDoNotBecomeTheSmallestValue()
+    {
+        var column = CreateOptionalByteArrayColumn(1024);
+
+        column.Serialize([null, "b"u8.ToArray(), null, "a"u8.ToArray(), null]);
+
+        AssertMinMax(column.Statistics, "a"u8, "b"u8);
+        AssertNullCount(column.Statistics, 3);
+    }
+
+    [Test]
+    public void AnAllNullOptionalColumnHasNoExtremes()
+    {
+        var column = CreateOptionalByteArrayColumn(1024);
+
+        column.Serialize([null, null, null]);
+
+        if (!column.Statistics.GetMinValue().IsEmpty || !column.Statistics.GetMaxValue().IsEmpty)
+            throw new InvalidOperationException("An all-null column must not report a min or a max.");
+        AssertNullCount(column.Statistics, 3);
+    }
+
+    [Test]
+    public void OptionalDeltaByteArrayColumnsReportTheSameMinAndMax()
+    {
+        // The delta encodings measure their pages against the plain size too, so they take the same
+        // extremes from the same pass.
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.DeltaByteArray]))
+        ]);
+        var writer = schema.CreateWriter(new MemoryStream(), new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 1024
+        });
+        var column = writer.CreateSerializedColumn<byte[]?>(schema.LeafColumns[0]);
+
+        column.Serialize(["banana"u8.ToArray(), null, "apple"u8.ToArray(), "cherry"u8.ToArray()]);
+
+        AssertMinMax(column.Statistics, "apple"u8, "cherry"u8);
+        AssertNullCount(column.Statistics, 1);
+    }
+
+    [Test]
+    public void OptionalDecimalColumnsKeepTheirSignedOrdering()
+    {
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("amount", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(ParquetRepetition.Optional), new LogicalType.Decimal(9, 2))
+        ]);
+        var writer = schema.CreateWriter(new MemoryStream(), new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 1024
+        });
+        var column = writer.CreateSerializedColumn<byte[]?>(schema.LeafColumns[0]);
+
+        column.Serialize([new byte[] { 0x01 }, null, new byte[] { 0xff }, new byte[] { 0x7f }]);
+
+        AssertMinMax(column.Statistics, [0xff], [0x7f]);
+        AssertNullCount(column.Statistics, 1);
+    }
+
+    static SerializedColumn<byte[]?> CreateOptionalByteArrayColumn(uint targetDataPageSizeBytes)
+    {
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(ParquetRepetition.Optional))
+        ]);
+        var writer = schema.CreateWriter(new MemoryStream(), new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = targetDataPageSizeBytes
+        });
+        return writer.CreateSerializedColumn<byte[]?>(schema.LeafColumns[0]);
+    }
+
+    static void AssertNullCount(ColumnStatistics statistics, long expected)
+    {
+        if (statistics.NullCount != expected)
+            throw new InvalidOperationException(
+                $"Null count mismatch. Expected {expected}, got {statistics.NullCount}.");
+    }
+
     static SerializedColumn<byte[]> CreateByteArrayColumn(uint targetDataPageSizeBytes)
     {
         var schema = new PlankParquetSchema([
