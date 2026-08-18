@@ -1019,8 +1019,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         // take its answer rather than walking the value references again for the same result.
         Statistics = binaryMinMax.Found && ColumnStatistics.OrdersBinaryValuesLexicographically(_column)
             ? ColumnStatistics.CreateBinaryFromKnownExtremes(_column, values, binaryMinMax.MinIndex,
-                binaryMinMax.MaxIndex, ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer,
-                _owner.BufferWriters.BufferPool)
+                binaryMinMax.MaxIndex, binaryMinMax.NullCount, ref _statisticsMinValueBuffer,
+                ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool)
             : ColumnStatistics.CreateWithReusableBinaryBuffers(_column, statisticsValues, 0,
                 ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
@@ -1102,13 +1102,20 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = checked((uint)values.Length);
-        Statistics = ColumnStatistics.CreateOptionalWithReusableBinaryBuffers(_column, values,
-            ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategyContext, Pages,
             _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
-            GetOrCreateDictionaryState<TValue>());
+            GetOrCreateDictionaryState<TValue>(), out var binaryMinMax);
+        // The encode pass had to measure every row to place its page boundaries, so it settled the
+        // column's min and max on the way past. Taking its answer spares a second walk over value
+        // references that rarely fit in cache.
+        Statistics = binaryMinMax.Found && ColumnStatistics.OrdersBinaryValuesLexicographically(_column)
+            ? ColumnStatistics.CreateBinaryFromKnownExtremes(_column, values, binaryMinMax.MinIndex,
+                binaryMinMax.MaxIndex, binaryMinMax.NullCount, ref _statisticsMinValueBuffer,
+                ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool)
+            : ColumnStatistics.CreateOptionalWithReusableBinaryBuffers(_column, values,
+                ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         _bloomFilterByteLength = BloomFilterBuilder.BuildOptionalReferences(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
         if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
