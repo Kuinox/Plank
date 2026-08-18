@@ -51,6 +51,6 @@ sealed class DefaultStrategy : IPageStrategy
         return true;
     }
 
-    public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
-        => false;
+    public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+        => totalRowCount - rowsWritten;
 }

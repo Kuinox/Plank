@@ -580,8 +580,8 @@ internal sealed class PageSizeTests
         public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
             => false;
 
-        public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
-            => currentPageRowCount >= _rowsPerPage;
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => Math.Min(_rowsPerPage, totalRowCount - rowsWritten);
     }
 
     sealed class TargetBytesPageStrategy(uint targetBytes) : IPageStrategy
@@ -598,7 +598,7 @@ internal sealed class PageSizeTests
             return true;
         }
 
-        public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
-            => throw new InvalidOperationException("Target-byte strategies must not use row callbacks.");
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => totalRowCount - rowsWritten;
     }
 }

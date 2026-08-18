@@ -17,5 +17,10 @@ public interface IPageStrategy
         return false;
     }
 
-    bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount);
+    /// <summary>Gets the number of rows to write to the next data page.</summary>
+    /// <remarks>
+    /// The result must be greater than zero and no greater than <paramref name="totalRowCount"/> minus
+    /// <paramref name="rowsWritten"/>.
+    /// </remarks>
+    uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten);
 }
