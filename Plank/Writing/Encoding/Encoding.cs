@@ -1192,10 +1192,11 @@ static class Encoding
             {
                 var pageStart = rowsWritten;
                 int pageRowCount;
+                var pageBytes = -1;
                 if (useTargetPageBytes)
                 {
                     pageRowCount = MeasureByteArrayPageRows<TRow, TValue, TProbe>(column, values, rowsWritten,
-                        presentValueBytes, targetPageBytes, trackMinMax, ref binaryMinMax);
+                        presentValueBytes, targetPageBytes, trackMinMax, ref binaryMinMax, out pageBytes);
                     rowsWritten += pageRowCount;
                 }
                 else
@@ -1225,8 +1226,14 @@ static class Encoding
                 // reader accepts — Plank could not read it back and neither could
                 // arrow-cpp ("Unexpected end of stream: InitHeader EOF").
                 else
+                    // A variable-length row was measured as one definition-level byte plus its plain
+                    // length prefix and payload, so the budget the sizer arrived at already holds the
+                    // payload size and the writer does not have to walk the rows again to find it.
+                    // Fixed-width shapes are left to count for themselves: their rows were measured
+                    // without a length prefix the length-prefixed writer goes on to emit.
                     ValueEncodingDispatcher.WriteOptionalValues<TRow, TRowAccess>(dataEncoding, column, pageRows,
-                        bufferWriters, ref page.Content);
+                        bufferWriters, pageBytes >= 0 && presentValueBytes == 0 ? pageBytes - pageRowCount : -1,
+                        ref page.Content);
 
                 WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
                     useDictionary ? dictionaryEncoding : dataEncoding);
@@ -1254,7 +1261,8 @@ static class Encoding
     /// to a concrete loop the JIT can see through.
     /// </remarks>
     static int MeasureByteArrayPageRows<TRow, TValue, TProbe>(Column column, ReadOnlySpan<TRow> rows, int startIndex,
-        int presentValueBytes, int targetPageBytes, bool trackMinMax, ref PlainBinaryMinMax binaryMinMax)
+        int presentValueBytes, int targetPageBytes, bool trackMinMax, ref PlainBinaryMinMax binaryMinMax,
+        out int pageBytes)
         where TValue : notnull
         where TProbe : IOptionalRow<TRow, TValue>
     {
@@ -1262,9 +1270,9 @@ static class Encoding
             return MeasureByteArrayPageRows(
                 MemoryMarshal.CreateReadOnlySpan(
                     ref Unsafe.As<TRow, byte[]>(ref MemoryMarshal.GetReference(rows)), rows.Length),
-                startIndex, presentValueBytes, targetPageBytes, trackMinMax, ref binaryMinMax);
+                startIndex, presentValueBytes, targetPageBytes, trackMinMax, ref binaryMinMax, out pageBytes);
 
-        var pageBytes = 0;
+        pageBytes = 0;
         for (var i = startIndex; i < rows.Length; i++)
         {
             var rowBytes = GetOptionalRowBytes<TRow, TValue, TProbe>(column, in rows[i], presentValueBytes);
@@ -1277,13 +1285,13 @@ static class Encoding
     }
 
     static int MeasureByteArrayPageRows(ReadOnlySpan<byte[]> rows, int startIndex, int presentValueBytes,
-        int targetPageBytes, bool trackMinMax, ref PlainBinaryMinMax binaryMinMax)
+        int targetPageBytes, bool trackMinMax, ref PlainBinaryMinMax binaryMinMax, out int pageBytes)
     {
         var minIndex = binaryMinMax.Found ? binaryMinMax.MinIndex : -1;
         var maxIndex = binaryMinMax.Found ? binaryMinMax.MaxIndex : -1;
         var min = minIndex < 0 ? null : rows[minIndex];
         var max = maxIndex < 0 ? null : rows[maxIndex];
-        var pageBytes = 0;
+        pageBytes = 0;
         var i = startIndex;
         for (; i < rows.Length; i++)
         {

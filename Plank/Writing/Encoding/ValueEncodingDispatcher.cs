@@ -48,14 +48,21 @@ static class ValueEncodingDispatcher
     /// shape - <c>byte[]</c> or <see cref="ReadOnlyMemory{T}"/> - is carried by
     /// <typeparamref name="TRowAccess"/> rather than by a separate overload per shape.
     /// </summary>
+    /// <summary>
+    /// <paramref name="knownPlainPayloadBytes"/> is how many bytes these rows occupy once plain encoded, or
+    /// -1 when the caller does not know. Only PLAIN can use it; the delta encodings measure their pages
+    /// against the plain size but do not write it.
+    /// </summary>
     internal static void WriteOptionalValues<TRow, TRowAccess>(EncodingKind encoding, Column column,
-        ReadOnlySpan<TRow> rows, BufferWriterFactory bufferWriters, ref BufferWriter writer)
+        ReadOnlySpan<TRow> rows, BufferWriterFactory bufferWriters, int knownPlainPayloadBytes,
+        ref BufferWriter writer)
         where TRowAccess : IByteArrayRow<TRow>
     {
         switch (encoding)
         {
             case EncodingKind.Plain:
-                PlainEncoding.WriteOptionalValues<TRow, TRowAccess>(column, rows, ref writer);
+                PlainEncoding.WriteOptionalValues<TRow, TRowAccess>(column, rows, knownPlainPayloadBytes,
+                    ref writer);
                 return;
             case EncodingKind.DeltaLengthByteArray:
                 DeltaLengthByteArrayEncoding.WriteOptionalValues<TRow, TRowAccess>(column, rows, bufferWriters,
