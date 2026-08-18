@@ -15,11 +15,9 @@ Plank.Writing.PageKind.Dictionary = 2 -> Plank.Writing.PageKind
 Plank.Writing.PageStrategy.ForceDictionaryPageStrategy
 Plank.Writing.PageStrategy.ForceDictionaryPageStrategy.GetDictionaryMode() -> Plank.Writing.PageStrategy.DictionaryMode
 Plank.Writing.PageStrategy.ForceDictionaryPageStrategy.ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen) -> bool
-Plank.Writing.PageStrategy.ForceDictionaryPageStrategy.ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount) -> bool
 Plank.Writing.PageStrategy.IPageStrategy
 Plank.Writing.PageStrategy.IPageStrategy.GetDictionaryMode() -> Plank.Writing.PageStrategy.DictionaryMode
 Plank.Writing.PageStrategy.IPageStrategy.ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen) -> bool
-Plank.Writing.PageStrategy.IPageStrategy.ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount) -> bool
 Plank.Writing.PageStrategy.IPageStrategy.TryGetTargetDataPageSizeBytes(out uint sizeBytes) -> bool
 Plank.Writing.ParquetWriterOptions
 Plank.Writing.ParquetWriterOptions.BufferChunkSizeBytes.get -> uint

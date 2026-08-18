@@ -321,7 +321,7 @@ internal sealed class NullableNumericEncodingTests
         public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
             => false;
 
-        public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
-            => currentPageRowCount >= _rowsPerPage;
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => Math.Min(_rowsPerPage, totalRowCount - rowsWritten);
     }
 }
