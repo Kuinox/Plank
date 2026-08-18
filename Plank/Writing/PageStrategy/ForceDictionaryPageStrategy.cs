@@ -15,6 +15,6 @@ public sealed class ForceDictionaryPageStrategy : IPageStrategy
     public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
         => false;
 
-    public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
-        => false;
+    uint IPageStrategy.GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+        => totalRowCount - rowsWritten;
 }

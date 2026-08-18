@@ -748,8 +748,8 @@ internal sealed class NullableNumericDecodingTests
         public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
             => false;
 
-        public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
-            => currentPageRowCount >= rowsPerPage;
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => Math.Min(rowsPerPage, totalRowCount - rowsWritten);
     }
 
     sealed class SinglePageStrategy(bool dictionary) : IPageStrategy
@@ -760,7 +760,7 @@ internal sealed class NullableNumericDecodingTests
         public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
             => false;
 
-        public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
-            => false;
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => totalRowCount - rowsWritten;
     }
 }

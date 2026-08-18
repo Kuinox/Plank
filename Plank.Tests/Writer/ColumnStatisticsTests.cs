@@ -693,7 +693,7 @@ internal sealed class ColumnStatisticsTests
         public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
             => false;
 
-        public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
-            => currentPageRowCount >= (uint)_rowsPerPage;
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => Math.Min((uint)_rowsPerPage, totalRowCount - rowsWritten);
     }
 }

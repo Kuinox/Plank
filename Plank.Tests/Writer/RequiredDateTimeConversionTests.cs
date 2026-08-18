@@ -264,7 +264,7 @@ internal sealed class RequiredDateTimeConversionTests
         public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
             => false;
 
-        public bool ShouldStartNewDataPage(uint totalRowCount, uint rowsWritten, uint currentPageRowCount)
-            => currentPageRowCount >= rowsPerPage;
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => Math.Min(rowsPerPage, totalRowCount - rowsWritten);
     }
 }
