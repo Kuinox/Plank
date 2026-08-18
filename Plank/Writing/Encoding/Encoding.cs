@@ -109,10 +109,27 @@ static class Encoding
         }
     }
 
+    /// <summary>
+    /// True when <paramref name="strategy"/> can answer <see cref="IPageStrategy.ShouldStartNewDataPage"/>
+    /// with anything other than a constant false. Both built-in strategies split pages by encoded bytes and
+    /// never by row count, so the row-counting loops below were making one interface call per row - a virtual
+    /// stub dispatch that could not change the answer, and 9% of an optional int64 delta-binary-packed column.
+    /// Resolving it once lets those loops collapse into a single slice. A custom strategy still gets asked.
+    /// </summary>
+    static bool SplitsPagesByRowCount(IPageStrategy strategy)
+        => strategy is not (DefaultStrategy or ForceDictionaryPageStrategy);
+
     static void WriteStrategyDataPages<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         EncodingKind dataEncoding, IPageStrategy strategy, PageList pages)
         where T : notnull
     {
+        if (!SplitsPagesByRowCount(strategy))
+        {
+            if (values.Length > 0)
+                WriteDataPage(bufferWriters, column, values, dataEncoding, pages);
+            return;
+        }
+
         var rowsWritten = 0;
         while (rowsWritten < values.Length)
         {
@@ -333,22 +350,32 @@ static class Encoding
         var rowsPerTargetPage = TryGetDictionaryRowsPerPage(strategy, dictionaryBitWidth, out var rowsPerPage)
             ? rowsPerPage
             : 0;
+        var askStrategyPerRow = rowsPerTargetPage == 0 && SplitsPagesByRowCount(strategy);
         var rowsWritten = 0;
         while (rowsWritten < totalRowCount)
         {
             var pageStart = rowsWritten;
-            var pageRowCount = 0;
-            while (rowsWritten < totalRowCount)
+            int pageRowCount;
+            if (!askStrategyPerRow)
             {
-                rowsWritten++;
-                pageRowCount++;
-                if (rowsWritten == totalRowCount)
-                    break;
-                if (rowsPerTargetPage > 0 && pageRowCount >= rowsPerTargetPage)
-                    break;
-                if (rowsPerTargetPage == 0 && strategy.ShouldStartNewDataPage(checked((uint)totalRowCount),
-                        checked((uint)rowsWritten), checked((uint)pageRowCount)))
-                    break;
+                pageRowCount = rowsPerTargetPage > 0
+                    ? Math.Min(rowsPerTargetPage, totalRowCount - rowsWritten)
+                    : totalRowCount - rowsWritten;
+                rowsWritten += pageRowCount;
+            }
+            else
+            {
+                pageRowCount = 0;
+                while (rowsWritten < totalRowCount)
+                {
+                    rowsWritten++;
+                    pageRowCount++;
+                    if (rowsWritten == totalRowCount)
+                        break;
+                    if (strategy.ShouldStartNewDataPage(checked((uint)totalRowCount),
+                            checked((uint)rowsWritten), checked((uint)pageRowCount)))
+                        break;
+                }
             }
 
             var pageIndex = AddNewDataPage(bufferWriters, pages);
@@ -943,7 +970,7 @@ static class Encoding
                     pageRowCount = Math.Min(fixedRowsPerPage, values.Length - rowsWritten);
                     rowsWritten += pageRowCount;
                 }
-                else if (!useTargetPageBytes && strategy is ForceDictionaryPageStrategy)
+                else if (!useTargetPageBytes && !SplitsPagesByRowCount(strategy))
                 {
                     pageRowCount = values.Length - rowsWritten;
                     rowsWritten = values.Length;
@@ -1184,26 +1211,34 @@ static class Encoding
                 var pageStart = rowsWritten;
                 var pageRowCount = 0;
                 var pageBytes = 0;
-                while (rowsWritten < values.Length)
+                if (!useTargetPageBytes && !SplitsPagesByRowCount(strategy))
                 {
-                    var rowBytes = 0;
-                    if (useTargetPageBytes)
+                    pageRowCount = values.Length - rowsWritten;
+                    rowsWritten = values.Length;
+                }
+                else
+                {
+                    while (rowsWritten < values.Length)
                     {
-                        rowBytes = GetOptionalRowBytes<TRow, TValue, TProbe>(column, in values[rowsWritten],
-                            presentValueBytes);
-                        if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
+                        var rowBytes = 0;
+                        if (useTargetPageBytes)
+                        {
+                            rowBytes = GetOptionalRowBytes<TRow, TValue, TProbe>(column, in values[rowsWritten],
+                                presentValueBytes);
+                            if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
+                                break;
+                        }
+
+                        rowsWritten++;
+                        pageRowCount++;
+                        if (useTargetPageBytes)
+                            pageBytes = checked(pageBytes + rowBytes);
+                        if (rowsWritten == values.Length)
+                            break;
+                        if (!useTargetPageBytes && strategy.ShouldStartNewDataPage(checked((uint)values.Length),
+                                checked((uint)rowsWritten), checked((uint)pageRowCount)))
                             break;
                     }
-
-                    rowsWritten++;
-                    pageRowCount++;
-                    if (useTargetPageBytes)
-                        pageBytes = checked(pageBytes + rowBytes);
-                    if (rowsWritten == values.Length)
-                        break;
-                    if (!useTargetPageBytes && strategy.ShouldStartNewDataPage(checked((uint)values.Length),
-                            checked((uint)rowsWritten), checked((uint)pageRowCount)))
-                        break;
                 }
 
                 var pageIndex = AddNewDataPage(bufferWriters, pages);
