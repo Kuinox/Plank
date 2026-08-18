@@ -1,5 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
-
 namespace Plank.Schema;
 
 public enum EncodingKind : ushort
@@ -16,8 +14,13 @@ public enum EncodingKind : ushort
 
     /// <summary>
     /// Adaptive Lossless floating-Point encoding for <see cref="ParquetPhysicalType.Float"/> and
-    /// <see cref="ParquetPhysicalType.Double"/>. This encoding is in Preview in the Parquet format.
+    /// <see cref="ParquetPhysicalType.Double"/>.
     /// </summary>
-    [Experimental("PLANK001", UrlFormat = "https://github.com/apache/parquet-format/blob/master/Encodings.md#adaptive-lossless-floating-point-alp--10")]
+    /// <remarks>
+    /// ALP is a recent addition to the Parquet format and is classified there as Preview: the byte
+    /// layout is final, but reader support across the ecosystem is still spreading. Check that every
+    /// Parquet library that will read the file supports ALP before selecting it.
+    /// See <see href="https://github.com/apache/parquet-format/blob/master/Encodings.md#adaptive-lossless-floating-point-alp--10"/>.
+    /// </remarks>
     Alp = 9
 }

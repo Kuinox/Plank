@@ -36,7 +36,6 @@ internal sealed class IncompatibleEncodingDiagnosticTests
     public async Task AlpAcceptsFloatAndRejectsIntegerColumns()
     {
         const string source = """
-            #pragma warning disable PLANK001
             using Plank.Schema;
 
             namespace Regression;
