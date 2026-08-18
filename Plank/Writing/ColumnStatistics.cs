@@ -154,7 +154,7 @@ internal readonly struct ColumnStatistics
     /// check <see cref="OrdersBinaryValuesLexicographically"/> before using an encoder-supplied result.
     /// </remarks>
     internal static ColumnStatistics CreateBinaryFromKnownExtremes<T>(Column column, ReadOnlySpan<T> values,
-        int minIndex, int maxIndex, ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer,
+        int minIndex, int maxIndex, long nullCount, ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer,
         IParquetBufferPool bufferPool)
         where T : notnull
     {
@@ -180,7 +180,7 @@ internal readonly struct ColumnStatistics
 
         CopyToReusableBuffer(min, ref minBuffer, bufferPool);
         CopyToReusableBuffer(max, ref maxBuffer, bufferPool);
-        return new ColumnStatistics(minBuffer, min.Length, maxBuffer, max.Length, 0, true);
+        return new ColumnStatistics(minBuffer, min.Length, maxBuffer, max.Length, nullCount, true);
     }
 
     /// <summary>

@@ -349,7 +349,7 @@ static class PlainEncoding
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
         {
             WriteLengthPrefixedPayloads<ReadOnlyMemory<byte>, RequiredMemoryRow>(column,
-                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>>>(ref values), ref writer);
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>>>(ref values), -1, ref writer);
             return;
         }
 
@@ -518,13 +518,17 @@ static class PlainEncoding
     /// bytes. Absent rows contribute nothing, so this serves the required and optional shapes alike.
     /// </summary>
     static void WriteLengthPrefixedPayloads<TRow, TRowAccess>(Column column, ReadOnlySpan<TRow> rows,
-        ref BufferWriter writer)
+        int knownPayloadBytes, ref BufferWriter writer)
         where TRowAccess : IByteArrayRow<TRow>
     {
-        var byteCount = 0;
-        for (var i = 0; i < rows.Length; i++)
-            if (ByteArrayRows.TryGetPayload<TRow, TRowAccess>(column, in rows[i], out var payload))
-                byteCount = checked(byteCount + sizeof(int) + payload.Length);
+        var byteCount = knownPayloadBytes;
+        if (byteCount < 0)
+        {
+            byteCount = 0;
+            for (var i = 0; i < rows.Length; i++)
+                if (ByteArrayRows.TryGetPayload<TRow, TRowAccess>(column, in rows[i], out var payload))
+                    byteCount = checked(byteCount + sizeof(int) + payload.Length);
+        }
 
         if (byteCount == 0)
             return;
@@ -545,14 +549,20 @@ static class PlainEncoding
         writer.Advance(offset);
     }
 
+    /// <summary>
+    /// Writes one page of optional plain BYTE_ARRAY payloads. <paramref name="knownPayloadBytes"/> is how
+    /// many bytes they occupy once encoded, or -1 when the caller does not know; the page sizer already
+    /// measured every row to place the page boundary, so handing that total over saves walking the value
+    /// references a second time just to size the destination.
+    /// </summary>
     internal static void WriteOptionalValues<TRow, TRowAccess>(Column column, ReadOnlySpan<TRow> rows,
-        ref BufferWriter writer)
+        int knownPayloadBytes, ref BufferWriter writer)
         where TRowAccess : IByteArrayRow<TRow>
     {
         if (typeof(TRow) == typeof(byte[]))
         {
             WriteOptionalByteArrayPayloads(column,
-                Unsafe.As<ReadOnlySpan<TRow>, ReadOnlySpan<byte[]>>(ref rows), ref writer);
+                Unsafe.As<ReadOnlySpan<TRow>, ReadOnlySpan<byte[]>>(ref rows), knownPayloadBytes, ref writer);
             return;
         }
 
@@ -567,23 +577,28 @@ static class PlainEncoding
             return;
         }
 
-        WriteLengthPrefixedPayloads<TRow, TRowAccess>(column, rows, ref writer);
+        WriteLengthPrefixedPayloads<TRow, TRowAccess>(column, rows, knownPayloadBytes, ref writer);
     }
 
     static void WriteOptionalByteArrayPayloads(Column column, ReadOnlySpan<byte[]> values,
-        ref BufferWriter writer)
+        int knownPayloadBytes, ref BufferWriter writer)
     {
         if (column.PhysicalType is ParquetPhysicalType.FixedLenByteArray or ParquetPhysicalType.Int96)
         {
             var valueLength = column.PhysicalType == ParquetPhysicalType.Int96
                 ? 12
                 : EncodingPrimitives.GetFixedLength(column);
-            var presentCount = 0;
-            for (var i = 0; i < values.Length; i++)
-                if (values[i] is not null)
-                    presentCount++;
+            var fixedByteCount = knownPayloadBytes;
+            if (fixedByteCount < 0)
+            {
+                var presentCount = 0;
+                for (var i = 0; i < values.Length; i++)
+                    if (values[i] is not null)
+                        presentCount++;
+                fixedByteCount = checked(presentCount * valueLength);
+            }
 
-            var destination = writer.GetSpan(checked(presentCount * valueLength));
+            var destination = writer.GetSpan(fixedByteCount);
             var offset = 0;
             for (var i = 0; i < values.Length; i++)
             {
@@ -593,7 +608,7 @@ static class PlainEncoding
                 if (value.Length != valueLength)
                     throw new InvalidOperationException(
                         $"Column '{column.Name}' expects fixed-length values of {valueLength} bytes, but got {value.Length}.");
-                value.CopyTo(destination[offset..]);
+                EncodingPrimitives.CopyPayload(value, destination[offset..]);
                 offset += valueLength;
             }
 
@@ -601,10 +616,14 @@ static class PlainEncoding
             return;
         }
 
-        var byteCount = 0;
-        for (var i = 0; i < values.Length; i++)
-            if (values[i] is { } value)
-                byteCount = checked(byteCount + sizeof(int) + value.Length);
+        var byteCount = knownPayloadBytes;
+        if (byteCount < 0)
+        {
+            byteCount = 0;
+            for (var i = 0; i < values.Length; i++)
+                if (values[i] is { } value)
+                    byteCount = checked(byteCount + sizeof(int) + value.Length);
+        }
 
         if (byteCount == 0)
             return;
@@ -618,7 +637,7 @@ static class PlainEncoding
                 continue;
             BinaryPrimitives.WriteInt32LittleEndian(lengthPrefixedDestination[lengthPrefixedOffset..], value.Length);
             lengthPrefixedOffset += sizeof(int);
-            value.CopyTo(lengthPrefixedDestination[lengthPrefixedOffset..]);
+            EncodingPrimitives.CopyPayload(value, lengthPrefixedDestination[lengthPrefixedOffset..]);
             lengthPrefixedOffset += value.Length;
         }
 
