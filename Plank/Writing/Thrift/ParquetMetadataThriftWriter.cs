@@ -1088,21 +1088,11 @@ static class ParquetMetadataThriftWriter
             _ => throw new NotSupportedException($"Repetition '{repetition}' is not supported.")
         };
 
+    // EncodingKind carries the Parquet wire values, so writing is a validity check plus a cast.
     static int GetEncoding(EncodingKind encoding)
-        => encoding switch
-        {
-            EncodingKind.Plain => (int)ParquetEncoding.Plain,
-            EncodingKind.PlainDictionary => (int)ParquetEncoding.PlainDictionary,
-            EncodingKind.RleDictionary => (int)ParquetEncoding.RleDictionary,
-            EncodingKind.Rle => (int)ParquetEncoding.Rle,
-            EncodingKind.BitPacked => (int)ParquetEncoding.BitPacked,
-            EncodingKind.DeltaBinaryPacked => (int)ParquetEncoding.DeltaBinaryPacked,
-            EncodingKind.DeltaLengthByteArray => (int)ParquetEncoding.DeltaLengthByteArray,
-            EncodingKind.DeltaByteArray => (int)ParquetEncoding.DeltaByteArray,
-            EncodingKind.ByteStreamSplit => (int)ParquetEncoding.ByteStreamSplit,
-            EncodingKind.Alp => (int)ParquetEncoding.Alp,
-            _ => throw new NotSupportedException($"Encoding '{encoding}' is not supported.")
-        };
+        => (int)encoding is 0 or (>= 2 and <= 10)
+            ? (int)encoding
+            : throw new NotSupportedException($"Encoding '{encoding}' is not supported.");
 
     static int GetCompression(CompressionKind compression)
         => compression switch
@@ -1148,20 +1138,6 @@ static class ParquetMetadataThriftWriter
         Required = 0,
         Optional = 1,
         Repeated = 2
-    }
-
-    enum ParquetEncoding
-    {
-        Plain = 0,
-        PlainDictionary = 2,
-        Rle = 3,
-        BitPacked = 4,
-        DeltaBinaryPacked = 5,
-        DeltaLengthByteArray = 6,
-        DeltaByteArray = 7,
-        RleDictionary = 8,
-        ByteStreamSplit = 9,
-        Alp = 10
     }
 
     enum CompressionCodec

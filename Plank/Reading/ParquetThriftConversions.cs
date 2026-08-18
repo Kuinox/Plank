@@ -17,19 +17,9 @@ static class ParquetThriftConversions
             _ => throw new NotSupportedException($"Compression codec '{compression}' is not supported.")
         };
 
+    // EncodingKind carries the Parquet wire values, so reading is a range check plus a cast.
     internal static EncodingKind ReadEncoding(int encoding)
-        => encoding switch
-        {
-            0 => EncodingKind.Plain,
-            2 => EncodingKind.PlainDictionary,
-            3 => EncodingKind.Rle,
-            4 => EncodingKind.BitPacked,
-            5 => EncodingKind.DeltaBinaryPacked,
-            6 => EncodingKind.DeltaLengthByteArray,
-            7 => EncodingKind.DeltaByteArray,
-            8 => EncodingKind.RleDictionary,
-            9 => EncodingKind.ByteStreamSplit,
-            10 => EncodingKind.Alp,
-            _ => throw new NotSupportedException($"Encoding '{encoding}' is not supported.")
-        };
+        => encoding is 0 or (>= 2 and <= 10)
+            ? (EncodingKind)encoding
+            : throw new NotSupportedException($"Encoding '{encoding}' is not supported.");
 }

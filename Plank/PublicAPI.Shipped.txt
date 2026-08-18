@@ -429,14 +429,11 @@ Plank.Schema.CompressionKind.Snappy = 1 -> Plank.Schema.CompressionKind
 Plank.Schema.CompressionKind.Zstd = 3 -> Plank.Schema.CompressionKind
 Plank.Schema.EncodingKind
 Plank.Schema.EncodingKind.BitPacked = 4 -> Plank.Schema.EncodingKind
-Plank.Schema.EncodingKind.ByteStreamSplit = 8 -> Plank.Schema.EncodingKind
 Plank.Schema.EncodingKind.DeltaBinaryPacked = 5 -> Plank.Schema.EncodingKind
 Plank.Schema.EncodingKind.DeltaByteArray = 7 -> Plank.Schema.EncodingKind
 Plank.Schema.EncodingKind.DeltaLengthByteArray = 6 -> Plank.Schema.EncodingKind
 Plank.Schema.EncodingKind.Plain = 0 -> Plank.Schema.EncodingKind
-Plank.Schema.EncodingKind.PlainDictionary = 1 -> Plank.Schema.EncodingKind
 Plank.Schema.EncodingKind.Rle = 3 -> Plank.Schema.EncodingKind
-Plank.Schema.EncodingKind.RleDictionary = 2 -> Plank.Schema.EncodingKind
 Plank.Schema.LogicalType
 Plank.Schema.LogicalType.Date
 Plank.Schema.LogicalType.Decimal

@@ -1517,11 +1517,12 @@ static class NestedParquetRowEmitter
 
     static bool TryGetEncoding(int value, out string encoding)
     {
+        // These are EncodingKind's values, which are the Parquet format's wire values; 1 is unused.
         encoding = value switch
         {
-            0 => "Plain", 1 => "PlainDictionary", 2 => "RleDictionary", 3 => "Rle", 4 => "BitPacked",
-            5 => "DeltaBinaryPacked", 6 => "DeltaLengthByteArray", 7 => "DeltaByteArray", 8 => "ByteStreamSplit",
-            9 => "Alp",
+            0 => "Plain", 2 => "PlainDictionary", 3 => "Rle", 4 => "BitPacked",
+            5 => "DeltaBinaryPacked", 6 => "DeltaLengthByteArray", 7 => "DeltaByteArray", 8 => "RleDictionary",
+            9 => "ByteStreamSplit", 10 => "Alp",
             _ => string.Empty
         };
         return encoding.Length > 0;
