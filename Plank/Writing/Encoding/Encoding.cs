@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using System.Threading;
 using Plank.Schema;
 using Plank.Writing.PageStrategy;
@@ -11,6 +13,7 @@ static class Encoding
 {
     const int DictionaryDropCheckPeriodRows = 2048;
     const int MaximumInitialForcedDictionaryCapacity = 2048;
+    static readonly bool HasCanonicalNullableInt64Layout = ProbeCanonicalNullableInt64Layout();
 
     internal static bool Encode<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         PageStrategyContext strategyContext, PageList pages, ParquetDataPageVersion dataPageVersion,
@@ -729,6 +732,287 @@ static class Encoding
 
         EncodeOptionalFlatValues(bufferWriters, column, values, strategyContext, pages, dataPageVersion,
             densePresentValues, dictionaryState);
+    }
+
+    /// <summary>
+    /// Writes size-bounded optional PLAIN INT64 pages directly from nullable rows. Page sizing and definition-level
+    /// encoding share one pass; the value copy also computes page and column statistics. This avoids materializing a
+    /// column-sized dense buffer and walking that buffer again for statistics.
+    /// </summary>
+    internal static ColumnStatistics EncodeOptionalPlainInt64(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<long?> values, PageStrategyContext strategyContext, PageList pages,
+        ParquetDataPageVersion dataPageVersion, LeafProjectionInfo leafProjectionInfo)
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        ArgumentNullException.ThrowIfNull(strategyContext);
+        ArgumentNullException.ThrowIfNull(pages);
+        if (column.Options.Repetition != ParquetRepetition.Optional
+            || column.PhysicalType != ParquetPhysicalType.Int64)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' must be an optional INT64 column for direct PLAIN encoding.");
+        if (leafProjectionInfo.MaxDefinitionLevel != 1 || leafProjectionInfo.MaxRepetitionLevel != 0)
+            throw new NotSupportedException(
+                $"Column '{column.Name}' optional flat encoding requires a single optional leaf.");
+        if (EncodingKindResolver.GetDataEncodingKind(column) != EncodingKind.Plain
+            || strategyContext.Strategy is not DefaultStrategy
+            || strategyContext.Strategy.GetDictionaryMode() != DictionaryMode.Disabled
+            || !strategyContext.Strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytesUnsigned))
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' requires the default non-dictionary PLAIN page strategy.");
+
+        pages.Clear();
+        if (values.IsEmpty)
+            return ColumnStatistics.Empty(0);
+
+        var targetPageBytes = checked((int)targetPageBytesUnsigned);
+        if (BitConverter.IsLittleEndian && HasCanonicalNullableInt64Layout && Avx2.IsSupported
+            && AreAllNullableInt64ValuesPresent(values))
+            return EncodeAllPresentOptionalPlainInt64(bufferWriters, values, targetPageBytes, pages,
+                dataPageVersion);
+
+        var rowsWritten = 0;
+        var columnNullCount = 0L;
+        var hasColumnValue = false;
+        var columnMin = 0L;
+        var columnMax = 0L;
+        while (rowsWritten < values.Length)
+        {
+            var pageStart = rowsWritten;
+            var pageIndex = AddNewDataPage(bufferWriters, pages);
+            ref var page = ref pages[pageIndex];
+            var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
+                ref page.Content);
+            var definitionStart = page.Content.WrittenLength;
+            var pageRowCount = 0;
+            var pageBytes = 0;
+            var nullCount = 0;
+            var presentRows = 0;
+            var currentLevel = -1;
+            var currentRunLength = 0;
+            while (rowsWritten < values.Length)
+            {
+                var present = values[rowsWritten].HasValue;
+                var rowBytes = present ? sizeof(long) + 1 : 1;
+                if (pageRowCount > 0 && rowBytes > targetPageBytes - pageBytes)
+                    break;
+
+                var level = present ? 1 : 0;
+                if (present)
+                    presentRows++;
+                else
+                    nullCount++;
+
+                if (currentRunLength == 0)
+                {
+                    currentLevel = level;
+                    currentRunLength = 1;
+                }
+                else if (currentLevel == level)
+                {
+                    currentRunLength++;
+                }
+                else
+                {
+                    EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref page.Content);
+                    currentLevel = level;
+                    currentRunLength = 1;
+                }
+
+                rowsWritten++;
+                pageRowCount++;
+                pageBytes = checked(pageBytes + rowBytes);
+            }
+
+            EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref page.Content);
+            var definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref page.Content);
+            var pageRows = values.Slice(pageStart, pageRowCount);
+            var pageStatistics = WriteOptionalPlainInt64Values(pageRows, presentRows, nullCount, ref page.Content);
+            WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
+                EncodingKind.Plain);
+            page.Statistics = pageStatistics;
+
+            columnNullCount = checked(columnNullCount + nullCount);
+            if (presentRows == 0)
+                continue;
+
+            var pageMin = page.Statistics.MinBits;
+            var pageMax = page.Statistics.MaxBits;
+            if (!hasColumnValue)
+            {
+                columnMin = pageMin;
+                columnMax = pageMax;
+                hasColumnValue = true;
+            }
+            else
+            {
+                if (pageMin < columnMin)
+                    columnMin = pageMin;
+                if (pageMax > columnMax)
+                    columnMax = pageMax;
+            }
+        }
+
+        return hasColumnValue
+            ? ColumnStatistics.FromInt64(columnMin, columnMax, columnNullCount)
+            : ColumnStatistics.Empty(columnNullCount);
+    }
+
+    static ColumnStatistics EncodeAllPresentOptionalPlainInt64(BufferWriterFactory bufferWriters,
+        ReadOnlySpan<long?> values, int targetPageBytes, PageList pages,
+        ParquetDataPageVersion dataPageVersion)
+    {
+        var rowsPerPage = Math.Max(1, targetPageBytes / (sizeof(long) + 1));
+        var hasColumnValue = false;
+        var columnMin = 0L;
+        var columnMax = 0L;
+        var rowsWritten = 0;
+        while (rowsWritten < values.Length)
+        {
+            var pageStart = rowsWritten;
+            var pageRowCount = Math.Min(rowsPerPage, values.Length - pageStart);
+            rowsWritten += pageRowCount;
+            var pageIndex = AddNewDataPage(bufferWriters, pages);
+            ref var page = ref pages[pageIndex];
+            var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
+                ref page.Content);
+            var definitionStart = page.Content.WrittenLength;
+            EncodingPrimitives.WriteRleRun(1, pageRowCount, 1, ref page.Content);
+            var definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref page.Content);
+            var pageStatistics = WriteOptionalPlainInt64Values(values.Slice(pageStart, pageRowCount),
+                pageRowCount, 0, ref page.Content);
+            WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, definitionLength,
+                EncodingKind.Plain);
+            page.Statistics = pageStatistics;
+
+            if (!hasColumnValue)
+            {
+                columnMin = pageStatistics.MinBits;
+                columnMax = pageStatistics.MaxBits;
+                hasColumnValue = true;
+                continue;
+            }
+
+            if (pageStatistics.MinBits < columnMin)
+                columnMin = pageStatistics.MinBits;
+            if (pageStatistics.MaxBits > columnMax)
+                columnMax = pageStatistics.MaxBits;
+        }
+
+        return hasColumnValue
+            ? ColumnStatistics.FromInt64(columnMin, columnMax, 0)
+            : ColumnStatistics.Empty(0);
+    }
+
+    static bool AreAllNullableInt64ValuesPresent(ReadOnlySpan<long?> values)
+    {
+        ref var nullableSource = ref MemoryMarshal.GetReference(values);
+        ref var source = ref Unsafe.As<long?, long>(ref nullableSource);
+        var expectedFlags = Vector256.Create(1L);
+        var valueIndex = 0;
+        for (; values.Length - valueIndex >= 4; valueIndex += 4)
+        {
+            var first = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
+            var second = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 4));
+            var firstFlags = Avx2.Permute4x64(first, 0x88);
+            var secondFlags = Avx2.Permute4x64(second, 0x88);
+            var flags = Avx2.And(Avx2.Permute2x128(firstFlags, secondFlags, 0x20), Vector256.Create(0xffL));
+            if (Avx2.MoveMask(Avx2.CompareEqual(flags, expectedFlags).AsByte()) != -1)
+                return false;
+        }
+
+        for (; valueIndex < values.Length; valueIndex++)
+            if (!values[valueIndex].HasValue)
+                return false;
+        return true;
+    }
+
+    static ColumnStatistics WriteOptionalPlainInt64Values(ReadOnlySpan<long?> values, int presentCount,
+        int nullCount, ref BufferWriter writer)
+    {
+        var byteCount = checked(presentCount * sizeof(long));
+        var destinationBytes = writer.GetSpan(byteCount)[..byteCount];
+        var destination = MemoryMarshal.Cast<byte, long>(destinationBytes);
+        if (nullCount == 0 && presentCount == values.Length && BitConverter.IsLittleEndian
+            && HasCanonicalNullableInt64Layout && Avx2.IsSupported)
+        {
+            ExtractAllPresentNullableInt64Values(values, destination);
+            writer.Advance(byteCount);
+            if (!ColumnStatistics.TryGetInt64MinMax(destination, out var pageMin, out var pageMax))
+                throw new InvalidOperationException("An all-present optional INT64 page did not contain any values.");
+            return ColumnStatistics.FromInt64(pageMin, pageMax, 0);
+        }
+
+        var destinationIndex = 0;
+        var hasValue = false;
+        var min = 0L;
+        var max = 0L;
+        for (var i = 0; i < values.Length; i++)
+        {
+            if (values[i] is not { } value)
+                continue;
+
+            if (BitConverter.IsLittleEndian)
+                destination[destinationIndex] = value;
+            else
+                BinaryPrimitives.WriteInt64LittleEndian(destinationBytes[(destinationIndex * sizeof(long))..], value);
+            destinationIndex++;
+
+            if (!hasValue)
+            {
+                min = value;
+                max = value;
+                hasValue = true;
+            }
+            else
+            {
+                if (value < min)
+                    min = value;
+                if (value > max)
+                    max = value;
+            }
+        }
+
+        if (destinationIndex != presentCount)
+            throw new InvalidOperationException(
+                $"Optional INT64 page contained {destinationIndex} present values, but {presentCount} were expected.");
+        writer.Advance(byteCount);
+        return hasValue ? ColumnStatistics.FromInt64(min, max, nullCount) : ColumnStatistics.Empty(nullCount);
+    }
+
+    static void ExtractAllPresentNullableInt64Values(ReadOnlySpan<long?> values, Span<long> destination)
+    {
+        ref var nullableSource = ref MemoryMarshal.GetReference(values);
+        ref var source = ref Unsafe.As<long?, long>(ref nullableSource);
+        ref var target = ref MemoryMarshal.GetReference(destination);
+        var valueIndex = 0;
+        for (; values.Length - valueIndex >= 4; valueIndex += 4)
+        {
+            var first = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
+            var second = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 4));
+            var firstValues = Avx2.Permute4x64(first, 0xdd);
+            var secondValues = Avx2.Permute4x64(second, 0xdd);
+            Avx2.Permute2x128(firstValues, secondValues, 0x20)
+                .StoreUnsafe(ref target, checked((nuint)valueIndex));
+        }
+
+        for (; valueIndex < values.Length; valueIndex++)
+            Unsafe.Add(ref target, valueIndex) = Unsafe.Add(ref source, checked(valueIndex * 2 + 1));
+    }
+
+    static bool ProbeCanonicalNullableInt64Layout()
+    {
+        if (Unsafe.SizeOf<long?>() != sizeof(long) * 2)
+            return false;
+
+        const long expected = 0x0102030405060708L;
+        long? present = expected;
+        ref var presentBytes = ref Unsafe.As<long?, byte>(ref present);
+        if (presentBytes != 1
+            || Unsafe.ReadUnaligned<long>(ref Unsafe.Add(ref presentBytes, sizeof(long))) != expected)
+            return false;
+
+        long? absent = null;
+        return Unsafe.As<long?, byte>(ref absent) == 0;
     }
 
     /// <summary>
