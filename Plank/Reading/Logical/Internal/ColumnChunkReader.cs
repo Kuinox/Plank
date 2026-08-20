@@ -2173,8 +2173,10 @@ static class ColumnChunkReader
             var targetIndex = GetBinaryLogicalIndex(definitions, ref logicalIndex, physicalIndex);
             var valueDestination = destinationPayload.Slice(destinationOffset, length);
             if (prefixLength > 0)
-                destination[previousLogicalIndex].GetSpan(payloadAddress)[..prefixLength].CopyTo(valueDestination);
-            suffixRemaining[..suffixLength].CopyTo(valueDestination[prefixLength..]);
+                Plank.Writing.Encoding.EncodingPrimitives.CopyPayload(
+                    destination[previousLogicalIndex].GetSpan(payloadAddress)[..prefixLength], valueDestination);
+            Plank.Writing.Encoding.EncodingPrimitives.CopyPayload(
+                suffixRemaining[..suffixLength], valueDestination[prefixLength..]);
             suffixRemaining = suffixRemaining[suffixLength..];
             destination[targetIndex] = new BinaryValueDescriptor(destinationOffset, length);
             previousLogicalIndex = targetIndex;
