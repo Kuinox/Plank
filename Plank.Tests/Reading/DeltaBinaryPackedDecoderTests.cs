@@ -31,6 +31,39 @@ internal sealed class DeltaBinaryPackedDecoderTests
         }
     }
 
+    [Test]
+    public void ReadNullableInt32WritesDirectlyAcrossVectorWidthsAndScalarFallback()
+    {
+        var values = new int[257];
+        values[0] = int.MinValue;
+        values[1] = int.MaxValue;
+        for (var i = 2; i < values.Length; i++)
+            values[i] = i % 37 == 0
+                ? unchecked(values[i - 1] + int.MaxValue)
+                : unchecked(values[i - 1] + (i % 17) - 8);
+
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 1024, 1024);
+        try
+        {
+            DeltaBinaryPackedEncoding.WriteInt32(values, ref writer);
+            var payload = new byte[writer.WrittenLength];
+            writer.CopyTo(payload);
+
+            foreach (var canonicalLayout in new[] { false, true })
+            {
+                var decoded = new int?[values.Length];
+                DeltaBinaryPackedDecoder.ReadNullableInt32(payload, decoded, canonicalLayout);
+                if (!decoded.SequenceEqual(values.Select(static value => (int?)value)))
+                    throw new InvalidOperationException(
+                        $"Direct nullable Int32 decode differs with canonicalLayout={canonicalLayout}.");
+            }
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+    }
+
     /// <remarks>
     /// The format fixes neither the block size nor the mini-block count: the
     /// block size is a multiple of 128 and the mini-block size a multiple of 32,
