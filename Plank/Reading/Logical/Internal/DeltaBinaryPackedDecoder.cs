@@ -113,7 +113,9 @@ static class DeltaBinaryPackedDecoder
 
     static void ReadInt32Values(ref DeltaBinaryPackedReader reader, Span<int> destination)
     {
-        // Int32 deltas can be wider than Int32, so reconstruct in Int64 and narrow only when storing.
+        // Reconstructed in Int64 and narrowed on store: the running sum is what
+        // the vector paths widen to, and the narrowing is a truncation, because
+        // the encoder's deltas wrap in 32 bits. See NarrowInt32.
         var previous = reader.ReadZigZagInt64();
         destination[0] = NarrowInt32(previous);
         var index = 1;
@@ -168,7 +170,6 @@ static class DeltaBinaryPackedDecoder
         ref long previous, Span<int> destination)
     {
         ref var destinationStart = ref destination[0];
-        long overflow = 0;
 
         if (bitWidth <= 8)
         {
@@ -184,7 +185,7 @@ static class DeltaBinaryPackedDecoder
                 var upper = Avx2.ConvertToVector256Int64(
                     Sse2.ShiftRightLogical128BitLane(unpackedBytes, sizeof(uint)));
                 ReconstructEightInt32(lower, upper, minDelta, ref previous,
-                    ref destinationStart, index, ref overflow);
+                    ref destinationStart, index);
             }
         }
         else
@@ -200,36 +201,30 @@ static class DeltaBinaryPackedDecoder
                 var residuals = Avx2.ConvertToVector256Int64(
                     Vector128.CreateScalar(unpacked).AsUInt16());
                 ReconstructFourInt32(residuals, minDelta, ref previous,
-                    ref destinationStart, index, ref overflow);
+                    ref destinationStart, index);
             }
         }
-
-        ThrowIfInt32Overflow(overflow);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static void ReconstructEightInt32(Vector256<long> lower, Vector256<long> upper, long minDelta,
-        ref long previous, ref int destination, int index, ref long overflow)
+        ref long previous, ref int destination, int index)
     {
         lower = PrefixSum(lower + Vector256.Create(minDelta));
         upper = PrefixSum(upper + Vector256.Create(minDelta));
         lower += Vector256.Create(previous);
         upper += Vector256.Create(lower.GetElement(Vector256<long>.Count - 1));
 
-        if (ContainsInt32Overflow(lower) || ContainsInt32Overflow(upper))
-            overflow = -1;
         Vector256.Narrow(lower, upper).StoreUnsafe(ref destination, (nuint)index);
         previous = upper.GetElement(Vector256<long>.Count - 1);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static void ReconstructFourInt32(Vector256<long> residuals, long minDelta,
-        ref long previous, ref int destination, int index, ref long overflow)
+        ref long previous, ref int destination, int index)
     {
         var values = PrefixSum(residuals + Vector256.Create(minDelta));
         values += Vector256.Create(previous);
-        if (ContainsInt32Overflow(values))
-            overflow = -1;
         Vector256.Narrow(values, Vector256<long>.Zero).GetLower()
             .StoreUnsafe(ref destination, (nuint)index);
         previous = values.GetElement(Vector256<long>.Count - 1);
@@ -278,7 +273,6 @@ static class DeltaBinaryPackedDecoder
         if (destination.IsEmpty)
             return;
 
-        long overflow = 0;
         var index = 0;
         ref var deltaStart = ref Unsafe.AsRef(in adjustedDeltas[0]);
         ref var destinationStart = ref destination[0];
@@ -290,10 +284,7 @@ static class DeltaBinaryPackedDecoder
             lower += Vector256.Create(previous);
             upper += Vector256.Create(lower.GetElement(Vector256<long>.Count - 1));
 
-            var narrowed = Vector256.Narrow(lower, upper);
-            if (ContainsInt32Overflow(lower) || ContainsInt32Overflow(upper))
-                overflow = -1;
-            narrowed.StoreUnsafe(ref destinationStart, (nuint)index);
+            Vector256.Narrow(lower, upper).StoreUnsafe(ref destinationStart, (nuint)index);
             previous = upper.GetElement(Vector256<long>.Count - 1);
         }
 
@@ -301,10 +292,8 @@ static class DeltaBinaryPackedDecoder
         {
             var values = PrefixSum(Vector256.LoadUnsafe(ref deltaStart, (nuint)index));
             values += Vector256.Create(previous);
-            var narrowed = Vector256.Narrow(values, Vector256<long>.Zero);
-            if (ContainsInt32Overflow(values))
-                overflow = -1;
-            narrowed.GetLower().StoreUnsafe(ref destinationStart, (nuint)index);
+            Vector256.Narrow(values, Vector256<long>.Zero).GetLower()
+                .StoreUnsafe(ref destinationStart, (nuint)index);
             previous = values.GetElement(Vector256<long>.Count - 1);
             index += Vector256<long>.Count;
         }
@@ -312,25 +301,20 @@ static class DeltaBinaryPackedDecoder
         for (; index < destination.Length; index++)
         {
             previous = unchecked(previous + adjustedDeltas[index]);
-            overflow |= previous ^ (long)(int)previous;
             destination[index] = unchecked((int)previous);
         }
-        ThrowIfInt32Overflow(overflow);
     }
 
     static void DecodeInt32MiniBlock(ReadOnlySpan<byte> packed, int bitWidth, long minDelta,
         ref long previous, Span<int> destination)
     {
-        long overflow = 0;
         if (bitWidth == 0)
         {
             for (var i = 0; i < destination.Length; i++)
             {
                 previous = unchecked(previous + minDelta);
-                overflow |= previous ^ (long)(int)previous;
                 destination[i] = unchecked((int)previous);
             }
-            ThrowIfInt32Overflow(overflow);
             return;
         }
 
@@ -357,10 +341,8 @@ static class DeltaBinaryPackedDecoder
             bitBuffer >>= bitWidth;
             bufferedBits -= bitWidth;
             previous = unchecked(previous + minDelta + (long)delta);
-            overflow |= previous ^ (long)(int)previous;
             destination[i] = unchecked((int)previous);
         }
-        ThrowIfInt32Overflow(overflow);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -372,10 +354,6 @@ static class DeltaBinaryPackedDecoder
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static bool ContainsInt32Overflow(Vector256<long> values)
-        => !Vector256.EqualsAll(values, Vector256.ShiftRightArithmetic(values << 32, 32));
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static ulong ReadPackedWord(ReadOnlySpan<byte> packed, int byteOffset)
     {
         if (byteOffset <= packed.Length - sizeof(ulong))
@@ -385,14 +363,6 @@ static class DeltaBinaryPackedDecoder
         for (var i = byteOffset; i < packed.Length; i++)
             value |= (ulong)packed[i] << ((i - byteOffset) * 8);
         return value;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static void ThrowIfInt32Overflow(long overflow)
-    {
-        if (overflow != 0)
-            throw new CorruptParquetException(
-                "Delta binary packed mini-block contains a value outside the Int32 range.");
     }
 
     static int ReadNarrowInt32Core<T>(ReadOnlySpan<byte> payload, Span<T> destination)
@@ -713,13 +683,14 @@ static class DeltaBinaryPackedDecoder
         }
     }
 
+    // DELTA_BINARY_PACKED for INT32 is defined over wrapping 32-bit arithmetic:
+    // an encoder takes each delta as a uint32 subtraction, so a run that steps
+    // from Int32.MinValue to Int32.MaxValue is an ordinary delta and not an
+    // out-of-range value. Reconstruction happens in Int64 because the widened
+    // sum is what the vector paths need, and truncating back is what recovers
+    // the value the encoder started from.
     static int NarrowInt32(long value)
-    {
-        if (value < int.MinValue || value > int.MaxValue)
-            throw new CorruptParquetException($"Delta binary packed Int32 value {value} is outside the Int32 range.");
-
-        return (int)value;
-    }
+        => unchecked((int)value);
 
     static void StoreNarrowInt32<T>(Span<T> destination, int index, int value)
         where T : unmanaged
