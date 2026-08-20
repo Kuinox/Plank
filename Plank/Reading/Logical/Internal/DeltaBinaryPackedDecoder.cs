@@ -838,18 +838,33 @@ static class DeltaBinaryPackedDecoder
         if (bitWidth <= 8)
         {
             var laneMask = 0x0101010101010101UL * ((1UL << bitWidth) - 1);
+            var useBytePrefix = bitWidth <= 5;
+            var lowerMinDeltaPrefix = useBytePrefix
+                ? Vector256.Create(minDelta, unchecked(minDelta * 2), unchecked(minDelta * 3),
+                    unchecked(minDelta * 4))
+                : default;
+            var upperMinDeltaPrefix = useBytePrefix
+                ? Vector256.Create(unchecked(minDelta * 5), unchecked(minDelta * 6),
+                    unchecked(minDelta * 7), unchecked(minDelta * 8))
+                : default;
             for (var index = 0; index < MiniBlockChunk; index += Vector256<long>.Count * 2)
             {
                 // Eight packed fields occupy exactly bitWidth bytes. Deposit each field into
                 // a byte lane, widen the lanes, then reconstruct both prefix-sum vectors.
                 var packedWord = ReadPackedWord(packed, index * bitWidth / 8);
                 var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
-                var unpackedBytes = Vector128.CreateScalar(unpacked).AsByte();
-                var lower = Avx2.ConvertToVector256Int64(unpackedBytes);
-                var upper = Avx2.ConvertToVector256Int64(
-                    Sse2.ShiftRightLogical128BitLane(unpackedBytes, sizeof(uint)));
-                ReconstructEightInt64(lower, upper, minDelta, ref previous,
-                    ref destinationStart, index);
+                if (useBytePrefix)
+                    ReconstructEightNarrowInt64(unpacked, lowerMinDeltaPrefix,
+                        upperMinDeltaPrefix, ref previous, ref destinationStart, index);
+                else
+                {
+                    var unpackedBytes = Vector128.CreateScalar(unpacked).AsByte();
+                    var lower = Avx2.ConvertToVector256Int64(unpackedBytes);
+                    var upper = Avx2.ConvertToVector256Int64(
+                        Sse2.ShiftRightLogical128BitLane(unpackedBytes, sizeof(uint)));
+                    ReconstructEightInt64(lower, upper, minDelta, ref previous,
+                        ref destinationStart, index);
+                }
             }
         }
         else
@@ -867,6 +882,26 @@ static class DeltaBinaryPackedDecoder
                     ref destinationStart, index);
             }
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void ReconstructEightNarrowInt64(ulong unpacked,
+        Vector256<long> lowerMinDeltaPrefix, Vector256<long> upperMinDeltaPrefix,
+        ref long previous, ref long destination, int index)
+    {
+        // Each residual occupies one byte and at widths <= 5 the sum of all eight
+        // is at most 248. Multiplication by repeated 1 bytes therefore computes
+        // eight independent prefix sums without any carry crossing a byte lane.
+        var prefixBytes = Vector128.CreateScalar(
+            unchecked(unpacked * 0x0101010101010101UL)).AsByte();
+        var lower = Avx2.ConvertToVector256Int64(prefixBytes) + lowerMinDeltaPrefix;
+        var upper = Avx2.ConvertToVector256Int64(
+            Sse2.ShiftRightLogical128BitLane(prefixBytes, sizeof(uint))) + upperMinDeltaPrefix;
+        lower += Vector256.Create(previous);
+        upper += Vector256.Create(previous);
+        lower.StoreUnsafe(ref destination, (nuint)index);
+        upper.StoreUnsafe(ref destination, (nuint)(index + Vector256<long>.Count));
+        previous = upper.GetElement(Vector256<long>.Count - 1);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
