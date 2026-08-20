@@ -111,6 +111,13 @@ static class PublishedReadFingerprint
                     ref Unsafe.As<T, int>(ref first), values.Length));
                 return;
             }
+            if (typeof(T) == typeof(int?))
+            {
+                ref var first = ref MemoryMarshal.GetReference(values);
+                AddNullableInt32Values(MemoryMarshal.CreateReadOnlySpan(
+                    ref Unsafe.As<T, int?>(ref first), values.Length));
+                return;
+            }
 
             for (var index = 0; index < values.Length; index++)
                 AddValue(values[index]);
@@ -184,6 +191,29 @@ static class PublishedReadFingerprint
             for (; index < values.Length; index++)
                 AddWord(unchecked((uint)Unsafe.Add(ref first, index)));
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        void AddNullableInt32Values(ReadOnlySpan<int?> values)
+        {
+            ref var first = ref MemoryMarshal.GetReference(values);
+            var index = 0;
+            for (; index <= values.Length - 4; index += 4)
+            {
+                _lane0 = MixNullableInt32(_lane0, Unsafe.Add(ref first, index + 3));
+                _lane1 = MixNullableInt32(_lane1, Unsafe.Add(ref first, index + 2));
+                _lane2 = MixNullableInt32(_lane2, Unsafe.Add(ref first, index + 1));
+                _lane3 = MixNullableInt32(_lane3, Unsafe.Add(ref first, index));
+            }
+
+            for (; index < values.Length; index++)
+                AddValue(Unsafe.Add(ref first, index));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static ulong MixNullableInt32(ulong lane, int? value)
+            => value.HasValue
+                ? Mix(lane, unchecked((uint)value.GetValueOrDefault()), Prime)
+                : Mix(lane, 0, AbsentPrime);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static ulong Mix(ulong lane, ulong value, ulong multiplier)
