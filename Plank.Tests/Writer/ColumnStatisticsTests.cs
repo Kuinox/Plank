@@ -585,6 +585,46 @@ internal sealed class ColumnStatisticsTests
     }
 
     [Test]
+    [Arguments(2)]
+    [Arguments(16)]
+    public void DictionaryInt64StatisticsMatchRequiredAndOptionalPageBoundaries(int rowsPerPage)
+    {
+        using var stream = new MemoryStream();
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("required_value", ParquetPhysicalType.Int64,
+                pageStrategy: new FixedRowsPageStrategy(rowsPerPage, DictionaryMode.Forced)),
+            Plank.Schema.ColumnDefinition.Leaf("optional_value", ParquetPhysicalType.Int64,
+                new ColumnOptions(ParquetRepetition.Optional),
+                pageStrategy: new FixedRowsPageStrategy(rowsPerPage, DictionaryMode.Forced))
+        ]);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
+        var requiredColumn = writer.CreateSerializedColumn<long>(schema.LeafColumns[0]);
+        var optionalColumn = writer.CreateSerializedColumn<long?>(schema.LeafColumns[1]);
+
+        requiredColumn.Serialize([10L, 50L, -5L, 40L, 0L]);
+        optionalColumn.Serialize([10L, null, -5L, 40L, null]);
+
+        AssertInt64Statistics(requiredColumn.Statistics, min: -5, max: 50, nullCount: 0);
+        AssertInt64Statistics(optionalColumn.Statistics, min: -5, max: 40, nullCount: 2);
+        var expectedDataPageCount = rowsPerPage >= 5 ? 1 : 3;
+        AssertDictionaryPageLayout(requiredColumn.Pages, expectedDataPageCount);
+        AssertDictionaryPageLayout(optionalColumn.Pages, expectedDataPageCount);
+        if (rowsPerPage >= 5)
+        {
+            AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 0, min: -5, max: 50, nullCount: 0);
+            AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 0, min: -5, max: 40, nullCount: 2);
+            return;
+        }
+
+        AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 0, min: 10, max: 50, nullCount: 0);
+        AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 1, min: -5, max: 40, nullCount: 0);
+        AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 2, min: 0, max: 0, nullCount: 0);
+        AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 0, min: 10, max: 10, nullCount: 1);
+        AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 1, min: -5, max: 40, nullCount: 0);
+        AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 2, min: null, max: null, nullCount: 1);
+    }
+
+    [Test]
     public void PageIndexesAreReadableByDuckDb()
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-page-index-duckdb-{Guid.NewGuid():N}.parquet");
@@ -911,6 +951,25 @@ internal sealed class ColumnStatisticsTests
         throw new InvalidOperationException($"Data page {pageIndex} was not written.");
     }
 
+    static void AssertDictionaryPageLayout(PageList pages, int expectedDataPageCount)
+    {
+        var dictionaryPageCount = 0;
+        var dataPageCount = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            if (page.Kind == PageKind.Dictionary)
+                dictionaryPageCount++;
+            else if (page.Kind == PageKind.DataV2)
+                dataPageCount++;
+        }
+
+        if (dictionaryPageCount != 1 || dataPageCount != expectedDataPageCount)
+            throw new InvalidOperationException(
+                $"Expected one dictionary page and {expectedDataPageCount} data pages, got " +
+                $"{dictionaryPageCount} and {dataPageCount}.");
+    }
+
     static void AssertPageInt32Statistics(ParquetDataPageMetadata page, int min, int max, long nullCount)
     {
         var statistics = page.Statistics;
@@ -1007,13 +1066,17 @@ internal sealed class ColumnStatisticsTests
 
     sealed class FixedRowsPageStrategy : IPageStrategy
     {
+        readonly DictionaryMode _dictionaryMode;
         readonly int _rowsPerPage;
 
-        internal FixedRowsPageStrategy(int rowsPerPage)
-            => _rowsPerPage = rowsPerPage;
+        internal FixedRowsPageStrategy(int rowsPerPage, DictionaryMode dictionaryMode = DictionaryMode.Disabled)
+        {
+            _rowsPerPage = rowsPerPage;
+            _dictionaryMode = dictionaryMode;
+        }
 
         public DictionaryMode GetDictionaryMode()
-            => DictionaryMode.Disabled;
+            => _dictionaryMode;
 
         public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
             => false;

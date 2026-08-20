@@ -878,6 +878,49 @@ static class PlainEncoding
         writer.Advance(lengthPrefixedOffset);
     }
 
+    /// <summary>
+    /// Writes optional plain BYTE_ARRAY values after the page measurement pass established that every
+    /// present payload contains exactly one byte. The little-endian caller lets each non-final eight-byte
+    /// store overlap the next value's length prefix, then writes the final five-byte value without overlap.
+    /// </summary>
+    internal static void WriteOptionalSingleByteArrayPayloads(ReadOnlySpan<byte[]> values, int presentCount,
+        ref BufferWriter writer)
+    {
+        var byteCount = checked(presentCount * (sizeof(int) + 1));
+        if (byteCount == 0)
+            return;
+
+        var destination = writer.GetSpan(byteCount);
+        var offset = 0;
+        var index = 0;
+        var nonFinalPresentCount = presentCount - 1;
+        while (nonFinalPresentCount > 0 && index < values.Length)
+        {
+            var value = values[index++];
+            if (value is null)
+                continue;
+            Unsafe.WriteUnaligned(ref destination[offset], 1UL | (ulong)value[0] << 32);
+            offset += sizeof(int) + 1;
+            nonFinalPresentCount--;
+        }
+
+        while (index < values.Length && values[index] is null)
+            index++;
+        if (index >= values.Length)
+            throw new InvalidOperationException("The measured optional BYTE_ARRAY present count changed while encoding.");
+        BinaryPrimitives.WriteInt32LittleEndian(destination[offset..], 1);
+        destination[offset + sizeof(int)] = values[index][0];
+        offset += sizeof(int) + 1;
+        index++;
+
+        while (index < values.Length)
+            if (values[index++] is not null)
+                throw new InvalidOperationException("The measured optional BYTE_ARRAY present count changed while encoding.");
+        if (offset != byteCount)
+            throw new InvalidOperationException("The measured optional BYTE_ARRAY present count changed while encoding.");
+        writer.Advance(byteCount);
+    }
+
     static void WriteOptionalFixedLengthPayloads<TRow, TRowAccess>(Column column, ReadOnlySpan<TRow> rows,
         ref BufferWriter writer)
         where TRowAccess : IByteArrayRow<TRow>
