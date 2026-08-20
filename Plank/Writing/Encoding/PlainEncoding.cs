@@ -312,6 +312,139 @@ static class PlainEncoding
         writer.Advance(byteCount);
     }
 
+    internal static ColumnStatistics WriteDoublePageWithStatistics(ReadOnlySpan<double> values,
+        ref BufferWriter writer)
+    {
+        var byteCount = checked(values.Length * sizeof(double));
+        if (byteCount == 0)
+            return ColumnStatistics.FromDoubleAccumulation(0, 0, 0, 0, false);
+
+        var destinationBytes = writer.GetSpan(byteCount)[..byteCount];
+        bool hasValue;
+        double min;
+        double max;
+        long nanCount;
+        if (BitConverter.IsLittleEndian && Avx2.IsSupported && values.Length >= Vector256<double>.Count * 4)
+        {
+            hasValue = CopyDoubleValuesAndGetStatistics(values,
+                MemoryMarshal.Cast<byte, double>(destinationBytes), out min, out max, out nanCount);
+        }
+        else
+        {
+            if (BitConverter.IsLittleEndian)
+                MemoryMarshal.AsBytes(values).CopyTo(destinationBytes);
+            else
+                for (var i = 0; i < values.Length; i++)
+                    BinaryPrimitives.WriteInt64LittleEndian(destinationBytes[(i * sizeof(double))..],
+                        BitConverter.DoubleToInt64Bits(values[i]));
+            hasValue = ColumnStatistics.TryGetDoubleMinMax(values, out min, out max, out nanCount);
+        }
+
+        writer.Advance(byteCount);
+        return ColumnStatistics.FromDoubleAccumulation(min, max, 0, nanCount, hasValue);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static bool CopyDoubleValuesAndGetStatistics(ReadOnlySpan<double> values, Span<double> destination,
+        out double min, out double max, out long nanCount)
+    {
+        ref var source = ref MemoryMarshal.GetReference(values);
+        ref var target = ref MemoryMarshal.GetReference(destination);
+        var count = (nuint)values.Length;
+        var width = (nuint)Vector256<double>.Count;
+        var blockWidth = width * 4;
+        var index = (nuint)0;
+
+        var min0 = Vector256.LoadUnsafe(ref source);
+        var min1 = Vector256.LoadUnsafe(ref source, width);
+        var min2 = Vector256.LoadUnsafe(ref source, width * 2);
+        var min3 = Vector256.LoadUnsafe(ref source, width * 3);
+        var max0 = min0;
+        var max1 = min1;
+        var max2 = min2;
+        var max3 = min3;
+        var ordered = Vector256.BitwiseAnd(
+            Vector256.BitwiseAnd(Vector256.Equals(min0, min0), Vector256.Equals(min1, min1)),
+            Vector256.BitwiseAnd(Vector256.Equals(min2, min2), Vector256.Equals(min3, min3)));
+        var signBits = Vector256.BitwiseOr(Vector256.BitwiseOr(min0, min1), Vector256.BitwiseOr(min2, min3));
+        min0.StoreUnsafe(ref target);
+        min1.StoreUnsafe(ref target, width);
+        min2.StoreUnsafe(ref target, width * 2);
+        min3.StoreUnsafe(ref target, width * 3);
+        index = blockWidth;
+
+        for (; count - index >= blockWidth; index += blockWidth)
+        {
+            var current0 = Vector256.LoadUnsafe(ref source, index);
+            var current1 = Vector256.LoadUnsafe(ref source, index + width);
+            var current2 = Vector256.LoadUnsafe(ref source, index + width * 2);
+            var current3 = Vector256.LoadUnsafe(ref source, index + width * 3);
+
+            current0.StoreUnsafe(ref target, index);
+            current1.StoreUnsafe(ref target, index + width);
+            current2.StoreUnsafe(ref target, index + width * 2);
+            current3.StoreUnsafe(ref target, index + width * 3);
+
+            min0 = Vector256.Min(min0, current0);
+            min1 = Vector256.Min(min1, current1);
+            min2 = Vector256.Min(min2, current2);
+            min3 = Vector256.Min(min3, current3);
+            max0 = Vector256.Max(max0, current0);
+            max1 = Vector256.Max(max1, current1);
+            max2 = Vector256.Max(max2, current2);
+            max3 = Vector256.Max(max3, current3);
+
+            ordered = Vector256.BitwiseAnd(ordered, Vector256.BitwiseAnd(
+                Vector256.BitwiseAnd(Vector256.Equals(current0, current0), Vector256.Equals(current1, current1)),
+                Vector256.BitwiseAnd(Vector256.Equals(current2, current2), Vector256.Equals(current3, current3))));
+            signBits = Vector256.BitwiseOr(signBits, Vector256.BitwiseOr(
+                Vector256.BitwiseOr(current0, current1), Vector256.BitwiseOr(current2, current3)));
+        }
+
+        min0 = Vector256.Min(Vector256.Min(min0, min1), Vector256.Min(min2, min3));
+        max0 = Vector256.Max(Vector256.Max(max0, max1), Vector256.Max(max2, max3));
+        Span<double> minima = stackalloc double[Vector256<double>.Count];
+        Span<double> maxima = stackalloc double[Vector256<double>.Count];
+        min0.CopyTo(minima);
+        max0.CopyTo(maxima);
+        min = minima[0];
+        max = maxima[0];
+        for (var lane = 1; lane < minima.Length; lane++)
+        {
+            if (minima[lane] < min)
+                min = minima[lane];
+            if (maxima[lane] > max)
+                max = maxima[lane];
+        }
+
+        for (; index < count; index++)
+        {
+            var value = Unsafe.Add(ref source, index);
+            Unsafe.Add(ref target, index) = value;
+            if (double.IsNaN(value))
+            {
+                ordered = Vector256<double>.Zero;
+                continue;
+            }
+            if (value < min)
+                min = value;
+            if (value > max)
+                max = value;
+            if (BitConverter.DoubleToInt64Bits(value) < 0)
+                signBits = Vector256.Create(-0.0d);
+        }
+
+        // An all-non-positive page needs the positive-zero half of total zero ordering as well.
+        // It is rare and outside the throughput-oriented path, so reuse the scalar implementation.
+        if (ordered.ExtractMostSignificantBits() != (1u << Vector256<double>.Count) - 1 || max == 0)
+            return ColumnStatistics.TryGetDoubleMinMax(values, out min, out max, out nanCount);
+
+        nanCount = 0;
+        if (min == 0)
+            min = signBits.ExtractMostSignificantBits() != 0 ? -0.0d : +0.0d;
+        return true;
+    }
+
     static void WriteByteArrayValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {

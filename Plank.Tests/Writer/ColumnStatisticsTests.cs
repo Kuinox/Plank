@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using DuckDB.NET.Data;
 using ParquetSharp;
 using Plank.Reading;
@@ -450,6 +451,55 @@ internal sealed class ColumnStatisticsTests
     }
 
     [Test]
+    public void RequiredPlainDoubleEncodingFusesCopyAndPageStatistics()
+    {
+        using var stream = new MemoryStream();
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("value", ParquetPhysicalType.Double,
+                new ColumnOptions(encodings: [EncodingKind.Plain]))
+        ]);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 16 * sizeof(double)
+        });
+        var column = writer.CreateSerializedColumn<double>(schema.LeafColumns[0]);
+        var values = new double[48];
+        for (var i = 0; i < 16; i++)
+            values[i] = i + 1;
+        values[0] = +0.0d;
+        values[1] = -0.0d;
+        for (var i = 16; i < 32; i++)
+            values[i] = double.NaN;
+        for (var i = 32; i < 48; i++)
+            values[i] = -0.0d;
+        values[39] = +0.0d;
+
+        column.Serialize(values);
+
+        AssertDoubleStatistics(column.Statistics, long.MinValue, BitConverter.DoubleToInt64Bits(16d),
+            nanCount: 16);
+        AssertDataPageDoubleStatistics(column.Pages, pageIndex: 0, minBits: long.MinValue,
+            maxBits: BitConverter.DoubleToInt64Bits(16d), nanCount: 0);
+        AssertDataPageDoubleStatistics(column.Pages, pageIndex: 1, minBits: null, maxBits: null, nanCount: 16);
+        AssertDataPageDoubleStatistics(column.Pages, pageIndex: 2, minBits: long.MinValue, maxBits: 0,
+            nanCount: 0);
+
+        var rowOffset = 0;
+        for (var i = 0; i < column.Pages.Count; i++)
+        {
+            ref var page = ref column.Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (!page.Content.TryGetSingleWrittenSpan(out var encoded))
+                throw new InvalidOperationException("Expected one contiguous Plain page payload.");
+            var pageRows = values.AsSpan(rowOffset, checked((int)page.RowCount));
+            if (!encoded.SequenceEqual(MemoryMarshal.AsBytes(pageRows)))
+                throw new InvalidOperationException($"Plain Double page {rowOffset / 16} bytes differ.");
+            rowOffset += pageRows.Length;
+        }
+    }
+
+    [Test]
     public void PageIndexesAreReadableByDuckDb()
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-page-index-duckdb-{Guid.NewGuid():N}.parquet");
@@ -596,7 +646,8 @@ internal sealed class ColumnStatisticsTests
                 $"Float null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
     }
 
-    static void AssertDoubleStatistics(ColumnStatistics statistics, long minBits, long maxBits, long nullCount = 0)
+    static void AssertDoubleStatistics(ColumnStatistics statistics, long minBits, long maxBits, long nullCount = 0,
+        long? nanCount = null)
     {
         if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Double)
             throw new InvalidOperationException($"Expected double statistics, got {statistics.ValueKind}.");
@@ -609,6 +660,9 @@ internal sealed class ColumnStatisticsTests
         if (statistics.NullCount != nullCount)
             throw new InvalidOperationException(
                 $"Double null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+        if (nanCount.HasValue && statistics.NanCount != nanCount.Value)
+            throw new InvalidOperationException(
+                $"Double NaN count mismatch. Expected {nanCount.Value}, got {statistics.NanCount}.");
     }
 
     static void AssertInt64Statistics(ColumnStatistics statistics, long? min, long? max, long nullCount)
@@ -687,6 +741,42 @@ internal sealed class ColumnStatisticsTests
             if (dataPageIndex == pageIndex)
             {
                 AssertInt64Statistics(page.Statistics, min, max, nullCount);
+                return;
+            }
+
+            dataPageIndex++;
+        }
+
+        throw new InvalidOperationException($"Data page {pageIndex} was not written.");
+    }
+
+    static void AssertDataPageDoubleStatistics(PageList pages, int pageIndex, long? minBits, long? maxBits,
+        long nanCount)
+    {
+        var dataPageIndex = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (dataPageIndex == pageIndex)
+            {
+                var statistics = page.Statistics;
+                var expectedKind = minBits.HasValue
+                    ? ColumnStatistics.ColumnStatisticsValueKind.Double
+                    : ColumnStatistics.ColumnStatisticsValueKind.None;
+                if (statistics.ValueKind != expectedKind)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} statistics kind mismatch. Expected {expectedKind}, got {statistics.ValueKind}.");
+                if (statistics.MinBits != minBits.GetValueOrDefault())
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} min bits mismatch. Expected {minBits.GetValueOrDefault():X16}, got {statistics.MinBits:X16}.");
+                if (statistics.MaxBits != maxBits.GetValueOrDefault())
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} max bits mismatch. Expected {maxBits.GetValueOrDefault():X16}, got {statistics.MaxBits:X16}.");
+                if (statistics.NanCount != nanCount)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} NaN count mismatch. Expected {nanCount}, got {statistics.NanCount}.");
                 return;
             }
 

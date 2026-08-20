@@ -987,7 +987,8 @@ internal readonly struct ColumnStatistics
         return true;
     }
 
-    static bool TryGetDoubleMinMax(ReadOnlySpan<double> values, out double min, out double max, out long nanCount)
+    internal static bool TryGetDoubleMinMax(ReadOnlySpan<double> values, out double min, out double max,
+        out long nanCount)
     {
         min = 0;
         max = 0;
@@ -1203,11 +1204,11 @@ internal readonly struct ColumnStatistics
         => value > other || value == 0 && other == 0 &&
             BitConverter.SingleToInt32Bits(value) > BitConverter.SingleToInt32Bits(other);
 
-    static bool IsLessThan(double value, double other)
+    internal static bool IsLessThan(double value, double other)
         => value < other || value == 0 && other == 0 &&
             BitConverter.DoubleToInt64Bits(value) < BitConverter.DoubleToInt64Bits(other);
 
-    static bool IsGreaterThan(double value, double other)
+    internal static bool IsGreaterThan(double value, double other)
         => value > other || value == 0 && other == 0 &&
             BitConverter.DoubleToInt64Bits(value) > BitConverter.DoubleToInt64Bits(other);
 
