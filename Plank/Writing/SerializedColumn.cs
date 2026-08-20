@@ -1049,6 +1049,26 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var firstPresentIndex = IndexOfFirstPresent(values);
             if (firstPresentIndex >= 0)
             {
+                if (typeof(TValue) == typeof(long)
+                    && _column.PhysicalType == ParquetPhysicalType.Int64
+                    && strategyContext.Strategy is ForceDictionaryPageStrategy
+                    && !_owner.WritePageIndexes && _column.Options.BloomFilter is null)
+                {
+                    Pages.Clear();
+                    ColumnOrdinal = columnOrdinal;
+                    RowCount = checked((uint)values.Length);
+                    HasPendingData = true;
+                    var longValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<long?>>(ref values);
+                    Statistics = Plank.Writing.Encoding.Encoding.EncodeOptionalForcedInt64Dictionary(
+                        _owner.BufferWriters, _column, longValues, strategyContext, Pages,
+                        _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
+                        GetOrCreateDictionaryState<long>());
+                    if (!TryAssignSingleDataPageStatistics(Statistics))
+                        throw new InvalidOperationException("Fused optional int64 encoding produced multiple data pages.");
+                    _bloomFilterByteLength = 0;
+                    return;
+                }
+
                 if (typeof(TValue) == typeof(double)
                     && strategyContext.Strategy is ForceDictionaryPageStrategy
                     && !_owner.WritePageIndexes && _column.Options.BloomFilter is null)

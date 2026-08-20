@@ -43,6 +43,46 @@ internal sealed class NullableNumericEncodingTests
         AssertForcedNullableDictionary(doubles, ParquetPhysicalType.Double, dataPageVersion);
     }
 
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void FusedNullableInt64DictionaryMatchesGenericOutput(ParquetDataPageVersion dataPageVersion)
+    {
+        long?[] values =
+        [
+            null, 7, 7, long.MinValue, null, 42, 7, long.MaxValue, 42, null, -9, -9, 0, null, 7
+        ];
+
+        var fused = WriteNullableInt64Dictionary(values, ForceDictionaryPageStrategy.Shared, dataPageVersion);
+        var generic = WriteNullableInt64Dictionary(values,
+            new FixedRowsPageStrategy(checked((uint)values.Length), DictionaryMode.Forced), dataPageVersion);
+
+        if (!fused.AsSpan().SequenceEqual(generic))
+            throw new InvalidOperationException(
+                $"Fused optional int64 {dataPageVersion} dictionary encoding changed the Parquet bytes.");
+    }
+
+    static byte[] WriteNullableInt64Dictionary(long?[] values, IPageStrategy pageStrategy,
+        ParquetDataPageVersion dataPageVersion)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("optional", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.RleDictionary]), pageStrategy: pageStrategy)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            WritePageIndexes = false
+        });
+        var serialized = writer.CreateSerializedColumn<long?>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return stream.ToArray();
+    }
+
     static void AssertForcedNullableDictionary<TValue>(TValue[] requiredValues,
         ParquetPhysicalType physicalType, ParquetDataPageVersion dataPageVersion)
         where TValue : struct
