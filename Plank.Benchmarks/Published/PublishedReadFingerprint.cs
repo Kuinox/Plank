@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Plank.Benchmarks.Published;
@@ -101,6 +102,20 @@ static class PublishedReadFingerprint
                 throw new NotSupportedException($"Unsupported fingerprint value '{typeof(T)}'.");
         }
 
+        public void AddValues<T>(ReadOnlySpan<T> values)
+        {
+            if (typeof(T) == typeof(int))
+            {
+                ref var first = ref MemoryMarshal.GetReference(values);
+                AddInt32Values(MemoryMarshal.CreateReadOnlySpan(
+                    ref Unsafe.As<T, int>(ref first), values.Length));
+                return;
+            }
+
+            for (var index = 0; index < values.Length; index++)
+                AddValue(values[index]);
+        }
+
         public void AddBytes(ReadOnlySpan<byte> value)
         {
             AddWord(unchecked((uint)value.Length));
@@ -148,6 +163,26 @@ static class PublishedReadFingerprint
             _lane2 = _lane1;
             _lane1 = _lane0;
             _lane0 = next;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        void AddInt32Values(ReadOnlySpan<int> values)
+        {
+            ref var first = ref MemoryMarshal.GetReference(values);
+            var index = 0;
+            for (; index <= values.Length - 4; index += 4)
+            {
+                // Four Rotate calls restore the fields to their starting positions. Update each lane
+                // directly with the value it would have received after those rotations. This is exact
+                // from every starting position, so callers may split the same sequence into any chunks.
+                _lane0 = Mix(_lane0, unchecked((uint)Unsafe.Add(ref first, index + 3)), Prime);
+                _lane1 = Mix(_lane1, unchecked((uint)Unsafe.Add(ref first, index + 2)), Prime);
+                _lane2 = Mix(_lane2, unchecked((uint)Unsafe.Add(ref first, index + 1)), Prime);
+                _lane3 = Mix(_lane3, unchecked((uint)Unsafe.Add(ref first, index)), Prime);
+            }
+
+            for (; index < values.Length; index++)
+                AddWord(unchecked((uint)Unsafe.Add(ref first, index)));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -236,10 +271,7 @@ static class PublishedReadFingerprint
     }
 
     static void AddValues<T>(ref Accumulator fingerprint, ReadOnlySpan<T> values)
-    {
-        for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
-            fingerprint.AddValue(values[valueIndex]);
-    }
+        => fingerprint.AddValues(values);
 
     static void AddBinaryValues(ref Accumulator fingerprint, ReadOnlySpan<byte[]?> values)
     {

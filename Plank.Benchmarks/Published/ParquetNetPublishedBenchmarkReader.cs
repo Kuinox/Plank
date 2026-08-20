@@ -122,8 +122,7 @@ sealed class ParquetNetPublishedBenchmarkReader : IPublishedBenchmarkReader
     static PublishedReadResult Consume<T>(ReadOnlySpan<T> values, int columnIndex, int rowGroupIndex)
     {
         var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, values.Length);
-        for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
-            fingerprint.AddValue(values[valueIndex]);
+        fingerprint.AddValues(values);
         return new PublishedReadResult(values.Length, fingerprint.Finish());
     }
 }
