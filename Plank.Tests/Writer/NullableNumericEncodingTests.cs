@@ -83,6 +83,61 @@ internal sealed class NullableNumericEncodingTests
         return stream.ToArray();
     }
 
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void FusedNullableInt64PlainMatchesGenericOutput(ParquetDataPageVersion dataPageVersion)
+    {
+        long?[][] valuePatterns =
+        [
+            [null, long.MinValue, -9, 0, null, 17, long.MaxValue, null, 42, -1, 7, null, 99],
+            [long.MinValue, -100, -9, -1, 0, 1, 7, 17, 42, 99, 100, long.MaxValue],
+            new long?[20]
+        ];
+
+        uint[] targetPageBytes = [1, 18, 90];
+        foreach (var targetBytes in targetPageBytes)
+        foreach (var values in valuePatterns)
+        {
+            var fused = WriteNullableInt64Plain(values, null, dataPageVersion, targetBytes);
+            var generic = WriteNullableInt64Plain(values, new TargetBytesPageStrategy(targetBytes),
+                dataPageVersion, targetBytes);
+            if (!fused.AsSpan().SequenceEqual(generic))
+                throw new InvalidOperationException(
+                    $"Fused optional int64 {dataPageVersion} PLAIN encoding changed the Parquet bytes "
+                    + $"at a {targetBytes}-byte page target.");
+
+            using var readStream = new MemoryStream(fused, writable: false);
+            using var reader = new ParquetFileReader(readStream, leaveOpen: false);
+            using var rowGroup = reader.RowGroup(0);
+            using var column = rowGroup.Column(0).LogicalReader<long?>();
+            AssertColumn(column.ReadAll(values.Length), values, EncodingKind.Plain, "optional");
+        }
+    }
+
+    static byte[] WriteNullableInt64Plain(long?[] values, IPageStrategy? pageStrategy,
+        ParquetDataPageVersion dataPageVersion, uint targetPageBytes)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("optional", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.Plain]), pageStrategy: pageStrategy)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = targetPageBytes,
+            WritePageIndexes = true
+        });
+        var serialized = writer.CreateSerializedColumn<long?>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return stream.ToArray();
+    }
+
+
     static void AssertForcedNullableDictionary<TValue>(TValue[] requiredValues,
         ParquetPhysicalType physicalType, ParquetDataPageVersion dataPageVersion)
         where TValue : struct
@@ -363,5 +418,23 @@ internal sealed class NullableNumericEncodingTests
 
         public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
             => Math.Min(_rowsPerPage, totalRowCount - rowsWritten);
+    }
+
+    sealed class TargetBytesPageStrategy(uint targetBytes) : IPageStrategy
+    {
+        public DictionaryMode GetDictionaryMode()
+            => DictionaryMode.Disabled;
+
+        public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
+            => false;
+
+        public bool TryGetTargetDataPageSizeBytes(out uint sizeBytes)
+        {
+            sizeBytes = targetBytes;
+            return true;
+        }
+
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => totalRowCount - rowsWritten;
     }
 }
