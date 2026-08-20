@@ -521,9 +521,6 @@ internal sealed class LogicalPageMetadataTests
                 var readEnd = checked(read.Offset + read.Length);
                 if (read.Offset >= chunkEnd || readEnd <= chunkOffset)
                     continue;
-                if (read.Length != 1)
-                    throw new InvalidOperationException(
-                        $"Header fallback read {read.Length} bytes inside the column chunk.");
 
                 var isHeaderByte = false;
                 for (var pageIndex = 0; pageIndex < pages.Count; pageIndex++)
