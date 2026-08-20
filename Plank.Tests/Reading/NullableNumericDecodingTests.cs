@@ -97,6 +97,117 @@ internal sealed class NullableNumericDecodingTests
     }
 
     [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void AllPresentPlainNullableInt32PagePreservesBitsBatchesAndRetainedValues(
+        ParquetDataPageVersion pageVersion)
+    {
+        var maximumBufferCount = ColumnChunkReader.DecodeBatchSizeBytes / Unsafe.SizeOf<int?>();
+        var expected = new int?[maximumBufferCount + 7];
+        for (var i = 0; i < expected.Length; i++)
+            expected[i] = CreateInt32(i);
+        expected[0] = int.MinValue;
+        expected[maximumBufferCount - 1] = -1;
+        expected[maximumBufferCount] = 0;
+        expected[^1] = int.MaxValue;
+
+        var schema = CreateSinglePageSchema(ParquetPhysicalType.Int32, EncodingKind.Plain);
+        var file = WriteSinglePage(schema, expected, pageVersion, CompressionKind.None);
+        ParquetBuffer retained = default;
+        try
+        {
+            using (var source = new MemoryReadSource(file))
+            using (var reader = schema.CreateReader(source))
+            {
+                var buffers = reader.RowGroups[0].Column<int?>(0).GetEnumerator();
+                try
+                {
+                    if (!buffers.MoveNext() || buffers.Current.Count != maximumBufferCount)
+                        throw new InvalidOperationException(
+                            $"{pageVersion}: expected a full first nullable Int32 batch.");
+                    AssertEqual(expected.AsSpan(0, maximumBufferCount), buffers.Current.Values,
+                        EncodingKind.Plain, pageVersion, NullPattern.NoNulls);
+                    retained = buffers.Current.Retain();
+
+                    if (!buffers.MoveNext() || buffers.Current.Count != expected.Length - maximumBufferCount)
+                        throw new InvalidOperationException(
+                            $"{pageVersion}: expected the nullable Int32 tail batch.");
+                    AssertEqual(expected.AsSpan(maximumBufferCount), buffers.Current.Values,
+                        EncodingKind.Plain, pageVersion, NullPattern.NoNulls);
+                    if (buffers.MoveNext())
+                        throw new InvalidOperationException($"{pageVersion}: expected exactly two batches.");
+                }
+                finally
+                {
+                    buffers.Dispose();
+                }
+            }
+
+            AssertEqual(expected.AsSpan(0, maximumBufferCount), retained.AsSpan<int?>(),
+                EncodingKind.Plain, pageVersion, NullPattern.NoNulls);
+        }
+        finally
+        {
+            retained.Dispose();
+        }
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void PlainNullableInt32PageContainingNullPreservesFallbackAcrossBatches(
+        ParquetDataPageVersion pageVersion)
+    {
+        var maximumBufferCount = ColumnChunkReader.DecodeBatchSizeBytes / Unsafe.SizeOf<int?>();
+        var expected = new int?[maximumBufferCount + 7];
+        for (var i = 0; i < expected.Length; i++)
+            expected[i] = CreateInt32(i);
+        expected[0] = null;
+        expected[maximumBufferCount - 1] = null;
+        expected[maximumBufferCount] = null;
+        expected[^1] = null;
+
+        var schema = CreateSinglePageSchema(ParquetPhysicalType.Int32, EncodingKind.Plain);
+        var file = WriteSinglePage(schema, expected, pageVersion, CompressionKind.None);
+        using var source = new MemoryReadSource(file);
+        using var reader = schema.CreateReader(source);
+        var actual = new List<int?>(expected.Length);
+        var bufferCount = 0;
+        foreach (var buffer in reader.RowGroups[0].Column<int?>(0))
+        {
+            actual.AddRange(buffer.Values);
+            bufferCount++;
+        }
+        if (bufferCount != 2)
+            throw new InvalidOperationException($"{pageVersion}: expected two fallback batches, got {bufferCount}.");
+        AssertEqual(expected, actual.ToArray(), EncodingKind.Plain, pageVersion, NullPattern.Mixed);
+    }
+
+    [Test]
+    public void AllPresentPlainInt32ExpansionPreservesSignedTailsOffsetsAndEndianFallback()
+    {
+        int[] physical = [123, int.MinValue, -1, 0, 1, 0x1234_5678, int.MaxValue, -17, 456];
+        var payload = new byte[physical.Length * sizeof(int)];
+        for (var i = 0; i < physical.Length; i++)
+            BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(i * sizeof(int)), physical[i]);
+        int?[] expected = [int.MinValue, -1, 0, 1, 0x1234_5678, int.MaxValue, -17];
+
+        foreach (var (nativeLittleEndian, allowVector) in new[]
+                 {
+                     (true, false),
+                     (true, true),
+                     (false, true)
+                 })
+        {
+            var actual = new int?[expected.Length];
+            ColumnChunkReader.DecodeAllPresentPlainInt32BatchForTesting(payload, physicalOffset: 1,
+                actual, nativeLittleEndian, allowVector);
+            AssertEqual(expected, actual, EncodingKind.Plain, ParquetDataPageVersion.V1,
+                NullPattern.NoNulls);
+        }
+    }
+
+    [Test]
     public void LargeRequiredNumericPageIsSplitAcrossEncodingsPagesAndCompression()
     {
         ParquetDataPageVersion[] pageVersions =

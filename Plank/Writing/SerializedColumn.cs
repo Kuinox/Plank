@@ -1017,6 +1017,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
         if (TryAssignInt64ColumnAndPageStatistics(values, hasDictionaryStatistics))
             return;
+        if (TryAssignDoubleColumnStatisticsFromPages<TValue>())
+            return;
 
         var statisticsValues = hasDictionaryStatistics && typeof(TValue) != typeof(float)
             && typeof(TValue) != typeof(double)
@@ -1034,6 +1036,56 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             AssignPageStatistics(values);
     }
 
+    bool TryAssignDoubleColumnStatisticsFromPages<TValue>()
+        where TValue : notnull
+    {
+        if (_column.PhysicalType != ParquetPhysicalType.Double
+            || _column.Options.Repetition != ParquetRepetition.Required || typeof(TValue) != typeof(double))
+            return false;
+
+        var hasColumnValue = false;
+        var columnMin = 0d;
+        var columnMax = 0d;
+        var columnNanCount = 0L;
+        var dataPageCount = 0;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var page = ref Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (!page.Statistics.HasStatistics || page.Statistics.NanCount < 0)
+                return false;
+
+            dataPageCount++;
+            columnNanCount = checked(columnNanCount + page.Statistics.NanCount);
+            if (page.Statistics.ValueKind == ColumnStatistics.ColumnStatisticsValueKind.None)
+                continue;
+            if (page.Statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Double)
+                return false;
+
+            var pageMin = BitConverter.Int64BitsToDouble(page.Statistics.MinBits);
+            var pageMax = BitConverter.Int64BitsToDouble(page.Statistics.MaxBits);
+            if (!hasColumnValue)
+            {
+                columnMin = pageMin;
+                columnMax = pageMax;
+                hasColumnValue = true;
+                continue;
+            }
+
+            if (ColumnStatistics.IsLessThan(pageMin, columnMin))
+                columnMin = pageMin;
+            if (ColumnStatistics.IsGreaterThan(pageMax, columnMax))
+                columnMax = pageMax;
+        }
+
+        if (dataPageCount == 0)
+            return false;
+        Statistics = ColumnStatistics.FromDoubleAccumulation(columnMin, columnMax, 0, columnNanCount,
+            hasColumnValue);
+        return true;
+    }
+
     void SerializeOptionalCore<TValue>(ReadOnlySpan<TValue?> values, uint columnOrdinal,
         PageStrategyContext strategyContext)
         where TValue : struct
@@ -1049,6 +1101,26 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var firstPresentIndex = IndexOfFirstPresent(values);
             if (firstPresentIndex >= 0)
             {
+                if (typeof(TValue) == typeof(long)
+                    && _column.PhysicalType == ParquetPhysicalType.Int64
+                    && strategyContext.Strategy is ForceDictionaryPageStrategy
+                    && !_owner.WritePageIndexes && _column.Options.BloomFilter is null)
+                {
+                    Pages.Clear();
+                    ColumnOrdinal = columnOrdinal;
+                    RowCount = checked((uint)values.Length);
+                    HasPendingData = true;
+                    var longValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<long?>>(ref values);
+                    Statistics = Plank.Writing.Encoding.Encoding.EncodeOptionalForcedInt64Dictionary(
+                        _owner.BufferWriters, _column, longValues, strategyContext, Pages,
+                        _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
+                        GetOrCreateDictionaryState<long>());
+                    if (!TryAssignSingleDataPageStatistics(Statistics))
+                        throw new InvalidOperationException("Fused optional int64 encoding produced multiple data pages.");
+                    _bloomFilterByteLength = 0;
+                    return;
+                }
+
                 if (typeof(TValue) == typeof(double)
                     && strategyContext.Strategy is ForceDictionaryPageStrategy
                     && !_owner.WritePageIndexes && _column.Options.BloomFilter is null)
@@ -1127,7 +1199,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         _bloomFilterByteLength = BloomFilterBuilder.BuildOptionalReferences(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
-        if (!TryAssignSingleDataPageStatistics(Statistics))
+        if (!TryAssignSingleDataPageStatistics(Statistics) && !AllDataPagesHaveStatistics())
             AssignOptionalPageStatistics(values);
     }
 

@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Plank.Benchmarks.Published;
@@ -101,6 +102,27 @@ static class PublishedReadFingerprint
                 throw new NotSupportedException($"Unsupported fingerprint value '{typeof(T)}'.");
         }
 
+        public void AddValues<T>(ReadOnlySpan<T> values)
+        {
+            if (typeof(T) == typeof(int))
+            {
+                ref var first = ref MemoryMarshal.GetReference(values);
+                AddInt32Values(MemoryMarshal.CreateReadOnlySpan(
+                    ref Unsafe.As<T, int>(ref first), values.Length));
+                return;
+            }
+            if (typeof(T) == typeof(int?))
+            {
+                ref var first = ref MemoryMarshal.GetReference(values);
+                AddNullableInt32Values(MemoryMarshal.CreateReadOnlySpan(
+                    ref Unsafe.As<T, int?>(ref first), values.Length));
+                return;
+            }
+
+            for (var index = 0; index < values.Length; index++)
+                AddValue(values[index]);
+        }
+
         public void AddBytes(ReadOnlySpan<byte> value)
         {
             AddWord(unchecked((uint)value.Length));
@@ -149,6 +171,49 @@ static class PublishedReadFingerprint
             _lane1 = _lane0;
             _lane0 = next;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        void AddInt32Values(ReadOnlySpan<int> values)
+        {
+            ref var first = ref MemoryMarshal.GetReference(values);
+            var index = 0;
+            for (; index <= values.Length - 4; index += 4)
+            {
+                // Four Rotate calls restore the fields to their starting positions. Update each lane
+                // directly with the value it would have received after those rotations. This is exact
+                // from every starting position, so callers may split the same sequence into any chunks.
+                _lane0 = Mix(_lane0, unchecked((uint)Unsafe.Add(ref first, index + 3)), Prime);
+                _lane1 = Mix(_lane1, unchecked((uint)Unsafe.Add(ref first, index + 2)), Prime);
+                _lane2 = Mix(_lane2, unchecked((uint)Unsafe.Add(ref first, index + 1)), Prime);
+                _lane3 = Mix(_lane3, unchecked((uint)Unsafe.Add(ref first, index)), Prime);
+            }
+
+            for (; index < values.Length; index++)
+                AddWord(unchecked((uint)Unsafe.Add(ref first, index)));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        void AddNullableInt32Values(ReadOnlySpan<int?> values)
+        {
+            ref var first = ref MemoryMarshal.GetReference(values);
+            var index = 0;
+            for (; index <= values.Length - 4; index += 4)
+            {
+                _lane0 = MixNullableInt32(_lane0, Unsafe.Add(ref first, index + 3));
+                _lane1 = MixNullableInt32(_lane1, Unsafe.Add(ref first, index + 2));
+                _lane2 = MixNullableInt32(_lane2, Unsafe.Add(ref first, index + 1));
+                _lane3 = MixNullableInt32(_lane3, Unsafe.Add(ref first, index));
+            }
+
+            for (; index < values.Length; index++)
+                AddValue(Unsafe.Add(ref first, index));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static ulong MixNullableInt32(ulong lane, int? value)
+            => value.HasValue
+                ? Mix(lane, unchecked((uint)value.GetValueOrDefault()), Prime)
+                : Mix(lane, 0, AbsentPrime);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static ulong Mix(ulong lane, ulong value, ulong multiplier)
@@ -236,10 +301,7 @@ static class PublishedReadFingerprint
     }
 
     static void AddValues<T>(ref Accumulator fingerprint, ReadOnlySpan<T> values)
-    {
-        for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
-            fingerprint.AddValue(values[valueIndex]);
-    }
+        => fingerprint.AddValues(values);
 
     static void AddBinaryValues(ref Accumulator fingerprint, ReadOnlySpan<byte[]?> values)
     {

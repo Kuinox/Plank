@@ -14,6 +14,7 @@ static class ColumnChunkReader
     static readonly DateOnly UnixEpochDate = new(1970, 1, 1);
     static readonly ulong[] ExpandedDefinitionBytes = CreateExpandedDefinitionBytes();
     static readonly byte[] DefinitionByteCounts = CreateDefinitionByteCounts();
+    static readonly bool NullableInt32HasCanonicalLayout = HasCanonicalNullableInt32Layout();
     internal static bool TryDecodeDictionaryPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
@@ -295,6 +296,7 @@ static class ColumnChunkReader
         internal int BatchElementSize;
         internal FixedWidthDecoderKind DecoderKind;
         internal bool IsNullable;
+        internal ReadOnlyMemory<byte> BorrowedPlainPayload;
 
         internal readonly bool Active
             => ValueOffset < ValueCount;
@@ -311,6 +313,13 @@ static class ColumnChunkReader
     internal static bool TryStartFixedWidthPageBatches<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ulong rowCount, ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool,
         ref FixedWidthPageState page, out ColumnBuffer<T> buffer)
+        => TryStartFixedWidthPageBatches(header, payload, default, column, rowCount, ref buffers,
+            bufferPool, ref page, out buffer);
+
+    internal static bool TryStartFixedWidthPageBatches<T>(PageHeader header, ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> borrowedPayload, Column column, ulong rowCount,
+        ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool, ref FixedWidthPageState page,
+        out ColumnBuffer<T> buffer)
     {
         buffer = default;
         page = default;
@@ -417,6 +426,14 @@ static class ColumnChunkReader
                 ref buffers, bufferPool);
         }
 
+        // An array-backed MemoryReadSource already keeps uncompressed page bytes alive. Required plain
+        // int32 values have the same representation on little-endian hosts, so copying them into a
+        // second pooled buffer only spends memory bandwidth. Retain() materializes an owned copy on demand.
+        var borrowedPlainPayload = dataOffset == 0 && physicalCount == valueCount &&
+            CanBorrowPlainValues<T>(column, physicalType, isRequired, decoderKind, borrowedPayload)
+            ? borrowedPayload.Slice(dataOffset, checked(physicalCount * physicalSize))
+            : default;
+
         page = new FixedWidthPageState
         {
             ValueCount = valueCount,
@@ -429,7 +446,8 @@ static class ColumnChunkReader
                 Math.Max(GetEncodedFixedWidth(column),
                     isNullable && converter is not null ? sizeof(int) : 1)),
             DecoderKind = decoderKind,
-            IsNullable = isNullable
+            IsNullable = isNullable,
+            BorrowedPlainPayload = borrowedPlainPayload
         };
         buffer = DecodeNextFixedWidthBatch(payload, column, ref buffers, bufferPool, ref page);
         return true;
@@ -445,11 +463,29 @@ static class ColumnChunkReader
 
         var batchCapacity = Math.Max(1, DecodeBatchSizeBytes / page.BatchElementSize);
         var batchCount = Math.Min(batchCapacity, page.ValueCount - page.ValueOffset);
+        if (!page.BorrowedPlainPayload.IsEmpty)
+        {
+            var elementSize = Unsafe.SizeOf<T>();
+            var byteOffset = checked(page.ValueOffset * elementSize);
+            var byteLength = checked(batchCount * elementSize);
+            var borrowed = new ColumnBuffer<T>(
+                page.BorrowedPlainPayload.Slice(byteOffset, byteLength), batchCount, bufferPool);
+            page.ValueOffset += batchCount;
+            page.PhysicalOffset += batchCount;
+            return borrowed;
+        }
         var values = buffers.GetValues<T>(batchCount, bufferPool);
         int physicalBatchCount;
         ReadOnlySpan<byte> byteDefinitions = [];
         ReadOnlySpan<int> intDefinitions = [];
         if (!page.IsNullable)
+            physicalBatchCount = batchCount;
+        else if (column.Converter is null && page.PhysicalCount == page.ValueCount &&
+                 page.DecoderKind == FixedWidthDecoderKind.Plain &&
+                 column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int?))
+            // The page's definition stream was still decoded and validated when the batch state was
+            // created. With every row present, keep it compact: the plain Int32 decoder below can expand
+            // directly into nullable slots without materializing per-row definitions or physical scratch.
             physicalBatchCount = batchCount;
         else if (column.Converter is not null)
         {
@@ -492,6 +528,13 @@ static class ColumnChunkReader
                 $"expected {page.PhysicalCount}.");
         return buffers.CreateNativeBuffer(batchCount);
     }
+
+    static bool CanBorrowPlainValues<T>(Column column, Type physicalType, bool isRequired,
+        FixedWidthDecoderKind decoderKind, ReadOnlyMemory<byte> borrowedPayload)
+        => BitConverter.IsLittleEndian && isRequired && column.Converter is null &&
+           physicalType == typeof(int) && typeof(T) == typeof(int) &&
+           column.PhysicalType == ParquetPhysicalType.Int32 &&
+           decoderKind == FixedWidthDecoderKind.Plain && !borrowedPayload.IsEmpty;
 
     static bool CanBatchFixedWidthProjection(Column column, Type physicalType, EncodingKind encoding)
     {
@@ -697,6 +740,15 @@ static class ColumnChunkReader
             return;
         }
 
+        if (converter is null && byteDefinitions.IsEmpty && physicalBatchCount == values.Length &&
+            decoderKind == FixedWidthDecoderKind.Plain && column.PhysicalType == ParquetPhysicalType.Int32 &&
+            typeof(T) == typeof(int?) && typeof(TValue) == typeof(int))
+        {
+            DecodeAllPresentPlainInt32Batch(payload, physicalOffset,
+                Unsafe.As<Span<T>, Span<int?>>(ref values));
+            return;
+        }
+
         var physical = GetFixedWidthBatchValues<T, TValue>(payload, column, totalPhysicalCount,
             physicalOffset, physicalBatchCount, decoderKind, ref buffers, bufferPool);
         if (converter is not null)
@@ -711,6 +763,66 @@ static class ColumnChunkReader
 
         var destination = Unsafe.As<Span<T>, Span<TValue?>>(ref values);
         ScatterNullableFixedWidthBatch(byteDefinitions, physical, destination);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static void DecodeAllPresentPlainInt32Batch(ReadOnlySpan<byte> payload, int physicalOffset,
+        Span<int?> destination)
+        => DecodeAllPresentPlainInt32Batch(payload, physicalOffset, destination,
+            BitConverter.IsLittleEndian, allowVector: true);
+
+    internal static void DecodeAllPresentPlainInt32BatchForTesting(ReadOnlySpan<byte> payload,
+        int physicalOffset, Span<int?> destination, bool nativeLittleEndian, bool allowVector)
+        => DecodeAllPresentPlainInt32Batch(payload, physicalOffset, destination,
+            nativeLittleEndian, allowVector);
+
+    static void DecodeAllPresentPlainInt32Batch(ReadOnlySpan<byte> payload, int physicalOffset,
+        Span<int?> destination, bool nativeLittleEndian, bool allowVector)
+    {
+        var byteOffset = checked(physicalOffset * sizeof(int));
+        var byteLength = checked(destination.Length * sizeof(int));
+        if ((uint)byteOffset > (uint)payload.Length || payload.Length - byteOffset < byteLength)
+            throw new CorruptParquetException(
+                $"Plain Int32 payload ({payload.Length} bytes) is too short for batch offset {physicalOffset} " +
+                $"and {destination.Length} values.");
+
+        var sourceBytes = payload.Slice(byteOffset, byteLength);
+        if (!nativeLittleEndian)
+        {
+            for (var i = 0; i < destination.Length; i++)
+                destination[i] = BinaryPrimitives.ReadInt32LittleEndian(sourceBytes[(i * sizeof(int))..]);
+            return;
+        }
+
+        var source = MemoryMarshal.Cast<byte, int>(sourceBytes);
+        var index = 0;
+        if (allowVector && NullableInt32HasCanonicalLayout && Avx2.IsSupported &&
+            destination.Length >= Vector256<ulong>.Count)
+        {
+            ref var sourceStart = ref MemoryMarshal.GetReference(source);
+            ref var destinationStart = ref Unsafe.As<int?, ulong>(ref MemoryMarshal.GetReference(destination));
+            var present = Vector256.Create(1UL);
+            for (; index <= source.Length - Vector256<ulong>.Count; index += Vector256<ulong>.Count)
+            {
+                var values = Avx2.ConvertToVector256Int64(
+                    Vector128.LoadUnsafe(ref sourceStart, (nuint)index)).AsUInt64();
+                var nullable = Vector256.ShiftLeft(values, 32) | present;
+                nullable.StoreUnsafe(ref destinationStart, (nuint)index);
+            }
+        }
+
+        for (; index < source.Length; index++)
+            destination[index] = source[index];
+    }
+
+    static bool HasCanonicalNullableInt32Layout()
+    {
+        if (Unsafe.SizeOf<int?>() != sizeof(ulong))
+            return false;
+        const int value = unchecked((int)0x8123_4567);
+        int?[] probe = [value];
+        ref var nullable = ref MemoryMarshal.GetArrayDataReference(probe);
+        return Unsafe.As<int?, ulong>(ref nullable) == (1UL | (ulong)unchecked((uint)value) << 32);
     }
 
     static ReadOnlySpan<TValue> GetFixedWidthBatchValues<T, TValue>(ReadOnlySpan<byte> payload,
