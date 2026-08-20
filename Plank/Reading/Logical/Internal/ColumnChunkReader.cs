@@ -1215,7 +1215,8 @@ static class ColumnChunkReader
         where TValue : struct
     {
         if (encoding is not (EncodingKind.Plain or EncodingKind.ByteStreamSplit or
-                EncodingKind.RleDictionary or EncodingKind.PlainDictionary))
+                EncodingKind.RleDictionary or EncodingKind.PlainDictionary) &&
+            !(encoding == EncodingKind.DeltaBinaryPacked && typeof(TValue) == typeof(int)))
         {
             physicalCount = 0;
             return false;
@@ -1224,11 +1225,17 @@ static class ColumnChunkReader
         var values = state.GetValues<T>(valueCount, bufferPool);
         var destination = Unsafe.As<Span<T>, Span<TValue?>>(ref values);
         var definitions = AsBytes(destination)[..valueCount];
+        var isDeltaInt32 = encoding == EncodingKind.DeltaBinaryPacked &&
+            typeof(T) == typeof(int?) && typeof(TValue) == typeof(int);
         if (definitionPayload.IsEmpty)
         {
-            definitions.Fill(1);
             physicalCount = valueCount;
+            if (!isDeltaInt32)
+                definitions.Fill(1);
         }
+        else if (isDeltaInt32)
+            physicalCount = CountCompactDefinitionLevels(definitionPayload,
+                definitionLevelEncoding, valueCount);
         else
             DecodeCompactDefinitionLevels(definitionPayload, definitionLevelEncoding,
                 definitions, out physicalCount);
@@ -1238,6 +1245,18 @@ static class ColumnChunkReader
             destination.Clear();
             return true;
         }
+
+        if (isDeltaInt32 && physicalCount == valueCount)
+        {
+            var nullable = Unsafe.As<Span<TValue?>, Span<int?>>(ref destination);
+            DeltaBinaryPackedDecoder.ReadNullableInt32(payload, nullable,
+                NullableInt32HasCanonicalLayout);
+            return true;
+        }
+
+        if (isDeltaInt32)
+            DecodeCompactDefinitionLevels(definitionPayload, definitionLevelEncoding,
+                definitions, out physicalCount);
 
         var physicalByteLength = checked(physicalCount * Unsafe.SizeOf<TValue>());
         var physicalValues = MemoryMarshal.Cast<byte, TValue>(
@@ -3904,6 +3923,60 @@ static class ColumnChunkReader
         }
 
         nonNullCount = nonNulls;
+    }
+
+    static int CountCompactDefinitionLevels(ReadOnlySpan<byte> payload, EncodingKind encoding,
+        int valueCount)
+    {
+        if (encoding == EncodingKind.BitPacked)
+            return LegacyBitPackedDecoder.CountSetBits(payload, valueCount);
+        if (encoding != EncodingKind.Rle)
+            throw new NotSupportedException($"Definition level encoding '{encoding}' is not supported.");
+
+        var valueIndex = 0;
+        var nonNulls = 0;
+        while (valueIndex < valueCount)
+        {
+            var header = ReadUnsignedVarInt(ref payload);
+            if ((header & 1U) == 0)
+            {
+                var runLength = header >> 1;
+                if (runLength == 0)
+                    throw new CorruptParquetException("Definition levels contain an empty RLE run.");
+                var repeated = ReadLittleEndian(ref payload, byteWidth: 1);
+                if ((uint)repeated > 1)
+                    throw new CorruptParquetException(
+                        $"Definition level {repeated} exceeds the schema maximum of 1.");
+                var copyLength = (int)Math.Min(runLength, checked((uint)(valueCount - valueIndex)));
+                if (repeated != 0)
+                    nonNulls += copyLength;
+                valueIndex += copyLength;
+                continue;
+            }
+
+            var literalGroupCount = header >> 1;
+            if (literalGroupCount == 0 || literalGroupCount > uint.MaxValue / 8)
+                throw new CorruptParquetException(
+                    $"Definition levels literal run group count {literalGroupCount} is invalid.");
+            var literalCount = literalGroupCount * 8U;
+            var literalByteCount = (literalCount + 7U) >> 3;
+            if (literalByteCount > (uint)payload.Length)
+                throw new CorruptParquetException(
+                    $"Definition level literal group claims {literalByteCount} bytes but only " +
+                    $"{payload.Length} remain.");
+
+            var count = Math.Min(literalCount, checked((uint)(valueCount - valueIndex)));
+            var fullBytes = (int)(count >> 3);
+            for (var i = 0; i < fullBytes; i++)
+                nonNulls += DefinitionByteCounts[payload[i]];
+            var trailingBits = (int)(count & 7);
+            if (trailingBits != 0)
+                nonNulls += DefinitionByteCounts[payload[fullBytes] & ((1 << trailingBits) - 1)];
+            valueIndex += checked((int)count);
+            payload = payload[checked((int)literalByteCount)..];
+        }
+
+        return nonNulls;
     }
 
     static int[] ReadRleBitPackedHybrid(ReadOnlySpan<byte> payload, uint valueCount, bool hasBitWidthPrefix)

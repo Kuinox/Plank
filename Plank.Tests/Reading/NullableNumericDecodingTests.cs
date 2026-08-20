@@ -208,6 +208,20 @@ internal sealed class NullableNumericDecodingTests
     }
 
     [Test]
+    public void NullableInt32DeltaBinaryPackedPreservesValuesAcrossPageVersionsAndNullPatterns()
+    {
+        foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        foreach (var pattern in Enum.GetValues<NullPattern>())
+        {
+            var expected = CreateValues<int>(pattern, CreateInt32);
+            AssertEqual(expected,
+                RoundTrip(ParquetPhysicalType.Int32, expected, EncodingKind.DeltaBinaryPacked,
+                    pageVersion),
+                EncodingKind.DeltaBinaryPacked, pageVersion, pattern);
+        }
+    }
+
+    [Test]
     public void LargeRequiredNumericPageIsSplitAcrossEncodingsPagesAndCompression()
     {
         ParquetDataPageVersion[] pageVersions =
