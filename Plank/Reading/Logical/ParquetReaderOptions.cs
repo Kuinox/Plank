@@ -11,7 +11,7 @@ public sealed class ParquetReaderOptions
     public bool VerifyPageCrc { get; init; }
 
     // RowReaderCore exposes writable refs to its current values and therefore opts out of read-only views.
-    internal bool BorrowRequiredPlainInt32Values { get; init; } = true;
+    internal bool BorrowRequiredPlainValues { get; init; } = true;
 
     internal void Validate()
     {

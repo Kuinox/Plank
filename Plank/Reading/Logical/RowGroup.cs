@@ -122,7 +122,7 @@ public readonly struct RowGroup
             : columnOrdinal;
         return new ColumnBufferEnumerable<T>(reader.PhysicalReader, Metadata.RowGroupOrdinal,
             physicalColumnOrdinal, definition, reader.Options.BufferPool,
-            Metadata.RowCount, reader.PagePruner, reader.Options.BorrowRequiredPlainInt32Values);
+            Metadata.RowCount, reader.PagePruner, reader.Options.BorrowRequiredPlainValues);
     }
 
     internal VariableLengthColumnBufferEnumerable<T> EnumerateVariableLengthBuffers<T>(LeafColumn definition,

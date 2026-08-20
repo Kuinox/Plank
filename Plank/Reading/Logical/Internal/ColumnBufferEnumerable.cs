@@ -13,11 +13,11 @@ readonly struct ColumnBufferEnumerable<T>
     readonly IParquetBufferPool _bufferPool;
     readonly ulong _rowCount;
     readonly ParquetPagePruner? _pruner;
-    readonly bool _borrowRequiredPlainInt32Values;
+    readonly bool _borrowRequiredPlainValues;
 
     internal ColumnBufferEnumerable(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
         LeafColumn definition, IParquetBufferPool bufferPool, ulong rowCount, ParquetPagePruner? pruner,
-        bool borrowRequiredPlainInt32Values)
+        bool borrowRequiredPlainValues)
     {
         ArgumentNullException.ThrowIfNull(physicalReader);
         ArgumentNullException.ThrowIfNull(definition);
@@ -31,12 +31,12 @@ readonly struct ColumnBufferEnumerable<T>
         _bufferPool = bufferPool;
         _rowCount = rowCount;
         _pruner = pruner;
-        _borrowRequiredPlainInt32Values = borrowRequiredPlainInt32Values;
+        _borrowRequiredPlainValues = borrowRequiredPlainValues;
     }
 
     internal Enumerator GetEnumerator()
         => new(_physicalReader, _rowGroupOrdinal, _columnOrdinal, _definition, _bufferPool, _rowCount, _pruner,
-            _borrowRequiredPlainInt32Values);
+            _borrowRequiredPlainValues);
 
     internal struct Enumerator : IDisposable
     {
@@ -48,7 +48,7 @@ readonly struct ColumnBufferEnumerable<T>
         readonly IParquetBufferPool _bufferPool;
         readonly ulong _rowCount;
         readonly ParquetPagePruner? _pruner;
-        readonly bool _borrowRequiredPlainInt32Values;
+        readonly bool _borrowRequiredPlainValues;
         ParquetPageCursor _cursor;
         PageMetadataHandle _pageMetadata;
         ColumnReadBuffers<T> _buffers;
@@ -59,7 +59,7 @@ readonly struct ColumnBufferEnumerable<T>
         internal Enumerator(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
             LeafColumn definition,
             IParquetBufferPool bufferPool, ulong rowCount, ParquetPagePruner? pruner,
-            bool borrowRequiredPlainInt32Values)
+            bool borrowRequiredPlainValues)
         {
             ArgumentNullException.ThrowIfNull(physicalReader);
             ArgumentNullException.ThrowIfNull(definition);
@@ -73,7 +73,7 @@ readonly struct ColumnBufferEnumerable<T>
             _bufferPool = bufferPool;
             _rowCount = rowCount;
             _pruner = pruner;
-            _borrowRequiredPlainInt32Values = borrowRequiredPlainInt32Values;
+            _borrowRequiredPlainValues = borrowRequiredPlainValues;
             _cursor = default;
             _pageMetadata = default;
             _buffers = default;
@@ -118,7 +118,7 @@ readonly struct ColumnBufferEnumerable<T>
                         (EncodingKind.RleDictionary or EncodingKind.PlainDictionary)) &&
                     ColumnChunkReader.TryStartFixedWidthPageBatches(_cursor.CurrentHeader,
                         _cursor.CurrentPayload,
-                        _borrowRequiredPlainInt32Values ? _cursor.CurrentBorrowedPayloadUnchecked : default,
+                        _borrowRequiredPlainValues ? _cursor.CurrentBorrowedPayloadUnchecked : default,
                         _column, _rowCount, ref _buffers, _bufferPool,
                         ref _fixedWidthPage, out var batchedFixedWidthBuffer))
                 {

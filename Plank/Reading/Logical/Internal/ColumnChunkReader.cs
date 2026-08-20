@@ -428,7 +428,7 @@ static class ColumnChunkReader
         }
 
         // An array-backed MemoryReadSource already keeps uncompressed page bytes alive. Required plain
-        // int32 values have the same representation on little-endian hosts, so copying them into a
+        // primitive values have the same representation on little-endian hosts, so copying them into a
         // second pooled buffer only spends memory bandwidth. Retain() materializes an owned copy on demand.
         var borrowedPlainPayload = dataOffset == 0 && physicalCount == valueCount &&
             CanBorrowPlainValues<T>(column, physicalType, isRequired, decoderKind, borrowedPayload)
@@ -532,10 +532,21 @@ static class ColumnChunkReader
 
     static bool CanBorrowPlainValues<T>(Column column, Type physicalType, bool isRequired,
         FixedWidthDecoderKind decoderKind, ReadOnlyMemory<byte> borrowedPayload)
-        => BitConverter.IsLittleEndian && isRequired && column.Converter is null &&
-           physicalType == typeof(int) && typeof(T) == typeof(int) &&
-           column.PhysicalType == ParquetPhysicalType.Int32 &&
-           decoderKind == FixedWidthDecoderKind.Plain && !borrowedPayload.IsEmpty;
+    {
+        if (!BitConverter.IsLittleEndian || !isRequired || column.Converter is not null ||
+            physicalType != typeof(T) || decoderKind != FixedWidthDecoderKind.Plain ||
+            borrowedPayload.IsEmpty)
+            return false;
+
+        return column.PhysicalType switch
+        {
+            ParquetPhysicalType.Int32 => typeof(T) == typeof(int),
+            ParquetPhysicalType.Int64 => typeof(T) == typeof(long),
+            ParquetPhysicalType.Float => typeof(T) == typeof(float),
+            ParquetPhysicalType.Double => typeof(T) == typeof(double),
+            _ => false
+        };
+    }
 
     static bool CanBatchFixedWidthProjection(Column column, Type physicalType, EncodingKind encoding)
     {
