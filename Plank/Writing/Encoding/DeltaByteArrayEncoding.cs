@@ -56,31 +56,58 @@ static class DeltaByteArrayEncoding
                 previous = current;
             }
 
-            DeltaBinaryPackedEncoding.WriteInt32(prefixLengths, ref writer);
-            DeltaBinaryPackedEncoding.WriteInt32(suffixLengths, ref writer);
-            if (totalSuffixBytes == 0)
-                return;
-
-            var destination = writer.GetSpan(totalSuffixBytes);
-            var offset = 0;
-            for (var i = 0; i < values.Length; i++)
-            {
-                var current = values[i]!;
-                var prefixLength = prefixLengths[i];
-                var suffixLength = suffixLengths[i];
-                if (suffixLength == 0)
-                    continue;
-                EncodingPrimitives.CopyPayload(current.AsSpan(prefixLength, suffixLength), destination[offset..]);
-                offset += suffixLength;
-            }
-
-            writer.Advance(offset);
+            WritePrecomputedRequiredByteArrayPage(values, prefixLengths, suffixLengths, totalSuffixBytes,
+                ref writer);
         }
         finally
         {
             bufferWriters.ReturnScratch(rentedPrefixLengthsBytes);
             bufferWriters.ReturnScratch(rentedSuffixLengthsBytes);
         }
+    }
+
+    /// <summary>
+    /// Writes a required byte-array page whose prefix and suffix lengths were already discovered by
+    /// the target-page sizing pass.
+    /// </summary>
+    /// <remarks>
+    /// Keeping the length spans for the whole column lets the target-sized writer avoid both a second
+    /// traversal of the page's jagged references and a pair of scratch-buffer rents per page. The
+    /// remaining traversal copies the suffix payloads into their final contiguous destination.
+    /// </remarks>
+    internal static void WritePrecomputedRequiredByteArrayPage(ReadOnlySpan<byte[]> values,
+        ReadOnlySpan<int> prefixLengths, ReadOnlySpan<int> suffixLengths, int totalSuffixBytes,
+        ref BufferWriter writer)
+    {
+        if (prefixLengths.Length != values.Length)
+            throw new ArgumentException("The prefix-length count must match the value count.",
+                nameof(prefixLengths));
+        if (suffixLengths.Length != values.Length)
+            throw new ArgumentException("The suffix-length count must match the value count.",
+                nameof(suffixLengths));
+        if (totalSuffixBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(totalSuffixBytes), totalSuffixBytes,
+                "The suffix byte count cannot be negative.");
+
+        DeltaBinaryPackedEncoding.WriteInt32(prefixLengths, ref writer);
+        DeltaBinaryPackedEncoding.WriteInt32(suffixLengths, ref writer);
+        if (totalSuffixBytes == 0)
+            return;
+
+        var destination = writer.GetSpan(totalSuffixBytes);
+        var offset = 0;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var current = values[i]!;
+            var prefixLength = prefixLengths[i];
+            var suffixLength = suffixLengths[i];
+            if (suffixLength == 0)
+                continue;
+            EncodingPrimitives.CopyPayload(current.AsSpan(prefixLength, suffixLength), destination[offset..]);
+            offset += suffixLength;
+        }
+
+        writer.Advance(offset);
     }
 
     internal static void WriteOptionalValues<TRow, TRowAccess>(Column column, ReadOnlySpan<TRow> rows,
