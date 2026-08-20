@@ -454,7 +454,7 @@ internal sealed class NullableNumericDecodingTests
                     retained = buffers.Current.Retain();
                     if (!buffers.MoveNext())
                         throw new InvalidOperationException("Expected a second required fixed-width batch.");
-                    if (buffers.Current.NativeValues.DangerousGetAddress() == retained.DangerousGetAddress())
+                    if (!retained.AsSpan<double>().SequenceEqual(firstBatch))
                         throw new InvalidOperationException(
                             "Advancing overwrote the storage held by the retained batch.");
                 }

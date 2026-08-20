@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Reading.Physical;
@@ -77,23 +78,73 @@ internal sealed class MemoryBackedPageBorrowingTests
     {
         var (schema, file, expected) = CreateFile(valueCount: 70_003,
             targetPageSize: 1024 * 1024, pageVersion: pageVersion);
+        AssertRequiredPlainLogicalBuffersBorrowPageStorageUntilRetained(schema, file, expected);
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void RequiredPlainInt64LogicalBuffersBorrowPageStorageUntilRetained(
+        ParquetDataPageVersion pageVersion)
+    {
+        var expected = Enumerable.Range(0, 70_003)
+            .Select(static value => (long)value * 1_000_003 - 17)
+            .ToArray();
+        var (schema, file) = CreatePrimitiveFile(ParquetPhysicalType.Int64, expected, pageVersion);
+        AssertRequiredPlainLogicalBuffersBorrowPageStorageUntilRetained(schema, file, expected);
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void RequiredPlainFloatLogicalBuffersBorrowPageStorageUntilRetained(
+        ParquetDataPageVersion pageVersion)
+    {
+        var expected = Enumerable.Range(0, 70_003)
+            .Select(static value => value % 19 == 0 ? float.NaN : value * 0.25f - 17f)
+            .ToArray();
+        var (schema, file) = CreatePrimitiveFile(ParquetPhysicalType.Float, expected, pageVersion);
+        AssertRequiredPlainLogicalBuffersBorrowPageStorageUntilRetained(schema, file, expected);
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void RequiredPlainDoubleLogicalBuffersBorrowPageStorageUntilRetained(
+        ParquetDataPageVersion pageVersion)
+    {
+        var expected = Enumerable.Range(0, 70_003)
+            .Select(static value => value % 19 switch
+            {
+                0 => BitConverter.Int64BitsToDouble(unchecked((long)0x7ff8000000000042UL)),
+                1 => double.NegativeZero,
+                _ => value * 0.25 - 17
+            })
+            .ToArray();
+        var (schema, file) = CreatePrimitiveFile(ParquetPhysicalType.Double, expected, pageVersion);
+        AssertRequiredPlainLogicalBuffersBorrowPageStorageUntilRetained(schema, file, expected);
+    }
+
+    static void AssertRequiredPlainLogicalBuffersBorrowPageStorageUntilRetained<T>(
+        ParquetSchema schema, byte[] file, T[] expected) where T : unmanaged
+    {
         var pool = new TrackingBufferPool();
         ParquetBuffer retained = default;
-        int[] firstValues;
+        T[] firstValues;
         try
         {
             using (var reader = schema.CreateReader(new MemoryReadSource(file),
                        new ParquetReaderOptions { BufferPool = pool }))
             {
                 pool.Reset();
-                var buffers = reader.RowGroups[0].Column<int>(0).GetEnumerator();
+                var buffers = reader.RowGroups[0].Column<T>(0).GetEnumerator();
                 try
                 {
                     if (!buffers.MoveNext())
-                        throw new InvalidOperationException("Expected a required plain int32 buffer.");
+                        throw new InvalidOperationException($"Expected a required plain {typeof(T)} buffer.");
                     var first = buffers.Current;
                     firstValues = first.Values.ToArray();
-                    if (!first.Values.SequenceEqual(expected.AsSpan(0, first.Count)))
+                    if (!ValuesEqual(first.Values, expected.AsSpan(0, first.Count)))
                         throw new InvalidOperationException("The first borrowed buffer contains different values.");
                     if (first.Count >= expected.Length)
                         throw new InvalidOperationException("The borrowed page was not split into bounded buffers.");
@@ -110,7 +161,7 @@ internal sealed class MemoryBackedPageBorrowingTests
                     while (buffers.MoveNext())
                     {
                         var current = buffers.Current;
-                        if (!current.Values.SequenceEqual(expected.AsSpan(offset, current.Count)))
+                        if (!ValuesEqual(current.Values, expected.AsSpan(offset, current.Count)))
                             throw new InvalidOperationException(
                                 $"A borrowed buffer contains different values at offset {offset}.");
                         offset += current.Count;
@@ -128,7 +179,7 @@ internal sealed class MemoryBackedPageBorrowingTests
                 }
             }
 
-            if (!retained.AsSpan<int>().SequenceEqual(firstValues))
+            if (!ValuesEqual(retained.AsSpan<T>(), firstValues))
                 throw new InvalidOperationException(
                     "Retained borrowed values changed after advancing and disposing the reader.");
         }
@@ -137,6 +188,9 @@ internal sealed class MemoryBackedPageBorrowingTests
             retained.Dispose();
         }
     }
+
+    static bool ValuesEqual<T>(ReadOnlySpan<T> left, ReadOnlySpan<T> right) where T : unmanaged
+        => MemoryMarshal.AsBytes(left).SequenceEqual(MemoryMarshal.AsBytes(right));
 
     [Test]
     public void StreamSourceKeepsOwnedPageBuffer()
@@ -271,6 +325,28 @@ internal sealed class MemoryBackedPageBorrowingTests
         writer.StartRowGroup().Write(serialized);
         writer.CloseFile();
         return (schema, stream.ToArray(), values);
+    }
+
+    static (ParquetSchema Schema, byte[] File) CreatePrimitiveFile<T>(ParquetPhysicalType physicalType,
+        T[] values, ParquetDataPageVersion pageVersion) where T : unmanaged
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("value", physicalType,
+                new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = pageVersion,
+            TargetDataPageSizeBytes = 1024 * 1024,
+            WritePageIndexes = false
+        });
+        var serialized = writer.CreateSerializedColumn<T>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return (schema, stream.ToArray());
     }
 
     sealed class TrackingBufferPool : IParquetBufferPool
