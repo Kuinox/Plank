@@ -482,7 +482,8 @@ static class ColumnChunkReader
         if (!page.IsNullable)
             physicalBatchCount = batchCount;
         else if (column.Converter is null && page.PhysicalCount == page.ValueCount &&
-                 page.DecoderKind is FixedWidthDecoderKind.Plain or FixedWidthDecoderKind.Dictionary &&
+                 page.DecoderKind is FixedWidthDecoderKind.Plain or FixedWidthDecoderKind.Dictionary or
+                     FixedWidthDecoderKind.ByteStreamSplit &&
                  column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int?))
             // The page's definition stream was still decoded and validated when the batch state was
             // created. With every row present, keep it compact: the Int32 decoder below can expand
@@ -753,17 +754,24 @@ static class ColumnChunkReader
         }
 
         if (converter is null && byteDefinitions.IsEmpty && physicalBatchCount == values.Length &&
-            decoderKind is FixedWidthDecoderKind.Plain or FixedWidthDecoderKind.Dictionary &&
+            decoderKind is FixedWidthDecoderKind.Plain or FixedWidthDecoderKind.Dictionary or
+                FixedWidthDecoderKind.ByteStreamSplit &&
             column.PhysicalType == ParquetPhysicalType.Int32 &&
             typeof(T) == typeof(int?) && typeof(TValue) == typeof(int))
         {
             var nullableDestination = Unsafe.As<Span<T>, Span<int?>>(ref values);
             if (decoderKind == FixedWidthDecoderKind.Plain)
                 DecodeAllPresentPlainInt32Batch(payload, physicalOffset, nullableDestination);
-            else
+            else if (decoderKind == FixedWidthDecoderKind.Dictionary)
                 ExpandAllPresentInt32Batch(
                     MemoryMarshal.Cast<byte, int>(buffers.Scratch.Span)
                         .Slice(physicalOffset, physicalBatchCount), nullableDestination);
+            else
+            {
+                var decoded = GetFixedWidthBatchValues<T, TValue>(payload, column, totalPhysicalCount,
+                    physicalOffset, physicalBatchCount, decoderKind, ref buffers, bufferPool);
+                ExpandAllPresentInt32Batch(MemoryMarshal.Cast<TValue, int>(decoded), nullableDestination);
+            }
             return;
         }
 

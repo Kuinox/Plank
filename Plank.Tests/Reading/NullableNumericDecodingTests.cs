@@ -101,6 +101,8 @@ internal sealed class NullableNumericDecodingTests
     [Arguments(ParquetDataPageVersion.V2, EncodingKind.Plain)]
     [Arguments(ParquetDataPageVersion.V1, EncodingKind.RleDictionary)]
     [Arguments(ParquetDataPageVersion.V2, EncodingKind.RleDictionary)]
+    [Arguments(ParquetDataPageVersion.V1, EncodingKind.ByteStreamSplit)]
+    [Arguments(ParquetDataPageVersion.V2, EncodingKind.ByteStreamSplit)]
     public void AllPresentNullableInt32PagePreservesBitsBatchesAndRetainedValues(
         ParquetDataPageVersion pageVersion, EncodingKind encoding)
     {
@@ -159,6 +161,8 @@ internal sealed class NullableNumericDecodingTests
     [Arguments(ParquetDataPageVersion.V2, EncodingKind.Plain)]
     [Arguments(ParquetDataPageVersion.V1, EncodingKind.RleDictionary)]
     [Arguments(ParquetDataPageVersion.V2, EncodingKind.RleDictionary)]
+    [Arguments(ParquetDataPageVersion.V1, EncodingKind.ByteStreamSplit)]
+    [Arguments(ParquetDataPageVersion.V2, EncodingKind.ByteStreamSplit)]
     public void NullableInt32PageContainingNullPreservesFallbackAcrossBatches(
         ParquetDataPageVersion pageVersion, EncodingKind encoding)
     {
