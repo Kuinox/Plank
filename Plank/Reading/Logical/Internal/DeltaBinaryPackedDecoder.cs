@@ -7,11 +7,64 @@ namespace Plank.Reading.Logical.Internal;
 
 static class DeltaBinaryPackedDecoder
 {
-    const uint BlockSize = 128;
-    const uint MiniBlockCount = 4;
-    const int MiniBlockSize = 32;
-    const int PackedBytesPerBitWidth = MiniBlockSize / 8;
+    // The unit every decoder below works in. It is not the mini-block size — the
+    // format only requires a mini-block to be a multiple of 32 values — but 32
+    // values at any bit width occupy a whole number of bytes, so a mini-block is
+    // always a whole number of these and decodes as a run of them.
+    const int MiniBlockChunk = 32;
+    const int PackedBytesPerBitWidth = MiniBlockChunk / 8;
     const int PackedWordLookahead = sizeof(ulong) - 1;
+
+    // Bounds the stack buffer the per-block bit widths are read into. Writers in
+    // the wild use 4; this is room to spare rather than a considered limit.
+    const int MaxMiniBlockCount = 64;
+
+    /// <summary>How a page divides its values into blocks and mini-blocks.</summary>
+    readonly record struct BlockLayout(int MiniBlockCount, int MiniBlockSize);
+
+    /// <summary>Reads the block size and mini-block count a page declares.</summary>
+    /// <remarks>
+    /// This used to require exactly 128 and 4. Nothing in the format fixes them:
+    /// the block size is a multiple of 128 and the mini-block size — the block
+    /// size divided by the number of mini-blocks — is a multiple of 32, and that
+    /// is all. Implementations differ inside that. parquet-mr and Arrow both use
+    /// 128/4 for INT32, but Arrow uses 256/4 for INT64, so pinning 128/4 rejected
+    /// every int64 delta column Arrow has ever written — all of them, on every
+    /// format version, whatever the values.
+    /// </remarks>
+    static BlockLayout ReadBlockLayout(ref DeltaBinaryPackedReader reader)
+    {
+        var blockSize = ReadHeaderVarUInt32(ref reader, "block size");
+        var miniBlockCount = ReadHeaderVarUInt32(ref reader, "mini-block count");
+
+        if (blockSize == 0 || blockSize % 128 != 0)
+            throw new CorruptParquetException(
+                $"Delta binary packed block size {blockSize} is not a positive multiple of 128.");
+        if (miniBlockCount == 0 || blockSize % miniBlockCount != 0)
+            throw new CorruptParquetException(
+                $"Delta binary packed block size {blockSize} is not divisible by its mini-block count {miniBlockCount}.");
+
+        var miniBlockSize = blockSize / miniBlockCount;
+        if (miniBlockSize % MiniBlockChunk != 0)
+            throw new CorruptParquetException(
+                $"Delta binary packed mini-block size {miniBlockSize} is not a multiple of {MiniBlockChunk}.");
+        if (miniBlockCount > MaxMiniBlockCount)
+            throw new NotSupportedException(
+                $"Delta binary packed decoding supports at most {MaxMiniBlockCount} mini-blocks per block, "
+                + $"and this page declares {miniBlockCount}.");
+
+        return new BlockLayout((int)miniBlockCount, (int)miniBlockSize);
+    }
+
+    // A block costs at least one min-delta varint plus one bit-width byte per
+    // mini-block, so this is the most values the bytes left could possibly hold.
+    // It exists to stop a corrupt value count from driving a huge allocation.
+    static uint MaxPossibleValues(BlockLayout layout, int remainingBytes)
+    {
+        var blockSize = layout.MiniBlockCount * layout.MiniBlockSize;
+        var perByte = (blockSize + layout.MiniBlockCount) / (1 + layout.MiniBlockCount);
+        return (uint)remainingBytes * (uint)perByte + 2U;
+    }
 
     internal static int[] ReadInt32(ReadOnlySpan<byte> payload)
     {
@@ -61,16 +114,10 @@ static class DeltaBinaryPackedDecoder
     static (int[] Values, int ConsumedBytes) ReadInt32Core(ReadOnlySpan<byte> payload)
     {
         var reader = new DeltaBinaryPackedReader(payload);
-        var blockSize = ReadHeaderVarUInt32(ref reader, "block size");
-        var miniBlockCount = ReadHeaderVarUInt32(ref reader, "mini-block count");
+        var layout = ReadBlockLayout(ref reader);
         var valueCount = ReadHeaderVarUInt32(ref reader, "value count");
-        if (blockSize != BlockSize || miniBlockCount != MiniBlockCount)
-            throw new NotSupportedException(
-                $"Delta binary packed decoding currently supports block size {BlockSize} and mini-block count {MiniBlockCount} only.");
 
-        // Each block encodes 128 values in at minimum 5 bytes (1 minDelta varint + 4 bitwidths, bitWidth=0).
-        // A corrupt header claiming more values than the payload could hold would cause a huge allocation.
-        var maxPossibleValues = (uint)(payload.Length - reader.Offset) * 26U + 2U;
+        var maxPossibleValues = MaxPossibleValues(layout, payload.Length - reader.Offset);
         if (valueCount > maxPossibleValues)
             throw new CorruptParquetException(
                 $"Delta binary packed value count {valueCount} exceeds what {payload.Length - reader.Offset} bytes could encode.");
@@ -82,7 +129,7 @@ static class DeltaBinaryPackedDecoder
         }
 
         var values = new int[checked((int)valueCount)];
-        ReadInt32Values(ref reader, values);
+        ReadInt32Values(ref reader, values, layout);
 
         return (values, reader.Offset);
     }
@@ -90,12 +137,8 @@ static class DeltaBinaryPackedDecoder
     static int ReadInt32Core(ReadOnlySpan<byte> payload, Span<int> destination)
     {
         var reader = new DeltaBinaryPackedReader(payload);
-        var blockSize = ReadHeaderVarUInt32(ref reader, "block size");
-        var miniBlockCount = ReadHeaderVarUInt32(ref reader, "mini-block count");
+        var layout = ReadBlockLayout(ref reader);
         var valueCount = ReadHeaderVarUInt32(ref reader, "value count");
-        if (blockSize != BlockSize || miniBlockCount != MiniBlockCount)
-            throw new NotSupportedException(
-                $"Delta binary packed decoding currently supports block size {BlockSize} and mini-block count {MiniBlockCount} only.");
         if ((uint)destination.Length != valueCount)
             throw new CorruptParquetException(
                 $"DeltaBinaryPacked encoded value count {valueCount} does not match expected {destination.Length}.");
@@ -106,12 +149,13 @@ static class DeltaBinaryPackedDecoder
             return reader.Offset;
         }
 
-        ReadInt32Values(ref reader, destination);
+        ReadInt32Values(ref reader, destination, layout);
 
         return reader.Offset;
     }
 
-    static void ReadInt32Values(ref DeltaBinaryPackedReader reader, Span<int> destination)
+    static void ReadInt32Values(ref DeltaBinaryPackedReader reader, Span<int> destination,
+        BlockLayout layout)
     {
         // Reconstructed in Int64 and narrowed on store: the running sum is what
         // the vector paths widen to, and the narrowing is a truncation, because
@@ -119,8 +163,9 @@ static class DeltaBinaryPackedDecoder
         var previous = reader.ReadZigZagInt64();
         destination[0] = NarrowInt32(previous);
         var index = 1;
-        Span<byte> bitWidths = stackalloc byte[checked((int)MiniBlockCount)];
-        Span<long> adjustedDeltas = Avx2.IsSupported ? stackalloc long[MiniBlockSize] : default;
+        Span<byte> bitWidthStorage = stackalloc byte[MaxMiniBlockCount];
+        var bitWidths = bitWidthStorage[..layout.MiniBlockCount];
+        Span<long> adjustedDeltas = Avx2.IsSupported ? stackalloc long[MiniBlockChunk] : default;
 
         while (index < destination.Length)
         {
@@ -135,32 +180,39 @@ static class DeltaBinaryPackedDecoder
                     throw new CorruptParquetException(
                         $"Delta binary packed mini-block bit width {bitWidth} exceeds 64.");
 
-                var count = Math.Min(MiniBlockSize, destination.Length - index);
-                if (bitWidth <= 56)
+                // A mini-block holds a whole number of 32-value chunks, and 32
+                // values at any bit width occupy a whole number of bytes, so a
+                // wider mini-block decodes as a run of chunks of exactly the
+                // shape the decoders below already handle.
+                for (var chunk = 0; chunk < layout.MiniBlockSize; chunk += MiniBlockChunk)
                 {
-                    var packed = reader.ReadBytesWithLookahead(
-                        bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
-                    if (Avx2.IsSupported && Bmi2.X64.IsSupported && bitWidth is > 0 and <= 16 &&
-                        count == MiniBlockSize)
-                        DecodeInt32MiniBlockBmi2(packed, bitWidth, minDelta, ref previous,
-                            destination.Slice(index, count));
-                    else if (Avx2.IsSupported && bitWidth <= 16)
-                        DecodeInt32MiniBlockVectorized(packed, bitWidth, minDelta, ref previous,
-                            adjustedDeltas, destination.Slice(index, count));
-                    else
-                        DecodeInt32MiniBlock(packed, bitWidth, minDelta, ref previous,
-                            destination.Slice(index, count));
-                    index += count;
-                    continue;
-                }
-
-                for (var i = 0; i < MiniBlockSize; i++)
-                {
-                    var delta = reader.ReadPackedUnsigned(bitWidth);
-                    if (i >= count)
+                    var count = Math.Min(MiniBlockChunk, destination.Length - index);
+                    if (bitWidth <= 56)
+                    {
+                        var packed = reader.ReadBytesWithLookahead(
+                            bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
+                        if (Avx2.IsSupported && Bmi2.X64.IsSupported && bitWidth is > 0 and <= 16 &&
+                            count == MiniBlockChunk)
+                            DecodeInt32MiniBlockBmi2(packed, bitWidth, minDelta, ref previous,
+                                destination.Slice(index, count));
+                        else if (Avx2.IsSupported && bitWidth <= 16)
+                            DecodeInt32MiniBlockVectorized(packed, bitWidth, minDelta, ref previous,
+                                adjustedDeltas, destination.Slice(index, count));
+                        else
+                            DecodeInt32MiniBlock(packed, bitWidth, minDelta, ref previous,
+                                destination.Slice(index, count));
+                        index += count;
                         continue;
-                    previous = unchecked(previous + minDelta + (long)delta);
-                    destination[index++] = NarrowInt32(previous);
+                    }
+
+                    for (var i = 0; i < MiniBlockChunk; i++)
+                    {
+                        var delta = reader.ReadPackedUnsigned(bitWidth);
+                        if (i >= count)
+                            continue;
+                        previous = unchecked(previous + minDelta + (long)delta);
+                        destination[index++] = NarrowInt32(previous);
+                    }
                 }
             }
         }
@@ -174,7 +226,7 @@ static class DeltaBinaryPackedDecoder
         if (bitWidth <= 8)
         {
             var laneMask = 0x0101010101010101UL * ((1UL << bitWidth) - 1);
-            for (var index = 0; index < MiniBlockSize; index += Vector256<int>.Count)
+            for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
             {
                 // Eight packed fields occupy exactly bitWidth bytes. PDEP places each field in
                 // the low bits of a byte so two widening loads produce the Int64 delta lanes.
@@ -191,7 +243,7 @@ static class DeltaBinaryPackedDecoder
         else
         {
             var laneMask = 0x0001000100010001UL * ((1UL << bitWidth) - 1);
-            for (var index = 0; index < MiniBlockSize; index += Vector256<long>.Count)
+            for (var index = 0; index < MiniBlockChunk; index += Vector256<long>.Count)
             {
                 // Four fields may start on a half-byte boundary. Shift the packed word to the
                 // first field, then deposit the fields into four UInt16 lanes before widening.
@@ -372,12 +424,8 @@ static class DeltaBinaryPackedDecoder
             throw new InvalidOperationException($"Cannot narrow Int32 values into '{typeof(T)}'.");
 
         var reader = new DeltaBinaryPackedReader(payload);
-        var blockSize = ReadHeaderVarUInt32(ref reader, "block size");
-        var miniBlockCount = ReadHeaderVarUInt32(ref reader, "mini-block count");
+        var layout = ReadBlockLayout(ref reader);
         var valueCount = ReadHeaderVarUInt32(ref reader, "value count");
-        if (blockSize != BlockSize || miniBlockCount != MiniBlockCount)
-            throw new NotSupportedException(
-                $"Delta binary packed decoding currently supports block size {BlockSize} and mini-block count {MiniBlockCount} only.");
         if ((uint)destination.Length != valueCount)
             throw new CorruptParquetException(
                 $"DeltaBinaryPacked encoded value count {valueCount} does not match expected {destination.Length}.");
@@ -391,19 +439,19 @@ static class DeltaBinaryPackedDecoder
         var previous = reader.ReadZigZagInt64();
         StoreNarrowInt32(destination, 0, NarrowInt32(previous));
         var index = 1U;
-        var miniBlockSize = blockSize / miniBlockCount;
-        Span<byte> bitWidths = stackalloc byte[checked((int)MiniBlockCount)];
+        Span<byte> bitWidthStorage = stackalloc byte[MaxMiniBlockCount];
+        var bitWidths = bitWidthStorage[..layout.MiniBlockCount];
 
         while (index < valueCount)
         {
             var minDelta = reader.ReadZigZagInt64();
-            for (var i = 0U; i < MiniBlockCount; i++)
-                bitWidths[checked((int)i)] = reader.ReadByte();
+            for (var i = 0; i < bitWidths.Length; i++)
+                bitWidths[i] = reader.ReadByte();
 
-            for (var miniBlock = 0U; miniBlock < MiniBlockCount; miniBlock++)
+            for (var miniBlock = 0; miniBlock < bitWidths.Length; miniBlock++)
             {
-                var bitWidth = bitWidths[checked((int)miniBlock)];
-                for (var i = 0U; i < miniBlockSize; i++)
+                var bitWidth = bitWidths[miniBlock];
+                for (var i = 0; i < layout.MiniBlockSize; i++)
                 {
                     var delta = bitWidth == 0 ? 0UL : reader.ReadPackedUnsigned(bitWidth);
                     if (index < valueCount)
@@ -421,14 +469,10 @@ static class DeltaBinaryPackedDecoder
     static (long[] Values, int ConsumedBytes) ReadInt64Core(ReadOnlySpan<byte> payload)
     {
         var reader = new DeltaBinaryPackedReader(payload);
-        var blockSize = ReadHeaderVarUInt32(ref reader, "block size");
-        var miniBlockCount = ReadHeaderVarUInt32(ref reader, "mini-block count");
+        var layout = ReadBlockLayout(ref reader);
         var valueCount = ReadHeaderVarUInt32(ref reader, "value count");
-        if (blockSize != BlockSize || miniBlockCount != MiniBlockCount)
-            throw new NotSupportedException(
-                $"Delta binary packed decoding currently supports block size {BlockSize} and mini-block count {MiniBlockCount} only.");
 
-        var maxPossibleValues = (uint)(payload.Length - reader.Offset) * 26U + 2U;
+        var maxPossibleValues = MaxPossibleValues(layout, payload.Length - reader.Offset);
         if (valueCount > maxPossibleValues)
             throw new CorruptParquetException(
                 $"Delta binary packed value count {valueCount} exceeds what {payload.Length - reader.Offset} bytes could encode.");
@@ -440,7 +484,7 @@ static class DeltaBinaryPackedDecoder
         }
 
         var values = new long[checked((int)valueCount)];
-        ReadInt64Values(ref reader, values);
+        ReadInt64Values(ref reader, values, layout);
 
         return (values, reader.Offset);
     }
@@ -448,12 +492,8 @@ static class DeltaBinaryPackedDecoder
     static int ReadInt64Core(ReadOnlySpan<byte> payload, Span<long> destination)
     {
         var reader = new DeltaBinaryPackedReader(payload);
-        var blockSize = ReadHeaderVarUInt32(ref reader, "block size");
-        var miniBlockCount = ReadHeaderVarUInt32(ref reader, "mini-block count");
+        var layout = ReadBlockLayout(ref reader);
         var valueCount = ReadHeaderVarUInt32(ref reader, "value count");
-        if (blockSize != BlockSize || miniBlockCount != MiniBlockCount)
-            throw new NotSupportedException(
-                $"Delta binary packed decoding currently supports block size {BlockSize} and mini-block count {MiniBlockCount} only.");
         if ((uint)destination.Length != valueCount)
             throw new CorruptParquetException(
                 $"DeltaBinaryPacked encoded value count {valueCount} does not match expected {destination.Length}.");
@@ -464,18 +504,20 @@ static class DeltaBinaryPackedDecoder
             return reader.Offset;
         }
 
-        ReadInt64Values(ref reader, destination);
+        ReadInt64Values(ref reader, destination, layout);
 
         return reader.Offset;
     }
 
-    static void ReadInt64Values(ref DeltaBinaryPackedReader reader, Span<long> destination)
+    static void ReadInt64Values(ref DeltaBinaryPackedReader reader, Span<long> destination,
+        BlockLayout layout)
     {
         var previous = reader.ReadZigZagInt64();
         destination[0] = previous;
         var index = 1;
-        Span<byte> bitWidths = stackalloc byte[checked((int)MiniBlockCount)];
-        Span<long> adjustedDeltas = Avx2.IsSupported ? stackalloc long[MiniBlockSize] : default;
+        Span<byte> bitWidthStorage = stackalloc byte[MaxMiniBlockCount];
+        var bitWidths = bitWidthStorage[..layout.MiniBlockCount];
+        Span<long> adjustedDeltas = Avx2.IsSupported ? stackalloc long[MiniBlockChunk] : default;
 
         while (index < destination.Length)
         {
@@ -490,32 +532,39 @@ static class DeltaBinaryPackedDecoder
                     throw new CorruptParquetException(
                         $"Delta binary packed mini-block bit width {bitWidth} exceeds 64.");
 
-                var count = Math.Min(MiniBlockSize, destination.Length - index);
-                if (bitWidth <= 56)
+                // A mini-block holds a whole number of 32-value chunks, and 32
+                // values at any bit width occupy a whole number of bytes, so a
+                // wider mini-block decodes as a run of chunks of exactly the
+                // shape the decoders below already handle.
+                for (var chunk = 0; chunk < layout.MiniBlockSize; chunk += MiniBlockChunk)
                 {
-                    var packed = reader.ReadBytesWithLookahead(
-                        bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
-                    if (Avx2.IsSupported && Bmi2.X64.IsSupported && bitWidth is > 0 and <= 16 &&
-                        count == MiniBlockSize)
-                        DecodeInt64MiniBlockBmi2(packed, bitWidth, minDelta, ref previous,
-                            destination.Slice(index, count));
-                    else if (Avx2.IsSupported && bitWidth <= 16)
-                        DecodeInt64MiniBlockVectorized(packed, bitWidth, minDelta, ref previous,
-                            adjustedDeltas, destination.Slice(index, count));
-                    else
-                        DecodeInt64MiniBlock(packed, bitWidth, minDelta, ref previous,
-                            destination.Slice(index, count));
-                    index += count;
-                    continue;
-                }
-
-                for (var i = 0; i < MiniBlockSize; i++)
-                {
-                    var delta = reader.ReadPackedUnsigned(bitWidth);
-                    if (i >= count)
+                    var count = Math.Min(MiniBlockChunk, destination.Length - index);
+                    if (bitWidth <= 56)
+                    {
+                        var packed = reader.ReadBytesWithLookahead(
+                            bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
+                        if (Avx2.IsSupported && Bmi2.X64.IsSupported && bitWidth is > 0 and <= 16 &&
+                            count == MiniBlockChunk)
+                            DecodeInt64MiniBlockBmi2(packed, bitWidth, minDelta, ref previous,
+                                destination.Slice(index, count));
+                        else if (Avx2.IsSupported && bitWidth <= 16)
+                            DecodeInt64MiniBlockVectorized(packed, bitWidth, minDelta, ref previous,
+                                adjustedDeltas, destination.Slice(index, count));
+                        else
+                            DecodeInt64MiniBlock(packed, bitWidth, minDelta, ref previous,
+                                destination.Slice(index, count));
+                        index += count;
                         continue;
-                    previous = unchecked(previous + minDelta + (long)delta);
-                    destination[index++] = previous;
+                    }
+
+                    for (var i = 0; i < MiniBlockChunk; i++)
+                    {
+                        var delta = reader.ReadPackedUnsigned(bitWidth);
+                        if (i >= count)
+                            continue;
+                        previous = unchecked(previous + minDelta + (long)delta);
+                        destination[index++] = previous;
+                    }
                 }
             }
         }
@@ -528,7 +577,7 @@ static class DeltaBinaryPackedDecoder
         if (bitWidth <= 8)
         {
             var laneMask = 0x0101010101010101UL * ((1UL << bitWidth) - 1);
-            for (var index = 0; index < MiniBlockSize; index += Vector256<long>.Count * 2)
+            for (var index = 0; index < MiniBlockChunk; index += Vector256<long>.Count * 2)
             {
                 // Eight packed fields occupy exactly bitWidth bytes. Deposit each field into
                 // a byte lane, widen the lanes, then reconstruct both prefix-sum vectors.
@@ -545,7 +594,7 @@ static class DeltaBinaryPackedDecoder
         else
         {
             var laneMask = 0x0001000100010001UL * ((1UL << bitWidth) - 1);
-            for (var index = 0; index < MiniBlockSize; index += Vector256<long>.Count)
+            for (var index = 0; index < MiniBlockChunk; index += Vector256<long>.Count)
             {
                 // Four fields may start between bytes. Align the first field, then deposit
                 // all four into UInt16 lanes before widening them to Int64.
