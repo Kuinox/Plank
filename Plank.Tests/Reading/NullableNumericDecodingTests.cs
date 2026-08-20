@@ -97,10 +97,12 @@ internal sealed class NullableNumericDecodingTests
     }
 
     [Test]
-    [Arguments(ParquetDataPageVersion.V1)]
-    [Arguments(ParquetDataPageVersion.V2)]
-    public void AllPresentPlainNullableInt32PagePreservesBitsBatchesAndRetainedValues(
-        ParquetDataPageVersion pageVersion)
+    [Arguments(ParquetDataPageVersion.V1, EncodingKind.Plain)]
+    [Arguments(ParquetDataPageVersion.V2, EncodingKind.Plain)]
+    [Arguments(ParquetDataPageVersion.V1, EncodingKind.RleDictionary)]
+    [Arguments(ParquetDataPageVersion.V2, EncodingKind.RleDictionary)]
+    public void AllPresentNullableInt32PagePreservesBitsBatchesAndRetainedValues(
+        ParquetDataPageVersion pageVersion, EncodingKind encoding)
     {
         var maximumBufferCount = ColumnChunkReader.DecodeBatchSizeBytes / Unsafe.SizeOf<int?>();
         var expected = new int?[maximumBufferCount + 7];
@@ -111,7 +113,7 @@ internal sealed class NullableNumericDecodingTests
         expected[maximumBufferCount] = 0;
         expected[^1] = int.MaxValue;
 
-        var schema = CreateSinglePageSchema(ParquetPhysicalType.Int32, EncodingKind.Plain);
+        var schema = CreateSinglePageSchema(ParquetPhysicalType.Int32, encoding);
         var file = WriteSinglePage(schema, expected, pageVersion, CompressionKind.None);
         ParquetBuffer retained = default;
         try
@@ -126,14 +128,14 @@ internal sealed class NullableNumericDecodingTests
                         throw new InvalidOperationException(
                             $"{pageVersion}: expected a full first nullable Int32 batch.");
                     AssertEqual(expected.AsSpan(0, maximumBufferCount), buffers.Current.Values,
-                        EncodingKind.Plain, pageVersion, NullPattern.NoNulls);
+                        encoding, pageVersion, NullPattern.NoNulls);
                     retained = buffers.Current.Retain();
 
                     if (!buffers.MoveNext() || buffers.Current.Count != expected.Length - maximumBufferCount)
                         throw new InvalidOperationException(
                             $"{pageVersion}: expected the nullable Int32 tail batch.");
                     AssertEqual(expected.AsSpan(maximumBufferCount), buffers.Current.Values,
-                        EncodingKind.Plain, pageVersion, NullPattern.NoNulls);
+                        encoding, pageVersion, NullPattern.NoNulls);
                     if (buffers.MoveNext())
                         throw new InvalidOperationException($"{pageVersion}: expected exactly two batches.");
                 }
@@ -144,7 +146,7 @@ internal sealed class NullableNumericDecodingTests
             }
 
             AssertEqual(expected.AsSpan(0, maximumBufferCount), retained.AsSpan<int?>(),
-                EncodingKind.Plain, pageVersion, NullPattern.NoNulls);
+                encoding, pageVersion, NullPattern.NoNulls);
         }
         finally
         {
@@ -153,10 +155,12 @@ internal sealed class NullableNumericDecodingTests
     }
 
     [Test]
-    [Arguments(ParquetDataPageVersion.V1)]
-    [Arguments(ParquetDataPageVersion.V2)]
-    public void PlainNullableInt32PageContainingNullPreservesFallbackAcrossBatches(
-        ParquetDataPageVersion pageVersion)
+    [Arguments(ParquetDataPageVersion.V1, EncodingKind.Plain)]
+    [Arguments(ParquetDataPageVersion.V2, EncodingKind.Plain)]
+    [Arguments(ParquetDataPageVersion.V1, EncodingKind.RleDictionary)]
+    [Arguments(ParquetDataPageVersion.V2, EncodingKind.RleDictionary)]
+    public void NullableInt32PageContainingNullPreservesFallbackAcrossBatches(
+        ParquetDataPageVersion pageVersion, EncodingKind encoding)
     {
         var maximumBufferCount = ColumnChunkReader.DecodeBatchSizeBytes / Unsafe.SizeOf<int?>();
         var expected = new int?[maximumBufferCount + 7];
@@ -167,7 +171,7 @@ internal sealed class NullableNumericDecodingTests
         expected[maximumBufferCount] = null;
         expected[^1] = null;
 
-        var schema = CreateSinglePageSchema(ParquetPhysicalType.Int32, EncodingKind.Plain);
+        var schema = CreateSinglePageSchema(ParquetPhysicalType.Int32, encoding);
         var file = WriteSinglePage(schema, expected, pageVersion, CompressionKind.None);
         using var source = new MemoryReadSource(file);
         using var reader = schema.CreateReader(source);
@@ -180,7 +184,7 @@ internal sealed class NullableNumericDecodingTests
         }
         if (bufferCount != 2)
             throw new InvalidOperationException($"{pageVersion}: expected two fallback batches, got {bufferCount}.");
-        AssertEqual(expected, actual.ToArray(), EncodingKind.Plain, pageVersion, NullPattern.Mixed);
+        AssertEqual(expected, actual.ToArray(), encoding, pageVersion, NullPattern.Mixed);
     }
 
     [Test]

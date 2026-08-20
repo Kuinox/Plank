@@ -482,11 +482,11 @@ static class ColumnChunkReader
         if (!page.IsNullable)
             physicalBatchCount = batchCount;
         else if (column.Converter is null && page.PhysicalCount == page.ValueCount &&
-                 page.DecoderKind == FixedWidthDecoderKind.Plain &&
+                 page.DecoderKind is FixedWidthDecoderKind.Plain or FixedWidthDecoderKind.Dictionary &&
                  column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int?))
             // The page's definition stream was still decoded and validated when the batch state was
-            // created. With every row present, keep it compact: the plain Int32 decoder below can expand
-            // directly into nullable slots without materializing per-row definitions or physical scratch.
+            // created. With every row present, keep it compact: the Int32 decoder below can expand
+            // directly into nullable slots without materializing per-row definitions.
             physicalBatchCount = batchCount;
         else if (column.Converter is not null)
         {
@@ -753,11 +753,17 @@ static class ColumnChunkReader
         }
 
         if (converter is null && byteDefinitions.IsEmpty && physicalBatchCount == values.Length &&
-            decoderKind == FixedWidthDecoderKind.Plain && column.PhysicalType == ParquetPhysicalType.Int32 &&
+            decoderKind is FixedWidthDecoderKind.Plain or FixedWidthDecoderKind.Dictionary &&
+            column.PhysicalType == ParquetPhysicalType.Int32 &&
             typeof(T) == typeof(int?) && typeof(TValue) == typeof(int))
         {
-            DecodeAllPresentPlainInt32Batch(payload, physicalOffset,
-                Unsafe.As<Span<T>, Span<int?>>(ref values));
+            var nullableDestination = Unsafe.As<Span<T>, Span<int?>>(ref values);
+            if (decoderKind == FixedWidthDecoderKind.Plain)
+                DecodeAllPresentPlainInt32Batch(payload, physicalOffset, nullableDestination);
+            else
+                ExpandAllPresentInt32Batch(
+                    MemoryMarshal.Cast<byte, int>(buffers.Scratch.Span)
+                        .Slice(physicalOffset, physicalBatchCount), nullableDestination);
             return;
         }
 
@@ -806,7 +812,15 @@ static class ColumnChunkReader
             return;
         }
 
-        var source = MemoryMarshal.Cast<byte, int>(sourceBytes);
+        ExpandAllPresentInt32Batch(MemoryMarshal.Cast<byte, int>(sourceBytes), destination,
+            allowVector);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static void ExpandAllPresentInt32Batch(ReadOnlySpan<int> source, Span<int?> destination,
+        bool allowVector = true)
+    {
+        System.Diagnostics.Debug.Assert(source.Length == destination.Length);
         var index = 0;
         if (allowVector && NullableInt32HasCanonicalLayout && Avx2.IsSupported &&
             destination.Length >= Vector256<ulong>.Count)
@@ -3565,6 +3579,19 @@ static class ColumnChunkReader
             return;
         }
 
+        if (bitWidth is 1 or 2 or 8 or 9 && typeof(T) == typeof(int) && destination.Length >= 8 &&
+            Avx2.IsSupported && Bmi2.X64.IsSupported)
+        {
+            var vectorizedLength = destination.Length & ~7;
+            DecodeDictionaryLiteralInt32IndexesSmall(payload, bitWidth,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref dictionary),
+                Unsafe.As<Span<T>, Span<int>>(ref destination)[..vectorizedLength]);
+            payload = payload[(vectorizedLength / 8 * bitWidth)..];
+            destination = destination[vectorizedLength..];
+            if (destination.IsEmpty)
+                return;
+        }
+
         if (bitWidth == 11 && destination.Length >= 8 && Avx2.IsSupported && Bmi2.X64.IsSupported)
         {
             var vectorizedLength = destination.Length & ~7;
@@ -3626,6 +3653,55 @@ static class ColumnChunkReader
                 throw new CorruptParquetException(
                     $"Dictionary index {dictionaryIndex} is out of range for a dictionary of {dictionary.Length} entries.");
             destination[i] = dictionary[dictionaryIndex];
+        }
+    }
+
+    static unsafe void DecodeDictionaryLiteralInt32IndexesSmall(ReadOnlySpan<byte> payload,
+        int bitWidth, ReadOnlySpan<int> dictionary, Span<int> destination)
+    {
+        ref var source = ref MemoryMarshal.GetReference(payload);
+        ref var target = ref MemoryMarshal.GetReference(destination);
+        var maximumIndex = Vector256.Create(dictionary.Length - 1);
+        var laneValue = (1UL << bitWidth) - 1UL;
+        var laneMask = laneValue | laneValue << 16 | laneValue << 32 | laneValue << 48;
+        fixed (int* dictionaryPointer = dictionary)
+        {
+            var byteIndex = 0;
+            for (var valueIndex = 0; valueIndex < destination.Length;
+                 valueIndex += 8, byteIndex += bitWidth)
+            {
+                ulong lower;
+                ulong upper;
+                if (bitWidth == 9)
+                {
+                    lower = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex));
+                    upper = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref source, byteIndex + 4));
+                    upper |= (ulong)Unsafe.Add(ref source, byteIndex + 8) << 32;
+                    upper >>= 4;
+                }
+                else
+                {
+                    var packed = bitWidth switch
+                    {
+                        1 => Unsafe.Add(ref source, byteIndex),
+                        2 => Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref source, byteIndex)),
+                        _ => Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex))
+                    };
+                    lower = packed;
+                    upper = packed >> (bitWidth * 4);
+                }
+
+                var indexes = Avx2.ConvertToVector256Int32(Vector128.Create(
+                    Bmi2.X64.ParallelBitDeposit(lower, laneMask),
+                    Bmi2.X64.ParallelBitDeposit(upper, laneMask)).AsUInt16());
+                if (Avx2.MoveMask(Avx2.CompareGreaterThan(indexes, maximumIndex).AsByte()) != 0)
+                {
+                    for (var lane = 0; lane < 8; lane++)
+                        ValidateDictionaryIndex(indexes.GetElement(lane), dictionary.Length);
+                }
+                Avx2.GatherVector256(dictionaryPointer, indexes, sizeof(int))
+                    .StoreUnsafe(ref target, (nuint)valueIndex);
+            }
         }
     }
 
