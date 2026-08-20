@@ -92,6 +92,13 @@ rm -f fuzz/reader-corpus/gen-*.bin
 # corpus that is already pinned by commit.
 bash fuzz/import-parquet-testing-seeds.sh | sed 's/^/  /'
 
+# The cross-writer seeds are choice indexes for the plan decoder, so they are
+# written by the code that decodes them rather than kept as bytes nobody can
+# read or reproduce.
+rm -f fuzz/corpus/crosswriter-*
+./Plank.Fuzzing.Target/bin/Release/net10.0/Plank.Fuzzing.Target \
+  --generate-corpus fuzz/corpus 2>/dev/null | sed 's/^/  /'
+
 bash fuzz/run-fleet.sh reader 2>&1 | grep -E '==> (Starting|Running)' | sed 's/^/  /'
 bash fuzz/run-fleet.sh writer 2>&1 | grep -E '==> (Starting|Running)' | sed 's/^/  /'
 REMOTE
