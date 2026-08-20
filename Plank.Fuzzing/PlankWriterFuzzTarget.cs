@@ -44,6 +44,12 @@ public static class PlankWriterFuzzTarget
     // re-encode, splicing column chunks across and rewriting their offsets.
     const byte MergerMarker = 0xFD;
 
+    // 0xFC inverts this target: Apache Arrow writes the file and Plank has to
+    // read it. It lives behind the writer's marker rather than as a selector in
+    // the reader target because its input is a plan for a file, not a file — see
+    // PlankCrossWriterFuzzTarget.
+    const byte CrossWriterMarker = 0xFC;
+
     public static void Execute(ReadOnlySpan<byte> data)
     {
         if (!data.IsEmpty && data[0] == RowApiMarker)
@@ -61,6 +67,12 @@ public static class PlankWriterFuzzTarget
         if (!data.IsEmpty && data[0] == MergerMarker)
         {
             PlankMergerFuzzTarget.Execute(data[1..]);
+            return;
+        }
+
+        if (!data.IsEmpty && data[0] == CrossWriterMarker)
+        {
+            PlankCrossWriterFuzzTarget.Execute(data[1..]);
             return;
         }
 

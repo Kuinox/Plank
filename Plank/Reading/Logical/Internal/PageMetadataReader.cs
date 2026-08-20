@@ -290,7 +290,7 @@ static class PageMetadataReader
         var dataPageCount = 0;
         while (offset < chunkLength)
         {
-            var header = ReadHeaderExactly(reader, chunk.ChunkOffset + (ulong)offset, chunkLength - offset,
+            var header = ReadPageHeader(reader, chunk.ChunkOffset + (ulong)offset, chunkLength - offset,
                 chunk.TotalUncompressedSize, copyHeaderStatistics, ref statisticsBuilder,
                 out var headerStatistics);
             var pageSize = checked(header.HeaderLength + (int)header.CompressedPageSize);
@@ -337,7 +337,7 @@ static class PageMetadataReader
             ref var entry = ref entries[i];
             if (entry.CompressedSize > int.MaxValue)
                 throw new NotSupportedException("Pages larger than Int32.MaxValue are not supported.");
-            var header = ReadHeaderExactly(reader, entry.Offset, checked((int)entry.CompressedSize),
+            var header = ReadPageHeader(reader, entry.Offset, checked((int)entry.CompressedSize),
                 chunk.TotalUncompressedSize, copyStatistics: true, ref statisticsBuilder,
                 out var statistics);
             if (header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2))
@@ -371,31 +371,53 @@ static class PageMetadataReader
         }
     }
 
-    static PageHeader ReadHeaderExactly(ParquetFileReader reader, ulong offset, int remainingChunkLength,
+    /// <summary>Reads the page header at <paramref name="offset"/> and nothing past it.</summary>
+    /// <remarks>
+    /// A page header does not carry its own length, so the window has to grow
+    /// until one parses. It grows by exactly what the parse says it is short,
+    /// which is what keeps this from reading page payload: a caller scanning a
+    /// chunk's page metadata should not have to pull the chunk's data with it,
+    /// and HeaderFallbackInspectionReadsOnlyHeaders holds it to that.
+    ///
+    /// The shortfall used to be inferred by comparing the parse failure's Message
+    /// against a literal. That missed the message a half-read statistics min/max
+    /// actually raises — a binary field reports the bound its length prefix broke,
+    /// not the end of the payload — so the loop aborted on every page header with
+    /// statistics in it. Plank's writer emits none, so nothing in the suite or the
+    /// fuzz corpus had any; 26 files in apache/parquet-testing do. The signal is
+    /// now structural: see CompactProtocolTruncatedException.
+    /// </remarks>
+    static PageHeader ReadPageHeader(ParquetFileReader reader, ulong offset, int remainingChunkLength,
         ulong totalUncompressedSize, bool copyStatistics, ref StatisticsBufferBuilder statisticsBuilder,
         out EncodedStatistics copiedStatistics)
     {
         var maxLength = Math.Min(remainingChunkLength, MaxPageHeaderLength);
         using var buffer = reader.BufferPool.Rent(checked((uint)maxLength));
         var maxUncompressedPageSize = (uint)Math.Min(totalUncompressedSize, uint.MaxValue);
-        for (var length = 1; length <= maxLength; length++)
+        var length = 0;
+        var missingBytes = 1;
+        while (length < maxLength)
         {
-            reader.Source.ReadExactly(offset + (ulong)(length - 1), buffer.Span.Slice(length - 1, 1));
-            try
-            {
-                var header = PageHeaderReader.Read(buffer.Span[..length], maxUncompressedPageSize);
-                var statistics = header.Statistics;
-                if (header.Type == PageHeaderType.DataPageV2 && !statistics.HasNullCount)
-                    statistics = WithNullCount(statistics, header.NullCount);
-                copiedStatistics = copyStatistics
-                    ? statisticsBuilder.Copy(buffer.Span[..length], statistics)
-                    : default;
-                return header;
-            }
-            catch (CorruptParquetException exception) when (
-                exception.Message == "Unexpected end of compact protocol payload.")
-            {
-            }
+            // One byte to start, because the first parse cannot know anything, and
+            // afterwards exactly the shortfall the parse reported.
+            var wanted = (int)Math.Min((long)length + Math.Max(missingBytes, 1), maxLength);
+            reader.Source.ReadExactly(offset + (ulong)length, buffer.Span[length..wanted]);
+            length = wanted;
+
+            if (!PageHeaderReader.TryRead(buffer.Span[..length], maxUncompressedPageSize, out var header,
+                    out missingBytes))
+                continue;
+
+            var statistics = header.Statistics;
+            if (header.Type == PageHeaderType.DataPageV2 && !statistics.HasNullCount)
+                statistics = WithNullCount(statistics, header.NullCount);
+
+            // The offsets in EncodedStatistics are relative to the window that was
+            // parsed, so that whole window is what Copy has to slice out of.
+            copiedStatistics = copyStatistics
+                ? statisticsBuilder.Copy(buffer.Span[..length], statistics)
+                : default;
+            return header;
         }
 
         throw new CorruptParquetException(

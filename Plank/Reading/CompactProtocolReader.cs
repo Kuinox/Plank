@@ -7,14 +7,27 @@ ref struct CompactProtocolReader
     const int MaxStructDepth = 64;
 
     readonly ReadOnlySpan<byte> _buffer;
+
+    // Set when the buffer is known to be a prefix of the real payload rather than
+    // the whole of it. In that mode running out of bytes is not corruption but a
+    // request for more, and it is raised as CompactProtocolTruncatedException
+    // carrying the shortfall. Only the page-header probe reads that way; see the
+    // exception's remarks for why the distinction has to be structural.
+    readonly bool _bufferMayBeTruncated;
+
     FieldIdStack _fieldIdStack;
     int _offset;
     int _lastFieldId;
     int _depth;
 
-    internal CompactProtocolReader(ReadOnlySpan<byte> buffer)
+    internal CompactProtocolReader(ReadOnlySpan<byte> buffer) : this(buffer, bufferMayBeTruncated: false)
+    {
+    }
+
+    internal CompactProtocolReader(ReadOnlySpan<byte> buffer, bool bufferMayBeTruncated)
     {
         _buffer = buffer;
+        _bufferMayBeTruncated = bufferMayBeTruncated;
         _offset = 0;
         _lastFieldId = 0;
         _depth = 0;
@@ -113,11 +126,31 @@ ref struct CompactProtocolReader
 
     internal ReadOnlySpan<byte> ReadBinary()
     {
-        var length = checked((int)ReadVarU32(max: int.MaxValue));
-        EnsureAvailable(length);
+        var length = ReadBinaryLength();
         var value = _buffer.Slice(_offset, length);
         _offset += length;
         return value;
+    }
+
+    /// <summary>Reads a binary field's length prefix and checks it against what is left.</summary>
+    /// <remarks>
+    /// A length longer than the bytes remaining is the same condition
+    /// EnsureAvailable reports, found one field earlier, so it has to be reported
+    /// the same way — as a shortfall when the buffer is a known prefix, and as
+    /// corruption otherwise. Bounding it separately, as a varint range check, is
+    /// what made a truncated statistics min/max look malformed to the page-header
+    /// probe rather than incomplete.
+    /// </remarks>
+    int ReadBinaryLength()
+    {
+        var length = ReadVarUInt32();
+        var available = Remaining;
+        if (length <= available)
+            return (int)length;
+        if (_bufferMayBeTruncated)
+            throw new CompactProtocolTruncatedException(checked((int)(length - available)));
+        throw new CorruptParquetException(
+            $"Expected a varint value no greater than {available} but got {length}.");
     }
 
     internal (uint Count, CompactProtocolType ElementType) ReadListHeader()
@@ -156,8 +189,10 @@ ref struct CompactProtocolReader
                 return;
             case CompactProtocolType.Binary:
             {
-                var length = checked((int)ReadVarU32(max: Remaining));
-                EnsureAvailable(length);
+                // The length has to land in a local first: ReadBinaryLength
+                // advances _offset past the prefix, and a compound assignment
+                // would have read _offset before that happened.
+                var length = ReadBinaryLength();
                 _offset += length;
                 return;
             }
@@ -221,8 +256,12 @@ ref struct CompactProtocolReader
 
     void EnsureAvailable(int length)
     {
-        if ((uint)length > (uint)(_buffer.Length - _offset))
-            throw new CorruptParquetException("Unexpected end of compact protocol payload.");
+        var available = _buffer.Length - _offset;
+        if ((uint)length <= (uint)available)
+            return;
+        if (_bufferMayBeTruncated)
+            throw new CompactProtocolTruncatedException(length - available);
+        throw new CorruptParquetException("Unexpected end of compact protocol payload.");
     }
 
     void PushStruct()

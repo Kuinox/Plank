@@ -17,6 +17,20 @@ static class ParquetDecompressor
     internal static void DecompressInto(ReadOnlySpan<byte> payload, CompressionKind compression,
         Span<byte> destination)
     {
+        // A page that declares no uncompressed bytes has nothing to produce, and
+        // it is a shape mainstream writers emit: Arrow writes an empty dictionary
+        // page for an all-null column, with a non-empty compressed payload — the
+        // codec's own framing — wrapping zero bytes of content.
+        //
+        // Snappy, Gzip, Zstd and Brotli decode that payload back to zero bytes
+        // and read those files today. Both LZ4 decoders return -1 for a
+        // zero-length destination whatever the payload holds, which the length
+        // check below reported as "produced -1 bytes but 0 were expected". There
+        // is nothing to recover either way, so the six agree here rather than two
+        // of them learning the same special case.
+        if (destination.IsEmpty)
+            return;
+
         try
         {
             var written = compression switch

@@ -31,6 +31,97 @@ internal sealed class DeltaBinaryPackedDecoderTests
         }
     }
 
+    /// <remarks>
+    /// The format fixes neither the block size nor the mini-block count: the
+    /// block size is a multiple of 128 and the mini-block size a multiple of 32,
+    /// and that is all. Arrow uses 128/4 for INT32 but 256/4 for INT64, so
+    /// requiring 128/4 rejected every int64 delta column it has ever written —
+    /// all of them, on every format version, whatever the values held.
+    /// </remarks>
+    [Test]
+    public async Task ReadsInt64ValuesWrittenWithALargerBlockSize()
+    {
+        var random = new Random(20260820);
+        var values = new long[500];
+        values[0] = long.MinValue;
+        values[1] = long.MaxValue;
+        values[2] = 0;
+        for (var i = 3; i < values.Length; i++)
+            values[i] = random.NextInt64();
+
+        using var stream = new MemoryStream();
+        using (var properties = new ParquetSharp.WriterPropertiesBuilder()
+            .Compression(ParquetSharp.Compression.Uncompressed)
+            .DisableDictionary()
+            .Encoding(ParquetSharp.Encoding.DeltaBinaryPacked)
+            .Build())
+        using (var writer = new ParquetSharp.ParquetFileWriter(stream,
+            [new ParquetSharp.Column<long>("value")], null, properties, null, leaveOpen: true))
+        {
+            using (var rowGroup = writer.AppendRowGroup())
+            using (var column = rowGroup.NextColumn())
+                column.LogicalWriter<long>().WriteBatch(values);
+            writer.Close();
+        }
+
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(stream.ToArray(), writable: false));
+        var read = new List<long>();
+        foreach (var buffer in reader.RowGroups[0].Column<long>(reader.Schema.LeafColumns[0]))
+            read.AddRange(buffer.Values.ToArray());
+
+        await Assert.That(read).IsEquivalentTo(values);
+    }
+
+    [Test]
+    [Arguments(100u, 4u)]   // not a multiple of 128
+    [Arguments(0u, 4u)]     // no values per block at all
+    [Arguments(128u, 5u)]   // does not divide the block
+    [Arguments(128u, 0u)]   // no mini-blocks
+    [Arguments(128u, 128u)] // a one-value mini-block, not a multiple of 32
+    public void RejectsABlockLayoutTheFormatDoesNotAllow(uint blockSize, uint miniBlockCount)
+    {
+        var payload = new List<byte>();
+        WriteUnsignedVarIntReference(blockSize, payload);
+        WriteUnsignedVarIntReference(miniBlockCount, payload);
+        WriteUnsignedVarIntReference(1, payload);
+        WriteUnsignedVarIntReference(0, payload);
+
+        try
+        {
+            DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), new int[1]);
+            throw new InvalidOperationException(
+                $"Expected block size {blockSize} with {miniBlockCount} mini-blocks to be rejected.");
+        }
+        catch (CorruptParquetException)
+        {
+        }
+    }
+
+    /// <remarks>
+    /// The bit widths of a block are read into a stack buffer, so the count a
+    /// page may declare has to stop somewhere. Writers use 4; this only checks
+    /// that the limit is reported rather than overrunning.
+    /// </remarks>
+    [Test]
+    public void RejectsMoreMiniBlocksPerBlockThanTheDecoderWillHold()
+    {
+        var payload = new List<byte>();
+        WriteUnsignedVarIntReference(32 * 128, payload);
+        WriteUnsignedVarIntReference(128, payload);
+        WriteUnsignedVarIntReference(1, payload);
+        WriteUnsignedVarIntReference(0, payload);
+
+        try
+        {
+            DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), new int[1]);
+            throw new InvalidOperationException("Expected 128 mini-blocks per block to be rejected.");
+        }
+        catch (NotSupportedException)
+        {
+        }
+    }
+
     [Test]
     public void ReadConsumedByteCountIncludesPaddedMiniBlockBytes()
     {
@@ -515,8 +606,18 @@ internal sealed class DeltaBinaryPackedDecoderTests
         }
     }
 
+    /// <remarks>
+    /// The format defines these additions as modular: "Subtractions in steps 1)
+    /// and 3) may incur signed arithmetic overflow, and so will the
+    /// corresponding additions when decoding. Based on the assumption of a 2's
+    /// complement representation, this works OK." So a running sum leaving the
+    /// Int32 range is not a corruption signal — it is how a delta from
+    /// Int32.MaxValue to Int32.MinValue is spelled — and rejecting it made every
+    /// Arrow-written INT32 delta column unreadable once its values spanned the
+    /// type.
+    /// </remarks>
     [Test]
-    public void ReadInt32RejectsTransientOverflowInEveryVectorLaneAndTail()
+    public async Task ReadInt32WrapsAnOverflowingSumInEveryVectorLaneAndTail()
     {
         int[] overflowIndexes = [0, 3, 4, 7, 8, 15, 16, 23, 24, 30, 31];
         foreach (var overflowIndex in overflowIndexes)
@@ -534,20 +635,19 @@ internal sealed class DeltaBinaryPackedDecoderTests
             Array.Fill(deltas, -1, 32, deltas.Length - 32);
             WriteDeltaBlockReference(deltas, -1, payload);
 
-            try
-            {
-                DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), new int[33]);
-                throw new InvalidOperationException(
-                    $"Expected the transient Int32 overflow at delta {overflowIndex} to be rejected.");
-            }
-            catch (CorruptParquetException)
-            {
-            }
+            var destination = new int[33];
+            DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), destination);
+
+            // The run sits at Int32.MaxValue, steps once past it — which wraps to
+            // Int32.MinValue — and the matching -1  step brings it back.
+            for (var i = 0; i < destination.Length; i++)
+                await Assert.That(destination[i])
+                    .IsEqualTo(i == overflowIndex + 1 ? int.MinValue : int.MaxValue);
         }
     }
 
     [Test]
-    public void ReadInt32RejectsTransientInt64WrapInVectorPrefix()
+    public async Task ReadInt32WrapsASumThatLeavesTheInt64Range()
     {
         var payload = new List<byte>();
         WriteUnsignedVarIntReference(128, payload);
@@ -563,18 +663,18 @@ internal sealed class DeltaBinaryPackedDecoderTests
         Array.Fill(deltas, long.MaxValue, 4, deltas.Length - 4);
         WriteDeltaBlockReference(deltas, long.MaxValue, payload);
 
-        try
-        {
-            DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), new int[5]);
-            throw new InvalidOperationException("Expected the transient Int64 wrap to be rejected.");
-        }
-        catch (CorruptParquetException)
-        {
-        }
+        var destination = new int[5];
+        DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), destination);
+
+        // No conformant encoder produces Int64-wide deltas for an INT32 column, so
+        // this is a corrupt payload. It still has to decode to something definite
+        // rather than crash, and modular arithmetic is what the format specifies —
+        // there is no way to tell it apart from a legitimate wrap.
+        await Assert.That(destination).IsEquivalentTo(new[] { 0, 0, -1, -1, -2 });
     }
 
     [Test]
-    public void ReadInt32RejectsTransientOverflowWithinMiniBlock()
+    public async Task ReadInt32WrapsAnOverflowingSumWithinAMiniBlock()
     {
         var payload = new List<byte>();
         WriteUnsignedVarIntReference(128, payload);
@@ -588,14 +688,54 @@ internal sealed class DeltaBinaryPackedDecoderTests
         Array.Fill(deltas, (long)int.MinValue, 2, deltas.Length - 2);
         WriteDeltaBlockReference(deltas, int.MinValue, payload);
 
-        try
+        var destination = new int[3];
+        DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), destination);
+
+        // 0 -> Int32.MinValue -> 0, which is what those two deltas mean under
+        // two's complement and exactly what an encoder would emit for it.
+        await Assert.That(destination).IsEquivalentTo(new[] { 0, int.MinValue, 0 });
+    }
+
+    /// <remarks>
+    /// Arrow computes its deltas with wrapping 32-bit subtraction, so a column
+    /// holding values from both ends of the type is ordinary output, not an edge
+    /// case. Plank's own encoder widens instead, which is why round-tripping
+    /// through it — the only INT32 delta coverage there used to be — never
+    /// produced a payload the reader rejected.
+    /// </remarks>
+    [Test]
+    public async Task ReadsFullRangeInt32ValuesWrittenByAnotherImplementation()
+    {
+        var random = new Random(20260820);
+        var values = new int[300];
+        values[0] = int.MinValue;
+        values[1] = int.MaxValue;
+        values[2] = int.MinValue;
+        for (var i = 3; i < values.Length; i++)
+            values[i] = random.Next(int.MinValue, int.MaxValue);
+
+        using var stream = new MemoryStream();
+        using (var properties = new ParquetSharp.WriterPropertiesBuilder()
+            .Compression(ParquetSharp.Compression.Uncompressed)
+            .DisableDictionary()
+            .Encoding(ParquetSharp.Encoding.DeltaBinaryPacked)
+            .Build())
+        using (var writer = new ParquetSharp.ParquetFileWriter(stream,
+            [new ParquetSharp.Column<int>("value")], null, properties, null, leaveOpen: true))
         {
-            DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), new int[3]);
-            throw new InvalidOperationException("Expected the transient Int32 overflow to be rejected.");
+            using (var rowGroup = writer.AppendRowGroup())
+            using (var column = rowGroup.NextColumn())
+                column.LogicalWriter<int>().WriteBatch(values);
+            writer.Close();
         }
-        catch (CorruptParquetException)
-        {
-        }
+
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(stream.ToArray(), writable: false));
+        var read = new List<int>();
+        foreach (var buffer in reader.RowGroups[0].Column<int>(reader.Schema.LeafColumns[0]))
+            read.AddRange(buffer.Values.ToArray());
+
+        await Assert.That(read).IsEquivalentTo(values);
     }
 
     static long[] CreatePackedValues(int bitWidth)
