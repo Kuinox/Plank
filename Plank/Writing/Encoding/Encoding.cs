@@ -13,6 +13,8 @@ static class Encoding
 {
     const int DictionaryDropCheckPeriodRows = 2048;
     const int MaximumInitialForcedDictionaryCapacity = 2048;
+    const int SmallInt64DictionaryMinimum = -128;
+    const int SmallInt64DictionaryCount = 256;
     static readonly bool HasCanonicalNullableInt64Layout = ProbeCanonicalNullableInt64Layout();
 
     interface IPlainPrimitivePageWriter<T>
@@ -1125,27 +1127,30 @@ static class Encoding
         try
         {
             var indexes = MemoryMarshal.Cast<byte, int>(rentedIndexesBuffer.Span[..indexByteLength]);
-            dictionaryState.Reset(GetInitialForcedDictionaryCapacity(values.Length), useMap: true);
+            dictionaryState.Reset(GetInitialForcedDictionaryCapacity(values.Length), useMap: false);
+            Span<int> smallValueIndexes = stackalloc int[SmallInt64DictionaryCount];
+            smallValueIndexes.Fill(-1);
+            var usesSmallValueIndexes = true;
             Volatile.Write(ref strategyContext.DictionarySortOrder, (int)DictionarySortOrder.Unsorted);
 
             var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
                 ref dataPage.Content);
             var definitionStart = dataPage.Content.WrittenLength;
-            var currentLevel = -1;
-            var currentRunLength = 0;
             var presentCount = 0;
             var nullCount = 0;
             var min = 0L;
             var max = 0L;
             var hasStatisticsValue = false;
-
+            var currentLevel = -1;
+            var currentRunLength = 0;
             for (var i = 0; i < values.Length; i++)
             {
                 var level = 0;
                 if (values[i] is { } value)
                 {
                     level = 1;
-                    indexes[presentCount++] = dictionaryState.GetOrAddIndex(value);
+                    indexes[presentCount++] = GetOrAddForcedInt64DictionaryIndex(value, dictionaryState,
+                        smallValueIndexes, ref usesSmallValueIndexes);
                     if (!hasStatisticsValue)
                     {
                         min = value;
@@ -1184,6 +1189,7 @@ static class Encoding
 
             if (currentRunLength > 0)
                 EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref dataPage.Content);
+
             var definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref dataPage.Content);
             if (presentCount == 0)
                 throw new InvalidOperationException("Fused optional dictionary encoding requires a present value.");
@@ -1205,6 +1211,27 @@ static class Encoding
         {
             rentedIndexesBuffer.Dispose();
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static int GetOrAddForcedInt64DictionaryIndex(long value, ReusableDictionaryState<long> dictionaryState,
+        Span<int> smallValueIndexes, ref bool usesSmallValueIndexes)
+    {
+        var smallValueOffset = unchecked(value - SmallInt64DictionaryMinimum);
+        if (usesSmallValueIndexes && (ulong)smallValueOffset < SmallInt64DictionaryCount)
+        {
+            ref var dictionaryIndex = ref smallValueIndexes[(int)smallValueOffset];
+            if (dictionaryIndex < 0)
+                dictionaryIndex = dictionaryState.AddSortedUnique(value);
+            return dictionaryIndex;
+        }
+
+        if (usesSmallValueIndexes)
+        {
+            dictionaryState.EnableMap();
+            usesSmallValueIndexes = false;
+        }
+        return dictionaryState.GetOrAddIndex(value);
     }
 
     /// <summary>
