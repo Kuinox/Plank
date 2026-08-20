@@ -31,6 +31,97 @@ internal sealed class DeltaBinaryPackedDecoderTests
         }
     }
 
+    /// <remarks>
+    /// The format fixes neither the block size nor the mini-block count: the
+    /// block size is a multiple of 128 and the mini-block size a multiple of 32,
+    /// and that is all. Arrow uses 128/4 for INT32 but 256/4 for INT64, so
+    /// requiring 128/4 rejected every int64 delta column it has ever written —
+    /// all of them, on every format version, whatever the values held.
+    /// </remarks>
+    [Test]
+    public async Task ReadsInt64ValuesWrittenWithALargerBlockSize()
+    {
+        var random = new Random(20260820);
+        var values = new long[500];
+        values[0] = long.MinValue;
+        values[1] = long.MaxValue;
+        values[2] = 0;
+        for (var i = 3; i < values.Length; i++)
+            values[i] = random.NextInt64();
+
+        using var stream = new MemoryStream();
+        using (var properties = new ParquetSharp.WriterPropertiesBuilder()
+            .Compression(ParquetSharp.Compression.Uncompressed)
+            .DisableDictionary()
+            .Encoding(ParquetSharp.Encoding.DeltaBinaryPacked)
+            .Build())
+        using (var writer = new ParquetSharp.ParquetFileWriter(stream,
+            [new ParquetSharp.Column<long>("value")], null, properties, null, leaveOpen: true))
+        {
+            using (var rowGroup = writer.AppendRowGroup())
+            using (var column = rowGroup.NextColumn())
+                column.LogicalWriter<long>().WriteBatch(values);
+            writer.Close();
+        }
+
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(stream.ToArray(), writable: false));
+        var read = new List<long>();
+        foreach (var buffer in reader.RowGroups[0].Column<long>(reader.Schema.LeafColumns[0]))
+            read.AddRange(buffer.Values.ToArray());
+
+        await Assert.That(read).IsEquivalentTo(values);
+    }
+
+    [Test]
+    [Arguments(100u, 4u)]   // not a multiple of 128
+    [Arguments(0u, 4u)]     // no values per block at all
+    [Arguments(128u, 5u)]   // does not divide the block
+    [Arguments(128u, 0u)]   // no mini-blocks
+    [Arguments(128u, 128u)] // a one-value mini-block, not a multiple of 32
+    public void RejectsABlockLayoutTheFormatDoesNotAllow(uint blockSize, uint miniBlockCount)
+    {
+        var payload = new List<byte>();
+        WriteUnsignedVarIntReference(blockSize, payload);
+        WriteUnsignedVarIntReference(miniBlockCount, payload);
+        WriteUnsignedVarIntReference(1, payload);
+        WriteUnsignedVarIntReference(0, payload);
+
+        try
+        {
+            DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), new int[1]);
+            throw new InvalidOperationException(
+                $"Expected block size {blockSize} with {miniBlockCount} mini-blocks to be rejected.");
+        }
+        catch (CorruptParquetException)
+        {
+        }
+    }
+
+    /// <remarks>
+    /// The bit widths of a block are read into a stack buffer, so the count a
+    /// page may declare has to stop somewhere. Writers use 4; this only checks
+    /// that the limit is reported rather than overrunning.
+    /// </remarks>
+    [Test]
+    public void RejectsMoreMiniBlocksPerBlockThanTheDecoderWillHold()
+    {
+        var payload = new List<byte>();
+        WriteUnsignedVarIntReference(32 * 128, payload);
+        WriteUnsignedVarIntReference(128, payload);
+        WriteUnsignedVarIntReference(1, payload);
+        WriteUnsignedVarIntReference(0, payload);
+
+        try
+        {
+            DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), new int[1]);
+            throw new InvalidOperationException("Expected 128 mini-blocks per block to be rejected.");
+        }
+        catch (NotSupportedException)
+        {
+        }
+    }
+
     [Test]
     public void ReadConsumedByteCountIncludesPaddedMiniBlockBytes()
     {
