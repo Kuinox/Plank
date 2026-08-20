@@ -60,6 +60,37 @@ static class PlainEncoding
         writer.Advance(byteCount);
     }
 
+    internal static ColumnStatistics WriteBooleanPageWithStatistics(ReadOnlySpan<bool> values,
+        ref BufferWriter writer)
+    {
+        var byteCount = (values.Length + 7) >> 3;
+        if (byteCount == 0)
+            return ColumnStatistics.Empty(0);
+
+        var destination = writer.GetSpan(byteCount)[..byteCount];
+        EncodingPrimitives.PackBooleans(values, destination);
+        var anyTrue = false;
+        var allTrue = true;
+        var fullByteCount = values.Length >> 3;
+        for (var i = 0; i < fullByteCount; i++)
+        {
+            anyTrue |= destination[i] != 0;
+            allTrue &= destination[i] == byte.MaxValue;
+        }
+
+        var remainingBits = values.Length & 7;
+        if (remainingBits != 0)
+        {
+            var mask = (1 << remainingBits) - 1;
+            var last = destination[^1] & mask;
+            anyTrue |= last != 0;
+            allTrue &= last == mask;
+        }
+
+        writer.Advance(byteCount);
+        return ColumnStatistics.FromBoolean(allTrue, anyTrue, 0);
+    }
+
     static void WriteInt32Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
@@ -310,6 +341,76 @@ static class PlainEncoding
                     BitConverter.DoubleToInt64Bits(doubleValues[i]));
 
         writer.Advance(byteCount);
+    }
+
+    internal static ColumnStatistics WriteInt32PageWithStatistics(ReadOnlySpan<int> values,
+        ref BufferWriter writer)
+    {
+        var byteCount = checked(values.Length * sizeof(int));
+        if (byteCount == 0)
+            return ColumnStatistics.Empty(0);
+
+        var destinationBytes = writer.GetSpan(byteCount)[..byteCount];
+        int min;
+        int max;
+        if (BitConverter.IsLittleEndian)
+        {
+            MinMaxScan.CopyAndCompute(values, MemoryMarshal.Cast<byte, int>(destinationBytes), out min, out max);
+        }
+        else
+        {
+            for (var i = 0; i < values.Length; i++)
+                BinaryPrimitives.WriteInt32LittleEndian(destinationBytes[(i * sizeof(int))..], values[i]);
+            MinMaxScan.Compute(values, out min, out max);
+        }
+
+        writer.Advance(byteCount);
+        return ColumnStatistics.FromInt32(min, max, 0);
+    }
+
+    internal static ColumnStatistics WriteInt64PageWithStatistics(ReadOnlySpan<long> values,
+        ref BufferWriter writer)
+    {
+        var byteCount = checked(values.Length * sizeof(long));
+        if (byteCount == 0)
+            return ColumnStatistics.Empty(0);
+
+        var destinationBytes = writer.GetSpan(byteCount)[..byteCount];
+        long min;
+        long max;
+        if (BitConverter.IsLittleEndian)
+        {
+            MinMaxScan.CopyAndCompute(values, MemoryMarshal.Cast<byte, long>(destinationBytes), out min, out max);
+        }
+        else
+        {
+            for (var i = 0; i < values.Length; i++)
+                BinaryPrimitives.WriteInt64LittleEndian(destinationBytes[(i * sizeof(long))..], values[i]);
+            MinMaxScan.Compute(values, out min, out max);
+        }
+
+        writer.Advance(byteCount);
+        return ColumnStatistics.FromInt64(min, max, 0);
+    }
+
+    internal static ColumnStatistics WriteFloatPageWithStatistics(ReadOnlySpan<float> values,
+        ref BufferWriter writer)
+    {
+        var byteCount = checked(values.Length * sizeof(float));
+        if (byteCount == 0)
+            return ColumnStatistics.FromFloatAccumulation(0, 0, 0, 0, false);
+
+        var destinationBytes = writer.GetSpan(byteCount)[..byteCount];
+        if (BitConverter.IsLittleEndian)
+            MemoryMarshal.AsBytes(values).CopyTo(destinationBytes);
+        else
+            for (var i = 0; i < values.Length; i++)
+                BinaryPrimitives.WriteInt32LittleEndian(destinationBytes[(i * sizeof(float))..],
+                    BitConverter.SingleToInt32Bits(values[i]));
+
+        var hasValue = ColumnStatistics.TryGetFloatMinMax(values, out var min, out var max, out var nanCount);
+        writer.Advance(byteCount);
+        return ColumnStatistics.FromFloatAccumulation(min, max, 0, nanCount, hasValue);
     }
 
     internal static ColumnStatistics WriteDoublePageWithStatistics(ReadOnlySpan<double> values,

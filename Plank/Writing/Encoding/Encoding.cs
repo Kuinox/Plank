@@ -12,6 +12,42 @@ static class Encoding
     const int DictionaryDropCheckPeriodRows = 2048;
     const int MaximumInitialForcedDictionaryCapacity = 2048;
 
+    interface IPlainPrimitivePageWriter<T>
+        where T : struct
+    {
+        static abstract ColumnStatistics Write(ReadOnlySpan<T> values, ref BufferWriter writer);
+    }
+
+    readonly struct BooleanPlainPageWriter : IPlainPrimitivePageWriter<bool>
+    {
+        public static ColumnStatistics Write(ReadOnlySpan<bool> values, ref BufferWriter writer)
+            => PlainEncoding.WriteBooleanPageWithStatistics(values, ref writer);
+    }
+
+    readonly struct Int32PlainPageWriter : IPlainPrimitivePageWriter<int>
+    {
+        public static ColumnStatistics Write(ReadOnlySpan<int> values, ref BufferWriter writer)
+            => PlainEncoding.WriteInt32PageWithStatistics(values, ref writer);
+    }
+
+    readonly struct Int64PlainPageWriter : IPlainPrimitivePageWriter<long>
+    {
+        public static ColumnStatistics Write(ReadOnlySpan<long> values, ref BufferWriter writer)
+            => PlainEncoding.WriteInt64PageWithStatistics(values, ref writer);
+    }
+
+    readonly struct FloatPlainPageWriter : IPlainPrimitivePageWriter<float>
+    {
+        public static ColumnStatistics Write(ReadOnlySpan<float> values, ref BufferWriter writer)
+            => PlainEncoding.WriteFloatPageWithStatistics(values, ref writer);
+    }
+
+    readonly struct DoublePlainPageWriter : IPlainPrimitivePageWriter<double>
+    {
+        public static ColumnStatistics Write(ReadOnlySpan<double> values, ref BufferWriter writer)
+            => PlainEncoding.WriteDoublePageWithStatistics(values, ref writer);
+    }
+
     internal static bool Encode<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         PageStrategyContext strategyContext, PageList pages, ParquetDataPageVersion dataPageVersion,
         LeafProjectionInfo leafProjectionInfo, ReusableDictionaryState<T> dictionaryState,
@@ -145,13 +181,9 @@ static class Encoding
         if (!TryGetFixedWidthRowsPerPage(column, dataEncoding, checked((int)targetPageBytes), out var rowsPerPage))
             return false;
 
-        if (dataEncoding == EncodingKind.Plain && column.PhysicalType == ParquetPhysicalType.Double
-            && typeof(T) == typeof(double))
-        {
-            WritePlainDoubleDataPages(bufferWriters,
-                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values), rowsPerPage, pages);
+        if (dataEncoding == EncodingKind.Plain
+            && TryWritePlainPrimitiveDataPages(bufferWriters, column, values, rowsPerPage, pages))
             return true;
-        }
 
         for (var pageStart = 0; pageStart < values.Length; pageStart += rowsPerPage)
         {
@@ -162,16 +194,59 @@ static class Encoding
         return true;
     }
 
-    static void WritePlainDoubleDataPages(BufferWriterFactory bufferWriters, ReadOnlySpan<double> values,
-        int rowsPerPage, PageList pages)
+    static bool TryWritePlainPrimitiveDataPages<T>(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<T> values, int rowsPerPage, PageList pages)
+        where T : notnull
+    {
+        if (column.PhysicalType == ParquetPhysicalType.Boolean && typeof(T) == typeof(bool))
+        {
+            WritePlainPrimitiveDataPages<bool, BooleanPlainPageWriter>(bufferWriters,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<bool>>(ref values), rowsPerPage, pages);
+            return true;
+        }
+
+        if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int))
+        {
+            WritePlainPrimitiveDataPages<int, Int32PlainPageWriter>(bufferWriters,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), rowsPerPage, pages);
+            return true;
+        }
+
+        if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(long))
+        {
+            WritePlainPrimitiveDataPages<long, Int64PlainPageWriter>(bufferWriters,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), rowsPerPage, pages);
+            return true;
+        }
+
+        if (column.PhysicalType == ParquetPhysicalType.Float && typeof(T) == typeof(float))
+        {
+            WritePlainPrimitiveDataPages<float, FloatPlainPageWriter>(bufferWriters,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<float>>(ref values), rowsPerPage, pages);
+            return true;
+        }
+
+        if (column.PhysicalType == ParquetPhysicalType.Double && typeof(T) == typeof(double))
+        {
+            WritePlainPrimitiveDataPages<double, DoublePlainPageWriter>(bufferWriters,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values), rowsPerPage, pages);
+            return true;
+        }
+
+        return false;
+    }
+
+    static void WritePlainPrimitiveDataPages<T, TPageWriter>(BufferWriterFactory bufferWriters,
+        ReadOnlySpan<T> values, int rowsPerPage, PageList pages)
+        where T : struct
+        where TPageWriter : struct, IPlainPrimitivePageWriter<T>
     {
         for (var pageStart = 0; pageStart < values.Length; pageStart += rowsPerPage)
         {
             var pageRowCount = Math.Min(rowsPerPage, values.Length - pageStart);
             var pageIndex = AddNewDataPage(bufferWriters, pages);
             ref var page = ref pages[pageIndex];
-            var statistics = PlainEncoding.WriteDoublePageWithStatistics(
-                values.Slice(pageStart, pageRowCount), ref page.Content);
+            var statistics = TPageWriter.Write(values.Slice(pageStart, pageRowCount), ref page.Content);
             WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0, EncodingKind.Plain);
             page.Statistics = statistics;
         }

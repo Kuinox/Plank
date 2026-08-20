@@ -423,6 +423,46 @@ internal sealed class ColumnStatisticsTests
     }
 
     [Test]
+    public void RequiredPlainBooleanEncodingUsesSharedPageFusion()
+    {
+        using var stream = new MemoryStream();
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("value", ParquetPhysicalType.Boolean,
+                new ColumnOptions(encodings: [EncodingKind.Plain]))
+        ]);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions { TargetDataPageSizeBytes = 1 });
+        var column = writer.CreateSerializedColumn<bool>(schema.LeafColumns[0]);
+        bool[] values =
+        [
+            true, true, true, true, true, true, true, true,
+            false, false, true, false, true, false, false, false
+        ];
+
+        column.Serialize(values);
+
+        if (column.Statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Boolean
+            || column.Statistics.MinBits != 0 || column.Statistics.MaxBits != 1)
+            throw new InvalidOperationException("Boolean column statistics mismatch.");
+
+        Span<byte> expectedPages = [0xff, 0x14];
+        var dataPageIndex = 0;
+        for (var i = 0; i < column.Pages.Count; i++)
+        {
+            ref var page = ref column.Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (!page.Content.TryGetSingleWrittenSpan(out var encoded) || encoded.Length != 1
+                || encoded[0] != expectedPages[dataPageIndex])
+                throw new InvalidOperationException($"Boolean page {dataPageIndex} payload mismatch.");
+            var expectedMin = dataPageIndex == 0 ? 1 : 0;
+            if (page.Statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Boolean
+                || page.Statistics.MinBits != expectedMin || page.Statistics.MaxBits != 1)
+                throw new InvalidOperationException($"Boolean page {dataPageIndex} statistics mismatch.");
+            dataPageIndex++;
+        }
+    }
+
+    [Test]
     public void Int64PageStatisticsMatchRequiredAndOptionalPageBoundaries()
     {
         using var stream = new MemoryStream();
@@ -448,6 +488,51 @@ internal sealed class ColumnStatisticsTests
         AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 0, min: 10, max: 10, nullCount: 1);
         AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 1, min: -5, max: 40, nullCount: 0);
         AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 2, min: null, max: null, nullCount: 1);
+    }
+
+    [Test]
+    public void RequiredPlainFloatEncodingUsesSharedPageFusion()
+    {
+        using var stream = new MemoryStream();
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("value", ParquetPhysicalType.Float,
+                new ColumnOptions(encodings: [EncodingKind.Plain]))
+        ]);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 4 * sizeof(float)
+        });
+        var column = writer.CreateSerializedColumn<float>(schema.LeafColumns[0]);
+        float[] values =
+        [
+            +0.0f, -0.0f, 10f, float.NaN,
+            float.NaN, float.NaN, float.NaN, float.NaN,
+            -0.0f, +0.0f, -3f, 4f
+        ];
+
+        column.Serialize(values);
+
+        AssertFloatStatistics(column.Statistics, BitConverter.SingleToInt32Bits(-3f),
+            BitConverter.SingleToInt32Bits(10f), nanCount: 5);
+        AssertDataPageFloatStatistics(column.Pages, pageIndex: 0, minBits: int.MinValue,
+            maxBits: BitConverter.SingleToInt32Bits(10f), nanCount: 1);
+        AssertDataPageFloatStatistics(column.Pages, pageIndex: 1, minBits: null, maxBits: null, nanCount: 4);
+        AssertDataPageFloatStatistics(column.Pages, pageIndex: 2, minBits: BitConverter.SingleToInt32Bits(-3f),
+            maxBits: BitConverter.SingleToInt32Bits(4f), nanCount: 0);
+
+        var rowOffset = 0;
+        for (var i = 0; i < column.Pages.Count; i++)
+        {
+            ref var page = ref column.Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (!page.Content.TryGetSingleWrittenSpan(out var encoded))
+                throw new InvalidOperationException("Expected one contiguous Plain page payload.");
+            var pageRows = values.AsSpan(rowOffset, checked((int)page.RowCount));
+            if (!encoded.SequenceEqual(MemoryMarshal.AsBytes(pageRows)))
+                throw new InvalidOperationException($"Plain Float page {rowOffset / 4} bytes differ.");
+            rowOffset += pageRows.Length;
+        }
     }
 
     [Test]
@@ -631,7 +716,8 @@ internal sealed class ColumnStatisticsTests
             throw new InvalidOperationException("DuckDB returned more than one aggregate row.");
     }
 
-    static void AssertFloatStatistics(ColumnStatistics statistics, int minBits, int maxBits, long nullCount = 0)
+    static void AssertFloatStatistics(ColumnStatistics statistics, int minBits, int maxBits, long nullCount = 0,
+        long? nanCount = null)
     {
         if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Float)
             throw new InvalidOperationException($"Expected float statistics, got {statistics.ValueKind}.");
@@ -644,6 +730,9 @@ internal sealed class ColumnStatisticsTests
         if (statistics.NullCount != nullCount)
             throw new InvalidOperationException(
                 $"Float null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+        if (nanCount.HasValue && statistics.NanCount != nanCount.Value)
+            throw new InvalidOperationException(
+                $"Float NaN count mismatch. Expected {nanCount.Value}, got {statistics.NanCount}.");
     }
 
     static void AssertDoubleStatistics(ColumnStatistics statistics, long minBits, long maxBits, long nullCount = 0,
@@ -741,6 +830,42 @@ internal sealed class ColumnStatisticsTests
             if (dataPageIndex == pageIndex)
             {
                 AssertInt64Statistics(page.Statistics, min, max, nullCount);
+                return;
+            }
+
+            dataPageIndex++;
+        }
+
+        throw new InvalidOperationException($"Data page {pageIndex} was not written.");
+    }
+
+    static void AssertDataPageFloatStatistics(PageList pages, int pageIndex, int? minBits, int? maxBits,
+        long nanCount)
+    {
+        var dataPageIndex = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (dataPageIndex == pageIndex)
+            {
+                var statistics = page.Statistics;
+                var expectedKind = minBits.HasValue
+                    ? ColumnStatistics.ColumnStatisticsValueKind.Float
+                    : ColumnStatistics.ColumnStatisticsValueKind.None;
+                if (statistics.ValueKind != expectedKind)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} statistics kind mismatch. Expected {expectedKind}, got {statistics.ValueKind}.");
+                if ((int)statistics.MinBits != minBits.GetValueOrDefault())
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} min bits mismatch. Expected {minBits.GetValueOrDefault():X8}, got {(int)statistics.MinBits:X8}.");
+                if ((int)statistics.MaxBits != maxBits.GetValueOrDefault())
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} max bits mismatch. Expected {maxBits.GetValueOrDefault():X8}, got {(int)statistics.MaxBits:X8}.");
+                if (statistics.NanCount != nanCount)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} NaN count mismatch. Expected {nanCount}, got {statistics.NanCount}.");
                 return;
             }
 
