@@ -17,4 +17,6 @@ public sealed class PublishedBenchmarkOptions
     public int QuickRows { get; init; } = 4_096;
 
     public int QuickWidth { get; init; } = Math.Min(4, Environment.ProcessorCount);
+
+    public string? CaseId { get; init; }
 }

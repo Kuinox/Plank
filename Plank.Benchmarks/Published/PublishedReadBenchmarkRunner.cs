@@ -11,6 +11,7 @@ public static class PublishedReadBenchmarkRunner
         CancellationToken cancellationToken = default)
     {
         PublishedBenchmarkRunner.ValidateOptions(options);
+        PublishedBenchmarkRunner.ValidateCaseId(realWorldData, syntheticData, options.CaseId);
         var suites = new List<PublishedBenchmarkReport.SuiteResult>(2)
         {
             await RunSuiteAsync("real-world", "Real-world data", realWorldData, options, cancellationToken)
@@ -46,6 +47,8 @@ public static class PublishedReadBenchmarkRunner
         var results = new List<PublishedBenchmarkReport.CaseResult>(dataSets.Count);
         foreach (var dataSet in dataSets)
         {
+            if (options.CaseId is { } caseId && !string.Equals(dataSet.Id, caseId, StringComparison.Ordinal))
+                continue;
             Console.WriteLine($"{label}: {dataSet.Label} ({dataSet.RowCount:N0} rows, {dataSet.Columns.Count} columns)");
             results.Add(await RunCaseAsync(dataSet, options, cancellationToken).ConfigureAwait(false));
         }

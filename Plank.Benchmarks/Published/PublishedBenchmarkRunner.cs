@@ -14,6 +14,7 @@ public static class PublishedBenchmarkRunner
         CancellationToken cancellationToken = default)
     {
         ValidateOptions(options);
+        ValidateCaseId(realWorldData, syntheticData, options.CaseId);
         using var stream = new NonClosingMemoryStream();
         var suites = new List<PublishedBenchmarkReport.SuiteResult>(2)
         {
@@ -53,6 +54,8 @@ public static class PublishedBenchmarkRunner
         var results = new List<PublishedBenchmarkReport.CaseResult>(dataSets.Count);
         foreach (var dataSet in dataSets)
         {
+            if (options.CaseId is { } caseId && !string.Equals(dataSet.Id, caseId, StringComparison.Ordinal))
+                continue;
             Console.WriteLine($"{label}: {dataSet.Label} ({dataSet.RowCount:N0} rows, {dataSet.Columns.Count} columns)");
             results.Add(await RunCaseAsync(dataSet, options, stream, cancellationToken).ConfigureAwait(false));
         }
@@ -268,5 +271,15 @@ public static class PublishedBenchmarkRunner
         ArgumentOutOfRangeException.ThrowIfNegative(options.Warmups);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.Iterations);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.WorkerCount);
+    }
+
+    internal static void ValidateCaseId(IReadOnlyList<PublishedBenchmarkDataSet> realWorldData,
+        IReadOnlyList<PublishedBenchmarkDataSet> syntheticData, string? caseId)
+    {
+        if (caseId is null || realWorldData.Any(dataSet => dataSet.Id == caseId) ||
+            syntheticData.Any(dataSet => dataSet.Id == caseId))
+            return;
+
+        throw new ArgumentException($"Unknown published benchmark case '{caseId}'.", nameof(caseId));
     }
 }

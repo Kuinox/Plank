@@ -1,5 +1,6 @@
 using Plank.Schema;
 using Plank.Writing;
+using Plank.Writing.PageStrategy;
 using PlankParquetSchema = Plank.Schema.ParquetSchema;
 
 namespace Plank.Tests.Writer;
@@ -184,6 +185,98 @@ internal sealed class PlainByteArrayStatisticsTests
     }
 
     [Test]
+    [Arguments(EncodingKind.DeltaByteArray, ParquetDataPageVersion.V1)]
+    [Arguments(EncodingKind.DeltaByteArray, ParquetDataPageVersion.V2)]
+    [Arguments(EncodingKind.DeltaLengthByteArray, ParquetDataPageVersion.V1)]
+    [Arguments(EncodingKind.DeltaLengthByteArray, ParquetDataPageVersion.V2)]
+    public void RequiredDeltaByteArraySizingPreservesPageStatisticsAndFileBytes(EncodingKind encoding,
+        ParquetDataPageVersion dataPageVersion)
+    {
+        byte[][] values =
+        [
+            "mmmmmmmmmm"u8.ToArray(),
+            "nnnnnnnnnn"u8.ToArray(),
+            "bbbbbbbbbb"u8.ToArray(),
+            "yyyyyyyyyy"u8.ToArray(),
+            "aaaaaaaaaa"u8.ToArray(),
+            "dddddddddd"u8.ToArray(),
+            "xxxxxxxxxx"u8.ToArray(),
+            "cccccccccc"u8.ToArray(),
+            "wwwwwwwwww"u8.ToArray(),
+            "zzzzzzzzzz"u8.ToArray(),
+            "qqqqqqqqqq"u8.ToArray()
+        ];
+
+        var sizedSchema = CreateDeltaByteArraySchema(encoding);
+        using var sizedStream = new MemoryStream();
+        var sizedWriter = sizedSchema.CreateWriter(sizedStream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = 70
+        });
+        var sizedColumn = sizedWriter.CreateSerializedColumn<byte[]>(sizedSchema.LeafColumns[0]);
+        sizedColumn.Serialize(values);
+
+        AssertMinMax(sizedColumn.Statistics, "aaaaaaaaaa"u8, "zzzzzzzzzz"u8);
+        AssertDataPageMinMax(sizedColumn.Pages, pageIndex: 0, "aaaaaaaaaa"u8, "yyyyyyyyyy"u8);
+        AssertDataPageMinMax(sizedColumn.Pages, pageIndex: 1, "cccccccccc"u8, "zzzzzzzzzz"u8);
+        AssertDataPageMinMax(sizedColumn.Pages, pageIndex: 2, "qqqqqqqqqq"u8, "qqqqqqqqqq"u8);
+        sizedWriter.StartRowGroup().Write(sizedColumn);
+        sizedWriter.CloseFile();
+        var sizedFile = sizedStream.ToArray();
+
+        // Five ten-byte payloads occupy exactly 70 plain bytes. A fixed five-row strategy therefore creates
+        // the same boundaries without taking the fused target-size path, giving us a byte-for-byte
+        // reference for the observable Parquet output.
+        var fixedSchema = CreateDeltaByteArraySchema(encoding, new FixedRowsPageStrategy(5));
+        using var fixedStream = new MemoryStream();
+        var fixedWriter = fixedSchema.CreateWriter(fixedStream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = 70
+        });
+        var fixedColumn = fixedWriter.CreateSerializedColumn<byte[]>(fixedSchema.LeafColumns[0]);
+        fixedColumn.Serialize(values);
+        fixedWriter.StartRowGroup().Write(fixedColumn);
+        fixedWriter.CloseFile();
+        if (!sizedFile.AsSpan().SequenceEqual(fixedStream.ToArray()))
+            throw new InvalidOperationException(
+                $"Fused {encoding} {dataPageVersion} page sizing changed the Parquet bytes.");
+
+        using var reader = new ParquetSharp.ParquetFileReader(new MemoryStream(sizedFile), leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var logicalReader = rowGroup.Column(0).LogicalReader<string>();
+        var actual = logicalReader.ReadAll(values.Length);
+        for (var i = 0; i < values.Length; i++)
+            if (!string.Equals(actual[i], System.Text.Encoding.UTF8.GetString(values[i]), StringComparison.Ordinal))
+                throw new InvalidOperationException($"{encoding} {dataPageVersion} round-trip mismatch at row {i}.");
+    }
+
+    [Test]
+    public void RequiredDeltaByteArrayDecimalsKeepSignedPageAndColumnOrdering()
+    {
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("amount", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(encodings: [EncodingKind.DeltaByteArray]),
+                new LogicalType.Decimal(3, 0))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 10
+        });
+        var column = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+
+        column.Serialize([[0x01], [0xff], [0x7f], [0x80]]);
+
+        AssertMinMax(column.Statistics, [0x80], [0x7f]);
+        AssertDataPageMinMax(column.Pages, pageIndex: 0, [0xff], [0x01]);
+        AssertDataPageMinMax(column.Pages, pageIndex: 1, [0x80], [0x7f]);
+    }
+
+    [Test]
     public void OptionalDecimalColumnsKeepTheirSignedOrdering()
     {
         var schema = new PlankParquetSchema([
@@ -234,6 +327,32 @@ internal sealed class PlainByteArrayStatisticsTests
         return writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
     }
 
+    static PlankParquetSchema CreateDeltaByteArraySchema(EncodingKind encoding, IPageStrategy? pageStrategy = null)
+        => new([
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(encodings: [encoding]), logicalType: new LogicalType.String(),
+                pageStrategy: pageStrategy)
+        ]);
+
+    static void AssertDataPageMinMax(PageList pages, int pageIndex, ReadOnlySpan<byte> min, ReadOnlySpan<byte> max)
+    {
+        var dataPageIndex = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (dataPageIndex == pageIndex)
+            {
+                AssertMinMax(page.Statistics, min, max);
+                return;
+            }
+            dataPageIndex++;
+        }
+
+        throw new InvalidOperationException($"Data page {pageIndex} was not written.");
+    }
+
     static void AssertMinMax(ColumnStatistics statistics, ReadOnlySpan<byte> min, ReadOnlySpan<byte> max)
     {
         if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Binary)
@@ -247,4 +366,16 @@ internal sealed class PlainByteArrayStatisticsTests
     }
 
     static string Describe(ReadOnlySpan<byte> value) => Convert.ToHexString(value);
+
+    sealed class FixedRowsPageStrategy(uint rowsPerPage) : IPageStrategy
+    {
+        public DictionaryMode GetDictionaryMode()
+            => DictionaryMode.Disabled;
+
+        public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
+            => false;
+
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => Math.Min(rowsPerPage, totalRowCount - rowsWritten);
+    }
 }

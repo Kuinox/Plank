@@ -18,7 +18,7 @@ static class EncodingPrimitives
     internal const int MaxVarIntByteCount = 5;
 
     /// <summary>Longest payload <see cref="CopyPayload"/> copies without calling Memmove.</summary>
-    const int InlinePayloadCopyLength = 16;
+    const int InlinePayloadCopyLength = 32;
 
     /// <summary>
     /// Copies one BYTE_ARRAY payload. <see cref="ReadOnlySpan{T}.CopyTo"/> hands every length it cannot
@@ -40,7 +40,17 @@ static class EncodingPrimitives
         // Slicing is the bounds check: a destination too short for the payload throws here, exactly
         // as CopyTo would, and the writes below then stay inside it.
         ref var to = ref MemoryMarshal.GetReference(destination[..length]);
-        if (length >= sizeof(ulong))
+        if (length > Vector128<byte>.Count)
+        {
+            // Load both ends before either store so this keeps CopyTo's overlap-safe behaviour.
+            // Together the vectors cover every 17-32 byte payload, including the middle overlap.
+            var first = Unsafe.ReadUnaligned<Vector128<byte>>(ref from);
+            var last = Unsafe.ReadUnaligned<Vector128<byte>>(
+                ref Unsafe.Add(ref from, length - Vector128<byte>.Count));
+            Unsafe.WriteUnaligned(ref to, first);
+            Unsafe.WriteUnaligned(ref Unsafe.Add(ref to, length - Vector128<byte>.Count), last);
+        }
+        else if (length >= sizeof(ulong))
         {
             Unsafe.WriteUnaligned(ref to, Unsafe.ReadUnaligned<ulong>(ref from));
             Unsafe.WriteUnaligned(ref Unsafe.Add(ref to, length - sizeof(ulong)),

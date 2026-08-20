@@ -907,7 +907,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = checked((uint)values.Length);
-        Statistics = ColumnStatistics.Create(_column, densePresentValues, nullCount);
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.EncodeOptionalConverted(_owner.BufferWriters, _column, values,
@@ -915,6 +914,10 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
         _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, densePresentValues,
             ref _bloomFilterBuffer);
+        if (TryAssignOptionalDenseInt64ColumnAndPageStatistics(densePresentValues, nullCount))
+            return;
+
+        Statistics = ColumnStatistics.Create(_column, densePresentValues, nullCount);
         if (!TryAssignSingleDataPageStatistics(Statistics))
             AssignOptionalDensePageStatistics(densePresentValues);
     }
@@ -1012,12 +1015,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             ref _bloomFilterBuffer);
         if (TryAssignInt32ColumnAndPageStatistics(values))
             return;
+        if (TryAssignInt64ColumnAndPageStatistics(values, hasDictionaryStatistics))
+            return;
 
         var statisticsValues = hasDictionaryStatistics && typeof(TValue) != typeof(float)
             && typeof(TValue) != typeof(double)
             ? dictionaryState.AsSpan()
             : values;
-        // A plain BYTE_ARRAY encode already compared every value on its way into the page buffer, so
+        // The BYTE_ARRAY sizing or encode pass already compared every value on its way into the page buffer, so
         // take its answer rather than walking the value references again for the same result.
         Statistics = binaryMinMax.Found && ColumnStatistics.OrdersBinaryValuesLexicographically(_column)
             ? ColumnStatistics.CreateBinaryFromKnownExtremes(_column, values, binaryMinMax.MinIndex,
@@ -1025,7 +1030,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool)
             : ColumnStatistics.CreateWithReusableBinaryBuffers(_column, statisticsValues, 0,
                 ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
-        if (!TryAssignSingleDataPageStatistics(Statistics))
+        if (!TryAssignSingleDataPageStatistics(Statistics) && !AllDataPagesHaveStatistics())
             AssignPageStatistics(values);
     }
 
@@ -1301,6 +1306,38 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         return true;
     }
 
+    bool HasSingleCompleteDataPage()
+    {
+        var dataPageIndex = -1;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var candidate = ref Pages[i];
+            if (candidate.Kind != PageKind.DataV2)
+                continue;
+            if (dataPageIndex >= 0)
+                return false;
+            dataPageIndex = i;
+        }
+
+        return dataPageIndex >= 0 && Pages[dataPageIndex].RowCount == RowCount;
+    }
+
+    bool AllDataPagesHaveStatistics()
+    {
+        var foundDataPage = false;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var page = ref Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (!page.Statistics.HasStatistics)
+                return false;
+            foundDataPage = true;
+        }
+
+        return foundDataPage;
+    }
+
     bool TryAssignInt32ColumnAndPageStatistics<TValue>(ReadOnlySpan<TValue> values)
         where TValue : notnull
     {
@@ -1353,6 +1390,119 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Statistics = hasColumnValue
             ? ColumnStatistics.FromInt32(columnMin, columnMax, 0)
             : ColumnStatistics.Empty(0);
+        return true;
+    }
+
+    bool TryAssignInt64ColumnAndPageStatistics<TValue>(ReadOnlySpan<TValue> values, bool hasDictionaryStatistics)
+        where TValue : notnull
+    {
+        if (_column.PhysicalType != ParquetPhysicalType.Int64 ||
+            _column.Options.Repetition != ParquetRepetition.Required || typeof(TValue) != typeof(long))
+            return false;
+        // A one-page dictionary column can scan its small set of unique values once and reuse the
+        // result for the page. Keep that shortcut; the fused full-row scan only pays when it also
+        // replaces one or more page scans.
+        if (hasDictionaryStatistics && HasSingleCompleteDataPage())
+            return false;
+
+        var longValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<long>>(ref values);
+        var rowOffset = 0;
+        var hasColumnValue = false;
+        var columnMin = 0L;
+        var columnMax = 0L;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var page = ref Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+
+            var pageRowCount = checked((int)page.RowCount);
+            var pageValues = longValues.Slice(rowOffset, pageRowCount);
+            rowOffset += pageRowCount;
+            if (pageValues.Length == 0)
+            {
+                page.Statistics = ColumnStatistics.Empty(page.NullCount);
+                continue;
+            }
+
+            if (!ColumnStatistics.TryGetInt64MinMax(pageValues, out var pageMin, out var pageMax))
+                throw new InvalidOperationException("Page statistics could not be computed for a non-empty int64 page.");
+            page.Statistics = ColumnStatistics.FromInt64(pageMin, pageMax, page.NullCount);
+            if (!hasColumnValue)
+            {
+                columnMin = pageMin;
+                columnMax = pageMax;
+                hasColumnValue = true;
+                continue;
+            }
+
+            if (pageMin < columnMin)
+                columnMin = pageMin;
+            if (pageMax > columnMax)
+                columnMax = pageMax;
+        }
+
+        if (rowOffset != longValues.Length)
+            throw new InvalidOperationException(
+                $"Int64 page statistics covered {rowOffset} rows, but the column contains {longValues.Length} rows.");
+
+        Statistics = hasColumnValue
+            ? ColumnStatistics.FromInt64(columnMin, columnMax, 0)
+            : ColumnStatistics.Empty(0);
+        return true;
+    }
+
+    bool TryAssignOptionalDenseInt64ColumnAndPageStatistics<TValue>(ReadOnlySpan<TValue> values, long nullCount)
+        where TValue : struct
+    {
+        if (_column.PhysicalType != ParquetPhysicalType.Int64 ||
+            _column.Options.Repetition != ParquetRepetition.Optional || typeof(TValue) != typeof(long))
+            return false;
+
+        var longValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<long>>(ref values);
+        var valueOffset = 0;
+        var hasColumnValue = false;
+        var columnMin = 0L;
+        var columnMax = 0L;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var page = ref Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+
+            var pageValueCount = checked((int)(page.RowCount - page.NullCount));
+            var pageValues = longValues.Slice(valueOffset, pageValueCount);
+            valueOffset += pageValueCount;
+            if (pageValues.Length == 0)
+            {
+                page.Statistics = ColumnStatistics.Empty(page.NullCount);
+                continue;
+            }
+
+            if (!ColumnStatistics.TryGetInt64MinMax(pageValues, out var pageMin, out var pageMax))
+                throw new InvalidOperationException("Page statistics could not be computed for a non-empty int64 page.");
+            page.Statistics = ColumnStatistics.FromInt64(pageMin, pageMax, page.NullCount);
+            if (!hasColumnValue)
+            {
+                columnMin = pageMin;
+                columnMax = pageMax;
+                hasColumnValue = true;
+                continue;
+            }
+
+            if (pageMin < columnMin)
+                columnMin = pageMin;
+            if (pageMax > columnMax)
+                columnMax = pageMax;
+        }
+
+        if (valueOffset != longValues.Length)
+            throw new InvalidOperationException(
+                $"Optional int64 page statistics covered {valueOffset} values, but the column contains {longValues.Length} present values.");
+
+        Statistics = hasColumnValue
+            ? ColumnStatistics.FromInt64(columnMin, columnMax, nullCount)
+            : ColumnStatistics.Empty(nullCount);
         return true;
     }
 
