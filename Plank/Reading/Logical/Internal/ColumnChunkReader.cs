@@ -3647,34 +3647,71 @@ static class ColumnChunkReader
         }
     }
 
-    static unsafe void DecodeDictionaryLiteralInt64Indexes11Bit(ReadOnlySpan<byte> payload,
+    static void DecodeDictionaryLiteralInt64Indexes11Bit(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<long> dictionary, Span<long> destination)
+    {
+        var blockValueCount = dictionary.Length & ~7;
+        if (blockValueCount >= 8 && destination.Length >= blockValueCount * 2)
+        {
+            var blockByteCount = checked(blockValueCount / 8 * 11);
+            if (payload.Length >= blockByteCount * 2 &&
+                payload[..blockByteCount].SequenceEqual(payload.Slice(blockByteCount, blockByteCount)))
+            {
+                var firstValues = destination[..blockValueCount];
+                DecodeDictionaryLiteralInt64Indexes11BitCore(payload[..blockByteCount],
+                    dictionary, firstValues);
+                var valueOffset = blockValueCount;
+                var byteOffset = blockByteCount;
+                while (destination.Length - valueOffset >= blockValueCount &&
+                       payload.Length - byteOffset >= blockByteCount &&
+                       payload.Slice(byteOffset, blockByteCount)
+                           .SequenceEqual(payload[..blockByteCount]))
+                {
+                    firstValues.CopyTo(destination[valueOffset..]);
+                    valueOffset += blockValueCount;
+                    byteOffset += blockByteCount;
+                }
+
+                if (valueOffset < destination.Length)
+                    DecodeDictionaryLiteralInt64Indexes11BitCore(payload[byteOffset..],
+                        dictionary, destination[valueOffset..]);
+                return;
+            }
+        }
+
+        DecodeDictionaryLiteralInt64Indexes11BitCore(payload, dictionary, destination);
+    }
+
+    static void DecodeDictionaryLiteralInt64Indexes11BitCore(ReadOnlySpan<byte> payload,
         ReadOnlySpan<long> dictionary, Span<long> destination)
     {
         const ulong laneMask = 0x07ff_07ff_07ff_07ffUL;
         ref var source = ref MemoryMarshal.GetReference(payload);
+        ref var dictionaryStart = ref MemoryMarshal.GetReference(dictionary);
         ref var target = ref MemoryMarshal.GetReference(destination);
         var maximumIndex = Vector256.Create(dictionary.Length - 1);
-        fixed (long* dictionaryPointer = dictionary)
+        var byteIndex = 0;
+        for (var valueIndex = 0; valueIndex < destination.Length; valueIndex += 8, byteIndex += 11)
         {
-            var byteIndex = 0;
-            for (var valueIndex = 0; valueIndex < destination.Length; valueIndex += 8, byteIndex += 11)
+            var lower = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex));
+            ulong upper = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref source, byteIndex + 5));
+            upper |= (ulong)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref source, byteIndex + 9)) << 32;
+            var indexes = Avx2.ConvertToVector256Int32(Vector128.Create(
+                Bmi2.X64.ParallelBitDeposit(lower, laneMask),
+                Bmi2.X64.ParallelBitDeposit(upper >> 4, laneMask)).AsUInt16());
+            if (Avx2.MoveMask(Avx2.CompareGreaterThan(indexes, maximumIndex).AsByte()) != 0)
             {
-                var lower = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex));
-                ulong upper = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref source, byteIndex + 5));
-                upper |= (ulong)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref source, byteIndex + 9)) << 32;
-                var indexes = Avx2.ConvertToVector256Int32(Vector128.Create(
-                    Bmi2.X64.ParallelBitDeposit(lower, laneMask),
-                    Bmi2.X64.ParallelBitDeposit(upper >> 4, laneMask)).AsUInt16());
-                if (Avx2.MoveMask(Avx2.CompareGreaterThan(indexes, maximumIndex).AsByte()) != 0)
-                {
-                    for (var lane = 0; lane < 8; lane++)
-                        ValidateDictionaryIndex(indexes.GetElement(lane), dictionary.Length);
-                }
-                Avx2.GatherVector256(dictionaryPointer, indexes.GetLower(), sizeof(long))
-                    .StoreUnsafe(ref target, (nuint)valueIndex);
-                Avx2.GatherVector256(dictionaryPointer, indexes.GetUpper(), sizeof(long))
-                    .StoreUnsafe(ref target, (nuint)(valueIndex + 4));
+                for (var lane = 0; lane < 8; lane++)
+                    ValidateDictionaryIndex(indexes.GetElement(lane), dictionary.Length);
             }
+            Unsafe.Add(ref target, valueIndex) = Unsafe.Add(ref dictionaryStart, indexes.GetElement(0));
+            Unsafe.Add(ref target, valueIndex + 1) = Unsafe.Add(ref dictionaryStart, indexes.GetElement(1));
+            Unsafe.Add(ref target, valueIndex + 2) = Unsafe.Add(ref dictionaryStart, indexes.GetElement(2));
+            Unsafe.Add(ref target, valueIndex + 3) = Unsafe.Add(ref dictionaryStart, indexes.GetElement(3));
+            Unsafe.Add(ref target, valueIndex + 4) = Unsafe.Add(ref dictionaryStart, indexes.GetElement(4));
+            Unsafe.Add(ref target, valueIndex + 5) = Unsafe.Add(ref dictionaryStart, indexes.GetElement(5));
+            Unsafe.Add(ref target, valueIndex + 6) = Unsafe.Add(ref dictionaryStart, indexes.GetElement(6));
+            Unsafe.Add(ref target, valueIndex + 7) = Unsafe.Add(ref dictionaryStart, indexes.GetElement(7));
         }
     }
 
