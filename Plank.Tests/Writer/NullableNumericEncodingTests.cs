@@ -48,18 +48,24 @@ internal sealed class NullableNumericEncodingTests
     [Arguments(ParquetDataPageVersion.V2)]
     public void FusedNullableInt64DictionaryMatchesGenericOutput(ParquetDataPageVersion dataPageVersion)
     {
-        long?[] values =
+        long?[][] valuePatterns =
         [
-            null, 7, 7, long.MinValue, null, 42, 7, long.MaxValue, 42, null, -9, -9, 0, null, 7
+            [7, 3, 7, -128, 127, 42, 3, 0, -9, 127, 7],
+            [null, 7, 7, null, 42, 7, 42, null, -9, -9, 0, null, 7],
+            [null, 7, 7, long.MinValue, null, 42, 7, long.MaxValue, 42, null, -9, -9, 0, null, 7],
+            Enumerable.Range(0, 300).Select(static value => (long?)value).ToArray()
         ];
 
-        var fused = WriteNullableInt64Dictionary(values, ForceDictionaryPageStrategy.Shared, dataPageVersion);
-        var generic = WriteNullableInt64Dictionary(values,
-            new FixedRowsPageStrategy(checked((uint)values.Length), DictionaryMode.Forced), dataPageVersion);
+        foreach (var values in valuePatterns)
+        {
+            var fused = WriteNullableInt64Dictionary(values, ForceDictionaryPageStrategy.Shared, dataPageVersion);
+            var generic = WriteNullableInt64Dictionary(values,
+                new FixedRowsPageStrategy(checked((uint)values.Length), DictionaryMode.Forced), dataPageVersion);
 
-        if (!fused.AsSpan().SequenceEqual(generic))
-            throw new InvalidOperationException(
-                $"Fused optional int64 {dataPageVersion} dictionary encoding changed the Parquet bytes.");
+            if (!fused.AsSpan().SequenceEqual(generic))
+                throw new InvalidOperationException(
+                    $"Fused optional int64 {dataPageVersion} dictionary encoding changed the Parquet bytes.");
+        }
     }
 
     static byte[] WriteNullableInt64Dictionary(long?[] values, IPageStrategy pageStrategy,
