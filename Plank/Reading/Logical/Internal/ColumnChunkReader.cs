@@ -3629,7 +3629,42 @@ static class ColumnChunkReader
         }
     }
 
-    static unsafe void DecodeDictionaryLiteralInt32Indexes11Bit(ReadOnlySpan<byte> payload,
+    static void DecodeDictionaryLiteralInt32Indexes11Bit(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<int> dictionary, Span<int> destination)
+    {
+        var blockValueCount = dictionary.Length & ~7;
+        if (blockValueCount >= 8 && destination.Length >= blockValueCount * 2)
+        {
+            var blockByteCount = checked(blockValueCount / 8 * 11);
+            if (payload.Length >= blockByteCount * 2 &&
+                payload[..blockByteCount].SequenceEqual(payload.Slice(blockByteCount, blockByteCount)))
+            {
+                var firstValues = destination[..blockValueCount];
+                DecodeDictionaryLiteralInt32Indexes11BitCore(payload[..blockByteCount],
+                    dictionary, firstValues);
+                var valueOffset = blockValueCount;
+                var byteOffset = blockByteCount;
+                while (destination.Length - valueOffset >= blockValueCount &&
+                       payload.Length - byteOffset >= blockByteCount &&
+                       payload.Slice(byteOffset, blockByteCount)
+                           .SequenceEqual(payload[..blockByteCount]))
+                {
+                    firstValues.CopyTo(destination[valueOffset..]);
+                    valueOffset += blockValueCount;
+                    byteOffset += blockByteCount;
+                }
+
+                if (valueOffset < destination.Length)
+                    DecodeDictionaryLiteralInt32Indexes11BitCore(payload[byteOffset..],
+                        dictionary, destination[valueOffset..]);
+                return;
+            }
+        }
+
+        DecodeDictionaryLiteralInt32Indexes11BitCore(payload, dictionary, destination);
+    }
+
+    static unsafe void DecodeDictionaryLiteralInt32Indexes11BitCore(ReadOnlySpan<byte> payload,
         ReadOnlySpan<int> dictionary, Span<int> destination)
     {
         const ulong laneMask = 0x07ff_07ff_07ff_07ffUL;

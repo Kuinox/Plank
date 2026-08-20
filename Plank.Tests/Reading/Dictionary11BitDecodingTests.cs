@@ -66,6 +66,23 @@ internal sealed class Dictionary11BitDecodingTests
     }
 
     [Test]
+    public void Int32LiteralDecoderReusesRepeatedDictionaryCyclesAndHandlesDifferentCycles()
+    {
+        var dictionary = Enumerable.Range(0, 2_048).Select(index => index * 17).ToArray();
+        var cycle = Enumerable.Range(0, dictionary.Length)
+            .Select(index => index * 61 & 2_047).ToArray();
+        var repeatedIndexes = cycle.Concat(cycle).Concat(cycle).Concat(cycle.AsSpan(0, 9).ToArray()).ToArray();
+        AssertDecoded(dictionary, ParquetPhysicalType.Int32,
+            EncodeLiteral(repeatedIndexes, 11), repeatedIndexes);
+
+        var differentCycle = cycle.ToArray();
+        differentCycle[1_037] ^= 0x155;
+        var differentIndexes = cycle.Concat(differentCycle).Concat(cycle.AsSpan(0, 9).ToArray()).ToArray();
+        AssertDecoded(dictionary, ParquetPhysicalType.Int32,
+            EncodeLiteral(differentIndexes, 11), differentIndexes);
+    }
+
+    [Test]
     public void DoubleLiteralDecoderHandlesVectorAndScalarBoundariesAndMixedRleRuns()
     {
         var dictionary = CreateDoubleDictionary(2_048);
@@ -349,11 +366,23 @@ internal sealed class Dictionary11BitDecodingTests
         var padded = new int[groupCount * 8];
         indexes.CopyTo(padded);
         var packed = Pack(padded, bitWidth);
-        var payload = new byte[2 + packed.Length];
+        var header = new List<byte>();
+        WriteUnsignedVarInt(checked((uint)(groupCount * 2 + 1)), header);
+        var payload = new byte[1 + header.Count + packed.Length];
         payload[0] = checked((byte)bitWidth);
-        payload[1] = checked((byte)(groupCount * 2 + 1));
-        packed.CopyTo(payload, 2);
+        header.CopyTo(payload, 1);
+        packed.CopyTo(payload, 1 + header.Count);
         return payload;
+    }
+
+    static void WriteUnsignedVarInt(uint value, List<byte> output)
+    {
+        while (value >= 0x80)
+        {
+            output.Add((byte)(value | 0x80));
+            value >>= 7;
+        }
+        output.Add((byte)value);
     }
 
     static byte[] Pack(ReadOnlySpan<int> indexes, int bitWidth)
