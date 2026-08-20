@@ -299,6 +299,37 @@ static class Encoding
         ReadOnlySpan<byte[]> values, EncodingKind dataEncoding, PageList pages, int targetPageBytes,
         ref PlainBinaryMinMax binaryMinMax)
     {
+        var precomputeDeltaByteArrayLengths = dataEncoding == EncodingKind.DeltaByteArray;
+        ParquetBuffer rentedPrefixLengthsBytes = default;
+        ParquetBuffer rentedSuffixLengthsBytes = default;
+        try
+        {
+            Span<int> prefixLengths = default;
+            Span<int> suffixLengths = default;
+            if (precomputeDeltaByteArrayLengths)
+            {
+                var byteLength = checked(values.Length * sizeof(int));
+                rentedPrefixLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
+                rentedSuffixLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
+                prefixLengths = MemoryMarshal.Cast<byte, int>(rentedPrefixLengthsBytes.Span[..byteLength]);
+                suffixLengths = MemoryMarshal.Cast<byte, int>(rentedSuffixLengthsBytes.Span[..byteLength]);
+            }
+
+            WriteRequiredByteArrayDataPagesCore(bufferWriters, column, values, dataEncoding, pages,
+                targetPageBytes, prefixLengths, suffixLengths, ref binaryMinMax);
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rentedPrefixLengthsBytes);
+            bufferWriters.ReturnScratch(rentedSuffixLengthsBytes);
+        }
+    }
+
+    static void WriteRequiredByteArrayDataPagesCore(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<byte[]> values, EncodingKind dataEncoding, PageList pages, int targetPageBytes,
+        Span<int> prefixLengths, Span<int> suffixLengths, ref PlainBinaryMinMax binaryMinMax)
+    {
+        var precomputeDeltaByteArrayLengths = !prefixLengths.IsEmpty;
         byte[]? columnMin = null;
         byte[]? columnMax = null;
         var columnMinIndex = -1;
@@ -313,8 +344,10 @@ static class Encoding
             var pageMaxIndex = -1;
             byte[]? pendingValue = null;
             var pendingIndex = -1;
+            ReadOnlySpan<byte> previous = [];
             var pageRowCount = 0;
             var pageBytes = 0;
+            var totalSuffixBytes = 0;
             while (rowsWritten < values.Length)
             {
                 var value = values[rowsWritten] ?? throw new InvalidOperationException(
@@ -322,6 +355,16 @@ static class Encoding
                 var rowBytes = checked(sizeof(int) + value.Length);
                 if (pageRowCount > 0 && rowBytes > targetPageBytes - pageBytes)
                     break;
+
+                if (precomputeDeltaByteArrayLengths)
+                {
+                    var prefixLength = previous.CommonPrefixLength(value);
+                    var suffixLength = value.Length - prefixLength;
+                    prefixLengths[rowsWritten] = prefixLength;
+                    suffixLengths[rowsWritten] = suffixLength;
+                    totalSuffixBytes = checked(totalSuffixBytes + suffixLength);
+                    previous = value;
+                }
 
                 // A pairwise tournament needs three comparisons for two values instead of comparing
                 // both values independently with both extremes. Keep one value pending until its mate
@@ -432,8 +475,17 @@ static class Encoding
 
             var pageIndex = AddNewDataPage(bufferWriters, pages);
             ref var page = ref pages[pageIndex];
-            ValueEncodingDispatcher.WriteValues(dataEncoding, column, values.Slice(pageStart, pageRowCount),
-                bufferWriters, ref page.Content);
+            if (precomputeDeltaByteArrayLengths)
+            {
+                DeltaByteArrayEncoding.WritePrecomputedRequiredByteArrayPage(
+                    values.Slice(pageStart, pageRowCount), prefixLengths.Slice(pageStart, pageRowCount),
+                    suffixLengths.Slice(pageStart, pageRowCount), totalSuffixBytes, ref page.Content);
+            }
+            else
+            {
+                ValueEncodingDispatcher.WriteValues(dataEncoding, column, values.Slice(pageStart, pageRowCount),
+                    bufferWriters, ref page.Content);
+            }
             WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0, dataEncoding);
             page.Statistics = ColumnStatistics.CreateBinaryFromKnownExtremes(column, values, pageMinIndex,
                 pageMaxIndex, 0, ref page.StatisticsMinValueBuffer, ref page.StatisticsMaxValueBuffer,
