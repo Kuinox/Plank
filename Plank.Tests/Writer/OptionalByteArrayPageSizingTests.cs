@@ -13,18 +13,24 @@ namespace Plank.Tests.Writer;
 internal sealed class OptionalByteArrayPageSizingTests
 {
     [Test]
-    public void VariableLengthValuesRoundTripAcrossPages()
+    [Arguments(EncodingKind.Plain)]
+    [Arguments(EncodingKind.DeltaByteArray)]
+    [Arguments(EncodingKind.DeltaLengthByteArray)]
+    [Arguments(EncodingKind.RleDictionary)]
+    public void VariableLengthValuesRoundTripAcrossPages(EncodingKind encoding)
     {
         var values = new byte[400][];
         for (var i = 0; i < values.Length; i++)
-            values[i] = i % 5 == 0 ? null! : System.Text.Encoding.UTF8.GetBytes($"value-{i:D4}-{new string('x', i % 23)}");
+            values[i] = i < 128 || i % 5 == 0
+                ? null!
+                : System.Text.Encoding.UTF8.GetBytes($"value-{i % 4}-{new string('x', i % 4)}");
 
         var schema = new PlankParquetSchema([
             Plank.Schema.ColumnDefinition.Leaf("value", ParquetPhysicalType.ByteArray,
-                new ColumnOptions(ParquetRepetition.Optional))
+                new ColumnOptions(ParquetRepetition.Optional, [encoding]))
         ]);
 
-        AssertRoundTrip(schema, values, 128);
+        AssertRoundTrip(schema, values, 128, expectDictionary: encoding == EncodingKind.RleDictionary);
     }
 
     [Test]
@@ -49,7 +55,8 @@ internal sealed class OptionalByteArrayPageSizingTests
         AssertRoundTrip(schema, values, 128);
     }
 
-    static void AssertRoundTrip(PlankParquetSchema schema, byte[]?[] values, uint targetPageBytes)
+    static void AssertRoundTrip(PlankParquetSchema schema, byte[]?[] values, uint targetPageBytes,
+        bool expectDictionary = false)
     {
         using var stream = new MemoryStream();
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
@@ -61,6 +68,22 @@ internal sealed class OptionalByteArrayPageSizingTests
         if (column.Pages.Count < 4)
             throw new InvalidOperationException(
                 $"Expected the column to split into several pages, got {column.Pages.Count}.");
+        if (expectDictionary && !HasDictionaryPage(column.Pages))
+            throw new InvalidOperationException("Expected the low-cardinality column to retain dictionary encoding.");
+        AssertStatistics(column.Statistics, values);
+        var rowOffset = 0;
+        for (var i = 0; i < column.Pages.Count; i++)
+        {
+            ref var page = ref column.Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            var pageRowCount = checked((int)page.RowCount);
+            AssertStatistics(page.Statistics, values.AsSpan(rowOffset, pageRowCount));
+            rowOffset += pageRowCount;
+        }
+        if (rowOffset != values.Length)
+            throw new InvalidOperationException(
+                $"Page statistics covered {rowOffset} rows, expected {values.Length}.");
 
         writer.StartRowGroup().Write(column);
         writer.CloseFile();
@@ -85,6 +108,14 @@ internal sealed class OptionalByteArrayPageSizingTests
         }
     }
 
+    static bool HasDictionaryPage(PageList pages)
+    {
+        for (var i = 0; i < pages.Count; i++)
+            if (pages[i].Kind == PageKind.Dictionary)
+                return true;
+        return false;
+    }
+
     static byte[]? ToBytes(object? value)
         => value switch
         {
@@ -93,6 +124,47 @@ internal sealed class OptionalByteArrayPageSizingTests
             Guid guid => guid.ToByteArray(bigEndian: true),
             _ => throw new InvalidOperationException($"Unexpected read value type '{value.GetType()}'.")
         };
+
+    static void AssertStatistics(ColumnStatistics statistics, ReadOnlySpan<byte[]?> values)
+    {
+        byte[]? min = null;
+        byte[]? max = null;
+        var nullCount = 0L;
+        foreach (var value in values)
+        {
+            if (value is null)
+            {
+                nullCount++;
+                continue;
+            }
+
+            if (min is null)
+            {
+                min = value;
+                max = value;
+            }
+            else
+            {
+                if (value.AsSpan().SequenceCompareTo(min) < 0)
+                    min = value;
+                if (value.AsSpan().SequenceCompareTo(max) > 0)
+                    max = value;
+            }
+        }
+
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Expected {nullCount} null statistics values, got {statistics.NullCount}.");
+        if (min is null)
+        {
+            if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
+                throw new InvalidOperationException("All-null page unexpectedly has min/max statistics.");
+            return;
+        }
+
+        if (!statistics.GetMinValue().SequenceEqual(min) || !statistics.GetMaxValue().SequenceEqual(max))
+            throw new InvalidOperationException("Byte-array min/max statistics do not match their page rows.");
+    }
 
     sealed class ReadAllVisitor(int count) : ParquetSharp.ILogicalColumnReaderVisitor<object>
     {

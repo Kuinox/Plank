@@ -1908,10 +1908,13 @@ static class Encoding
                 var pageStart = rowsWritten;
                 int pageRowCount;
                 var pageBytes = -1;
+                var pageMinIndex = -1;
+                var pageMaxIndex = -1;
                 if (useTargetPageBytes)
                 {
                     pageRowCount = MeasureByteArrayPageRows<TRow, TValue, TProbe>(column, values, rowsWritten,
-                        presentValueBytes, targetPageBytes, trackMinMax, ref binaryMinMax, out pageBytes);
+                        presentValueBytes, targetPageBytes, trackMinMax, ref binaryMinMax, out pageBytes,
+                        out pageMinIndex, out pageMaxIndex);
                     rowsWritten += pageRowCount;
                 }
                 else
@@ -1952,6 +1955,19 @@ static class Encoding
 
                 WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
                     useDictionary ? dictionaryEncoding : dataEncoding);
+                // A single complete page takes the column statistics in SerializedColumn, so avoid
+                // renting and copying a second pair of binary extrema buffers that it would immediately overwrite.
+                if (useTargetPageBytes && trackMinMax && typeof(TRow) == typeof(byte[])
+                    && (pageStart != 0 || rowsWritten != values.Length))
+                {
+                    var byteArrayRows = MemoryMarshal.CreateReadOnlySpan(
+                        ref Unsafe.As<TRow, byte[]>(ref MemoryMarshal.GetReference(values)), values.Length);
+                    page.Statistics = pageMinIndex < 0
+                        ? ColumnStatistics.Empty(nullCount)
+                        : ColumnStatistics.CreateBinaryFromKnownExtremes(column, byteArrayRows,
+                            pageMinIndex, pageMaxIndex, nullCount, ref page.StatisticsMinValueBuffer,
+                            ref page.StatisticsMaxValueBuffer, bufferWriters.BufferPool);
+                }
                 denseOffset += presentRows;
                 totalNullCount += nullCount;
             }
@@ -1977,7 +1993,7 @@ static class Encoding
     /// </remarks>
     static int MeasureByteArrayPageRows<TRow, TValue, TProbe>(Column column, ReadOnlySpan<TRow> rows, int startIndex,
         int presentValueBytes, int targetPageBytes, bool trackMinMax, ref PlainBinaryMinMax binaryMinMax,
-        out int pageBytes)
+        out int pageBytes, out int pageMinIndex, out int pageMaxIndex)
         where TValue : notnull
         where TProbe : IOptionalRow<TRow, TValue>
     {
@@ -1985,8 +2001,11 @@ static class Encoding
             return MeasureByteArrayPageRows(
                 MemoryMarshal.CreateReadOnlySpan(
                     ref Unsafe.As<TRow, byte[]>(ref MemoryMarshal.GetReference(rows)), rows.Length),
-                startIndex, presentValueBytes, targetPageBytes, trackMinMax, ref binaryMinMax, out pageBytes);
+                startIndex, presentValueBytes, targetPageBytes, trackMinMax, ref binaryMinMax, out pageBytes,
+                out pageMinIndex, out pageMaxIndex);
 
+        pageMinIndex = -1;
+        pageMaxIndex = -1;
         pageBytes = 0;
         for (var i = startIndex; i < rows.Length; i++)
         {
@@ -2000,12 +2019,13 @@ static class Encoding
     }
 
     static int MeasureByteArrayPageRows(ReadOnlySpan<byte[]> rows, int startIndex, int presentValueBytes,
-        int targetPageBytes, bool trackMinMax, ref PlainBinaryMinMax binaryMinMax, out int pageBytes)
+        int targetPageBytes, bool trackMinMax, ref PlainBinaryMinMax binaryMinMax, out int pageBytes,
+        out int pageMinIndex, out int pageMaxIndex)
     {
-        var minIndex = binaryMinMax.Found ? binaryMinMax.MinIndex : -1;
-        var maxIndex = binaryMinMax.Found ? binaryMinMax.MaxIndex : -1;
-        var min = minIndex < 0 ? null : rows[minIndex];
-        var max = maxIndex < 0 ? null : rows[maxIndex];
+        byte[]? pageMin = null;
+        byte[]? pageMax = null;
+        pageMinIndex = -1;
+        pageMaxIndex = -1;
         pageBytes = 0;
         var i = startIndex;
         for (; i < rows.Length; i++)
@@ -2031,32 +2051,42 @@ static class Encoding
                 continue;
             }
 
-            if (min is null)
+            if (pageMin is null)
             {
-                min = row;
-                max = row;
-                minIndex = i;
-                maxIndex = i;
+                pageMin = row;
+                pageMax = row;
+                pageMinIndex = i;
+                pageMaxIndex = i;
             }
             // A value below the running min cannot also be above the running max, so the second
             // comparison only runs when the first one did not claim the value.
-            else if (EncodingPrimitives.ComparePayload(row, min) < 0)
+            else if (EncodingPrimitives.ComparePayload(row, pageMin) < 0)
             {
-                min = row;
-                minIndex = i;
+                pageMin = row;
+                pageMinIndex = i;
             }
-            else if (EncodingPrimitives.ComparePayload(row, max) > 0)
+            else if (EncodingPrimitives.ComparePayload(row, pageMax!) > 0)
             {
-                max = row;
-                maxIndex = i;
+                pageMax = row;
+                pageMaxIndex = i;
             }
         }
 
-        if (min is not null)
+        if (pageMin is not null)
         {
-            binaryMinMax.Found = true;
-            binaryMinMax.MinIndex = minIndex;
-            binaryMinMax.MaxIndex = maxIndex;
+            if (!binaryMinMax.Found)
+            {
+                binaryMinMax.Found = true;
+                binaryMinMax.MinIndex = pageMinIndex;
+                binaryMinMax.MaxIndex = pageMaxIndex;
+            }
+            else
+            {
+                if (EncodingPrimitives.ComparePayload(pageMin, rows[binaryMinMax.MinIndex]) < 0)
+                    binaryMinMax.MinIndex = pageMinIndex;
+                if (EncodingPrimitives.ComparePayload(pageMax!, rows[binaryMinMax.MaxIndex]) > 0)
+                    binaryMinMax.MaxIndex = pageMaxIndex;
+            }
         }
 
         return i - startIndex;

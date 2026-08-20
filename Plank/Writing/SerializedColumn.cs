@@ -1295,7 +1295,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         _bloomFilterByteLength = BloomFilterBuilder.BuildOptionalReferences(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
-        if (!TryAssignSingleDataPageStatistics(Statistics))
+        if (!TryAssignSingleDataPageStatistics(Statistics) && !AllDataPagesHaveStatistics())
             AssignOptionalPageStatistics(values);
     }
 
