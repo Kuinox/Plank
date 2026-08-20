@@ -255,6 +255,71 @@ internal sealed class PlainByteArrayStatisticsTests
     }
 
     [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void RequiredDeltaByteArrayPrecomputedLengthsResetAtPageBoundaries(
+        ParquetDataPageVersion dataPageVersion)
+    {
+        // Every payload is 12 bytes, so a 48-byte plain-size target makes exact three-row pages.
+        // The first value on pages two and three shares a long prefix with the preceding page's
+        // final value. DELTA_BYTE_ARRAY must still start each page with a zero prefix length, and
+        // repeated values exercise a zero-byte suffix in the retained column scratch spans.
+        byte[][] values =
+        [
+            "shared-00000"u8.ToArray(),
+            "shared-00001"u8.ToArray(),
+            "shared-00001"u8.ToArray(),
+            "shared-00002"u8.ToArray(),
+            "shared-10002"u8.ToArray(),
+            "shared-10003"u8.ToArray(),
+            "shared-10003"u8.ToArray(),
+            "shared-10000"u8.ToArray(),
+            "shared-zzzzz"u8.ToArray()
+        ];
+
+        var sizedSchema = CreateDeltaByteArraySchema(EncodingKind.DeltaByteArray);
+        using var sizedStream = new MemoryStream();
+        var sizedWriter = sizedSchema.CreateWriter(sizedStream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = 48
+        });
+        var sizedColumn = sizedWriter.CreateSerializedColumn<byte[]>(sizedSchema.LeafColumns[0]);
+        sizedColumn.Serialize(values);
+        sizedWriter.StartRowGroup().Write(sizedColumn);
+        sizedWriter.CloseFile();
+
+        var fixedSchema = CreateDeltaByteArraySchema(EncodingKind.DeltaByteArray,
+            new FixedRowsPageStrategy(3));
+        using var fixedStream = new MemoryStream();
+        var fixedWriter = fixedSchema.CreateWriter(fixedStream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = 48
+        });
+        var fixedColumn = fixedWriter.CreateSerializedColumn<byte[]>(fixedSchema.LeafColumns[0]);
+        fixedColumn.Serialize(values);
+        fixedWriter.StartRowGroup().Write(fixedColumn);
+        fixedWriter.CloseFile();
+
+        var sizedFile = sizedStream.ToArray();
+        if (!sizedFile.AsSpan().SequenceEqual(fixedStream.ToArray()))
+            throw new InvalidOperationException(
+                $"Precomputed DELTA_BYTE_ARRAY {dataPageVersion} lengths changed the Parquet bytes.");
+
+        using var reader = new ParquetSharp.ParquetFileReader(new MemoryStream(sizedFile), leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var logicalReader = rowGroup.Column(0).LogicalReader<string>();
+        var actual = logicalReader.ReadAll(values.Length);
+        for (var i = 0; i < values.Length; i++)
+            if (!string.Equals(actual[i], System.Text.Encoding.UTF8.GetString(values[i]), StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    $"Precomputed DELTA_BYTE_ARRAY {dataPageVersion} round-trip mismatch at row {i}.");
+    }
+
+    [Test]
     public void RequiredDeltaByteArrayDecimalsKeepSignedPageAndColumnOrdering()
     {
         var schema = new PlankParquetSchema([
