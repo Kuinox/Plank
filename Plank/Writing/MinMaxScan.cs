@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 
@@ -91,6 +92,91 @@ static class MinMaxScan
                 min = minVector[lane];
             if (maxVector[lane] > max)
                 max = maxVector[lane];
+        }
+    }
+
+    /// <summary>
+    /// Copies <paramref name="values"/> while computing both extremes in the same memory pass.
+    /// </summary>
+    internal static void CopyAndCompute<T>(ReadOnlySpan<T> values, Span<T> destination, out T min, out T max)
+        where T : struct, INumber<T>
+    {
+        if (values.IsEmpty)
+            throw new ArgumentException("A min/max scan requires at least one value.", nameof(values));
+        if (destination.Length < values.Length)
+            throw new ArgumentException("The destination is shorter than the source.", nameof(destination));
+
+        ref var source = ref MemoryMarshal.GetReference(values);
+        ref var target = ref MemoryMarshal.GetReference(destination);
+        var length = (nuint)values.Length;
+        var width = (nuint)Vector256<T>.Count;
+        var index = (nuint)0;
+
+        if (Vector256.IsHardwareAccelerated && length >= width * Unroll)
+        {
+            var min0 = Vector256.LoadUnsafe(ref source);
+            var min1 = min0;
+            var min2 = min0;
+            var min3 = min0;
+            var max0 = min0;
+            var max1 = min0;
+            var max2 = min0;
+            var max3 = min0;
+            var blockWidth = width * Unroll;
+            for (; index + blockWidth <= length; index += blockWidth)
+            {
+                var value0 = Vector256.LoadUnsafe(ref source, index);
+                var value1 = Vector256.LoadUnsafe(ref source, index + width);
+                var value2 = Vector256.LoadUnsafe(ref source, index + width * 2);
+                var value3 = Vector256.LoadUnsafe(ref source, index + width * 3);
+                value0.StoreUnsafe(ref target, index);
+                value1.StoreUnsafe(ref target, index + width);
+                value2.StoreUnsafe(ref target, index + width * 2);
+                value3.StoreUnsafe(ref target, index + width * 3);
+                min0 = Vector256.Min(min0, value0);
+                min1 = Vector256.Min(min1, value1);
+                min2 = Vector256.Min(min2, value2);
+                min3 = Vector256.Min(min3, value3);
+                max0 = Vector256.Max(max0, value0);
+                max1 = Vector256.Max(max1, value1);
+                max2 = Vector256.Max(max2, value2);
+                max3 = Vector256.Max(max3, value3);
+            }
+
+            for (; index + width <= length; index += width)
+            {
+                var value = Vector256.LoadUnsafe(ref source, index);
+                value.StoreUnsafe(ref target, index);
+                min0 = Vector256.Min(min0, value);
+                max0 = Vector256.Max(max0, value);
+            }
+
+            var minVector = Vector256.Min(Vector256.Min(min0, min1), Vector256.Min(min2, min3));
+            var maxVector = Vector256.Max(Vector256.Max(max0, max1), Vector256.Max(max2, max3));
+            min = minVector[0];
+            max = maxVector[0];
+            for (var lane = 1; lane < Vector256<T>.Count; lane++)
+            {
+                if (minVector[lane] < min)
+                    min = minVector[lane];
+                if (maxVector[lane] > max)
+                    max = maxVector[lane];
+            }
+        }
+        else
+        {
+            min = values[0];
+            max = values[0];
+        }
+
+        for (; index < length; index++)
+        {
+            var value = Unsafe.Add(ref source, index);
+            Unsafe.Add(ref target, index) = value;
+            if (value < min)
+                min = value;
+            if (value > max)
+                max = value;
         }
     }
 

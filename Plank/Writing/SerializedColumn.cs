@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Plank.Schema;
@@ -1013,11 +1014,11 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], dictionaryState, out var binaryMinMax);
         _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
+        if (TryAssignPrimitiveColumnStatisticsFromPages<TValue>())
+            return;
         if (TryAssignInt32ColumnAndPageStatistics(values))
             return;
         if (TryAssignInt64ColumnAndPageStatistics(values, hasDictionaryStatistics))
-            return;
-        if (TryAssignDoubleColumnStatisticsFromPages<TValue>())
             return;
 
         var statisticsValues = hasDictionaryStatistics && typeof(TValue) != typeof(float)
@@ -1036,16 +1037,33 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             AssignPageStatistics(values);
     }
 
-    bool TryAssignDoubleColumnStatisticsFromPages<TValue>()
+    bool TryAssignPrimitiveColumnStatisticsFromPages<TValue>()
         where TValue : notnull
     {
-        if (_column.PhysicalType != ParquetPhysicalType.Double
-            || _column.Options.Repetition != ParquetRepetition.Required || typeof(TValue) != typeof(double))
+        if (_column.Options.Repetition != ParquetRepetition.Required)
+            return false;
+
+        var expectedKind = (_column.PhysicalType, typeof(TValue)) switch
+        {
+            (ParquetPhysicalType.Boolean, var type) when type == typeof(bool)
+                => ColumnStatistics.ColumnStatisticsValueKind.Boolean,
+            (ParquetPhysicalType.Int32, var type) when type == typeof(int)
+                => ColumnStatistics.ColumnStatisticsValueKind.Int32,
+            (ParquetPhysicalType.Int64, var type) when type == typeof(long)
+                => ColumnStatistics.ColumnStatisticsValueKind.Int64,
+            (ParquetPhysicalType.Float, var type) when type == typeof(float)
+                => ColumnStatistics.ColumnStatisticsValueKind.Float,
+            (ParquetPhysicalType.Double, var type) when type == typeof(double)
+                => ColumnStatistics.ColumnStatisticsValueKind.Double,
+            _ => ColumnStatistics.ColumnStatisticsValueKind.None
+        };
+        if (expectedKind == ColumnStatistics.ColumnStatisticsValueKind.None)
             return false;
 
         var hasColumnValue = false;
-        var columnMin = 0d;
-        var columnMax = 0d;
+        var columnMinBits = 0L;
+        var columnMaxBits = 0L;
+        var columnNullCount = 0L;
         var columnNanCount = 0L;
         var dataPageCount = 0;
         for (var i = 0; i < Pages.Count; i++)
@@ -1053,38 +1071,97 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             ref var page = ref Pages[i];
             if (page.Kind != PageKind.DataV2)
                 continue;
-            if (!page.Statistics.HasStatistics || page.Statistics.NanCount < 0)
+            if (!page.Statistics.HasStatistics)
                 return false;
 
             dataPageCount++;
-            columnNanCount = checked(columnNanCount + page.Statistics.NanCount);
+            columnNullCount = checked(columnNullCount + page.Statistics.NullCount);
+            if (expectedKind is ColumnStatistics.ColumnStatisticsValueKind.Float
+                or ColumnStatistics.ColumnStatisticsValueKind.Double)
+            {
+                if (page.Statistics.NanCount < 0)
+                    return false;
+                columnNanCount = checked(columnNanCount + page.Statistics.NanCount);
+            }
             if (page.Statistics.ValueKind == ColumnStatistics.ColumnStatisticsValueKind.None)
                 continue;
-            if (page.Statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Double)
+            if (page.Statistics.ValueKind != expectedKind)
                 return false;
 
-            var pageMin = BitConverter.Int64BitsToDouble(page.Statistics.MinBits);
-            var pageMax = BitConverter.Int64BitsToDouble(page.Statistics.MaxBits);
             if (!hasColumnValue)
             {
-                columnMin = pageMin;
-                columnMax = pageMax;
+                columnMinBits = page.Statistics.MinBits;
+                columnMaxBits = page.Statistics.MaxBits;
                 hasColumnValue = true;
                 continue;
             }
 
-            if (ColumnStatistics.IsLessThan(pageMin, columnMin))
-                columnMin = pageMin;
-            if (ColumnStatistics.IsGreaterThan(pageMax, columnMax))
-                columnMax = pageMax;
+            MergePrimitivePageExtremes(expectedKind, page.Statistics.MinBits, page.Statistics.MaxBits,
+                ref columnMinBits, ref columnMaxBits);
         }
 
         if (dataPageCount == 0)
             return false;
-        Statistics = ColumnStatistics.FromDoubleAccumulation(columnMin, columnMax, 0, columnNanCount,
-            hasColumnValue);
+        Statistics = CreatePrimitiveColumnStatistics(expectedKind, columnMinBits, columnMaxBits,
+            columnNullCount, columnNanCount, hasColumnValue);
         return true;
     }
+
+    static void MergePrimitivePageExtremes(ColumnStatistics.ColumnStatisticsValueKind kind,
+        long pageMinBits, long pageMaxBits, ref long columnMinBits, ref long columnMaxBits)
+    {
+        switch (kind)
+        {
+            case ColumnStatistics.ColumnStatisticsValueKind.Boolean:
+            case ColumnStatistics.ColumnStatisticsValueKind.Int32:
+            case ColumnStatistics.ColumnStatisticsValueKind.Int64:
+                if (pageMinBits < columnMinBits)
+                    columnMinBits = pageMinBits;
+                if (pageMaxBits > columnMaxBits)
+                    columnMaxBits = pageMaxBits;
+                return;
+            case ColumnStatistics.ColumnStatisticsValueKind.Float:
+                if (ColumnStatistics.IsLessThan(BitConverter.Int32BitsToSingle(checked((int)pageMinBits)),
+                        BitConverter.Int32BitsToSingle(checked((int)columnMinBits))))
+                    columnMinBits = pageMinBits;
+                if (ColumnStatistics.IsGreaterThan(BitConverter.Int32BitsToSingle(checked((int)pageMaxBits)),
+                        BitConverter.Int32BitsToSingle(checked((int)columnMaxBits))))
+                    columnMaxBits = pageMaxBits;
+                return;
+            case ColumnStatistics.ColumnStatisticsValueKind.Double:
+                if (ColumnStatistics.IsLessThan(BitConverter.Int64BitsToDouble(pageMinBits),
+                        BitConverter.Int64BitsToDouble(columnMinBits)))
+                    columnMinBits = pageMinBits;
+                if (ColumnStatistics.IsGreaterThan(BitConverter.Int64BitsToDouble(pageMaxBits),
+                        BitConverter.Int64BitsToDouble(columnMaxBits)))
+                    columnMaxBits = pageMaxBits;
+                return;
+            default:
+                throw new InvalidOperationException($"Cannot merge page statistics of kind '{kind}'.");
+        }
+    }
+
+    static ColumnStatistics CreatePrimitiveColumnStatistics(ColumnStatistics.ColumnStatisticsValueKind kind,
+        long minBits, long maxBits, long nullCount, long nanCount, bool hasValue)
+        => kind switch
+        {
+            ColumnStatistics.ColumnStatisticsValueKind.Boolean => hasValue
+                ? ColumnStatistics.FromBoolean(minBits != 0, maxBits != 0, nullCount)
+                : ColumnStatistics.Empty(nullCount),
+            ColumnStatistics.ColumnStatisticsValueKind.Int32 => hasValue
+                ? ColumnStatistics.FromInt32(checked((int)minBits), checked((int)maxBits), nullCount)
+                : ColumnStatistics.Empty(nullCount),
+            ColumnStatistics.ColumnStatisticsValueKind.Int64 => hasValue
+                ? ColumnStatistics.FromInt64(minBits, maxBits, nullCount)
+                : ColumnStatistics.Empty(nullCount),
+            ColumnStatistics.ColumnStatisticsValueKind.Float => ColumnStatistics.FromFloatAccumulation(
+                BitConverter.Int32BitsToSingle(checked((int)minBits)),
+                BitConverter.Int32BitsToSingle(checked((int)maxBits)), nullCount, nanCount, hasValue),
+            ColumnStatistics.ColumnStatisticsValueKind.Double => ColumnStatistics.FromDoubleAccumulation(
+                BitConverter.Int64BitsToDouble(minBits), BitConverter.Int64BitsToDouble(maxBits), nullCount,
+                nanCount, hasValue),
+            _ => throw new InvalidOperationException($"Cannot create column statistics of kind '{kind}'.")
+        };
 
     void SerializeOptionalCore<TValue>(ReadOnlySpan<TValue?> values, uint columnOrdinal,
         PageStrategyContext strategyContext)
@@ -1419,49 +1496,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return false;
 
         var intValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<int>>(ref values);
-        var rowOffset = 0;
-        var hasColumnValue = false;
-        var columnMin = 0;
-        var columnMax = 0;
-        for (var i = 0; i < Pages.Count; i++)
-        {
-            ref var page = ref Pages[i];
-            if (page.Kind != PageKind.DataV2)
-                continue;
-
-            var pageRowCount = checked((int)page.RowCount);
-            var pageValues = intValues.Slice(rowOffset, pageRowCount);
-            rowOffset += pageRowCount;
-            if (pageValues.Length == 0)
-            {
-                page.Statistics = ColumnStatistics.Empty(page.NullCount);
-                continue;
-            }
-
-            if (!ColumnStatistics.TryGetInt32MinMax(pageValues, out var pageMin, out var pageMax))
-                throw new InvalidOperationException("Page statistics could not be computed for a non-empty int32 page.");
-            page.Statistics = ColumnStatistics.FromInt32(pageMin, pageMax, page.NullCount);
-            if (!hasColumnValue)
-            {
-                columnMin = pageMin;
-                columnMax = pageMax;
-                hasColumnValue = true;
-                continue;
-            }
-
-            if (pageMin < columnMin)
-                columnMin = pageMin;
-            if (pageMax > columnMax)
-                columnMax = pageMax;
-        }
-
-        if (rowOffset != intValues.Length)
-            throw new InvalidOperationException(
-                $"Int32 page statistics covered {rowOffset} rows, but the column contains {intValues.Length} rows.");
-
-        Statistics = hasColumnValue
-            ? ColumnStatistics.FromInt32(columnMin, columnMax, 0)
-            : ColumnStatistics.Empty(0);
+        AssignSignedIntegerColumnAndPageStatistics(intValues, valuesAreDense: false, columnNullCount: 0);
         return true;
     }
 
@@ -1478,49 +1513,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return false;
 
         var longValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<long>>(ref values);
-        var rowOffset = 0;
-        var hasColumnValue = false;
-        var columnMin = 0L;
-        var columnMax = 0L;
-        for (var i = 0; i < Pages.Count; i++)
-        {
-            ref var page = ref Pages[i];
-            if (page.Kind != PageKind.DataV2)
-                continue;
-
-            var pageRowCount = checked((int)page.RowCount);
-            var pageValues = longValues.Slice(rowOffset, pageRowCount);
-            rowOffset += pageRowCount;
-            if (pageValues.Length == 0)
-            {
-                page.Statistics = ColumnStatistics.Empty(page.NullCount);
-                continue;
-            }
-
-            if (!ColumnStatistics.TryGetInt64MinMax(pageValues, out var pageMin, out var pageMax))
-                throw new InvalidOperationException("Page statistics could not be computed for a non-empty int64 page.");
-            page.Statistics = ColumnStatistics.FromInt64(pageMin, pageMax, page.NullCount);
-            if (!hasColumnValue)
-            {
-                columnMin = pageMin;
-                columnMax = pageMax;
-                hasColumnValue = true;
-                continue;
-            }
-
-            if (pageMin < columnMin)
-                columnMin = pageMin;
-            if (pageMax > columnMax)
-                columnMax = pageMax;
-        }
-
-        if (rowOffset != longValues.Length)
-            throw new InvalidOperationException(
-                $"Int64 page statistics covered {rowOffset} rows, but the column contains {longValues.Length} rows.");
-
-        Statistics = hasColumnValue
-            ? ColumnStatistics.FromInt64(columnMin, columnMax, 0)
-            : ColumnStatistics.Empty(0);
+        AssignSignedIntegerColumnAndPageStatistics(longValues, valuesAreDense: false, columnNullCount: 0);
         return true;
     }
 
@@ -1532,18 +1525,26 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return false;
 
         var longValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<long>>(ref values);
+        AssignSignedIntegerColumnAndPageStatistics(longValues, valuesAreDense: true, nullCount);
+        return true;
+    }
+
+    void AssignSignedIntegerColumnAndPageStatistics<TValue>(ReadOnlySpan<TValue> values, bool valuesAreDense,
+        long columnNullCount)
+        where TValue : struct, INumber<TValue>
+    {
         var valueOffset = 0;
         var hasColumnValue = false;
-        var columnMin = 0L;
-        var columnMax = 0L;
+        var columnMin = TValue.Zero;
+        var columnMax = TValue.Zero;
         for (var i = 0; i < Pages.Count; i++)
         {
             ref var page = ref Pages[i];
             if (page.Kind != PageKind.DataV2)
                 continue;
 
-            var pageValueCount = checked((int)(page.RowCount - page.NullCount));
-            var pageValues = longValues.Slice(valueOffset, pageValueCount);
+            var pageValueCount = checked((int)(valuesAreDense ? page.RowCount - page.NullCount : page.RowCount));
+            var pageValues = values.Slice(valueOffset, pageValueCount);
             valueOffset += pageValueCount;
             if (pageValues.Length == 0)
             {
@@ -1551,9 +1552,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 continue;
             }
 
-            if (!ColumnStatistics.TryGetInt64MinMax(pageValues, out var pageMin, out var pageMax))
-                throw new InvalidOperationException("Page statistics could not be computed for a non-empty int64 page.");
-            page.Statistics = ColumnStatistics.FromInt64(pageMin, pageMax, page.NullCount);
+            MinMaxScan.Compute(pageValues, out var pageMin, out var pageMax);
+            page.Statistics = CreateSignedIntegerStatistics(pageMin, pageMax, page.NullCount);
             if (!hasColumnValue)
             {
                 columnMin = pageMin;
@@ -1568,14 +1568,25 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 columnMax = pageMax;
         }
 
-        if (valueOffset != longValues.Length)
+        if (valueOffset != values.Length)
             throw new InvalidOperationException(
-                $"Optional int64 page statistics covered {valueOffset} values, but the column contains {longValues.Length} present values.");
+                $"Page statistics covered {valueOffset} values, but the column contains {values.Length} values.");
 
         Statistics = hasColumnValue
-            ? ColumnStatistics.FromInt64(columnMin, columnMax, nullCount)
-            : ColumnStatistics.Empty(nullCount);
-        return true;
+            ? CreateSignedIntegerStatistics(columnMin, columnMax, columnNullCount)
+            : ColumnStatistics.Empty(columnNullCount);
+    }
+
+    static ColumnStatistics CreateSignedIntegerStatistics<TValue>(TValue min, TValue max, long nullCount)
+        where TValue : struct, INumber<TValue>
+    {
+        if (typeof(TValue) == typeof(int))
+            return ColumnStatistics.FromInt32(Unsafe.As<TValue, int>(ref min), Unsafe.As<TValue, int>(ref max),
+                nullCount);
+        if (typeof(TValue) == typeof(long))
+            return ColumnStatistics.FromInt64(Unsafe.As<TValue, long>(ref min), Unsafe.As<TValue, long>(ref max),
+                nullCount);
+        throw new InvalidOperationException($"Unsupported signed statistics type '{typeof(TValue)}'.");
     }
 
     ReusableDictionaryState<TValue> GetOrCreateDictionaryState<TValue>()

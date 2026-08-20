@@ -89,6 +89,9 @@ internal readonly struct ColumnStatistics
     internal static ColumnStatistics Empty(long nullCount)
         => new(null, null, nullCount, true);
 
+    internal static ColumnStatistics FromBoolean(bool min, bool max, long nullCount)
+        => new(ColumnStatisticsValueKind.Boolean, min ? 1 : 0, max ? 1 : 0, nullCount, true);
+
     static ColumnStatistics EmptyFloating(long nullCount, long nanCount)
         => new(ColumnStatisticsValueKind.None, 0, 0, nullCount, true, nanCount);
 
@@ -439,7 +442,7 @@ internal readonly struct ColumnStatistics
                 break;
         }
 
-        return new ColumnStatistics(ColumnStatisticsValueKind.Boolean, min ? 1 : 0, max ? 1 : 0, nullCount, true);
+        return FromBoolean(min, max, nullCount);
     }
 
     static ColumnStatistics CreateNullableBoolean(ReadOnlySpan<bool?> values)
@@ -951,7 +954,8 @@ internal readonly struct ColumnStatistics
         return new ColumnStatistics(minBuffer, min.Length, maxBuffer, max.Length, nullCount, true);
     }
 
-    static bool TryGetFloatMinMax(ReadOnlySpan<float> values, out float min, out float max, out long nanCount)
+    internal static bool TryGetFloatMinMax(ReadOnlySpan<float> values, out float min, out float max,
+        out long nanCount)
     {
         min = 0;
         max = 0;
@@ -1196,11 +1200,11 @@ internal readonly struct ColumnStatistics
         return hasValue;
     }
 
-    static bool IsLessThan(float value, float other)
+    internal static bool IsLessThan(float value, float other)
         => value < other || value == 0 && other == 0 &&
             BitConverter.SingleToInt32Bits(value) < BitConverter.SingleToInt32Bits(other);
 
-    static bool IsGreaterThan(float value, float other)
+    internal static bool IsGreaterThan(float value, float other)
         => value > other || value == 0 && other == 0 &&
             BitConverter.SingleToInt32Bits(value) > BitConverter.SingleToInt32Bits(other);
 
@@ -1361,6 +1365,10 @@ internal readonly struct ColumnStatistics
     static ColumnStatistics FromFloat(float min, float max, long nullCount, long nanCount)
         => new(ColumnStatisticsValueKind.Float, BitConverter.SingleToInt32Bits(min),
             BitConverter.SingleToInt32Bits(max), nullCount, true, nanCount);
+
+    internal static ColumnStatistics FromFloatAccumulation(float min, float max, long nullCount,
+        long nanCount, bool hasValue)
+        => hasValue ? FromFloat(min, max, nullCount, nanCount) : EmptyFloating(nullCount, nanCount);
 
     static ColumnStatistics FromDouble(double min, double max, long nullCount, long nanCount)
         => new(ColumnStatisticsValueKind.Double, BitConverter.DoubleToInt64Bits(min),
