@@ -1687,8 +1687,14 @@ static class ColumnChunkReader
                 DecodeDeltaLengthBinaryValues(payload, definitions, valueCount, physicalCount,
                     scratch[..physicalCount], ref state, bufferPool);
                 return true;
-            case EncodingKind.DeltaByteArray when column.PhysicalType == ParquetPhysicalType.ByteArray:
-                DecodeDeltaBinaryValues(payload, definitions, valueCount, physicalCount,
+            // DELTA_BYTE_ARRAY is defined for FIXED_LEN_BYTE_ARRAY as well as
+            // BYTE_ARRAY, and parquet-mr's v2 writer uses it for both. The
+            // reconstruction is the same either way — a prefix taken from the
+            // previous value plus a suffix — so the only difference is that a
+            // fixed-length column has a length to check the result against.
+            case EncodingKind.DeltaByteArray when column.PhysicalType is ParquetPhysicalType.ByteArray
+                    or ParquetPhysicalType.FixedLenByteArray:
+                DecodeDeltaBinaryValues(payload, definitions, valueCount, physicalCount, column,
                     scratch[..checked(physicalCount * 2)], ref state, bufferPool);
                 return true;
             default:
@@ -1804,9 +1810,12 @@ static class ColumnChunkReader
     }
 
     static void DecodeDeltaBinaryValues<T>(ReadOnlySpan<byte> payload, ReadOnlySpan<int> definitions,
-        int valueCount, int physicalCount, Span<int> scratch, ref ColumnReadBuffers<T> state,
-        IParquetBufferPool bufferPool)
+        int valueCount, int physicalCount, Column column, Span<int> scratch,
+        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
+        var fixedLength = column.PhysicalType == ParquetPhysicalType.FixedLenByteArray
+            ? GetFixedBinaryLength(column)
+            : -1;
         var prefixLengths = scratch[..physicalCount];
         var prefixConsumed = physicalCount == 0
             ? 0
@@ -1834,6 +1843,10 @@ static class ColumnChunkReader
                 throw new CorruptParquetException(
                     $"Delta byte array value length overflow (prefix={prefixLength} + suffix={suffixLength}).");
             previousLength = prefixLength + suffixLength;
+            if (fixedLength >= 0 && previousLength != fixedLength)
+                throw new CorruptParquetException(
+                    $"Delta byte array value {i} reconstructs to {previousLength} bytes but column "
+                    + $"'{column.Name}' is fixed at {fixedLength}.");
             payloadByteLength = AddBinaryLength(payloadByteLength, previousLength);
             remainingSuffixLength -= suffixLength;
         }
@@ -2033,9 +2046,84 @@ static class ColumnChunkReader
                 return AlpDecoder.TryDecode(payload, column, valueCount, destination);
             case EncodingKind.DeltaBinaryPacked:
                 return TryDecodeDeltaBinaryPackedIntoNative(payload, column, destination);
+            case EncodingKind.DeltaByteArray:
+                return TryDecodeDeltaByteArrayIntoNative(payload, column, valueCount, destination);
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Decodes a DELTA_BYTE_ARRAY page of a fixed-length column into the CLR type
+    /// its annotation calls for.
+    /// </summary>
+    /// <remarks>
+    /// A FIXED_LEN_BYTE_ARRAY column annotated DECIMAL or UUID does not come back
+    /// as a byte span — it goes through a converter into decimal or Guid — so it
+    /// never reaches the binary decoders where the other DELTA_BYTE_ARRAY support
+    /// lives. Without this the encoding was readable as raw bytes and not
+    /// readable as the value it stands for.
+    ///
+    /// Each value is exactly the column's fixed length, so the prefix carried
+    /// over from the previous value plus the suffix read here fill one buffer,
+    /// and that buffer is what carries the prefix into the next value.
+    /// </remarks>
+    static bool TryDecodeDeltaByteArrayIntoNative<T>(ReadOnlySpan<byte> payload, Column column,
+        uint valueCount, Span<T> destination)
+    {
+        if (column.PhysicalType != ParquetPhysicalType.FixedLenByteArray ||
+            (typeof(T) != typeof(decimal) && typeof(T) != typeof(Guid)))
+            return false;
+
+        var valueLength = GetFixedBinaryLength(column);
+        var count = checked((int)valueCount);
+        var (prefixLengths, prefixConsumed) = valueCount == 0
+            ? ([], 0)
+            : DeltaBinaryPackedDecoder.ReadUInt32WithConsumedBytes(payload);
+        var suffixPayload = payload[prefixConsumed..];
+        var (suffixLengths, suffixConsumed) = valueCount == 0
+            ? ([], 0)
+            : DeltaBinaryPackedDecoder.ReadUInt32WithConsumedBytes(suffixPayload);
+        if (prefixLengths.Length < count || suffixLengths.Length < count)
+            throw new CorruptParquetException(
+                $"Delta byte array page declares {valueCount} values but carries "
+                + $"{Math.Min(prefixLengths.Length, suffixLengths.Length)} lengths.");
+
+        var suffixes = suffixPayload[suffixConsumed..];
+        Span<byte> value = valueLength <= 256 ? stackalloc byte[valueLength] : new byte[valueLength];
+        value.Clear();
+
+        for (var i = 0; i < count; i++)
+        {
+            var prefixLength = prefixLengths[i];
+            var suffixLength = suffixLengths[i];
+            if (prefixLength > (uint)valueLength || suffixLength > (uint)valueLength ||
+                prefixLength + suffixLength != (uint)valueLength)
+                throw new CorruptParquetException(
+                    $"Delta byte array value {i} reconstructs to {prefixLength + suffixLength} bytes "
+                    + $"but column '{column.Name}' is fixed at {valueLength}.");
+            if (suffixLength > (uint)suffixes.Length)
+                throw new CorruptParquetException(
+                    $"Delta byte array suffix length {suffixLength} exceeds remaining suffix bytes "
+                    + $"({suffixes.Length}).");
+
+            // Bytes below prefixLength are already the previous value's, which is
+            // exactly what the prefix means.
+            suffixes[..(int)suffixLength].CopyTo(value[(int)prefixLength..]);
+            suffixes = suffixes[(int)suffixLength..];
+
+            if (typeof(T) == typeof(decimal))
+                Unsafe.As<Span<T>, Span<decimal>>(ref destination)[i] =
+                    ParquetDecimalConverter.ReadBigEndian(value, column);
+            else
+            {
+                if (valueLength != 16)
+                    return false;
+                Unsafe.As<Span<T>, Span<Guid>>(ref destination)[i] = new Guid(value, bigEndian: true);
+            }
+        }
+
+        return true;
     }
 
     static bool TryDecodePlainIntoNative<T>(ReadOnlySpan<byte> payload, Column column, uint valueCount,
