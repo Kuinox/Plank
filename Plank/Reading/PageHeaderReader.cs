@@ -6,8 +6,39 @@ namespace Plank.Reading;
 static class PageHeaderReader
 {
     internal static PageHeader Read(ReadOnlySpan<byte> buffer, uint maxUncompressedPageSize = uint.MaxValue)
+        => Read(buffer, maxUncompressedPageSize, bufferMayBeTruncated: false);
+
+    /// <summary>
+    /// Parses a header out of a buffer that may not hold all of it yet, reporting
+    /// how many more bytes are needed instead of failing.
+    /// </summary>
+    /// <remarks>
+    /// A page header does not carry its own length, so a caller scanning headers
+    /// has to grow its window until one parses. <paramref name="missingBytes"/>
+    /// is a lower bound on the shortfall — the field the parse stopped on needs
+    /// at least that many more — which lets the caller extend by exactly that and
+    /// never read a byte beyond the header it is after.
+    /// </remarks>
+    internal static bool TryRead(ReadOnlySpan<byte> buffer, uint maxUncompressedPageSize,
+        out PageHeader header, out int missingBytes)
     {
-        var reader = new CompactProtocolReader(buffer);
+        try
+        {
+            header = Read(buffer, maxUncompressedPageSize, bufferMayBeTruncated: true);
+            missingBytes = 0;
+            return true;
+        }
+        catch (CompactProtocolTruncatedException truncated)
+        {
+            header = default;
+            missingBytes = truncated.MissingBytes;
+            return false;
+        }
+    }
+
+    static PageHeader Read(ReadOnlySpan<byte> buffer, uint maxUncompressedPageSize, bool bufferMayBeTruncated)
+    {
+        var reader = new CompactProtocolReader(buffer, bufferMayBeTruncated);
         var type = PageHeaderType.DataPage;
         var uncompressedPageSize = 0U;
         var compressedPageSize = 0U;

@@ -56,6 +56,102 @@ internal sealed class LogicalPageMetadataTests
             throw new InvalidOperationException("Page metadata enumeration returned an unexpected count.");
     }
 
+    /// <remarks>
+    /// Plank's writer emits no page-header statistics, so every fixture and every
+    /// fuzz seed in this repository had headers without them and the probe that
+    /// reads a header back was never given one. Arrow writes them whenever
+    /// statistics are on, and reaches the probe whenever the page index is off —
+    /// with an offset index in the file the reader takes each page's bounds from
+    /// it and never parses a header speculatively.
+    /// </remarks>
+    [Test]
+    [Arguments(WriterKind.Int32)]
+    [Arguments(WriterKind.String)]
+    [Arguments(WriterKind.Double)]
+    public async Task OpensPageHeadersCarryingStatisticsFromAnotherWriter(WriterKind kind)
+    {
+        var bytes = CreateArrowFileWithHeaderStatistics(kind);
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(bytes, writable: false));
+
+        using var pages = reader.RowGroups[0].GetColumnMetadata(0).OpenPages();
+
+        await Assert.That(pages.Count).IsEqualTo(1);
+        await Assert.That(pages[0].Statistics.Minimum.Length).IsGreaterThan(0);
+        await Assert.That(pages[0].Statistics.Maximum.Length).IsGreaterThan(0);
+    }
+
+    /// <remarks>
+    /// The metadata API is not the only way in. A pruner makes an ordinary read
+    /// take the same path, because the enumerator has to know each page's bounds
+    /// before it can decide to skip one.
+    /// </remarks>
+    [Test]
+    public async Task PrunedReadOfAnotherWriterHeaderStatisticsReturnsEveryValue()
+    {
+        var bytes = CreateArrowFileWithHeaderStatistics(WriterKind.Int32);
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(bytes, writable: false),
+            static (in ParquetDataPageMetadata _) => true);
+
+        var values = new List<int>();
+        foreach (var buffer in reader.RowGroups[0].Column<int>(reader.Schema.LeafColumns[0]))
+            values.AddRange(buffer.Values.ToArray());
+
+        await Assert.That(values).IsEquivalentTo(new[] { 1, 2, 3, 4, 5, 6, 7, 8 });
+    }
+
+    public enum WriterKind
+    {
+        Int32,
+        String,
+        Double
+    }
+
+    // Statistics on and the page index off is the combination that produces a
+    // header the reader has to parse without knowing its length, with a min and
+    // a max inside it. Arrow writes a page index by default, which routes around
+    // that path entirely.
+    static byte[] CreateArrowFileWithHeaderStatistics(WriterKind kind)
+    {
+        using var stream = new MemoryStream();
+        using var properties = new ParquetSharp.WriterPropertiesBuilder()
+            .Compression(ParquetSharp.Compression.Uncompressed)
+            .EnableStatistics()
+            .DisableWritePageIndex()
+            .Build();
+        ParquetSharp.Column column = kind switch
+        {
+            WriterKind.Int32 => new ParquetSharp.Column<int>("value"),
+            WriterKind.String => new ParquetSharp.Column<string?>("value"),
+            _ => new ParquetSharp.Column<double>("value")
+        };
+
+        using (var writer = new ParquetSharp.ParquetFileWriter(stream, [column], null, properties, null,
+            leaveOpen: true))
+        {
+            using (var rowGroup = writer.AppendRowGroup())
+            using (var columnWriter = rowGroup.NextColumn())
+                switch (kind)
+                {
+                    case WriterKind.Int32:
+                        columnWriter.LogicalWriter<int>().WriteBatch([1, 2, 3, 4, 5, 6, 7, 8]);
+                        break;
+                    case WriterKind.String:
+                        columnWriter.LogicalWriter<string?>()
+                            .WriteBatch(["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]);
+                        break;
+                    default:
+                        columnWriter.LogicalWriter<double>().WriteBatch([1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]);
+                        break;
+                }
+
+            writer.Close();
+        }
+
+        return stream.ToArray();
+    }
+
     [Test]
     public async Task ReaderLevelPrunerSkipsRejectedPages()
     {
