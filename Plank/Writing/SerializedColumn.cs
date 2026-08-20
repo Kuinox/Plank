@@ -687,6 +687,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         HasPendingData = true;
         Plank.Writing.Encoding.Encoding.EncodeRequiredDateTimeDictionary(_owner.BufferWriters, _column, values,
             timestamp, strategyContext, Pages, GetOrCreateDictionaryState<DateTime>());
+        if (!TryAssignSingleDataPageStatistics(statistics))
+            AssignRequiredDateTimePageStatistics(values, timestamp);
         _bloomFilterByteLength = 0;
         return true;
     }
@@ -913,7 +915,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
         _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, densePresentValues,
             ref _bloomFilterBuffer);
-        if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
+        if (!TryAssignSingleDataPageStatistics(Statistics))
             AssignOptionalDensePageStatistics(densePresentValues);
     }
 
@@ -1008,7 +1010,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], dictionaryState, out var binaryMinMax);
         _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
-        if (_owner.WritePageIndexes && TryAssignInt32ColumnAndPageStatistics(values))
+        if (TryAssignInt32ColumnAndPageStatistics(values))
             return;
 
         var statisticsValues = hasDictionaryStatistics && typeof(TValue) != typeof(float)
@@ -1023,7 +1025,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool)
             : ColumnStatistics.CreateWithReusableBinaryBuffers(_column, statisticsValues, 0,
                 ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
-        if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
+        if (!TryAssignSingleDataPageStatistics(Statistics))
             AssignPageStatistics(values);
     }
 
@@ -1055,6 +1057,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                         _owner.BufferWriters, _column, doubleValues, strategyContext, Pages,
                         _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
                         GetOrCreateDictionaryState<double>());
+                    if (!TryAssignSingleDataPageStatistics(Statistics))
+                        throw new InvalidOperationException("Fused optional double encoding produced multiple data pages.");
                     _bloomFilterByteLength = 0;
                     return;
                 }
@@ -1087,7 +1091,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             GetOrCreateDictionaryState<TValue>());
         _bloomFilterByteLength = BloomFilterBuilder.BuildOptional(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
-        if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
+        if (!TryAssignSingleDataPageStatistics(Statistics))
             AssignOptionalPageStatistics(values);
     }
 
@@ -1118,7 +1122,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         _bloomFilterByteLength = BloomFilterBuilder.BuildOptionalReferences(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
-        if (_owner.WritePageIndexes && !TryAssignSingleDataPageStatistics(Statistics))
+        if (!TryAssignSingleDataPageStatistics(Statistics))
             AssignOptionalPageStatistics(values);
     }
 
@@ -1173,13 +1177,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         if (_owner.DataPageVersion == ParquetDataPageVersion.V1)
         {
             ParquetMetadataThriftWriter.WriteDataPageHeaderV1(ref page.Header, page.ValueCount, page.Encoding,
-                uncompressedContentSize, page.Content.WrittenLength, GetPageCrc(ref page));
+                uncompressedContentSize, page.Content.WrittenLength, page.Statistics, GetPageCrc(ref page));
             return;
         }
 
         ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, page.RowCount, page.ValueCount,
             page.NullCount, page.RepetitionLevelsByteLength, page.DefinitionLevelsByteLength, page.Encoding,
-            uncompressedContentSize, page.Content.WrittenLength, compressed, GetPageCrc(ref page));
+            uncompressedContentSize, page.Content.WrittenLength, compressed, page.Statistics, GetPageCrc(ref page));
     }
 
     bool PrepareDataPageV1(ref Page page, ResolvedCompression compression, int uncompressedContentSize)
@@ -1378,6 +1382,24 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 ref page.StatisticsMinValueBuffer, ref page.StatisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
             rowOffset += pageRowCount;
         }
+    }
+
+    void AssignRequiredDateTimePageStatistics(ReadOnlySpan<DateTime> values, LogicalType.Timestamp timestamp)
+    {
+        var rowOffset = 0;
+        for (var i = 0; i < Pages.Count; i++)
+        {
+            ref var page = ref Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            var pageRowCount = checked((int)page.RowCount);
+            page.Statistics = CreateRequiredDateTimeStatistics(values.Slice(rowOffset, pageRowCount), timestamp);
+            rowOffset += pageRowCount;
+        }
+
+        if (rowOffset != values.Length)
+            throw new InvalidOperationException(
+                $"DateTime page statistics covered {rowOffset} rows, but the column contains {values.Length} rows.");
     }
 
     void AssignOptionalPageStatistics<TValue>(ReadOnlySpan<TValue?> values)

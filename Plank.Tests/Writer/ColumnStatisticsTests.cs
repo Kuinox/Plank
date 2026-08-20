@@ -373,6 +373,37 @@ internal sealed class ColumnStatisticsTests
     }
 
     [Test]
+    [Arguments(PlankDataPageVersion.V1)]
+    [Arguments(PlankDataPageVersion.V2)]
+    public void WriterEmitsPageHeaderStatisticsWithoutPageIndexes(PlankDataPageVersion dataPageVersion)
+    {
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32,
+                pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            WritePageIndexes = false,
+            DataPageVersion = dataPageVersion
+        });
+        var column = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        column.Serialize([10, 50, -5, 40, 0]);
+        writer.StartRowGroup().Write(column);
+        writer.CloseFile();
+
+        using var reader = schema.CreateReader(new MemoryStream(stream.ToArray()));
+        var metadata = reader.RowGroups[0].GetColumnMetadata(0);
+        if (metadata.HasColumnIndex || metadata.HasOffsetIndex)
+            throw new InvalidOperationException("The fixture unexpectedly contains page indexes.");
+
+        using var pages = metadata.OpenPages();
+        AssertPageInt32Statistics(pages[0], min: 10, max: 50, nullCount: 0);
+        AssertPageInt32Statistics(pages[1], min: -5, max: 40, nullCount: 0);
+        AssertPageInt32Statistics(pages[2], min: 0, max: 0, nullCount: 0);
+    }
+
+    [Test]
     public void RequiredInt32PageStatisticsMatchPageBoundaries()
     {
         using var stream = new MemoryStream();
@@ -596,6 +627,18 @@ internal sealed class ColumnStatisticsTests
         }
 
         throw new InvalidOperationException($"Data page {pageIndex} was not written.");
+    }
+
+    static void AssertPageInt32Statistics(ParquetDataPageMetadata page, int min, int max, long nullCount)
+    {
+        var statistics = page.Statistics;
+        if (!statistics.HasMinimum || BinaryPrimitives.ReadInt32LittleEndian(statistics.Minimum) != min)
+            throw new InvalidOperationException($"Page minimum mismatch. Expected {min}.");
+        if (!statistics.HasMaximum || BinaryPrimitives.ReadInt32LittleEndian(statistics.Maximum) != max)
+            throw new InvalidOperationException($"Page maximum mismatch. Expected {max}.");
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Page null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
     }
 
     static string EscapeDuckDbPath(string path)

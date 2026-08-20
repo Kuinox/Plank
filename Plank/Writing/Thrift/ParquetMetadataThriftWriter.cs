@@ -15,7 +15,7 @@ static class ParquetMetadataThriftWriter
 
     internal static void WriteDataPageHeaderV2(ref BufferWriter destination, uint rowCount, uint valueCount, uint nullCount,
         uint repetitionLevelsByteLength, uint definitionLevelsByteLength, EncodingKind encoding, int uncompressedPageSize,
-        int compressedPageSize, bool isCompressed, uint? crc)
+        int compressedPageSize, bool isCompressed, in ColumnStatistics statistics, uint? crc)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
@@ -34,13 +34,14 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI32(5, checked((int)definitionLevelsByteLength));
         writer.WriteFieldI32(6, checked((int)repetitionLevelsByteLength));
         writer.WriteFieldBool(7, isCompressed);
+        WriteStatistics(ref writer, 8, statistics);
         writer.EndStruct(previousData);
 
         writer.EndStruct(previous);
     }
 
     internal static void WriteDataPageHeaderV1(ref BufferWriter destination, uint valueCount, EncodingKind encoding,
-        int uncompressedPageSize, int compressedPageSize, uint? crc)
+        int uncompressedPageSize, int compressedPageSize, in ColumnStatistics statistics, uint? crc)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
@@ -56,6 +57,7 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI32(2, GetEncoding(encoding));
         writer.WriteFieldI32(3, GetEncoding(EncodingKind.Rle));
         writer.WriteFieldI32(4, GetEncoding(EncodingKind.Rle));
+        WriteStatistics(ref writer, 5, statistics);
         writer.EndStruct(previousData);
 
         writer.EndStruct(previous);
@@ -836,7 +838,7 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI64(9, metadata.DataPageOffset);
         if (metadata.HasDictionaryPage)
             writer.WriteFieldI64(11, metadata.DictionaryPageOffset);
-        WriteStatistics(ref writer, metadata.Statistics);
+        WriteStatistics(ref writer, 12, metadata.Statistics);
         if (metadata.BloomFilterLength > 0)
         {
             writer.WriteFieldI64(14, metadata.BloomFilterOffset);
@@ -894,12 +896,12 @@ static class ParquetMetadataThriftWriter
     static long GetColumnChunkStartOffset(in ColumnChunkMetadata metadata)
         => metadata.HasDictionaryPage ? metadata.DictionaryPageOffset : metadata.DataPageOffset;
 
-    static void WriteStatistics(ref CompactWriter writer, in ColumnStatistics statistics)
+    static void WriteStatistics(ref CompactWriter writer, int fieldId, in ColumnStatistics statistics)
     {
         if (!statistics.HasStatistics)
             return;
 
-        writer.WriteFieldHeader(12, CompactType.Struct);
+        writer.WriteFieldHeader(fieldId, CompactType.Struct);
         var previous = writer.BeginStruct();
         var writeLegacyMinMax = statistics.ValueKind is not
             (ColumnStatistics.ColumnStatisticsValueKind.None or
