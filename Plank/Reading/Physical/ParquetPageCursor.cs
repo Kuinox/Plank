@@ -81,6 +81,9 @@ public struct ParquetPageCursor : IDisposable
             ? _payloadBuffer.Span[.._payloadLength]
             : _borrowedPayload.Span;
 
+    internal ReadOnlyMemory<byte> CurrentBorrowedPayloadUnchecked
+        => _borrowedPayload;
+
     public ParquetPageCursor GetEnumerator()
         => this;
 

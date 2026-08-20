@@ -296,6 +296,7 @@ static class ColumnChunkReader
         internal int BatchElementSize;
         internal FixedWidthDecoderKind DecoderKind;
         internal bool IsNullable;
+        internal ReadOnlyMemory<byte> BorrowedPlainPayload;
 
         internal readonly bool Active
             => ValueOffset < ValueCount;
@@ -312,6 +313,13 @@ static class ColumnChunkReader
     internal static bool TryStartFixedWidthPageBatches<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ulong rowCount, ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool,
         ref FixedWidthPageState page, out ColumnBuffer<T> buffer)
+        => TryStartFixedWidthPageBatches(header, payload, default, column, rowCount, ref buffers,
+            bufferPool, ref page, out buffer);
+
+    internal static bool TryStartFixedWidthPageBatches<T>(PageHeader header, ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> borrowedPayload, Column column, ulong rowCount,
+        ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool, ref FixedWidthPageState page,
+        out ColumnBuffer<T> buffer)
     {
         buffer = default;
         page = default;
@@ -418,6 +426,14 @@ static class ColumnChunkReader
                 ref buffers, bufferPool);
         }
 
+        // An array-backed MemoryReadSource already keeps uncompressed page bytes alive. Required plain
+        // int32 values have the same representation on little-endian hosts, so copying them into a
+        // second pooled buffer only spends memory bandwidth. Retain() materializes an owned copy on demand.
+        var borrowedPlainPayload = dataOffset == 0 && physicalCount == valueCount &&
+            CanBorrowPlainValues<T>(column, physicalType, isRequired, decoderKind, borrowedPayload)
+            ? borrowedPayload.Slice(dataOffset, checked(physicalCount * physicalSize))
+            : default;
+
         page = new FixedWidthPageState
         {
             ValueCount = valueCount,
@@ -430,7 +446,8 @@ static class ColumnChunkReader
                 Math.Max(GetEncodedFixedWidth(column),
                     isNullable && converter is not null ? sizeof(int) : 1)),
             DecoderKind = decoderKind,
-            IsNullable = isNullable
+            IsNullable = isNullable,
+            BorrowedPlainPayload = borrowedPlainPayload
         };
         buffer = DecodeNextFixedWidthBatch(payload, column, ref buffers, bufferPool, ref page);
         return true;
@@ -446,6 +463,17 @@ static class ColumnChunkReader
 
         var batchCapacity = Math.Max(1, DecodeBatchSizeBytes / page.BatchElementSize);
         var batchCount = Math.Min(batchCapacity, page.ValueCount - page.ValueOffset);
+        if (!page.BorrowedPlainPayload.IsEmpty)
+        {
+            var elementSize = Unsafe.SizeOf<T>();
+            var byteOffset = checked(page.ValueOffset * elementSize);
+            var byteLength = checked(batchCount * elementSize);
+            var borrowed = new ColumnBuffer<T>(
+                page.BorrowedPlainPayload.Slice(byteOffset, byteLength), batchCount, bufferPool);
+            page.ValueOffset += batchCount;
+            page.PhysicalOffset += batchCount;
+            return borrowed;
+        }
         var values = buffers.GetValues<T>(batchCount, bufferPool);
         int physicalBatchCount;
         ReadOnlySpan<byte> byteDefinitions = [];
@@ -493,6 +521,13 @@ static class ColumnChunkReader
                 $"expected {page.PhysicalCount}.");
         return buffers.CreateNativeBuffer(batchCount);
     }
+
+    static bool CanBorrowPlainValues<T>(Column column, Type physicalType, bool isRequired,
+        FixedWidthDecoderKind decoderKind, ReadOnlyMemory<byte> borrowedPayload)
+        => BitConverter.IsLittleEndian && isRequired && column.Converter is null &&
+           physicalType == typeof(int) && typeof(T) == typeof(int) &&
+           column.PhysicalType == ParquetPhysicalType.Int32 &&
+           decoderKind == FixedWidthDecoderKind.Plain && !borrowedPayload.IsEmpty;
 
     static bool CanBatchFixedWidthProjection(Column column, Type physicalType, EncodingKind encoding)
     {
