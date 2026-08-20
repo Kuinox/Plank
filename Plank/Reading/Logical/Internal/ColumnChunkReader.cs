@@ -15,6 +15,7 @@ static class ColumnChunkReader
     static readonly ulong[] ExpandedDefinitionBytes = CreateExpandedDefinitionBytes();
     static readonly byte[] DefinitionByteCounts = CreateDefinitionByteCounts();
     static readonly bool NullableInt32HasCanonicalLayout = HasCanonicalNullableInt32Layout();
+    static readonly bool NullableDateTimeHasCanonicalLayout = HasCanonicalNullableDateTimeLayout();
     internal static bool TryDecodeDictionaryPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
@@ -1399,10 +1400,10 @@ static class ColumnChunkReader
     /// <remarks>
     /// The generic converted-value path stores four bytes per definition, decodes physical values,
     /// materializes each timestamp in place, and then copies them into nullable destinations. Keep
-    /// the definitions in the unused front of the destination instead, decode raw Int64 values to
-    /// scratch, and construct each timestamp while scattering backwards. The backwards walk is what
-    /// makes reusing the destination safe: a nullable value only overwrites definition bytes whose
-    /// entries have already been consumed.
+    /// the definitions in the unused front of the destination instead. When every value is present,
+    /// the first half of that destination can also hold the raw Int64 values: expanding the nullable
+    /// values backwards only overwrites raw values which have already been consumed. Pages containing
+    /// nulls keep the separate scratch buffer because their compact definitions share that storage.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static int DecodeNullableDeltaBinaryPackedDateTimes<T>(ReadOnlySpan<byte> payload,
@@ -1426,6 +1427,14 @@ static class ColumnChunkReader
                 definitions, out physicalCount);
         }
 
+        if (physicalCount == valueCount)
+        {
+            var raw = MemoryMarshal.Cast<byte, long>(AsBytes(destination))[..physicalCount];
+            DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
+            MaterializeAllPresentNullableDateTimes(raw, destination, timestamp.Unit, kind);
+            return physicalCount;
+        }
+
         var physicalByteLength = checked(physicalCount * sizeof(long));
         var physicalValues = MemoryMarshal.Cast<byte, long>(
             state.GetScratch(physicalByteLength, bufferPool));
@@ -1441,6 +1450,75 @@ static class ColumnChunkReader
                 $"Definition levels consumed {physicalCount - physicalIndex} physical values, " +
                 $"expected {physicalCount}.");
         return physicalCount;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static void MaterializeAllPresentNullableDateTimes(Span<long> raw, Span<DateTime?> destination,
+        TimeUnit unit, DateTimeKind kind)
+    {
+        var index = destination.Length;
+        if (unit == TimeUnit.Micros && NullableDateTimeHasCanonicalLayout && Avx2.IsSupported)
+        {
+            // These are the inclusive raw values whose scaled, epoch-adjusted ticks fit DateTime.
+            // Validating before the shifts makes their unchecked vector arithmetic equivalent to
+            // TimestampTicks, while an invalid vector falls back to that method for its exception.
+            const long minimumMicroseconds = -62_135_596_800_000_000;
+            const long maximumMicroseconds = 253_402_300_799_999_999;
+            ref var rawStart = ref MemoryMarshal.GetReference(raw);
+            ref var destinationStart = ref Unsafe.As<DateTime?, ulong>(
+                ref MemoryMarshal.GetReference(destination));
+            var minimum = Vector256.Create(minimumMicroseconds);
+            var maximum = Vector256.Create(maximumMicroseconds);
+            var epoch = Vector256.Create(DateTime.UnixEpoch.Ticks);
+            var present = Vector256.Create(1UL);
+            var kindProbe = new DateTime(0, kind);
+            var kindBits = Vector256.Create(Unsafe.As<DateTime, ulong>(ref kindProbe));
+
+            while ((index & (Vector256<long>.Count - 1)) != 0)
+            {
+                index--;
+                destination[index] = new DateTime(TimestampTicks(raw[index], unit), kind);
+            }
+
+            while (index != 0)
+            {
+                var next = index - Vector256<long>.Count;
+                var source = Vector256.LoadUnsafe(ref rawStart, (nuint)next);
+                var invalid = Avx2.CompareGreaterThan(minimum, source) |
+                    Avx2.CompareGreaterThan(source, maximum);
+                if (Avx2.MoveMask(invalid.AsByte()) != 0)
+                    break;
+
+                var scaled = Avx2.ShiftLeftLogical(source.AsUInt64(), 3).AsInt64() +
+                    Avx2.ShiftLeftLogical(source.AsUInt64(), 1).AsInt64();
+                var dateData = (scaled + epoch).AsUInt64() | kindBits;
+                var even = Avx2.UnpackLow(present, dateData);
+                var odd = Avx2.UnpackHigh(present, dateData);
+                // The canonical nullable layout is one present word followed by DateTime's data.
+                Avx2.Permute2x128(even.AsInt64(), odd.AsInt64(), 0x20).AsUInt64()
+                    .StoreUnsafe(ref destinationStart, (nuint)(next * 2));
+                Avx2.Permute2x128(even.AsInt64(), odd.AsInt64(), 0x31).AsUInt64()
+                    .StoreUnsafe(ref destinationStart, (nuint)(next * 2 + Vector256<ulong>.Count));
+                index = next;
+            }
+        }
+
+        while (index != 0)
+        {
+            index--;
+            destination[index] = new DateTime(TimestampTicks(raw[index], unit), kind);
+        }
+    }
+
+    static bool HasCanonicalNullableDateTimeLayout()
+    {
+        if (Unsafe.SizeOf<DateTime?>() != 2 * sizeof(ulong))
+            return false;
+        var value = new DateTime(0x1234_5678, DateTimeKind.Utc);
+        DateTime?[] probe = [value];
+        ref var nullable = ref MemoryMarshal.GetArrayDataReference(probe);
+        ref var firstWord = ref Unsafe.As<DateTime?, ulong>(ref nullable);
+        return firstWord == 1 && Unsafe.Add(ref firstWord, 1) == Unsafe.As<DateTime, ulong>(ref value);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

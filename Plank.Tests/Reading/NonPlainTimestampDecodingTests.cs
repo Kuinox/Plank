@@ -85,6 +85,28 @@ internal sealed class NonPlainTimestampDecodingTests
     }
 
     [Test]
+    public void AllPresentOptionalDeltaBinaryPackedDateTimesPreserveVectorBoundaries()
+    {
+        foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        foreach (var isAdjustedToUtc in new[] { false, true })
+        {
+            var kind = isAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+            var epoch = DateTime.SpecifyKind(DateTime.UnixEpoch, kind);
+            var expected = Enumerable.Range(0, 259)
+                .Select(index => (DateTime?)epoch.AddTicks((index - 129L) * 10))
+                .ToArray();
+            expected[0] = new DateTime(DateTime.MinValue.Ticks, kind);
+            expected[3] = new DateTime(DateTime.MaxValue.Ticks - 9, kind);
+
+            var actual = RoundTripOptional(expected, TimeUnit.Micros, isAdjustedToUtc,
+                EncodingKind.DeltaBinaryPacked, pageVersion);
+
+            AssertEqual(expected, actual, TimeUnit.Micros, isAdjustedToUtc,
+                EncodingKind.DeltaBinaryPacked, pageVersion);
+        }
+    }
+
+    [Test]
     public void RequiredDictionaryDateTimesPreserveUnitsKindsAndElevenBitIndexes()
     {
         foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
@@ -230,7 +252,7 @@ internal sealed class NonPlainTimestampDecodingTests
     }
 
     [Test]
-    public void OptionalDeltaBinaryPackedDateTimesRejectOutOfRangeValues()
+    public void OptionalDeltaBinaryPackedDateTimesRejectOutOfRangeVectorLane()
     {
         foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
         {
@@ -245,7 +267,7 @@ internal sealed class NonPlainTimestampDecodingTests
             var buffers = default(ColumnReadBuffers<DateTime?>);
             try
             {
-                DeltaBinaryPackedEncoding.WriteInt64([long.MaxValue], ref writer);
+                DeltaBinaryPackedEncoding.WriteInt64([0, 1, long.MaxValue, 3], ref writer);
                 var encodedValues = new byte[writer.WrittenLength];
                 writer.CopyTo(encodedValues);
 
@@ -255,7 +277,7 @@ internal sealed class NonPlainTimestampDecodingTests
                 {
                     payload = new byte[sizeof(int) + 2 + encodedValues.Length];
                     BinaryPrimitives.WriteInt32LittleEndian(payload, 2);
-                    payload[sizeof(int)] = 2; // One-value RLE run.
+                    payload[sizeof(int)] = 8; // Four-value RLE run.
                     payload[sizeof(int) + 1] = 1; // Present.
                     encodedValues.CopyTo(payload, sizeof(int) + 2);
                     definitionByteLength = 0;
@@ -263,7 +285,7 @@ internal sealed class NonPlainTimestampDecodingTests
                 else
                 {
                     payload = new byte[2 + encodedValues.Length];
-                    payload[0] = 2; // One-value RLE run.
+                    payload[0] = 8; // Four-value RLE run.
                     payload[1] = 1; // Present.
                     encodedValues.CopyTo(payload, 2);
                     definitionByteLength = 2;
@@ -272,15 +294,15 @@ internal sealed class NonPlainTimestampDecodingTests
                 var header = new PageHeader(
                     pageVersion == ParquetDataPageVersion.V1 ? PageHeaderType.DataPage : PageHeaderType.DataPageV2,
                     UncompressedPageSize: checked((uint)payload.Length),
-                    CompressedPageSize: checked((uint)payload.Length), ValueCount: 1,
+                    CompressedPageSize: checked((uint)payload.Length), ValueCount: 4,
                     Encoding: EncodingKind.DeltaBinaryPacked, HeaderLength: 1,
                     RepetitionLevelsByteLength: 0, DefinitionLevelsByteLength: definitionByteLength,
                     NullCount: 0, IsCompressed: false, RepetitionLevelEncoding: EncodingKind.Rle,
-                    DefinitionLevelEncoding: EncodingKind.Rle, RowCount: 1);
+                    DefinitionLevelEncoding: EncodingKind.Rle, RowCount: 4);
 
                 Assert.Throws<CorruptParquetException>(() =>
                     ColumnChunkReader.TryDecodeNullablePageIntoNative(header, payload, column,
-                        rowCount: 1, ref buffers, DefaultParquetBufferPool.Shared, out _));
+                        rowCount: 4, ref buffers, DefaultParquetBufferPool.Shared, out _));
             }
             finally
             {
