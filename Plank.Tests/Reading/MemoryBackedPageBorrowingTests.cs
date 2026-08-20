@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Collections.Immutable;
 using Plank.Reading;
+using Plank.Reading.Logical;
 using Plank.Reading.Physical;
 using Plank.Schema;
 using Plank.Writing;
@@ -66,6 +67,75 @@ internal sealed class MemoryBackedPageBorrowingTests
 
         if (actualOffset != expected.Length)
             throw new InvalidOperationException($"Decoded {actualOffset} values instead of {expected.Length}.");
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void RequiredPlainInt32LogicalBuffersBorrowPageStorageUntilRetained(
+        ParquetDataPageVersion pageVersion)
+    {
+        var (schema, file, expected) = CreateFile(valueCount: 70_003,
+            targetPageSize: 1024 * 1024, pageVersion: pageVersion);
+        var pool = new TrackingBufferPool();
+        ParquetBuffer retained = default;
+        int[] firstValues;
+        try
+        {
+            using (var reader = schema.CreateReader(new MemoryReadSource(file),
+                       new ParquetReaderOptions { BufferPool = pool }))
+            {
+                pool.Reset();
+                var buffers = reader.RowGroups[0].Column<int>(0).GetEnumerator();
+                try
+                {
+                    if (!buffers.MoveNext())
+                        throw new InvalidOperationException("Expected a required plain int32 buffer.");
+                    var first = buffers.Current;
+                    firstValues = first.Values.ToArray();
+                    if (!first.Values.SequenceEqual(expected.AsSpan(0, first.Count)))
+                        throw new InvalidOperationException("The first borrowed buffer contains different values.");
+                    if (first.Count >= expected.Length)
+                        throw new InvalidOperationException("The borrowed page was not split into bounded buffers.");
+                    if (pool.RentCount != 0)
+                        throw new InvalidOperationException(
+                            $"Borrowed logical values unexpectedly rented {pool.RentCount} buffers.");
+
+                    retained = first.Retain();
+                    if (pool.RentCount != 1)
+                        throw new InvalidOperationException(
+                            $"Retaining borrowed values rented {pool.RentCount} buffers instead of one.");
+
+                    var offset = first.Count;
+                    while (buffers.MoveNext())
+                    {
+                        var current = buffers.Current;
+                        if (!current.Values.SequenceEqual(expected.AsSpan(offset, current.Count)))
+                            throw new InvalidOperationException(
+                                $"A borrowed buffer contains different values at offset {offset}.");
+                        offset += current.Count;
+                    }
+                    if (offset != expected.Length)
+                        throw new InvalidOperationException(
+                            $"Decoded {offset} values instead of {expected.Length}.");
+                    if (pool.RentCount != 1)
+                        throw new InvalidOperationException(
+                            "Advancing borrowed buffers unexpectedly rented additional storage.");
+                }
+                finally
+                {
+                    buffers.Dispose();
+                }
+            }
+
+            if (!retained.AsSpan<int>().SequenceEqual(firstValues))
+                throw new InvalidOperationException(
+                    "Retained borrowed values changed after advancing and disposing the reader.");
+        }
+        finally
+        {
+            retained.Dispose();
+        }
     }
 
     [Test]
@@ -179,7 +249,8 @@ internal sealed class MemoryBackedPageBorrowingTests
         => pages.CurrentPayload.Length;
 
     static (ParquetSchema Schema, byte[] File, int[] Values) CreateFile(int valueCount = 1_024,
-        uint targetPageSize = 1024 * 1024, bool writePageCrc = false)
+        uint targetPageSize = 1024 * 1024, bool writePageCrc = false,
+        ParquetDataPageVersion pageVersion = ParquetDataPageVersion.V1)
     {
         var schema = new ParquetSchema([
             ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int32,
@@ -190,7 +261,7 @@ internal sealed class MemoryBackedPageBorrowingTests
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
             Compression = CompressionKind.None,
-            DataPageVersion = ParquetDataPageVersion.V1,
+            DataPageVersion = pageVersion,
             TargetDataPageSizeBytes = targetPageSize,
             WritePageIndexes = false,
             WritePageCrc = writePageCrc

@@ -120,8 +120,15 @@ sealed class ParquetSharpPublishedBenchmarkReader : IPublishedBenchmarkReader
         where T : struct, IEquatable<T>
     {
         var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
-        for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
-            fingerprint.AddValue(array.GetValue(valueIndex));
+        if (array.NullCount == 0)
+        {
+            fingerprint.AddValues(array.Values);
+        }
+        else
+        {
+            for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
+                fingerprint.AddValue(array.GetValue(valueIndex));
+        }
         return new PublishedReadResult(array.Length, fingerprint.Finish());
     }
 

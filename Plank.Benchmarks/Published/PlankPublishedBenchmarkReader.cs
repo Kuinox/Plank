@@ -90,8 +90,7 @@ sealed class PlankPublishedBenchmarkReader : IPublishedBenchmarkReader
         foreach (var buffer in rowGroup.Column<T>(columnIndex))
         {
             var values = buffer.Values;
-            for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
-                fingerprint.AddValue(values[valueIndex]);
+            fingerprint.AddValues(values);
             offset = checked(offset + buffer.Count);
         }
         ValidateCount(columnIndex, rowCount, offset);
