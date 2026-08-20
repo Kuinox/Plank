@@ -23,8 +23,13 @@ public static class TaxiBenchmarkData
         return path;
     }
 
-    public static IReadOnlyList<PublishedBenchmarkDataSet> Load(string path, int? maximumRows = null)
+    internal static bool IsCaseId(string caseId)
+        => GetCaseColumnOrdinals(caseId) is not null;
+
+    public static IReadOnlyList<PublishedBenchmarkDataSet> Load(string path, int? maximumRows = null,
+        string? caseId = null)
     {
+        var selectedColumns = GetCaseColumnOrdinals(caseId) ?? [];
         using var reader = new ParquetFileReader(path);
         var columns = new PublishedBenchmarkDataSet.Column[19];
         var values = new List<Array>[19];
@@ -40,20 +45,24 @@ public static class TaxiBenchmarkData
         {
             using var rowGroup = reader.RowGroup(rowGroupIndex);
             var count = Math.Min(checked((int)rowGroup.MetaData.NumRows), remaining);
-            values[0].Add(Read<int?>(rowGroup, 0, count));
-            values[1].Add(Read<DateTime?>(rowGroup, 1, count));
-            values[2].Add(Read<DateTime?>(rowGroup, 2, count));
-            values[3].Add(Read<long?>(rowGroup, 3, count));
-            values[4].Add(Read<double?>(rowGroup, 4, count));
-            values[5].Add(Read<long?>(rowGroup, 5, count));
-            var strings = Read<string?>(rowGroup, 6, count);
-            values[6].Add(strings);
-            utf8Values[6].Add(ToUtf8(strings));
-            values[7].Add(Read<int?>(rowGroup, 7, count));
-            values[8].Add(Read<int?>(rowGroup, 8, count));
-            values[9].Add(Read<long?>(rowGroup, 9, count));
+            if (selectedColumns.Contains(0)) values[0].Add(Read<int?>(rowGroup, 0, count));
+            if (selectedColumns.Contains(1)) values[1].Add(Read<DateTime?>(rowGroup, 1, count));
+            if (selectedColumns.Contains(2)) values[2].Add(Read<DateTime?>(rowGroup, 2, count));
+            if (selectedColumns.Contains(3)) values[3].Add(Read<long?>(rowGroup, 3, count));
+            if (selectedColumns.Contains(4)) values[4].Add(Read<double?>(rowGroup, 4, count));
+            if (selectedColumns.Contains(5)) values[5].Add(Read<long?>(rowGroup, 5, count));
+            if (selectedColumns.Contains(6))
+            {
+                var strings = Read<string?>(rowGroup, 6, count);
+                values[6].Add(strings);
+                utf8Values[6].Add(ToUtf8(strings));
+            }
+            if (selectedColumns.Contains(7)) values[7].Add(Read<int?>(rowGroup, 7, count));
+            if (selectedColumns.Contains(8)) values[8].Add(Read<int?>(rowGroup, 8, count));
+            if (selectedColumns.Contains(9)) values[9].Add(Read<long?>(rowGroup, 9, count));
             for (var column = 10; column < 19; column++)
-                values[column].Add(Read<double?>(rowGroup, column, count));
+                if (selectedColumns.Contains(column))
+                    values[column].Add(Read<double?>(rowGroup, column, count));
             remaining -= count;
         }
 
@@ -84,7 +93,7 @@ public static class TaxiBenchmarkData
         columns[17] = Column("congestion_surcharge", BenchmarkColumnKind.Double, values[17]);
         columns[18] = Column("Airport_fee", BenchmarkColumnKind.Double, values[18]);
 
-        return
+        PublishedBenchmarkDataSet[] dataSets =
         [
             .. Variants("taxi", "Complete taxi file", columns, "plain", "dictionary"),
             .. Variants("int32", "int32", Select(columns, 0, 7, 8),
@@ -98,6 +107,33 @@ public static class TaxiBenchmarkData
             .. Variants("strings", "Strings", Select(columns, 6),
                 "plain", "dictionary", "delta_length_byte_array", "delta_byte_array")
         ];
+        return dataSets.Where(dataSet => caseId is null || dataSet.Id == caseId).ToArray();
+    }
+
+    static int[]? GetCaseColumnOrdinals(string? caseId)
+    {
+        if (caseId is null)
+            return Enumerable.Range(0, 19).ToArray();
+        var separator = caseId.LastIndexOf('-');
+        if (separator < 0)
+            return null;
+        var encoding = caseId[(separator + 1)..];
+        var prefix = caseId[..separator];
+        return (prefix, encoding) switch
+        {
+            ("taxi", "plain" or "dictionary") => Enumerable.Range(0, 19).ToArray(),
+            ("int32", "plain" or "dictionary") => [0, 7, 8],
+            ("int64", "plain" or "dictionary") => [3, 5, 9],
+            ("timestamps", "plain" or "dictionary") => [1, 2],
+            ("doubles", "plain" or "dictionary") => [4, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+            ("strings", "plain" or "dictionary") => [6],
+            _ when caseId is "int32-delta-binary-packed" or "int32-byte-stream-split" => [0, 7, 8],
+            _ when caseId is "int64-delta-binary-packed" or "int64-byte-stream-split" => [3, 5, 9],
+            _ when caseId is "timestamps-delta-binary-packed" or "timestamps-byte-stream-split" => [1, 2],
+            _ when caseId is "doubles-byte-stream-split" => [4, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+            _ when caseId is "strings-delta-length-byte-array" or "strings-delta-byte-array" => [6],
+            _ => null
+        };
     }
 
     static T[] Read<T>(RowGroupReader rowGroup, int columnIndex, int count)

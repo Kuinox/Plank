@@ -52,11 +52,12 @@ internal sealed class NonPlainTimestampDecodingTests
     }
 
     [Test]
-    public void LargeOptionalPlainAndByteStreamSplitDateTimesPreserveUnitsKindsNullsAndBatchBoundaries()
+    public void LargeOptionalDateTimesPreserveUnitsKindsNullsAndBatchBoundaries()
     {
         ParquetDataPageVersion[] pageVersions =
             [ParquetDataPageVersion.V1, ParquetDataPageVersion.V2];
-        EncodingKind[] encodings = [EncodingKind.Plain, EncodingKind.ByteStreamSplit];
+        EncodingKind[] encodings =
+            [EncodingKind.Plain, EncodingKind.DeltaBinaryPacked, EncodingKind.ByteStreamSplit];
         foreach (var pageVersion in pageVersions)
         foreach (var encoding in encodings)
         foreach (var unit in Enum.GetValues<TimeUnit>())
@@ -68,6 +69,19 @@ internal sealed class NonPlainTimestampDecodingTests
             var actual = RoundTripOptional(expected, unit, isAdjustedToUtc, encoding, pageVersion);
             AssertEqual(expected, actual, unit, isAdjustedToUtc, encoding, pageVersion);
         }
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void AllNullOptionalDeltaBinaryPackedDateTimesRoundTrip(ParquetDataPageVersion pageVersion)
+    {
+        var expected = new DateTime?[257];
+        var actual = RoundTripOptional(expected, TimeUnit.Micros, isAdjustedToUtc: true,
+            EncodingKind.DeltaBinaryPacked, pageVersion);
+
+        AssertEqual(expected, actual, TimeUnit.Micros, isAdjustedToUtc: true,
+            EncodingKind.DeltaBinaryPacked, pageVersion);
     }
 
     [Test]
@@ -206,6 +220,67 @@ internal sealed class NonPlainTimestampDecodingTests
                     ColumnChunkReader.TryDecodeRequiredPageIntoNative(
                         header, payload, column, rowCount: 1, ref buffers,
                         DefaultParquetBufferPool.Shared, out _));
+            }
+            finally
+            {
+                buffers.Dispose();
+                writer.Dispose();
+            }
+        }
+    }
+
+    [Test]
+    public void OptionalDeltaBinaryPackedDateTimesRejectOutOfRangeValues()
+    {
+        foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        {
+            var schema = new ParquetSchema([
+                ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int64,
+                    new ColumnOptions(ParquetRepetition.Optional,
+                        ImmutableArray.Create(EncodingKind.DeltaBinaryPacked)),
+                    new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true))
+            ]);
+            var column = schema.LeafColumns[0].Column;
+            var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 1024, 1024);
+            var buffers = default(ColumnReadBuffers<DateTime?>);
+            try
+            {
+                DeltaBinaryPackedEncoding.WriteInt64([long.MaxValue], ref writer);
+                var encodedValues = new byte[writer.WrittenLength];
+                writer.CopyTo(encodedValues);
+
+                byte[] payload;
+                uint definitionByteLength;
+                if (pageVersion == ParquetDataPageVersion.V1)
+                {
+                    payload = new byte[sizeof(int) + 2 + encodedValues.Length];
+                    BinaryPrimitives.WriteInt32LittleEndian(payload, 2);
+                    payload[sizeof(int)] = 2; // One-value RLE run.
+                    payload[sizeof(int) + 1] = 1; // Present.
+                    encodedValues.CopyTo(payload, sizeof(int) + 2);
+                    definitionByteLength = 0;
+                }
+                else
+                {
+                    payload = new byte[2 + encodedValues.Length];
+                    payload[0] = 2; // One-value RLE run.
+                    payload[1] = 1; // Present.
+                    encodedValues.CopyTo(payload, 2);
+                    definitionByteLength = 2;
+                }
+
+                var header = new PageHeader(
+                    pageVersion == ParquetDataPageVersion.V1 ? PageHeaderType.DataPage : PageHeaderType.DataPageV2,
+                    UncompressedPageSize: checked((uint)payload.Length),
+                    CompressedPageSize: checked((uint)payload.Length), ValueCount: 1,
+                    Encoding: EncodingKind.DeltaBinaryPacked, HeaderLength: 1,
+                    RepetitionLevelsByteLength: 0, DefinitionLevelsByteLength: definitionByteLength,
+                    NullCount: 0, IsCompressed: false, RepetitionLevelEncoding: EncodingKind.Rle,
+                    DefinitionLevelEncoding: EncodingKind.Rle, RowCount: 1);
+
+                Assert.Throws<CorruptParquetException>(() =>
+                    ColumnChunkReader.TryDecodeNullablePageIntoNative(header, payload, column,
+                        rowCount: 1, ref buffers, DefaultParquetBufferPool.Shared, out _));
             }
             finally
             {

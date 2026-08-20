@@ -1027,6 +1027,20 @@ static class ColumnChunkReader
             return true;
         }
 
+        if (converter is null && typeof(T) == typeof(DateTime?) && physicalType == typeof(DateTime) &&
+            column.PhysicalType == ParquetPhysicalType.Int64 &&
+            header.Encoding == EncodingKind.DeltaBinaryPacked)
+        {
+            var timestampPhysicalCount = DecodeNullableDeltaBinaryPackedDateTimes(dataPayload,
+                definitionPayload, valueCount, definitionLevelEncoding, column.LogicalType,
+                ref state, bufferPool);
+            if (header.Type == PageHeaderType.DataPageV2 && timestampPhysicalCount != expectedPhysicalCount)
+                throw new CorruptParquetException(
+                    $"Definition levels contain {timestampPhysicalCount} values, expected {expectedPhysicalCount}.");
+            buffer = state.CreateNativeBuffer(valueCount);
+            return true;
+        }
+
         if (converter is null && TryDecodeNullableNumericValuesByPhysicalType(dataPayload,
                 definitionPayload, valueCount, column, header.Encoding, definitionLevelEncoding,
                 physicalType, ref state, bufferPool, out var numericPhysicalCount))
@@ -1264,6 +1278,57 @@ static class ColumnChunkReader
             definitionPayload = definitionPayload[checked((int)literalByteCount)..];
         }
         return physicalIndex;
+    }
+
+    /// <summary>
+    /// Decodes nullable delta-binary-packed timestamps without expanding every definition level to
+    /// an <see cref="int"/> or materializing an intermediate <see cref="DateTime"/> array.
+    /// </summary>
+    /// <remarks>
+    /// The generic converted-value path stores four bytes per definition, decodes physical values,
+    /// materializes each timestamp in place, and then copies them into nullable destinations. Keep
+    /// the definitions in the unused front of the destination instead, decode raw Int64 values to
+    /// scratch, and construct each timestamp while scattering backwards. The backwards walk is what
+    /// makes reusing the destination safe: a nullable value only overwrites definition bytes whose
+    /// entries have already been consumed.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static int DecodeNullableDeltaBinaryPackedDateTimes<T>(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<byte> definitionPayload, int valueCount, EncodingKind definitionLevelEncoding,
+        LogicalType? logicalType, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
+    {
+        var timestamp = GetTimestampLogicalType(logicalType);
+        var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+        var values = state.GetValues<T>(valueCount, bufferPool);
+        var destination = Unsafe.As<Span<T>, Span<DateTime?>>(ref values);
+        var definitions = AsBytes(destination)[..valueCount];
+        int physicalCount;
+        if (definitionPayload.IsEmpty)
+        {
+            definitions.Fill(1);
+            physicalCount = valueCount;
+        }
+        else
+        {
+            DecodeCompactDefinitionLevels(definitionPayload, definitionLevelEncoding,
+                definitions, out physicalCount);
+        }
+
+        var physicalByteLength = checked(physicalCount * sizeof(long));
+        var physicalValues = MemoryMarshal.Cast<byte, long>(
+            state.GetScratch(physicalByteLength, bufferPool));
+        DeltaBinaryPackedDecoder.ReadInt64(payload, physicalValues);
+
+        var physicalIndex = physicalCount;
+        for (var i = definitions.Length - 1; i >= 0; i--)
+            destination[i] = definitions[i] == 0
+                ? null
+                : new DateTime(TimestampTicks(physicalValues[--physicalIndex], timestamp.Unit), kind);
+        if (physicalIndex != 0)
+            throw new CorruptParquetException(
+                $"Definition levels consumed {physicalCount - physicalIndex} physical values, " +
+                $"expected {physicalCount}.");
+        return physicalCount;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

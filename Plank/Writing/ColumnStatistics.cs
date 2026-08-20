@@ -145,7 +145,7 @@ internal readonly struct ColumnStatistics
     }
 
     /// <summary>
-    /// Builds binary statistics from the min and max a plain BYTE_ARRAY encode pass already found,
+    /// Builds binary statistics from the min and max a BYTE_ARRAY sizing or encode pass already found,
     /// instead of walking the values again.
     /// </summary>
     /// <remarks>
@@ -524,7 +524,7 @@ internal readonly struct ColumnStatistics
         return FromInt64(min, max, nullCount);
     }
 
-    static bool TryGetInt64MinMax(ReadOnlySpan<long> values, out long min, out long max)
+    internal static bool TryGetInt64MinMax(ReadOnlySpan<long> values, out long min, out long max)
     {
         min = 0;
         max = 0;

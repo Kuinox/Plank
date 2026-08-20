@@ -5,18 +5,21 @@ public static class PublishedBenchmarkCommand
     public static async Task RunAsync(string[] args, CancellationToken cancellationToken = default)
     {
         var root = FindRepositoryRoot();
-        var quick = args.Contains("--quick", StringComparer.Ordinal);
-        var dataDirectory = ReadValue(args, "--data-dir") ?? Path.Combine(root, "Plank.Benchmarks", "nyc-data");
-        var output = ReadValue(args, "--output") ?? Path.Combine(root,
-            quick ? "artifacts/benchmarks/write-quick-v1.json" : "docs/benchmarks/write-v1.json");
         var options = CreateOptions(args);
-        var taxiPath = await TaxiBenchmarkData.EnsureJanuary2024Async(dataDirectory, cancellationToken)
-            .ConfigureAwait(false);
-        Console.WriteLine("Preloading and converting January 2024 NYC Yellow Taxi data (not timed).");
-        var realWorld = TaxiBenchmarkData.Load(taxiPath, quick ? options.QuickRows : null);
+        var dataDirectory = ReadValue(args, "--data-dir") ?? Path.Combine(root, "Plank.Benchmarks", "nyc-data");
+        var output = ReadValue(args, "--output") ?? GetDefaultOutputPath(root, read: false, options);
         var synthetic = SyntheticBenchmarkData.Create(
-            quick ? options.QuickRows : options.SyntheticRows,
-            quick ? options.QuickWidth : options.SyntheticWidth);
+            options.Quick ? options.QuickRows : options.SyntheticRows,
+            options.Quick ? options.QuickWidth : options.SyntheticWidth,
+            options.CaseId);
+        IReadOnlyList<PublishedBenchmarkDataSet> realWorld = [];
+        if (options.CaseId is null || TaxiBenchmarkData.IsCaseId(options.CaseId))
+        {
+            var taxiPath = await TaxiBenchmarkData.EnsureJanuary2024Async(dataDirectory, cancellationToken)
+                .ConfigureAwait(false);
+            Console.WriteLine("Preloading and converting January 2024 NYC Yellow Taxi data (not timed).");
+            realWorld = TaxiBenchmarkData.Load(taxiPath, options.Quick ? options.QuickRows : null, options.CaseId);
+        }
         var report = await PublishedBenchmarkRunner.RunAsync(realWorld, synthetic, options, cancellationToken)
             .ConfigureAwait(false);
         Directory.CreateDirectory(Path.GetDirectoryName(output)
@@ -24,6 +27,16 @@ public static class PublishedBenchmarkCommand
         await File.WriteAllTextAsync(output, PublishedBenchmarkJson.Serialize(report), cancellationToken)
             .ConfigureAwait(false);
         Console.WriteLine($"Published benchmark snapshot: {output}");
+    }
+
+    internal static string GetDefaultOutputPath(string root, bool read, PublishedBenchmarkOptions options)
+    {
+        var prefix = read ? "read" : "write";
+        if (options.CaseId is not null)
+            return Path.Combine(root, "artifacts", "benchmarks", $"{prefix}-case-v1.json");
+        return Path.Combine(root, options.Quick
+            ? $"artifacts/benchmarks/{prefix}-quick-v1.json"
+            : $"docs/benchmarks/{prefix}-v1.json");
     }
 
     internal static PublishedBenchmarkOptions CreateOptions(string[] args)
@@ -38,7 +51,8 @@ public static class PublishedBenchmarkCommand
             SyntheticRows = ReadInt(args, "--synthetic-rows") ?? 1_000_000,
             SyntheticWidth = ReadInt(args, "--synthetic-width") ?? Environment.ProcessorCount,
             QuickRows = ReadInt(args, "--quick-rows") ?? 4_096,
-            QuickWidth = ReadInt(args, "--quick-width") ?? Math.Min(4, Environment.ProcessorCount)
+            QuickWidth = ReadInt(args, "--quick-width") ?? Math.Min(4, Environment.ProcessorCount),
+            CaseId = ReadValue(args, "--case")
         };
     }
 

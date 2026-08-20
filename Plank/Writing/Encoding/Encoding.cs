@@ -169,7 +169,7 @@ static class Encoding
                 return false;
 
             WriteVariableByteArrayDataPages(bufferWriters, column, values, dataEncoding, pages,
-                checked((int)targetPageBytes));
+                checked((int)targetPageBytes), ref binaryMinMax);
             return true;
         }
 
@@ -260,9 +260,20 @@ static class Encoding
     }
 
     static void WriteVariableByteArrayDataPages<T>(BufferWriterFactory bufferWriters, Column column,
-        ReadOnlySpan<T> values, EncodingKind dataEncoding, PageList pages, int targetPageBytes)
+        ReadOnlySpan<T> values, EncodingKind dataEncoding, PageList pages, int targetPageBytes,
+        ref PlainBinaryMinMax binaryMinMax)
         where T : notnull
     {
+        // byte[] is a shared generic instantiation. Dispatch once so the hot sizing loop can load the
+        // payload directly, and settle page plus column statistics while every reference is already hot.
+        if (typeof(T) == typeof(byte[]) && ColumnStatistics.OrdersBinaryValuesLexicographically(column))
+        {
+            WriteRequiredByteArrayDataPages(bufferWriters, column,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values), dataEncoding, pages, targetPageBytes,
+                ref binaryMinMax);
+            return;
+        }
+
         var rowsWritten = 0;
         while (rowsWritten < values.Length)
         {
@@ -281,6 +292,159 @@ static class Encoding
             }
 
             WriteDataPage(bufferWriters, column, values.Slice(pageStart, pageRowCount), dataEncoding, pages);
+        }
+    }
+
+    static void WriteRequiredByteArrayDataPages(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<byte[]> values, EncodingKind dataEncoding, PageList pages, int targetPageBytes,
+        ref PlainBinaryMinMax binaryMinMax)
+    {
+        byte[]? columnMin = null;
+        byte[]? columnMax = null;
+        var columnMinIndex = -1;
+        var columnMaxIndex = -1;
+        var rowsWritten = 0;
+        while (rowsWritten < values.Length)
+        {
+            var pageStart = rowsWritten;
+            byte[]? pageMin = null;
+            byte[]? pageMax = null;
+            var pageMinIndex = -1;
+            var pageMaxIndex = -1;
+            byte[]? pendingValue = null;
+            var pendingIndex = -1;
+            var pageRowCount = 0;
+            var pageBytes = 0;
+            while (rowsWritten < values.Length)
+            {
+                var value = values[rowsWritten] ?? throw new InvalidOperationException(
+                    $"Column '{column.Name}' does not support null values.");
+                var rowBytes = checked(sizeof(int) + value.Length);
+                if (pageRowCount > 0 && rowBytes > targetPageBytes - pageBytes)
+                    break;
+
+                // A pairwise tournament needs three comparisons for two values instead of comparing
+                // both values independently with both extremes. Keep one value pending until its mate
+                // arrives, then send only the lower one toward min and the higher one toward max.
+                if (pendingValue is null)
+                {
+                    pendingValue = value;
+                    pendingIndex = rowsWritten;
+                }
+                else
+                {
+                    byte[] pairMin;
+                    byte[] pairMax;
+                    int pairMinIndex;
+                    int pairMaxIndex;
+                    if (EncodingPrimitives.ComparePayload(pendingValue, value) <= 0)
+                    {
+                        pairMin = pendingValue;
+                        pairMax = value;
+                        pairMinIndex = pendingIndex;
+                        pairMaxIndex = rowsWritten;
+                    }
+                    else
+                    {
+                        pairMin = value;
+                        pairMax = pendingValue;
+                        pairMinIndex = rowsWritten;
+                        pairMaxIndex = pendingIndex;
+                    }
+
+                    if (pageMin is null)
+                    {
+                        pageMin = pairMin;
+                        pageMax = pairMax;
+                        pageMinIndex = pairMinIndex;
+                        pageMaxIndex = pairMaxIndex;
+                    }
+                    else
+                    {
+                        if (EncodingPrimitives.ComparePayload(pairMin, pageMin) < 0)
+                        {
+                            pageMin = pairMin;
+                            pageMinIndex = pairMinIndex;
+                        }
+                        if (EncodingPrimitives.ComparePayload(pairMax, pageMax!) > 0)
+                        {
+                            pageMax = pairMax;
+                            pageMaxIndex = pairMaxIndex;
+                        }
+                    }
+
+                    pendingValue = null;
+                }
+
+                rowsWritten++;
+                pageRowCount++;
+                pageBytes = checked(pageBytes + rowBytes);
+            }
+
+            // An odd page leaves one value without a mate. Compare that tail with both extremes;
+            // a one-row page reaches this branch before the tournament has initialized them.
+            if (pendingValue is not null)
+            {
+                if (pageMin is null)
+                {
+                    pageMin = pendingValue;
+                    pageMax = pendingValue;
+                    pageMinIndex = pendingIndex;
+                    pageMaxIndex = pendingIndex;
+                }
+                else
+                {
+                    if (EncodingPrimitives.ComparePayload(pendingValue, pageMin) < 0)
+                    {
+                        pageMin = pendingValue;
+                        pageMinIndex = pendingIndex;
+                    }
+                    if (EncodingPrimitives.ComparePayload(pendingValue, pageMax!) > 0)
+                    {
+                        pageMax = pendingValue;
+                        pageMaxIndex = pendingIndex;
+                    }
+                }
+            }
+
+            // Reducing one min/max pair per page gives the column extrema without repeating both
+            // comparisons for every value.
+            if (columnMin is null)
+            {
+                columnMin = pageMin;
+                columnMax = pageMax;
+                columnMinIndex = pageMinIndex;
+                columnMaxIndex = pageMaxIndex;
+            }
+            else
+            {
+                if (EncodingPrimitives.ComparePayload(pageMin!, columnMin) < 0)
+                {
+                    columnMin = pageMin;
+                    columnMinIndex = pageMinIndex;
+                }
+                if (EncodingPrimitives.ComparePayload(pageMax!, columnMax!) > 0)
+                {
+                    columnMax = pageMax;
+                    columnMaxIndex = pageMaxIndex;
+                }
+            }
+
+            var pageIndex = AddNewDataPage(bufferWriters, pages);
+            ref var page = ref pages[pageIndex];
+            ValueEncodingDispatcher.WriteValues(dataEncoding, column, values.Slice(pageStart, pageRowCount),
+                bufferWriters, ref page.Content);
+            WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0, dataEncoding);
+            page.Statistics = ColumnStatistics.CreateBinaryFromKnownExtremes(column, values, pageMinIndex,
+                pageMaxIndex, 0, ref page.StatisticsMinValueBuffer, ref page.StatisticsMaxValueBuffer,
+                bufferWriters.BufferPool);
+        }
+
+        if (columnMin is not null)
+        {
+            binaryMinMax.Found = true;
+            binaryMinMax.MinIndex = columnMinIndex;
+            binaryMinMax.MaxIndex = columnMaxIndex;
         }
     }
 

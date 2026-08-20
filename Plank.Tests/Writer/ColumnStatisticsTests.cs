@@ -422,6 +422,34 @@ internal sealed class ColumnStatisticsTests
     }
 
     [Test]
+    public void Int64PageStatisticsMatchRequiredAndOptionalPageBoundaries()
+    {
+        using var stream = new MemoryStream();
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("required_value", ParquetPhysicalType.Int64,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.Leaf("optional_value", ParquetPhysicalType.Int64,
+                new ColumnOptions(ParquetRepetition.Optional), pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
+        var requiredColumn = writer.CreateSerializedColumn<long>(schema.LeafColumns[0]);
+        var optionalColumn = writer.CreateSerializedColumn<long?>(schema.LeafColumns[1]);
+
+        requiredColumn.Serialize([10L, 50L, -5L, 40L, 0L]);
+        optionalColumn.Serialize([10L, null, -5L, 40L, null]);
+
+        AssertInt64Statistics(requiredColumn.Statistics, min: -5, max: 50, nullCount: 0);
+        AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 0, min: 10, max: 50, nullCount: 0);
+        AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 1, min: -5, max: 40, nullCount: 0);
+        AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 2, min: 0, max: 0, nullCount: 0);
+
+        AssertInt64Statistics(optionalColumn.Statistics, min: -5, max: 40, nullCount: 2);
+        AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 0, min: 10, max: 10, nullCount: 1);
+        AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 1, min: -5, max: 40, nullCount: 0);
+        AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 2, min: null, max: null, nullCount: 1);
+    }
+
+    [Test]
     public void PageIndexesAreReadableByDuckDb()
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-page-index-duckdb-{Guid.NewGuid():N}.parquet");
@@ -583,6 +611,25 @@ internal sealed class ColumnStatisticsTests
                 $"Double null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
     }
 
+    static void AssertInt64Statistics(ColumnStatistics statistics, long? min, long? max, long nullCount)
+    {
+        var expectedKind = min.HasValue
+            ? ColumnStatistics.ColumnStatisticsValueKind.Int64
+            : ColumnStatistics.ColumnStatisticsValueKind.None;
+        if (statistics.ValueKind != expectedKind)
+            throw new InvalidOperationException(
+                $"Int64 statistics kind mismatch. Expected {expectedKind}, got {statistics.ValueKind}.");
+        if (statistics.MinBits != min.GetValueOrDefault())
+            throw new InvalidOperationException(
+                $"Int64 min mismatch. Expected {min.GetValueOrDefault()}, got {statistics.MinBits}.");
+        if (statistics.MaxBits != max.GetValueOrDefault())
+            throw new InvalidOperationException(
+                $"Int64 max mismatch. Expected {max.GetValueOrDefault()}, got {statistics.MaxBits}.");
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Int64 null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+    }
+
     static void AssertDuckDbInt64(DuckDBDataReader reader, int ordinal, long expected)
     {
         var actual = reader.GetInt64(ordinal);
@@ -620,6 +667,26 @@ internal sealed class ColumnStatisticsTests
                 if (statistics.NullCount != nullCount)
                     throw new InvalidOperationException(
                         $"Page {pageIndex} null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+                return;
+            }
+
+            dataPageIndex++;
+        }
+
+        throw new InvalidOperationException($"Data page {pageIndex} was not written.");
+    }
+
+    static void AssertDataPageInt64Statistics(PageList pages, int pageIndex, long? min, long? max, long nullCount)
+    {
+        var dataPageIndex = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (dataPageIndex == pageIndex)
+            {
+                AssertInt64Statistics(page.Statistics, min, max, nullCount);
                 return;
             }
 
