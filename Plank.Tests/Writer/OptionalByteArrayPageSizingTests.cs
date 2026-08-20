@@ -1,5 +1,6 @@
 using Plank.Schema;
 using Plank.Writing;
+using Plank.Writing.PageStrategy;
 using PlankParquetSchema = Plank.Schema.ParquetSchema;
 
 namespace Plank.Tests.Writer;
@@ -53,6 +54,51 @@ internal sealed class OptionalByteArrayPageSizingTests
         ]);
 
         AssertRoundTrip(schema, values, 128);
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void FusedSizingAndDefinitionLevelsPreservePlainFileBytes(ParquetDataPageVersion dataPageVersion)
+    {
+        byte[][] values =
+        [
+            [0x11], null!, [0x22, 0x23, 0x24], [], [0x25],
+            [0x31], null!, [0x32, 0x33, 0x34], [], [0x35],
+            [0x41], null!, [0x42, 0x43, 0x44], [], [0x45]
+        ];
+        var targetSchema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("value", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.Plain]))
+        ]);
+        var fixedSchema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("value", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.Plain]),
+                pageStrategy: new FixedRowsPageStrategy(5))
+        ]);
+
+        var fused = WriteFile(targetSchema, values, dataPageVersion, targetPageBytes: 26);
+        var reference = WriteFile(fixedSchema, values, dataPageVersion, targetPageBytes: 26);
+        if (!fused.AsSpan().SequenceEqual(reference))
+            throw new InvalidOperationException(
+                $"Fused optional Plain {dataPageVersion} sizing changed the Parquet bytes.");
+    }
+
+    static byte[] WriteFile(PlankParquetSchema schema, byte[][] values,
+        ParquetDataPageVersion dataPageVersion, uint targetPageBytes)
+    {
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = targetPageBytes
+        });
+        var column = writer.CreateSerializedColumn<byte[]?>(schema.LeafColumns[0]);
+        column.Serialize(values);
+        writer.StartRowGroup().Write(column);
+        writer.CloseFile();
+        return stream.ToArray();
     }
 
     static void AssertRoundTrip(PlankParquetSchema schema, byte[]?[] values, uint targetPageBytes,
@@ -170,5 +216,17 @@ internal sealed class OptionalByteArrayPageSizingTests
     {
         public object OnLogicalColumnReader<TValue>(ParquetSharp.LogicalColumnReader<TValue> reader)
             => reader.ReadAll(count);
+    }
+
+    sealed class FixedRowsPageStrategy(uint rowsPerPage) : IPageStrategy
+    {
+        public DictionaryMode GetDictionaryMode()
+            => DictionaryMode.Disabled;
+
+        public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
+            => false;
+
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => Math.Min(rowsPerPage, totalRowCount - rowsWritten);
     }
 }

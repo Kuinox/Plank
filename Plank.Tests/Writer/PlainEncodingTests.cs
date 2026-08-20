@@ -89,10 +89,28 @@ internal sealed class PlainEncodingTests
         var column = new Column("value", ParquetPhysicalType.ByteArray);
         AssertEqual(EncodeLengthPrefixed(required), Encode(column, required));
         AssertEqual(EncodeLengthPrefixed(required), Encode(column, requiredMemory));
-        AssertEqual(EncodeLengthPrefixed(optional.Where(static value => value is not null)!),
-            EncodeOptionalByteArrays(column, optional));
+        var expectedOptional = EncodeLengthPrefixed(optional.Where(static value => value is not null)!);
+        AssertEqual(expectedOptional, EncodeOptionalByteArrays(column, optional));
+        AssertEqual(expectedOptional, EncodeOptionalByteArrays(column, optional, expectedOptional.Length));
         AssertEqual(EncodeLengthPrefixed(optional.Where(static value => value is not null)!),
             EncodeOptionalMemory(column, optionalMemory));
+    }
+
+    [Test]
+    public void OptionalSingleByteArrayFastPathMatchesLengthPrefixedParquetBytes()
+    {
+        byte[][] values = [null!, [0x11], null!, [0x22], [0x33], null!, [0x44]];
+        var expected = EncodeLengthPrefixed(values.Where(static value => value is not null)!);
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 128 * 1024, 128 * 1024);
+        try
+        {
+            PlainEncoding.WriteOptionalSingleByteArrayPayloads(values, 4, ref writer);
+            AssertEqual(expected, CopyWritten(ref writer));
+        }
+        finally
+        {
+            writer.Dispose();
+        }
     }
 
     [Test]
@@ -158,12 +176,13 @@ internal sealed class PlainEncodingTests
         }
     }
 
-    static byte[] EncodeOptionalByteArrays(Column column, ReadOnlySpan<byte[]> values)
+    static byte[] EncodeOptionalByteArrays(Column column, ReadOnlySpan<byte[]> values, int knownPayloadBytes = -1)
     {
         var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 128 * 1024, 128 * 1024);
         try
         {
-            PlainEncoding.WriteOptionalValues<byte[], OptionalByteArrayRow>(column, values, -1, ref writer);
+            PlainEncoding.WriteOptionalValues<byte[], OptionalByteArrayRow>(column, values, knownPayloadBytes,
+                ref writer);
             return CopyWritten(ref writer);
         }
         finally
