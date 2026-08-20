@@ -47,6 +47,12 @@ cd "$PLANK_ROOT"
 git fetch origin --quiet
 git checkout "$PLANK_BRANCH" --quiet 2>/dev/null || git checkout -B "$PLANK_BRANCH" "origin/$PLANK_BRANCH" --quiet
 git reset --hard "origin/$PLANK_BRANCH" --quiet
+# reset --hard does not touch submodules, so the parquet-testing checkout has to
+# be moved to the commit this branch pins on its own. The seeds derived from it
+# below are not in the repository, so a stale or missing checkout silently costs
+# the reader fleet every envelope Plank's own writer cannot produce.
+git submodule sync --quiet
+git submodule update --init --recursive --quiet
 echo "  at $(git log --oneline -1)"
 
 echo "  stopping fleets..."
@@ -80,6 +86,11 @@ echo "  built both targets"
 rm -f fuzz/reader-corpus/gen-*.bin
 ./Plank.Fuzzing.Reader.Target/bin/Release/net10.0/Plank.Fuzzing.Reader.Target \
   --generate-corpus fuzz/reader-corpus 2>/dev/null | sed 's/^/  /'
+
+# Same reasoning, from the other source: these come out of the submodule rather
+# than out of the writer, and copying them into the repository would vendor a
+# corpus that is already pinned by commit.
+bash fuzz/import-parquet-testing-seeds.sh | sed 's/^/  /'
 
 bash fuzz/run-fleet.sh reader 2>&1 | grep -E '==> (Starting|Running)' | sed 's/^/  /'
 bash fuzz/run-fleet.sh writer 2>&1 | grep -E '==> (Starting|Running)' | sed 's/^/  /'
