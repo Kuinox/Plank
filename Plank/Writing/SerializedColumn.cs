@@ -1172,6 +1172,25 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
 
+        if (typeof(TValue) == typeof(long)
+            && _column.PhysicalType == ParquetPhysicalType.Int64
+            && strategyContext.Strategy is DefaultStrategy
+            && strategyContext.Strategy.GetDictionaryMode() == DictionaryMode.Disabled
+            && EncodingKindResolver.GetDataEncodingKind(_column) == EncodingKind.Plain
+            && _column.Options.BloomFilter is null)
+        {
+            Pages.Clear();
+            ColumnOrdinal = columnOrdinal;
+            RowCount = checked((uint)values.Length);
+            HasPendingData = true;
+            var longValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<long?>>(ref values);
+            Statistics = Plank.Writing.Encoding.Encoding.EncodeOptionalPlainInt64(
+                _owner.BufferWriters, _column, longValues, strategyContext, Pages,
+                _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal]);
+            _bloomFilterByteLength = 0;
+            return;
+        }
+
         if (typeof(TValue) == typeof(bool) || typeof(TValue) == typeof(int) || typeof(TValue) == typeof(long)
             || typeof(TValue) == typeof(float) || typeof(TValue) == typeof(double))
         {
