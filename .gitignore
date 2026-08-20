@@ -27,3 +27,6 @@ core.*
 
 # Derived from the parquet-testing submodule by fuzz/import-parquet-testing-seeds.sh.
 fuzz/reader-corpus/pqt-*.bin
+
+# Written by Plank.Fuzzing.Target --generate-corpus.
+fuzz/corpus/crosswriter-*
