@@ -1884,7 +1884,6 @@ static class ColumnChunkReader
         var payloadByteLength = ReadPlainBinaryLengths(payload, column, valueCount, lengths);
         var destination = state.GetBinaryDictionary(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
-        destination.Clear();
         FillPlainBinaryValues(payload, column, valueCount, lengths, [], destination,
             destinationPayload);
         return true;
@@ -2022,7 +2021,7 @@ static class ColumnChunkReader
             var byteArrayPayloadLength = payload.Length - prefixByteLength;
             var byteArrayDestination = state.GetBinaryValues(valueCount, byteArrayPayloadLength, bufferPool,
                 out var byteArrayPayload);
-            byteArrayDestination.Clear();
+            ClearMissingBinaryDescriptors(byteArrayDestination, physicalCount);
 
             var remaining = payload;
             var logicalIndex = 0;
@@ -2064,7 +2063,7 @@ static class ColumnChunkReader
         var payloadByteLength = ReadPlainBinaryLengths(payload, column, physicalCount, lengths);
         var destination = state.GetBinaryValues(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
-        destination.Clear();
+        ClearMissingBinaryDescriptors(destination, physicalCount);
         FillPlainBinaryValues(payload, column, physicalCount, lengths, definitions, destination,
             destinationPayload);
     }
@@ -2077,7 +2076,7 @@ static class ColumnChunkReader
         var payloadByteLength = GetFixedBinaryPayloadLength(payload, physicalCount, valueLength);
         var destination = state.GetBinaryValues(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
-        destination.Clear();
+        ClearMissingBinaryDescriptors(destination, physicalCount);
         var logicalIndex = 0;
         var destinationOffset = 0;
         for (var physicalIndex = 0; physicalIndex < physicalCount; physicalIndex++)
@@ -2102,7 +2101,7 @@ static class ColumnChunkReader
         var payloadByteLength = SumBinaryLengths(lengths, remaining.Length, "Delta length byte array");
         var destination = state.GetBinaryValues(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
-        destination.Clear();
+        ClearMissingBinaryDescriptors(destination, physicalCount);
         var logicalIndex = 0;
         var destinationOffset = 0;
         for (var physicalIndex = 0; physicalIndex < physicalCount; physicalIndex++)
@@ -2160,7 +2159,7 @@ static class ColumnChunkReader
 
         var destination = state.GetBinaryValues(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
-        destination.Clear();
+        ClearMissingBinaryDescriptors(destination, physicalCount);
         var payloadAddress = GetBinaryPayloadAddress(state.Values, valueCount);
         var logicalIndex = 0;
         var destinationOffset = 0;
@@ -2197,7 +2196,7 @@ static class ColumnChunkReader
 
         var destination = state.GetBinaryValues(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
-        destination.Clear();
+        ClearMissingBinaryDescriptors(destination, physicalCount);
         var logicalIndex = 0;
         var destinationOffset = 0;
         for (var physicalIndex = 0; physicalIndex < physicalCount; physicalIndex++)
@@ -2262,6 +2261,16 @@ static class ColumnChunkReader
             remaining = remaining[length..];
             destinationOffset += length;
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void ClearMissingBinaryDescriptors(Span<BinaryValueDescriptor> destination,
+        int physicalCount)
+    {
+        // Every present value assignment overwrites one descriptor. Only sparse pages need
+        // zero-filled gaps so the unassigned descriptors retain the null representation.
+        if (physicalCount != destination.Length)
+            destination.Clear();
     }
 
     static int GetBinaryLogicalIndex(ReadOnlySpan<int> definitions, ref int logicalIndex,
