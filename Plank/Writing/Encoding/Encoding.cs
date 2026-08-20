@@ -145,6 +145,14 @@ static class Encoding
         if (!TryGetFixedWidthRowsPerPage(column, dataEncoding, checked((int)targetPageBytes), out var rowsPerPage))
             return false;
 
+        if (dataEncoding == EncodingKind.Plain && column.PhysicalType == ParquetPhysicalType.Double
+            && typeof(T) == typeof(double))
+        {
+            WritePlainDoubleDataPages(bufferWriters,
+                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values), rowsPerPage, pages);
+            return true;
+        }
+
         for (var pageStart = 0; pageStart < values.Length; pageStart += rowsPerPage)
         {
             var pageRowCount = Math.Min(rowsPerPage, values.Length - pageStart);
@@ -152,6 +160,21 @@ static class Encoding
         }
 
         return true;
+    }
+
+    static void WritePlainDoubleDataPages(BufferWriterFactory bufferWriters, ReadOnlySpan<double> values,
+        int rowsPerPage, PageList pages)
+    {
+        for (var pageStart = 0; pageStart < values.Length; pageStart += rowsPerPage)
+        {
+            var pageRowCount = Math.Min(rowsPerPage, values.Length - pageStart);
+            var pageIndex = AddNewDataPage(bufferWriters, pages);
+            ref var page = ref pages[pageIndex];
+            var statistics = PlainEncoding.WriteDoublePageWithStatistics(
+                values.Slice(pageStart, pageRowCount), ref page.Content);
+            WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0, EncodingKind.Plain);
+            page.Statistics = statistics;
+        }
     }
 
     static bool TryWriteSizeBoundedDataPages<T>(BufferWriterFactory bufferWriters, Column column,
