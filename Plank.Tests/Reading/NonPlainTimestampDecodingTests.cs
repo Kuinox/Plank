@@ -201,6 +201,22 @@ internal sealed class NonPlainTimestampDecodingTests
     }
 
     [Test]
+    public void LargeAllPresentOptionalDictionaryDateTimesPreserveBatchBoundaries()
+    {
+        foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        foreach (var unit in Enum.GetValues<TimeUnit>())
+        foreach (var isAdjustedToUtc in new[] { false, true })
+        {
+            var expected = Array.ConvertAll(CreateLargeValues(unit, isAdjustedToUtc),
+                static value => (DateTime?)value);
+            var actual = RoundTripOptional(expected, unit, isAdjustedToUtc,
+                EncodingKind.RleDictionary, pageVersion);
+            AssertEqual(expected, actual, unit, isAdjustedToUtc,
+                EncodingKind.RleDictionary, pageVersion);
+        }
+    }
+
+    [Test]
     public void RequiredDictionaryDateTimesRejectOutOfRangeVectorizedIndex()
     {
         var schema = new ParquetSchema([
