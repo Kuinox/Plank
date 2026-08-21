@@ -499,9 +499,14 @@ static class Encoding
             var pageIndex = AddNewDataPage(bufferWriters, pages);
             ref var page = ref pages[pageIndex];
             var pageRowCount = PlainEncoding.WriteRequiredByteArrayPage(column, values, rowsWritten,
-                targetPageBytes, ref page.Content, ref binaryMinMax);
+                targetPageBytes, ref page.Content, ref binaryMinMax, out var pageMinIndex,
+                out var pageMaxIndex);
             rowsWritten += pageRowCount;
             WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, 0, EncodingKind.Plain);
+            if (ColumnStatistics.OrdersBinaryValuesLexicographically(column))
+                page.Statistics = ColumnStatistics.CreateBinaryFromKnownExtremes(column, values, pageMinIndex,
+                    pageMaxIndex, 0, ref page.StatisticsMinValueBuffer, ref page.StatisticsMaxValueBuffer,
+                    bufferWriters.BufferPool);
         }
     }
 

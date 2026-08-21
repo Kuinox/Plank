@@ -121,6 +121,26 @@ internal sealed class PlainByteArrayStatisticsTests
     }
 
     [Test]
+    public void RequiredPlainDecimalPagesKeepTheirSignedOrdering()
+    {
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("amount", ParquetPhysicalType.ByteArray,
+                logicalType: new LogicalType.Decimal(9, 2))
+        ]);
+        var writer = schema.CreateWriter(new MemoryStream(), new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 10
+        });
+        var column = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+
+        column.Serialize([[0x01], [0xff], [0x7f], [0x80]]);
+
+        AssertMinMax(column.Statistics, [0x80], [0x7f]);
+        AssertDataPageMinMax(column.Pages, pageIndex: 0, [0xff], [0x01]);
+        AssertDataPageMinMax(column.Pages, pageIndex: 1, [0x80], [0x7f]);
+    }
+
+    [Test]
     public void OptionalMinAndMaxSpanEveryPageOfTheColumn()
     {
         // Same two-rows-per-page split as the required case, with the extremes on different pages,
@@ -182,6 +202,62 @@ internal sealed class PlainByteArrayStatisticsTests
 
         AssertMinMax(column.Statistics, "apple"u8, "cherry"u8);
         AssertNullCount(column.Statistics, 1);
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void RequiredPlainSizingPreservesPageStatisticsAndFileBytes(
+        ParquetDataPageVersion dataPageVersion)
+    {
+        byte[][] values =
+        [
+            "mmmmmmmmmm"u8.ToArray(),
+            "nnnnnnnnnn"u8.ToArray(),
+            "bbbbbbbbbb"u8.ToArray(),
+            "yyyyyyyyyy"u8.ToArray(),
+            "aaaaaaaaaa"u8.ToArray(),
+            "dddddddddd"u8.ToArray(),
+            "xxxxxxxxxx"u8.ToArray(),
+            "cccccccccc"u8.ToArray(),
+            "wwwwwwwwww"u8.ToArray(),
+            "zzzzzzzzzz"u8.ToArray(),
+            "qqqqqqqqqq"u8.ToArray()
+        ];
+
+        var sizedSchema = CreatePlainByteArraySchema();
+        using var sizedStream = new MemoryStream();
+        var sizedWriter = sizedSchema.CreateWriter(sizedStream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = 70
+        });
+        var sizedColumn = sizedWriter.CreateSerializedColumn<byte[]>(sizedSchema.LeafColumns[0]);
+        sizedColumn.Serialize(values);
+
+        AssertMinMax(sizedColumn.Statistics, "aaaaaaaaaa"u8, "zzzzzzzzzz"u8);
+        AssertDataPageMinMax(sizedColumn.Pages, pageIndex: 0, "aaaaaaaaaa"u8, "yyyyyyyyyy"u8);
+        AssertDataPageMinMax(sizedColumn.Pages, pageIndex: 1, "cccccccccc"u8, "zzzzzzzzzz"u8);
+        AssertDataPageMinMax(sizedColumn.Pages, pageIndex: 2, "qqqqqqqqqq"u8, "qqqqqqqqqq"u8);
+        sizedWriter.StartRowGroup().Write(sizedColumn);
+        sizedWriter.CloseFile();
+
+        var fixedSchema = CreatePlainByteArraySchema(new FixedRowsPageStrategy(5));
+        using var fixedStream = new MemoryStream();
+        var fixedWriter = fixedSchema.CreateWriter(fixedStream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = 70
+        });
+        var fixedColumn = fixedWriter.CreateSerializedColumn<byte[]>(fixedSchema.LeafColumns[0]);
+        fixedColumn.Serialize(values);
+        fixedWriter.StartRowGroup().Write(fixedColumn);
+        fixedWriter.CloseFile();
+        if (!sizedStream.ToArray().AsSpan().SequenceEqual(fixedStream.ToArray()))
+            throw new InvalidOperationException(
+                $"Fused Plain {dataPageVersion} page statistics changed the Parquet bytes.");
     }
 
     [Test]
@@ -396,6 +472,13 @@ internal sealed class PlainByteArrayStatisticsTests
         => new([
             Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray,
                 new ColumnOptions(encodings: [encoding]), logicalType: new LogicalType.String(),
+                pageStrategy: pageStrategy)
+        ]);
+
+    static PlankParquetSchema CreatePlainByteArraySchema(IPageStrategy? pageStrategy = null)
+        => new([
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(encodings: [EncodingKind.Plain]), logicalType: new LogicalType.String(),
                 pageStrategy: pageStrategy)
         ]);
 
