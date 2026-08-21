@@ -137,10 +137,27 @@ public static class SyntheticBenchmarkData
         {
             var values = new string[rows];
             var utf8 = new byte[rows][];
+            // Dictionary inputs deliberately repeat a small logical domain. Prepare each distinct
+            // string and UTF-8 payload once, just as the ParquetSharp adapter prepares its compact
+            // Arrow array outside the timed write. Keeping a million separately allocated copies made
+            // Plank benchmark heap locality rather than dictionary encoding under parallel load.
+            Dictionary<string, (string Value, byte[] Utf8)>? preparedDictionaryValues =
+                encoding == "dictionary" ? new(StringComparer.Ordinal) : null;
             for (var row = 0; row < rows; row++)
             {
-                values[row] = factory(checked(row + column * rows));
-                utf8[row] = Encoding.UTF8.GetBytes(values[row]);
+                var value = factory(checked(row + column * rows));
+                if (preparedDictionaryValues is not null
+                    && preparedDictionaryValues.TryGetValue(value, out var prepared))
+                {
+                    values[row] = prepared.Value;
+                    utf8[row] = prepared.Utf8;
+                }
+                else
+                {
+                    values[row] = value;
+                    utf8[row] = Encoding.UTF8.GetBytes(value);
+                    preparedDictionaryValues?.Add(value, (value, utf8[row]));
+                }
             }
             columns[column] = new PublishedBenchmarkDataSet.Column
             {
