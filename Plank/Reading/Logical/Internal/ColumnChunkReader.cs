@@ -1387,15 +1387,30 @@ static class ColumnChunkReader
 
         var values = state.GetValues<T>(valueCount, bufferPool);
         var destination = Unsafe.As<Span<T>, Span<DateTime?>>(ref values);
+        int physicalCount;
         if (definitionPayload.IsEmpty)
         {
-            for (var i = 0; i < destination.Length; i++)
-                destination[i] = DecodePlainDateTime(payload, i, ticksPerUnit, kind);
+            physicalCount = valueCount;
+        }
+        else
+        {
+            if (definitionLevelEncoding != EncodingKind.Rle)
+                throw new NotSupportedException(
+                    $"Definition level encoding '{definitionLevelEncoding}' is not supported by the timestamp fast path.");
+            physicalCount = CountCompactDefinitionLevels(definitionPayload,
+                definitionLevelEncoding, valueCount);
+        }
+
+        if (physicalCount == valueCount && BitConverter.IsLittleEndian)
+        {
+            var byteLength = checked(valueCount * sizeof(long));
+            if (payload.Length < byteLength)
+                throw new CorruptParquetException(
+                    $"Payload ({payload.Length} bytes) is too short to decode {valueCount} timestamp values.");
+            var raw = MemoryMarshal.Cast<byte, long>(payload[..byteLength]);
+            MaterializeAllPresentNullableDateTimes(raw, destination, timestamp.Unit, kind);
             return valueCount;
         }
-        if (definitionLevelEncoding != EncodingKind.Rle)
-            throw new NotSupportedException(
-                $"Definition level encoding '{definitionLevelEncoding}' is not supported by the timestamp fast path.");
 
         var valueIndex = 0;
         var physicalIndex = 0;
@@ -1505,7 +1520,7 @@ static class ColumnChunkReader
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    static void MaterializeAllPresentNullableDateTimes(Span<long> raw, Span<DateTime?> destination,
+    static void MaterializeAllPresentNullableDateTimes(ReadOnlySpan<long> raw, Span<DateTime?> destination,
         TimeUnit unit, DateTimeKind kind)
     {
         var index = destination.Length;
