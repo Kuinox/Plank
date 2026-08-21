@@ -2,7 +2,7 @@ namespace Plank.Benchmarks.Published;
 
 public sealed class PublishedBenchmarkOptions
 {
-    public int Warmups { get; init; } = 2;
+    public int Warmups { get; init; } = 8;
 
     public int Iterations { get; init; } = 7;
 

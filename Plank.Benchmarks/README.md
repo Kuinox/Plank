@@ -104,7 +104,7 @@ taking a few cores does not show up as high in-run variation; it just makes that
 
 Intra-run `variationPercent` understates reproducibility, because it only sees jitter within one run.
 Across separate runs on the same idle machine and the same commit, read cases drift by a median of
-1.5%, but write cases drift 12–30%, and `synthetic/string · plain` swings by 2x — that one is a
-warmup artifact, costing ~506 ms on its first call and ~178 ms once warm, which the suite's two
-warmups do not always reach. Treat a single write row moving by less than ~30% as noise, and re-run
-before believing it.
+1.5%, but write cases drift 12–30%. The suite uses eight warmups because two warmups left tiered-JIT
+transitions inside the measured samples: for example, real-world nullable timestamps on Ryzen moved
+from 31–99 ms during compilation to 10–11 ms at steady state. Treat a single write row moving by less
+than ~30% as noise, and re-run before believing it.
