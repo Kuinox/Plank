@@ -72,6 +72,22 @@ internal sealed class NonPlainTimestampDecodingTests
     }
 
     [Test]
+    public void LargeAllPresentOptionalByteStreamSplitDateTimesPreserveBatchBoundaries()
+    {
+        foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        foreach (var unit in Enum.GetValues<TimeUnit>())
+        foreach (var isAdjustedToUtc in new[] { false, true })
+        {
+            var expected = Array.ConvertAll(CreateLargeValues(unit, isAdjustedToUtc),
+                static value => (DateTime?)value);
+            var actual = RoundTripOptional(expected, unit, isAdjustedToUtc,
+                EncodingKind.ByteStreamSplit, pageVersion);
+            AssertEqual(expected, actual, unit, isAdjustedToUtc,
+                EncodingKind.ByteStreamSplit, pageVersion);
+        }
+    }
+
+    [Test]
     [Arguments(ParquetDataPageVersion.V1)]
     [Arguments(ParquetDataPageVersion.V2)]
     public void AllNullOptionalDeltaBinaryPackedDateTimesRoundTrip(ParquetDataPageVersion pageVersion)

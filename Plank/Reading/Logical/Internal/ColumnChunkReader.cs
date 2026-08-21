@@ -483,11 +483,13 @@ static class ColumnChunkReader
         if (!page.IsNullable)
             physicalBatchCount = batchCount;
         else if (column.Converter is null && page.PhysicalCount == page.ValueCount &&
-                 page.DecoderKind is FixedWidthDecoderKind.Plain or FixedWidthDecoderKind.Dictionary or
-                     FixedWidthDecoderKind.ByteStreamSplit &&
-                 column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int?))
+                 ((page.DecoderKind is FixedWidthDecoderKind.Plain or FixedWidthDecoderKind.Dictionary or
+                       FixedWidthDecoderKind.ByteStreamSplit &&
+                   column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int?)) ||
+                  (page.DecoderKind == FixedWidthDecoderKind.ByteStreamSplit &&
+                   column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTime?))))
             // The page's definition stream was still decoded and validated when the batch state was
-            // created. With every row present, keep it compact: the Int32 decoder below can expand
+            // created. With every row present, keep it compact: the specialized decoders below expand
             // directly into nullable slots without materializing per-row definitions.
             physicalBatchCount = batchCount;
         else if (column.Converter is not null)
@@ -773,6 +775,21 @@ static class ColumnChunkReader
                     physicalOffset, physicalBatchCount, decoderKind, ref buffers, bufferPool);
                 ExpandAllPresentInt32Batch(MemoryMarshal.Cast<TValue, int>(decoded), nullableDestination);
             }
+            return;
+        }
+
+        if (converter is null && byteDefinitions.IsEmpty && physicalBatchCount == values.Length &&
+            decoderKind == FixedWidthDecoderKind.ByteStreamSplit &&
+            column.PhysicalType == ParquetPhysicalType.Int64 &&
+            typeof(T) == typeof(DateTime?) && typeof(TValue) == typeof(DateTime))
+        {
+            var nullableTimestamps = Unsafe.As<Span<T>, Span<DateTime?>>(ref values);
+            var raw = MemoryMarshal.Cast<byte, long>(AsBytes(nullableTimestamps))[..physicalBatchCount];
+            DecodeByteStreamSplitUInt64Slice(payload, totalPhysicalCount, physicalOffset,
+                MemoryMarshal.Cast<long, ulong>(raw));
+            var timestamp = GetTimestampLogicalType(column.LogicalType);
+            var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+            MaterializeAllPresentNullableDateTimes(raw, nullableTimestamps, timestamp.Unit, kind);
             return;
         }
 
