@@ -1040,7 +1040,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     bool TryAssignPrimitiveColumnStatisticsFromPages<TValue>()
         where TValue : notnull
     {
-        if (_column.Options.Repetition != ParquetRepetition.Required)
+        if (_column.Options.Repetition is not (ParquetRepetition.Required or ParquetRepetition.Optional))
             return false;
 
         var expectedKind = (_column.PhysicalType, typeof(TValue)) switch
@@ -1197,6 +1197,21 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var firstPresentIndex = IndexOfFirstPresent(values);
             if (firstPresentIndex >= 0)
             {
+                if (_column.Options.BloomFilter is null
+                    && Plank.Writing.Encoding.Encoding.TryEncodeOptionalPlainPrimitive(
+                        _owner.BufferWriters, _column, values, strategyContext, Pages,
+                        _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal]))
+                {
+                    ColumnOrdinal = columnOrdinal;
+                    RowCount = checked((uint)values.Length);
+                    HasPendingData = true;
+                    _bloomFilterByteLength = 0;
+                    if (!TryAssignPrimitiveColumnStatisticsFromPages<TValue>())
+                        throw new InvalidOperationException(
+                            "Fused optional PLAIN primitive pages did not contain complete statistics.");
+                    return;
+                }
+
                 if (typeof(TValue) == typeof(long)
                     && _column.PhysicalType == ParquetPhysicalType.Int64
                     && strategyContext.Strategy is ForceDictionaryPageStrategy

@@ -121,6 +121,76 @@ internal sealed class NullableNumericEncodingTests
         }
     }
 
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void FusedNullableFixedWidthPlainMatchesGenericOutput(ParquetDataPageVersion dataPageVersion)
+    {
+        AssertFusedNullablePlainMatchesGeneric<int>(
+            [null, int.MinValue, -9, 0, null, 17, int.MaxValue, null, 42, -1, 7, null, 99],
+            ParquetPhysicalType.Int32, dataPageVersion);
+        AssertFusedNullablePlainMatchesGeneric<float>(
+            [null, float.NegativeInfinity, -0.0f, float.NaN, +0.0f, 17.5f, float.PositiveInfinity, null, -9.25f],
+            ParquetPhysicalType.Float, dataPageVersion);
+        AssertFusedNullablePlainMatchesGeneric<double>(
+            [null, double.NegativeInfinity, -0.0d, double.NaN, +0.0d, 17.5d, double.PositiveInfinity, null,
+                -9.25d], ParquetPhysicalType.Double, dataPageVersion);
+
+        var allPresentDoubles = new double?[40];
+        for (var i = 0; i < allPresentDoubles.Length; i++)
+            allPresentDoubles[i] = i switch
+            {
+                0 => -0.0d,
+                1 => +0.0d,
+                2 => double.NaN,
+                _ => (i - 20) / 7d
+            };
+        AssertFusedNullablePlainMatchesGeneric(allPresentDoubles, ParquetPhysicalType.Double, dataPageVersion,
+            targetPageBytes: 1024);
+    }
+
+    static void AssertFusedNullablePlainMatchesGeneric<TValue>(TValue?[] values,
+        ParquetPhysicalType physicalType, ParquetDataPageVersion dataPageVersion, uint targetPageBytes = 90)
+        where TValue : struct
+    {
+        var fused = WriteNullablePlain(values, physicalType, null, dataPageVersion, targetPageBytes);
+        var generic = WriteNullablePlain(values, physicalType, new TargetBytesPageStrategy(targetPageBytes),
+            dataPageVersion, targetPageBytes);
+        if (!fused.AsSpan().SequenceEqual(generic))
+            throw new InvalidOperationException(
+                $"Fused optional {physicalType} {dataPageVersion} PLAIN encoding changed the Parquet bytes "
+                + $"at a {targetPageBytes}-byte page target.");
+
+        using var readStream = new MemoryStream(fused, writable: false);
+        using var reader = new ParquetFileReader(readStream, leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var column = rowGroup.Column(0).LogicalReader<TValue?>();
+        AssertColumn(column.ReadAll(values.Length), values, EncodingKind.Plain, "optional");
+    }
+
+    static byte[] WriteNullablePlain<TValue>(TValue?[] values, ParquetPhysicalType physicalType,
+        IPageStrategy? pageStrategy, ParquetDataPageVersion dataPageVersion, uint targetPageBytes)
+        where TValue : struct
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("optional", physicalType,
+                new ColumnOptions(encodings: [EncodingKind.Plain]), pageStrategy: pageStrategy)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = targetPageBytes,
+            WritePageIndexes = true
+        });
+        var serialized = writer.CreateSerializedColumn<TValue?>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return stream.ToArray();
+    }
+
     static byte[] WriteNullableInt64Plain(long?[] values, IPageStrategy? pageStrategy,
         ParquetDataPageVersion dataPageVersion, uint targetPageBytes)
     {

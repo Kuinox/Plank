@@ -16,11 +16,18 @@ static class Encoding
     const int SmallInt64DictionaryMinimum = -128;
     const int SmallInt64DictionaryCount = 256;
     static readonly bool HasCanonicalNullableInt64Layout = ProbeCanonicalNullableInt64Layout();
+    static readonly bool HasCanonicalNullableDoubleLayout = ProbeCanonicalNullableDoubleLayout();
 
     interface IPlainPrimitivePageWriter<T>
         where T : struct
     {
         static abstract ColumnStatistics Write(ReadOnlySpan<T> values, ref BufferWriter writer);
+    }
+
+    interface IAllPresentOptionalPlainPrimitivePageWriter<T>
+        where T : struct
+    {
+        static abstract ColumnStatistics Write(ReadOnlySpan<T?> values, ref BufferWriter writer);
     }
 
     readonly struct BooleanPlainPageWriter : IPlainPrimitivePageWriter<bool>
@@ -47,10 +54,14 @@ static class Encoding
             => PlainEncoding.WriteFloatPageWithStatistics(values, ref writer);
     }
 
-    readonly struct DoublePlainPageWriter : IPlainPrimitivePageWriter<double>
+    readonly struct DoublePlainPageWriter : IPlainPrimitivePageWriter<double>,
+        IAllPresentOptionalPlainPrimitivePageWriter<double>
     {
         public static ColumnStatistics Write(ReadOnlySpan<double> values, ref BufferWriter writer)
             => PlainEncoding.WriteDoublePageWithStatistics(values, ref writer);
+
+        public static ColumnStatistics Write(ReadOnlySpan<double?> values, ref BufferWriter writer)
+            => PlainEncoding.WriteAllPresentOptionalDoublePageWithStatistics(values, ref writer);
     }
 
     internal static bool Encode<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
@@ -809,6 +820,204 @@ static class Encoding
 
         EncodeOptionalFlatValues(bufferWriters, column, values, strategyContext, pages, dataPageVersion,
             densePresentValues, dictionaryState);
+    }
+
+    /// <summary>
+    /// Writes size-bounded optional fixed-width PLAIN pages without first materializing a column-sized dense buffer.
+    /// Page sizing remains shared for every supported primitive; only the primitive payload/statistics kernel varies.
+    /// </summary>
+    internal static bool TryEncodeOptionalPlainPrimitive<T>(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<T?> values, PageStrategyContext strategyContext, PageList pages,
+        ParquetDataPageVersion dataPageVersion, LeafProjectionInfo leafProjectionInfo)
+        where T : struct
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        ArgumentNullException.ThrowIfNull(strategyContext);
+        ArgumentNullException.ThrowIfNull(pages);
+        if (column.Options.Repetition != ParquetRepetition.Optional
+            || leafProjectionInfo.MaxDefinitionLevel != 1 || leafProjectionInfo.MaxRepetitionLevel != 0
+            || EncodingKindResolver.GetDataEncodingKind(column) != EncodingKind.Plain
+            || strategyContext.Strategy is not DefaultStrategy
+            || strategyContext.Strategy.GetDictionaryMode() != DictionaryMode.Disabled
+            || !strategyContext.Strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytes))
+            return false;
+
+        if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int))
+        {
+            EncodeOptionalPlainPrimitivePages<int, Int32PlainPageWriter>(bufferWriters,
+                Unsafe.As<ReadOnlySpan<T?>, ReadOnlySpan<int?>>(ref values), checked((int)targetPageBytes), pages,
+                dataPageVersion);
+            return true;
+        }
+
+        if (column.PhysicalType == ParquetPhysicalType.Float && typeof(T) == typeof(float))
+        {
+            EncodeOptionalPlainPrimitivePages<float, FloatPlainPageWriter>(bufferWriters,
+                Unsafe.As<ReadOnlySpan<T?>, ReadOnlySpan<float?>>(ref values), checked((int)targetPageBytes), pages,
+                dataPageVersion);
+            return true;
+        }
+
+        if (column.PhysicalType == ParquetPhysicalType.Double && typeof(T) == typeof(double))
+        {
+            var doubleValues = Unsafe.As<ReadOnlySpan<T?>, ReadOnlySpan<double?>>(ref values);
+            if (BitConverter.IsLittleEndian && HasCanonicalNullableDoubleLayout && Avx2.IsSupported
+                && AreAllNullableDoubleValuesPresent(doubleValues))
+            {
+                EncodeAllPresentOptionalPlainPrimitivePages<double, DoublePlainPageWriter>(bufferWriters,
+                    doubleValues, checked((int)targetPageBytes), pages, dataPageVersion);
+                return true;
+            }
+
+            EncodeOptionalPlainPrimitivePages<double, DoublePlainPageWriter>(bufferWriters,
+                doubleValues, checked((int)targetPageBytes), pages, dataPageVersion);
+            return true;
+        }
+
+        return false;
+    }
+
+    static void EncodeOptionalPlainPrimitivePages<T, TPageWriter>(BufferWriterFactory bufferWriters,
+        ReadOnlySpan<T?> values, int targetPageBytes, PageList pages, ParquetDataPageVersion dataPageVersion)
+        where T : struct
+        where TPageWriter : struct, IPlainPrimitivePageWriter<T>
+    {
+        pages.Clear();
+        if (values.IsEmpty)
+            return;
+
+        var valueByteCount = Unsafe.SizeOf<T>();
+        var maximumPresentValuesPerPage = Math.Min(values.Length, Math.Max(1, targetPageBytes / valueByteCount));
+        var rentedValues = bufferWriters.RentScratch<T>(checked((uint)maximumPresentValuesPerPage));
+        try
+        {
+            var denseValues = ParquetBuffer.AsSpan<T>(rentedValues, maximumPresentValuesPerPage);
+            var rowsWritten = 0;
+            while (rowsWritten < values.Length)
+            {
+                var pageStart = rowsWritten;
+                var pageRowCount = 0;
+                var pageBytes = 0;
+                while (rowsWritten < values.Length)
+                {
+                    var rowBytes = values[rowsWritten].HasValue ? valueByteCount + 1 : 1;
+                    if (pageRowCount > 0 && rowBytes > targetPageBytes - pageBytes)
+                        break;
+                    rowsWritten++;
+                    pageRowCount++;
+                    pageBytes = checked(pageBytes + rowBytes);
+                }
+
+                var pageIndex = AddNewDataPage(bufferWriters, pages);
+                ref var page = ref pages[pageIndex];
+                var pageRows = values.Slice(pageStart, pageRowCount);
+                var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
+                    ref page.Content);
+                var definitionStart = page.Content.WrittenLength;
+                var currentLevel = -1;
+                var currentRunLength = 0;
+                var presentCount = 0;
+                for (var i = 0; i < pageRows.Length; i++)
+                {
+                    var present = pageRows[i].HasValue;
+                    var level = present ? 1 : 0;
+                    if (present)
+                        denseValues[presentCount++] = pageRows[i]!.Value;
+
+                    if (currentRunLength == 0)
+                    {
+                        currentLevel = level;
+                        currentRunLength = 1;
+                    }
+                    else if (currentLevel == level)
+                    {
+                        currentRunLength++;
+                    }
+                    else
+                    {
+                        EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref page.Content);
+                        currentLevel = level;
+                        currentRunLength = 1;
+                    }
+                }
+
+                EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref page.Content);
+                var definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref page.Content);
+                var nullCount = pageRowCount - presentCount;
+                var pageStatistics = TPageWriter.Write(denseValues[..presentCount], ref page.Content)
+                    .WithNullCount(nullCount);
+                WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
+                    EncodingKind.Plain);
+                page.Statistics = pageStatistics;
+            }
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rentedValues);
+        }
+    }
+
+    static void EncodeAllPresentOptionalPlainPrimitivePages<T, TPageWriter>(BufferWriterFactory bufferWriters,
+        ReadOnlySpan<T?> values, int targetPageBytes, PageList pages, ParquetDataPageVersion dataPageVersion)
+        where T : struct
+        where TPageWriter : struct, IAllPresentOptionalPlainPrimitivePageWriter<T>
+    {
+        pages.Clear();
+        var rowsPerPage = Math.Max(1, targetPageBytes / (Unsafe.SizeOf<T>() + 1));
+        for (var pageStart = 0; pageStart < values.Length; pageStart += rowsPerPage)
+        {
+            var pageRowCount = Math.Min(rowsPerPage, values.Length - pageStart);
+            var pageIndex = AddNewDataPage(bufferWriters, pages);
+            ref var page = ref pages[pageIndex];
+            var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
+                ref page.Content);
+            var definitionStart = page.Content.WrittenLength;
+            EncodingPrimitives.WriteRleRun(1, pageRowCount, 1, ref page.Content);
+            var definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref page.Content);
+            var pageStatistics = TPageWriter.Write(values.Slice(pageStart, pageRowCount), ref page.Content);
+            WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, definitionLength,
+                EncodingKind.Plain);
+            page.Statistics = pageStatistics;
+        }
+    }
+
+    static bool AreAllNullableDoubleValuesPresent(ReadOnlySpan<double?> values)
+    {
+        ref var nullableSource = ref MemoryMarshal.GetReference(values);
+        ref var source = ref Unsafe.As<double?, long>(ref nullableSource);
+        var expectedFlags = Vector256.Create(1L);
+        var valueIndex = 0;
+        for (; values.Length - valueIndex >= 4; valueIndex += 4)
+        {
+            var first = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
+            var second = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 4));
+            var firstFlags = Avx2.Permute4x64(first, 0x88);
+            var secondFlags = Avx2.Permute4x64(second, 0x88);
+            var flags = Avx2.And(Avx2.Permute2x128(firstFlags, secondFlags, 0x20), Vector256.Create(0xffL));
+            if (Avx2.MoveMask(Avx2.CompareEqual(flags, expectedFlags).AsByte()) != -1)
+                return false;
+        }
+
+        for (; valueIndex < values.Length; valueIndex++)
+            if (!values[valueIndex].HasValue)
+                return false;
+        return true;
+    }
+
+    static bool ProbeCanonicalNullableDoubleLayout()
+    {
+        if (Unsafe.SizeOf<double?>() != sizeof(double) * 2)
+            return false;
+
+        const long expectedBits = 0x0102030405060708L;
+        double? present = BitConverter.Int64BitsToDouble(expectedBits);
+        ref var presentBytes = ref Unsafe.As<double?, byte>(ref present);
+        if (presentBytes != 1
+            || Unsafe.ReadUnaligned<long>(ref Unsafe.Add(ref presentBytes, sizeof(double))) != expectedBits)
+            return false;
+
+        double? absent = null;
+        return Unsafe.As<double?, byte>(ref absent) == 0;
     }
 
     /// <summary>
