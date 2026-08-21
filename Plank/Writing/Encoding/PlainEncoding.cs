@@ -756,16 +756,19 @@ static class PlainEncoding
     /// </para>
     /// </remarks>
     internal static int WriteRequiredByteArrayPage(Column column, ReadOnlySpan<byte[]> values, int startIndex,
-        int targetPageBytes, ref BufferWriter writer, ref PlainBinaryMinMax minMax)
+        int targetPageBytes, ref BufferWriter writer, ref PlainBinaryMinMax minMax,
+        out int pageMinIndex, out int pageMaxIndex)
     {
         var first = values[startIndex];
         if (first is null)
             ByteArrayRows.ThrowNullValue(column);
         var destination = writer.GetSpan(Math.Max(targetPageBytes, checked(sizeof(int) + first!.Length)));
-        var minIndex = minMax.Found ? minMax.MinIndex : -1;
-        var maxIndex = minMax.Found ? minMax.MaxIndex : -1;
-        var min = minIndex < 0 ? null : values[minIndex];
-        var max = maxIndex < 0 ? null : values[maxIndex];
+        byte[]? pageMin = null;
+        byte[]? pageMax = null;
+        pageMinIndex = -1;
+        pageMaxIndex = -1;
+        byte[]? pendingValue = null;
+        var pendingIndex = -1;
         var offset = 0;
         var rowCount = 0;
         for (; startIndex + rowCount < values.Length; rowCount++)
@@ -784,30 +787,104 @@ static class PlainEncoding
             value.CopyTo(destination[offset..]);
             offset += value.Length;
 
-            if (min is null)
+            // A pairwise tournament needs three comparisons for two values instead of comparing
+            // both values independently with both extrema. Only the lower value is compared with
+            // the page minimum and only the higher value with the maximum.
+            if (pendingValue is null)
             {
-                min = value;
-                max = value;
-                minIndex = index;
-                maxIndex = index;
+                pendingValue = value;
+                pendingIndex = index;
             }
-            // A value below the running min cannot also be above the running max, so the second
-            // comparison only runs when the first one did not claim the value.
-            else if (value.AsSpan().SequenceCompareTo(min) < 0)
+            else
             {
-                min = value;
-                minIndex = index;
-            }
-            else if (value.AsSpan().SequenceCompareTo(max) > 0)
-            {
-                max = value;
-                maxIndex = index;
+                byte[] pairMin;
+                byte[] pairMax;
+                int pairMinIndex;
+                int pairMaxIndex;
+                if (EncodingPrimitives.ComparePayload(pendingValue, value) <= 0)
+                {
+                    pairMin = pendingValue;
+                    pairMax = value;
+                    pairMinIndex = pendingIndex;
+                    pairMaxIndex = index;
+                }
+                else
+                {
+                    pairMin = value;
+                    pairMax = pendingValue;
+                    pairMinIndex = index;
+                    pairMaxIndex = pendingIndex;
+                }
+
+                if (pageMin is null)
+                {
+                    pageMin = pairMin;
+                    pageMax = pairMax;
+                    pageMinIndex = pairMinIndex;
+                    pageMaxIndex = pairMaxIndex;
+                }
+                else
+                {
+                    if (EncodingPrimitives.ComparePayload(pairMin, pageMin) < 0)
+                    {
+                        pageMin = pairMin;
+                        pageMinIndex = pairMinIndex;
+                    }
+                    if (EncodingPrimitives.ComparePayload(pairMax, pageMax!) > 0)
+                    {
+                        pageMax = pairMax;
+                        pageMaxIndex = pairMaxIndex;
+                    }
+                }
+
+                pendingValue = null;
             }
         }
 
         writer.Advance(offset);
-        if (min is not null)
-            minMax = new PlainBinaryMinMax { Found = true, MinIndex = minIndex, MaxIndex = maxIndex };
+        if (pendingValue is not null)
+        {
+            if (pageMin is null)
+            {
+                pageMin = pendingValue;
+                pageMax = pendingValue;
+                pageMinIndex = pendingIndex;
+                pageMaxIndex = pendingIndex;
+            }
+            else
+            {
+                if (EncodingPrimitives.ComparePayload(pendingValue, pageMin) < 0)
+                {
+                    pageMin = pendingValue;
+                    pageMinIndex = pendingIndex;
+                }
+                if (EncodingPrimitives.ComparePayload(pendingValue, pageMax!) > 0)
+                {
+                    pageMax = pendingValue;
+                    pageMaxIndex = pendingIndex;
+                }
+            }
+        }
+
+        if (pageMin is not null)
+        {
+            if (!minMax.Found)
+            {
+                minMax = new PlainBinaryMinMax
+                {
+                    Found = true,
+                    MinIndex = pageMinIndex,
+                    MaxIndex = pageMaxIndex
+                };
+            }
+            else
+            {
+                if (EncodingPrimitives.ComparePayload(pageMin, values[minMax.MinIndex]) < 0)
+                    minMax.MinIndex = pageMinIndex;
+                if (EncodingPrimitives.ComparePayload(pageMax!, values[minMax.MaxIndex]) > 0)
+                    minMax.MaxIndex = pageMaxIndex;
+            }
+        }
         return rowCount;
     }
 
