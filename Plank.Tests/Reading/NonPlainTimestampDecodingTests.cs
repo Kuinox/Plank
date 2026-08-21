@@ -107,6 +107,28 @@ internal sealed class NonPlainTimestampDecodingTests
     }
 
     [Test]
+    public void AllPresentOptionalPlainDateTimesPreserveVectorBoundaries()
+    {
+        foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        foreach (var isAdjustedToUtc in new[] { false, true })
+        {
+            var kind = isAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+            var epoch = DateTime.SpecifyKind(DateTime.UnixEpoch, kind);
+            var expected = Enumerable.Range(0, 259)
+                .Select(index => (DateTime?)epoch.AddTicks((index - 129L) * 10))
+                .ToArray();
+            expected[0] = new DateTime(DateTime.MinValue.Ticks, kind);
+            expected[3] = new DateTime(DateTime.MaxValue.Ticks - 9, kind);
+
+            var actual = RoundTripOptional(expected, TimeUnit.Micros, isAdjustedToUtc,
+                EncodingKind.Plain, pageVersion);
+
+            AssertEqual(expected, actual, TimeUnit.Micros, isAdjustedToUtc,
+                EncodingKind.Plain, pageVersion);
+        }
+    }
+
+    [Test]
     public void RequiredDictionaryDateTimesPreserveUnitsKindsAndElevenBitIndexes()
     {
         foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
