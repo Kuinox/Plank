@@ -52,4 +52,26 @@ internal sealed class PublishedReadBenchmarkQuickSmokeTests
         await Assert.That(rle.Measurements.Single(static result =>
             result.ImplementationId == "parquetnet-single").Available).IsFalse();
     }
+
+    [Test]
+    public async Task ThreeColumnRunUsesDedicatedWorkersAndPreservesTheFingerprint()
+    {
+        var options = new PublishedBenchmarkOptions
+        {
+            Quick = true,
+            Warmups = 1,
+            Iterations = 1,
+            WorkerCount = Math.Min(3, Environment.ProcessorCount),
+            CaseId = "int32-delta-binary-packed"
+        };
+        var synthetic = SyntheticBenchmarkData.Create(64, 3, options.CaseId);
+
+        var report = await PublishedReadBenchmarkRunner.RunAsync([], synthetic, options);
+
+        var benchmarkCase = report.Suites.Single(static suite => suite.Id == "synthetic").Cases.Single();
+        var plankMulti = benchmarkCase.Measurements.Single(static measurement =>
+            measurement.ImplementationId == "plank-multi");
+        await Assert.That(plankMulti.Available).IsTrue();
+        await Assert.That(plankMulti.SamplesMilliseconds).Count().IsEqualTo(1);
+    }
 }

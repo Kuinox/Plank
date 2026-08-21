@@ -8,12 +8,17 @@ sealed class PlankPublishedBenchmarkReader : IPublishedBenchmarkReader
     readonly PublishedBenchmarkDataSet _dataSet;
     readonly MemoryReadSource _source;
     readonly int _workerCount;
+    readonly DedicatedColumnWorker[]? _dedicatedWorkers;
 
     public PlankPublishedBenchmarkReader(byte[] fileBytes, PublishedBenchmarkDataSet dataSet, int workerCount)
     {
         _dataSet = dataSet;
         _source = new MemoryReadSource(fileBytes);
         _workerCount = workerCount;
+        if (workerCount > 1 && dataSet.Columns.Count is 2 or 3)
+            _dedicatedWorkers = Enumerable.Range(1, dataSet.Columns.Count - 1)
+                .Select(static columnIndex => new DedicatedColumnWorker(columnIndex))
+                .ToArray();
     }
 
     public string ImplementationId
@@ -45,6 +50,8 @@ sealed class PlankPublishedBenchmarkReader : IPublishedBenchmarkReader
             if (_workerCount == 1)
                 for (var columnIndex = 0; columnIndex < pieces.Length; columnIndex++)
                     pieces[columnIndex] = ReadColumn(rowGroup, columnIndex, rowCount);
+            else if (pieces.Length is 2 or 3)
+                ReadFewColumns(rowGroup, rowCount, pieces, cancellationToken);
             else
                 Parallel.For(0, pieces.Length, new ParallelOptions
                 {
@@ -61,8 +68,107 @@ sealed class PlankPublishedBenchmarkReader : IPublishedBenchmarkReader
         return ValueTask.FromResult(new PublishedReadResult(valueCount, aggregate));
     }
 
+    void ReadFewColumns(RowGroup rowGroup, int rowCount, PublishedReadResult[] pieces,
+        CancellationToken cancellationToken)
+    {
+        var workers = _dedicatedWorkers ?? throw new InvalidOperationException(
+            "Dedicated column workers were not initialized.");
+        for (var columnIndex = 1; columnIndex < pieces.Length; columnIndex++)
+        {
+            var capturedColumnIndex = columnIndex;
+            workers[columnIndex - 1].Start(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                pieces[capturedColumnIndex] = ReadColumn(rowGroup, capturedColumnIndex, rowCount);
+            });
+        }
+
+        var failures = new Exception?[workers.Length];
+        try
+        {
+            pieces[0] = ReadColumn(rowGroup, 0, rowCount);
+        }
+        finally
+        {
+            for (var workerIndex = 0; workerIndex < workers.Length; workerIndex++)
+                failures[workerIndex] = workers[workerIndex].Join();
+        }
+
+        var workerFailures = failures.OfType<Exception>().ToArray();
+        if (workerFailures.Length != 0)
+            throw new AggregateException("A published benchmark column failed to read.", workerFailures);
+    }
+
     public void Dispose()
     {
+        if (_dedicatedWorkers is not null)
+            foreach (var worker in _dedicatedWorkers)
+                worker.Dispose();
+    }
+
+    sealed class DedicatedColumnWorker : IDisposable
+    {
+        readonly AutoResetEvent _ready = new(false);
+        readonly AutoResetEvent _done = new(false);
+        readonly Thread _thread;
+        Action? _work;
+        Exception? _failure;
+        bool _stopping;
+
+        internal DedicatedColumnWorker(int columnIndex)
+        {
+            _thread = new Thread(Run)
+            {
+                IsBackground = true,
+                Name = $"Plank published column reader {columnIndex}"
+            };
+            _thread.Start();
+        }
+
+        internal void Start(Action work)
+        {
+            _work = work ?? throw new ArgumentNullException(nameof(work));
+            _failure = null;
+            _ready.Set();
+        }
+
+        internal Exception? Join()
+        {
+            _done.WaitOne();
+            return _failure;
+        }
+
+        public void Dispose()
+        {
+            _stopping = true;
+            _ready.Set();
+            _thread.Join();
+            _ready.Dispose();
+            _done.Dispose();
+        }
+
+        void Run()
+        {
+            while (true)
+            {
+                _ready.WaitOne();
+                if (_stopping)
+                    return;
+                try
+                {
+                    _work!();
+                }
+                catch (Exception exception)
+                {
+                    _failure = exception;
+                }
+                finally
+                {
+                    _work = null;
+                    _done.Set();
+                }
+            }
+        }
     }
 
     PublishedReadResult ReadColumn(RowGroup rowGroup, int columnIndex, int rowCount)
