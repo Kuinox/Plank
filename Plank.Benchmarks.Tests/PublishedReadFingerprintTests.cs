@@ -44,6 +44,32 @@ internal sealed class PublishedReadFingerprintTests
             .IsNotEqualTo(Fingerprint((ref Accumulator x) => x.AddBytes([])));
     }
 
+    [Test]
+    public async Task BulkByteFingerprintMatchesScalarAcrossLengthsAndStartingLanes()
+    {
+        var values = Enumerable.Range(0, 79)
+            .Select(static value => unchecked((byte)(value * 197 + 101)))
+            .ToArray();
+
+        for (var prefixLength = 0; prefixLength < 4; prefixLength++)
+            for (var length = 0; length <= values.Length; length++)
+            {
+                var scalar = Accumulator.StartPiece(3, 5, prefixLength + length);
+                for (var prefix = 0; prefix < prefixLength; prefix++)
+                    scalar.AddWord(unchecked((uint)(prefix * 7919)));
+                scalar.AddWord(unchecked((uint)length));
+                for (var index = 0; index < length; index++)
+                    scalar.AddWord(values[index]);
+
+                var bulk = Accumulator.StartPiece(3, 5, prefixLength + length);
+                for (var prefix = 0; prefix < prefixLength; prefix++)
+                    bulk.AddWord(unchecked((uint)(prefix * 7919)));
+                bulk.AddBytes(values.AsSpan(0, length));
+
+                await Assert.That(bulk.Finish()).IsEqualTo(scalar.Finish());
+            }
+    }
+
     /// <summary>
     /// Nulls are mixed with a different multiplier rather than an extra round, so a null still has to
     /// stay distinct from the value whose word is zero.

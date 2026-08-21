@@ -140,8 +140,7 @@ static class PublishedReadFingerprint
         public void AddBytes(ReadOnlySpan<byte> value)
         {
             AddWord(unchecked((uint)value.Length));
-            for (var index = 0; index < value.Length; index++)
-                AddWord(value[index]);
+            AddByteValues(value);
         }
 
         public void AddString(string value)
@@ -268,6 +267,23 @@ static class PublishedReadFingerprint
             => value.HasValue
                 ? Mix(lane, unchecked((ulong)value.GetValueOrDefault()), Prime)
                 : Mix(lane, 0, AbsentPrime);
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        void AddByteValues(ReadOnlySpan<byte> values)
+        {
+            ref var first = ref MemoryMarshal.GetReference(values);
+            var index = 0;
+            for (; index <= values.Length - 4; index += 4)
+            {
+                _lane0 = Mix(_lane0, Unsafe.Add(ref first, index + 3), Prime);
+                _lane1 = Mix(_lane1, Unsafe.Add(ref first, index + 2), Prime);
+                _lane2 = Mix(_lane2, Unsafe.Add(ref first, index + 1), Prime);
+                _lane3 = Mix(_lane3, Unsafe.Add(ref first, index), Prime);
+            }
+
+            for (; index < values.Length; index++)
+                AddWord(Unsafe.Add(ref first, index));
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static ulong Mix(ulong lane, ulong value, ulong multiplier)
