@@ -34,6 +34,7 @@ internal sealed class NullableNumericEncodingTests
     public void ForcedNullablePrimitiveDictionaryUsesOneDataPageAndPreservesStatistics(
         ParquetDataPageVersion dataPageVersion)
     {
+        AssertForcedNullableDictionary(CreateInt32Values(), ParquetPhysicalType.Int32, dataPageVersion);
         AssertForcedNullableDictionary(CreateInt64Values(), ParquetPhysicalType.Int64, dataPageVersion);
 
         var doubles = CreateDoubleValues();
@@ -41,6 +42,52 @@ internal sealed class NullableNumericEncodingTests
         doubles[43] = doubles[2];
         doubles[100] = doubles[3];
         AssertForcedNullableDictionary(doubles, ParquetPhysicalType.Double, dataPageVersion);
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void FusedNullableInt32DictionaryMatchesGenericOutput(ParquetDataPageVersion dataPageVersion)
+    {
+        int?[][] valuePatterns =
+        [
+            [7, 3, 7, 0, 511, 42, 3, 255, -9, 511, 7],
+            [null, 7, 7, null, 265, 7, 42, null, -9, -9, 0, null, 7],
+            [null, 7, 7, int.MinValue, null, 42, 7, int.MaxValue, 42, null, -9, 511, 0, null, 7],
+            Enumerable.Range(0, 700).Select(static value => (int?)value).ToArray()
+        ];
+
+        foreach (var values in valuePatterns)
+        {
+            var fused = WriteNullableInt32Dictionary(values, ForceDictionaryPageStrategy.Shared, dataPageVersion);
+            var generic = WriteNullableInt32Dictionary(values,
+                new FixedRowsPageStrategy(checked((uint)values.Length), DictionaryMode.Forced), dataPageVersion);
+
+            if (!fused.AsSpan().SequenceEqual(generic))
+                throw new InvalidOperationException(
+                    $"Fused optional int32 {dataPageVersion} dictionary encoding changed the Parquet bytes.");
+        }
+    }
+
+    static byte[] WriteNullableInt32Dictionary(int?[] values, IPageStrategy pageStrategy,
+        ParquetDataPageVersion dataPageVersion)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("optional", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.RleDictionary]), pageStrategy: pageStrategy)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            WritePageIndexes = false
+        });
+        var serialized = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return stream.ToArray();
     }
 
     [Test]

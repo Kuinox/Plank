@@ -1212,6 +1212,26 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                     return;
                 }
 
+                if (typeof(TValue) == typeof(int)
+                    && _column.PhysicalType == ParquetPhysicalType.Int32
+                    && strategyContext.Strategy is ForceDictionaryPageStrategy
+                    && !_owner.WritePageIndexes && _column.Options.BloomFilter is null)
+                {
+                    Pages.Clear();
+                    ColumnOrdinal = columnOrdinal;
+                    RowCount = checked((uint)values.Length);
+                    HasPendingData = true;
+                    var intValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<int?>>(ref values);
+                    Statistics = Plank.Writing.Encoding.Encoding.EncodeOptionalForcedInt32Dictionary(
+                        _owner.BufferWriters, _column, intValues, strategyContext, Pages,
+                        _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
+                        GetOrCreateDictionaryState<int>());
+                    if (!TryAssignSingleDataPageStatistics(Statistics))
+                        throw new InvalidOperationException("Fused optional int32 encoding produced multiple data pages.");
+                    _bloomFilterByteLength = 0;
+                    return;
+                }
+
                 if (typeof(TValue) == typeof(long)
                     && _column.PhysicalType == ParquetPhysicalType.Int64
                     && strategyContext.Strategy is ForceDictionaryPageStrategy
