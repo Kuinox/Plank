@@ -2162,7 +2162,8 @@ static class Encoding
                 var repeatedValue = values[repeatedIndex] ?? throw new InvalidOperationException(
                     "A required byte-array dictionary does not support null values.");
                 var cycleIndex = repeatedIndex - period;
-                if (!EncodingPrimitives.PayloadEquals(repeatedValue, values[cycleIndex]))
+                if (!ReferenceEquals(repeatedValue, values[cycleIndex])
+                    && !EncodingPrimitives.PayloadEquals(repeatedValue, values[cycleIndex]))
                 {
                     for (; repeatedIndex < values.Length; repeatedIndex++)
                     {

@@ -263,7 +263,11 @@ sealed class ReusableDictionaryState<T>
             return Unsafe.As<T, ReadOnlyMemory<byte>>(ref a).Span.SequenceEqual(
                 Unsafe.As<T, ReadOnlyMemory<byte>>(ref b).Span);
         if (typeof(T) == typeof(byte[]))
-            return EncodingPrimitives.PayloadEquals(Unsafe.As<T, byte[]>(ref a), Unsafe.As<T, byte[]>(ref b));
+        {
+            var left = Unsafe.As<T, byte[]>(ref a);
+            var right = Unsafe.As<T, byte[]>(ref b);
+            return ReferenceEquals(left, right) || EncodingPrimitives.PayloadEquals(left, right);
+        }
         if (typeof(T) == typeof(float))
             return Unsafe.As<T, uint>(ref a) == Unsafe.As<T, uint>(ref b);
         if (typeof(T) == typeof(double))
