@@ -94,6 +94,33 @@ internal sealed class PayloadCopyTests
                     throw new InvalidOperationException(
                         $"Comparing {Convert.ToHexString(left)} with {Convert.ToHexString(right)} gave "
                         + $"{actual}, expected {expected}.");
+        }
+    }
+
+    [Test]
+    public void EqualityAgreesWithSequenceEqualForEveryLengthBand()
+    {
+        for (var length = 0; length <= 40; length++)
+        {
+            var left = new byte[length];
+            for (var i = 0; i < length; i++)
+                left[i] = (byte)(i * 29 + length);
+            var right = left.ToArray();
+
+            if (!EncodingPrimitives.PayloadEquals(left, right))
+                throw new InvalidOperationException($"Equal payloads of length {length} compared unequal.");
+
+            for (var changedIndex = 0; changedIndex < length; changedIndex++)
+            {
+                right[changedIndex]++;
+                if (EncodingPrimitives.PayloadEquals(left, right))
+                    throw new InvalidOperationException(
+                        $"Payloads of length {length} compared equal after byte {changedIndex} changed.");
+                right[changedIndex]--;
             }
+
+            if (EncodingPrimitives.PayloadEquals(left, new byte[length + 1]))
+                throw new InvalidOperationException($"Payloads with different lengths compared equal at {length}.");
+        }
     }
 }
