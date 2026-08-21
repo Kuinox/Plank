@@ -318,10 +318,8 @@ static class DeltaBinaryPackedDecoder
                 var packedWord = ReadPackedWord(packed, index * bitWidth / 8);
                 var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
                 var unpackedBytes = Vector128.CreateScalar(unpacked).AsByte();
-                var lower = Avx2.ConvertToVector256Int64(unpackedBytes);
-                var upper = Avx2.ConvertToVector256Int64(
-                    Sse2.ShiftRightLogical128BitLane(unpackedBytes, sizeof(uint)));
-                ReconstructEightInt32(lower, upper, minDelta, ref previous,
+                var residuals = Avx2.ConvertToVector256Int32(unpackedBytes);
+                ReconstructEightInt32(residuals, minDelta, ref previous,
                     ref destinationStart, index);
             }
         }
@@ -356,10 +354,8 @@ static class DeltaBinaryPackedDecoder
                 var packedWord = ReadPackedWord(packed, index * bitWidth / 8);
                 var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
                 var unpackedBytes = Vector128.CreateScalar(unpacked).AsByte();
-                var lower = Avx2.ConvertToVector256Int64(unpackedBytes);
-                var upper = Avx2.ConvertToVector256Int64(
-                    Sse2.ShiftRightLogical128BitLane(unpackedBytes, sizeof(uint)));
-                ReconstructEightNullableInt32(lower, upper, minDelta, ref previous,
+                var residuals = Avx2.ConvertToVector256Int32(unpackedBytes);
+                ReconstructEightNullableInt32(residuals, minDelta, ref previous,
                     ref destinationStart, index);
             }
         }
@@ -380,16 +376,11 @@ static class DeltaBinaryPackedDecoder
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static void ReconstructEightInt32(Vector256<long> lower, Vector256<long> upper, long minDelta,
+    static void ReconstructEightInt32(Vector256<int> residuals, long minDelta,
         ref long previous, ref int destination, int index)
     {
-        lower = PrefixSum(lower + Vector256.Create(minDelta));
-        upper = PrefixSum(upper + Vector256.Create(minDelta));
-        lower += Vector256.Create(previous);
-        upper += Vector256.Create(lower.GetElement(Vector256<long>.Count - 1));
-
-        Vector256.Narrow(lower, upper).StoreUnsafe(ref destination, (nuint)index);
-        previous = upper.GetElement(Vector256<long>.Count - 1);
+        var values = ReconstructEightInt32Values(residuals, minDelta, ref previous);
+        values.StoreUnsafe(ref destination, (nuint)index);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -418,6 +409,36 @@ static class DeltaBinaryPackedDecoder
         (Vector256.ShiftLeft(upper.AsUInt64(), 32) | present)
             .StoreUnsafe(ref destination, (nuint)(index + Vector256<ulong>.Count));
         previous = upper.GetElement(Vector256<long>.Count - 1);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void ReconstructEightNullableInt32(Vector256<int> residuals, long minDelta,
+        ref long previous, ref ulong destination, int index)
+    {
+        var values = ReconstructEightInt32Values(residuals, minDelta, ref previous);
+        var lower = Avx2.ConvertToVector256Int64(values.GetLower());
+        var upper = Avx2.ConvertToVector256Int64(values.GetUpper());
+        var present = Vector256.Create(1UL);
+        (Vector256.ShiftLeft(lower.AsUInt64(), 32) | present)
+            .StoreUnsafe(ref destination, (nuint)index);
+        (Vector256.ShiftLeft(upper.AsUInt64(), 32) | present)
+            .StoreUnsafe(ref destination, (nuint)(index + Vector256<ulong>.Count));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static Vector256<int> ReconstructEightInt32Values(Vector256<int> residuals, long minDelta,
+        ref long previous)
+    {
+        // Int32 reconstruction is defined modulo 2^32. Keeping the prefix sum in Int32 lanes
+        // therefore preserves overflow semantics while reconstructing eight values per vector.
+        var values = residuals + Vector256.Create(unchecked((int)minDelta));
+        values += Avx2.ShiftLeftLogical128BitLane(values.AsByte(), sizeof(int)).AsInt32();
+        values += Avx2.ShiftLeftLogical128BitLane(values.AsByte(), 2 * sizeof(int)).AsInt32();
+        var lowerTotal = Avx2.PermuteVar8x32(values, Vector256.Create(3));
+        values += lowerTotal & Vector256.Create(0, 0, 0, 0, -1, -1, -1, -1);
+        values += Vector256.Create(unchecked((int)previous));
+        previous = values.GetElement(Vector256<int>.Count - 1);
+        return values;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
