@@ -83,6 +83,23 @@ internal sealed class Dictionary11BitDecodingTests
     }
 
     [Test]
+    public void DoubleLiteralDecoderReusesRepeatedDictionaryCyclesAndHandlesDifferentCycles()
+    {
+        var dictionary = CreateDoubleDictionary(2_048);
+        var cycle = Enumerable.Range(0, dictionary.Length)
+            .Select(index => index * 61 & 2_047).ToArray();
+        var repeatedIndexes = cycle.Concat(cycle).Concat(cycle).Concat(cycle).Concat(cycle)
+            .Concat(cycle.AsSpan(0, 9).ToArray()).ToArray();
+        AssertDecodedDouble(dictionary, EncodeLiteral(repeatedIndexes, 11), repeatedIndexes);
+
+        var differentCycle = cycle.ToArray();
+        differentCycle[1_037] ^= 0x155;
+        var differentIndexes = cycle.Concat(cycle).Concat(differentCycle)
+            .Concat(cycle.AsSpan(0, 9).ToArray()).ToArray();
+        AssertDecodedDouble(dictionary, EncodeLiteral(differentIndexes, 11), differentIndexes);
+    }
+
+    [Test]
     public void Int32SmallBitWidthDecoderHandlesVectorScalarAndCorruptBoundaries()
     {
         foreach (var bitWidth in new[] { 1, 2, 8, 9 })

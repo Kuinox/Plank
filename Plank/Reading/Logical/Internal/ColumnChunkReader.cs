@@ -3836,26 +3836,19 @@ static class ColumnChunkReader
         if (blockValueCount >= 8 && destination.Length >= blockValueCount * 2)
         {
             var blockByteCount = checked(blockValueCount / 8 * 11);
-            if (payload.Length >= blockByteCount * 2 &&
-                payload[..blockByteCount].SequenceEqual(payload.Slice(blockByteCount, blockByteCount)))
+            var repeatedBlockCount = GetRepeatedDictionaryBlockCount(payload, destination.Length,
+                blockValueCount, blockByteCount);
+            if (repeatedBlockCount >= 2)
             {
                 var firstValues = destination[..blockValueCount];
                 DecodeDictionaryLiteralInt32Indexes11BitCore(payload[..blockByteCount],
                     dictionary, firstValues);
-                var valueOffset = blockValueCount;
-                var byteOffset = blockByteCount;
-                while (destination.Length - valueOffset >= blockValueCount &&
-                       payload.Length - byteOffset >= blockByteCount &&
-                       payload.Slice(byteOffset, blockByteCount)
-                           .SequenceEqual(payload[..blockByteCount]))
-                {
-                    firstValues.CopyTo(destination[valueOffset..]);
-                    valueOffset += blockValueCount;
-                    byteOffset += blockByteCount;
-                }
+                RepeatDictionaryValues(destination, blockValueCount, repeatedBlockCount);
 
+                var valueOffset = checked(repeatedBlockCount * blockValueCount);
                 if (valueOffset < destination.Length)
-                    DecodeDictionaryLiteralInt32Indexes11BitCore(payload[byteOffset..],
+                    DecodeDictionaryLiteralInt32Indexes11BitCore(
+                        payload[checked(repeatedBlockCount * blockByteCount)..],
                         dictionary, destination[valueOffset..]);
                 return;
             }
@@ -3900,32 +3893,54 @@ static class ColumnChunkReader
         if (blockValueCount >= 8 && destination.Length >= blockValueCount * 2)
         {
             var blockByteCount = checked(blockValueCount / 8 * 11);
-            if (payload.Length >= blockByteCount * 2 &&
-                payload[..blockByteCount].SequenceEqual(payload.Slice(blockByteCount, blockByteCount)))
+            var repeatedBlockCount = GetRepeatedDictionaryBlockCount(payload, destination.Length,
+                blockValueCount, blockByteCount);
+            if (repeatedBlockCount >= 2)
             {
                 var firstValues = destination[..blockValueCount];
                 DecodeDictionaryLiteralInt64Indexes11BitCore(payload[..blockByteCount],
                     dictionary, firstValues);
-                var valueOffset = blockValueCount;
-                var byteOffset = blockByteCount;
-                while (destination.Length - valueOffset >= blockValueCount &&
-                       payload.Length - byteOffset >= blockByteCount &&
-                       payload.Slice(byteOffset, blockByteCount)
-                           .SequenceEqual(payload[..blockByteCount]))
-                {
-                    firstValues.CopyTo(destination[valueOffset..]);
-                    valueOffset += blockValueCount;
-                    byteOffset += blockByteCount;
-                }
+                RepeatDictionaryValues(destination, blockValueCount, repeatedBlockCount);
 
+                var valueOffset = checked(repeatedBlockCount * blockValueCount);
                 if (valueOffset < destination.Length)
-                    DecodeDictionaryLiteralInt64Indexes11BitCore(payload[byteOffset..],
+                    DecodeDictionaryLiteralInt64Indexes11BitCore(
+                        payload[checked(repeatedBlockCount * blockByteCount)..],
                         dictionary, destination[valueOffset..]);
                 return;
             }
         }
 
         DecodeDictionaryLiteralInt64Indexes11BitCore(payload, dictionary, destination);
+    }
+
+    static int GetRepeatedDictionaryBlockCount(ReadOnlySpan<byte> payload, int valueCount,
+        int blockValueCount, int blockByteCount)
+    {
+        var blockCount = valueCount / blockValueCount;
+        if (blockCount < 2)
+            return 0;
+        var repeatedByteCount = checked(blockCount * blockByteCount);
+        if (payload.Length < repeatedByteCount)
+            return 0;
+        var comparedByteCount = repeatedByteCount - blockByteCount;
+        return payload[..comparedByteCount]
+            .SequenceEqual(payload.Slice(blockByteCount, comparedByteCount))
+            ? blockCount
+            : 0;
+    }
+
+    static void RepeatDictionaryValues<T>(Span<T> destination, int blockValueCount,
+        int repeatedBlockCount)
+    {
+        var repeatedValueCount = checked(blockValueCount * repeatedBlockCount);
+        var copied = blockValueCount;
+        while (copied < repeatedValueCount)
+        {
+            var copyCount = Math.Min(copied, repeatedValueCount - copied);
+            destination[..copyCount].CopyTo(destination[copied..]);
+            copied += copyCount;
+        }
     }
 
     static void DecodeDictionaryLiteralInt64Indexes11BitCore(ReadOnlySpan<byte> payload,
