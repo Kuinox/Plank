@@ -498,6 +498,8 @@ static class ColumnChunkReader
                        FixedWidthDecoderKind.ByteStreamSplit &&
                    column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int?)) ||
                   (page.DecoderKind == FixedWidthDecoderKind.ByteStreamSplit &&
+                   column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTime?)) ||
+                  (page.DecoderKind == FixedWidthDecoderKind.Dictionary &&
                    column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTime?))))
             // The page's definition stream was still decoded and validated when the batch state was
             // created. With every row present, keep it compact: the specialized decoders below expand
@@ -840,6 +842,18 @@ static class ColumnChunkReader
         }
 
         if (converter is null && byteDefinitions.IsEmpty && physicalBatchCount == values.Length &&
+            decoderKind == FixedWidthDecoderKind.Dictionary &&
+            column.PhysicalType == ParquetPhysicalType.Int64 &&
+            typeof(T) == typeof(DateTime?) && typeof(TValue) == typeof(DateTime))
+        {
+            var nullableTimestamps = Unsafe.As<Span<T>, Span<DateTime?>>(ref values);
+            var decoded = MemoryMarshal.Cast<byte, DateTime>(buffers.Scratch.Span)
+                .Slice(physicalOffset, physicalBatchCount);
+            ExpandAllPresentDateTimeBatch(decoded, nullableTimestamps);
+            return;
+        }
+
+        if (converter is null && byteDefinitions.IsEmpty && physicalBatchCount == values.Length &&
             decoderKind == FixedWidthDecoderKind.ByteStreamSplit &&
             column.PhysicalType == ParquetPhysicalType.Int64 &&
             typeof(T) == typeof(DateTime?) && typeof(TValue) == typeof(DateTime))
@@ -921,6 +935,36 @@ static class ColumnChunkReader
                     Vector128.LoadUnsafe(ref sourceStart, (nuint)index)).AsUInt64();
                 var nullable = Vector256.ShiftLeft(values, 32) | present;
                 nullable.StoreUnsafe(ref destinationStart, (nuint)index);
+            }
+        }
+
+        for (; index < source.Length; index++)
+            destination[index] = source[index];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static void ExpandAllPresentDateTimeBatch(ReadOnlySpan<DateTime> source, Span<DateTime?> destination,
+        bool allowVector = true)
+    {
+        System.Diagnostics.Debug.Assert(source.Length == destination.Length);
+        var index = 0;
+        if (allowVector && NullableDateTimeHasCanonicalLayout && Avx2.IsSupported &&
+            destination.Length >= Vector256<ulong>.Count)
+        {
+            ref var sourceStart = ref Unsafe.As<DateTime, ulong>(ref MemoryMarshal.GetReference(source));
+            ref var destinationStart = ref Unsafe.As<DateTime?, ulong>(ref MemoryMarshal.GetReference(destination));
+            var present = Vector128.Create(1UL);
+            for (; index <= source.Length - Vector256<ulong>.Count; index += Vector256<ulong>.Count)
+            {
+                var values = Vector256.LoadUnsafe(ref sourceStart, (nuint)index);
+                var lower = Vector256.Create(
+                    Sse2.UnpackLow(present, values.GetLower()),
+                    Sse2.UnpackHigh(present, values.GetLower()));
+                var upper = Vector256.Create(
+                    Sse2.UnpackLow(present, values.GetUpper()),
+                    Sse2.UnpackHigh(present, values.GetUpper()));
+                lower.StoreUnsafe(ref destinationStart, (nuint)(index * 2));
+                upper.StoreUnsafe(ref destinationStart, (nuint)(index * 2 + 4));
             }
         }
 
