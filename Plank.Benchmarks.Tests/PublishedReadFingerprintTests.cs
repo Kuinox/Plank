@@ -137,6 +137,71 @@ internal sealed class PublishedReadFingerprintTests
     }
 
     [Test]
+    public async Task BulkInt64FingerprintMatchesScalarAcrossLengthsAndChunkBoundaries()
+    {
+        long[] values =
+        [
+            long.MinValue, -1, 0, 1, long.MaxValue,
+            .. Enumerable.Range(0, 67).Select(static value =>
+                unchecked(value * 6_364_136_223_846_793_005L + 1_442_695_040_888_963_407L))
+        ];
+
+        for (var length = 0; length <= values.Length; length++)
+        {
+            var scalar = Accumulator.StartPiece(3, 5, length + 3);
+            scalar.AddValue(101L);
+            scalar.AddValue(-202L);
+            scalar.AddValue(303L);
+            for (var index = 0; index < length; index++)
+                scalar.AddValue(values[index]);
+            var expected = scalar.Finish();
+
+            for (var chunkSize = 1; chunkSize <= 13; chunkSize++)
+            {
+                var bulk = Accumulator.StartPiece(3, 5, length + 3);
+                bulk.AddValues<long>([101, -202, 303]);
+                for (var offset = 0; offset < length; offset += chunkSize)
+                    bulk.AddValues(values.AsSpan(offset, Math.Min(chunkSize, length - offset)));
+
+                await Assert.That(bulk.Finish()).IsEqualTo(expected);
+            }
+        }
+    }
+
+    [Test]
+    public async Task BulkNullableInt64FingerprintMatchesScalarAcrossLengthsAndChunkBoundaries()
+    {
+        long?[] values =
+        [
+            null, long.MinValue, -1, 0, 1, null, long.MaxValue,
+            .. Enumerable.Range(0, 66).Select(static value => value % 11 == 0
+                ? (long?)null
+                : unchecked(value * 6_364_136_223_846_793_005L + 1_442_695_040_888_963_407L))
+        ];
+
+        for (var length = 0; length <= values.Length; length++)
+        {
+            var scalar = Accumulator.StartPiece(7, 9, length + 3);
+            scalar.AddValue((long?)101);
+            scalar.AddValue((long?)null);
+            scalar.AddValue((long?)-303);
+            for (var index = 0; index < length; index++)
+                scalar.AddValue(values[index]);
+            var expected = scalar.Finish();
+
+            for (var chunkSize = 1; chunkSize <= 13; chunkSize++)
+            {
+                var bulk = Accumulator.StartPiece(7, 9, length + 3);
+                bulk.AddValues<long?>([101, null, -303]);
+                for (var offset = 0; offset < length; offset += chunkSize)
+                    bulk.AddValues(values.AsSpan(offset, Math.Min(chunkSize, length - offset)));
+
+                await Assert.That(bulk.Finish()).IsEqualTo(expected);
+            }
+        }
+    }
+
+    [Test]
     public async Task DateTimeFingerprintMatchesUtcDateTimeOffsetAcrossKindsAndBounds()
     {
         long[] ticks =

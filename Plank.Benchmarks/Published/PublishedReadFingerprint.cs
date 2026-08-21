@@ -118,6 +118,20 @@ static class PublishedReadFingerprint
                     ref Unsafe.As<T, int?>(ref first), values.Length));
                 return;
             }
+            if (typeof(T) == typeof(long))
+            {
+                ref var first = ref MemoryMarshal.GetReference(values);
+                AddInt64Values(MemoryMarshal.CreateReadOnlySpan(
+                    ref Unsafe.As<T, long>(ref first), values.Length));
+                return;
+            }
+            if (typeof(T) == typeof(long?))
+            {
+                ref var first = ref MemoryMarshal.GetReference(values);
+                AddNullableInt64Values(MemoryMarshal.CreateReadOnlySpan(
+                    ref Unsafe.As<T, long?>(ref first), values.Length));
+                return;
+            }
 
             for (var index = 0; index < values.Length; index++)
                 AddValue(values[index]);
@@ -213,6 +227,46 @@ static class PublishedReadFingerprint
         static ulong MixNullableInt32(ulong lane, int? value)
             => value.HasValue
                 ? Mix(lane, unchecked((uint)value.GetValueOrDefault()), Prime)
+                : Mix(lane, 0, AbsentPrime);
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        void AddInt64Values(ReadOnlySpan<long> values)
+        {
+            ref var first = ref MemoryMarshal.GetReference(values);
+            var index = 0;
+            for (; index <= values.Length - 4; index += 4)
+            {
+                _lane0 = Mix(_lane0, unchecked((ulong)Unsafe.Add(ref first, index + 3)), Prime);
+                _lane1 = Mix(_lane1, unchecked((ulong)Unsafe.Add(ref first, index + 2)), Prime);
+                _lane2 = Mix(_lane2, unchecked((ulong)Unsafe.Add(ref first, index + 1)), Prime);
+                _lane3 = Mix(_lane3, unchecked((ulong)Unsafe.Add(ref first, index)), Prime);
+            }
+
+            for (; index < values.Length; index++)
+                AddWord(unchecked((ulong)Unsafe.Add(ref first, index)));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        void AddNullableInt64Values(ReadOnlySpan<long?> values)
+        {
+            ref var first = ref MemoryMarshal.GetReference(values);
+            var index = 0;
+            for (; index <= values.Length - 4; index += 4)
+            {
+                _lane0 = MixNullableInt64(_lane0, Unsafe.Add(ref first, index + 3));
+                _lane1 = MixNullableInt64(_lane1, Unsafe.Add(ref first, index + 2));
+                _lane2 = MixNullableInt64(_lane2, Unsafe.Add(ref first, index + 1));
+                _lane3 = MixNullableInt64(_lane3, Unsafe.Add(ref first, index));
+            }
+
+            for (; index < values.Length; index++)
+                AddValue(Unsafe.Add(ref first, index));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static ulong MixNullableInt64(ulong lane, long? value)
+            => value.HasValue
+                ? Mix(lane, unchecked((ulong)value.GetValueOrDefault()), Prime)
                 : Mix(lane, 0, AbsentPrime);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
