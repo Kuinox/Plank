@@ -296,20 +296,13 @@ static class ColumnChunkReader
         internal int DataLength;
         internal int DefinitionBitsetLength;
         internal int BatchElementSize;
+        internal int ReusableDictionaryValueCount;
         internal FixedWidthDecoderKind DecoderKind;
         internal bool IsNullable;
         internal ReadOnlyMemory<byte> BorrowedPlainPayload;
 
         internal readonly bool Active
             => ValueOffset < ValueCount;
-    }
-
-    internal static bool CanBatchDictionaryPages<T>(Column column)
-    {
-        var converter = column.Converter;
-        return converter is null
-            ? GetPhysicalDecodeType<T>(column) != typeof(T)
-            : converter.IsNullableValueType(typeof(T));
     }
 
     internal static bool TryStartFixedWidthPageBatches<T>(PageHeader header, ReadOnlySpan<byte> payload,
@@ -340,12 +333,9 @@ static class ColumnChunkReader
             RuntimeHelpers.IsReferenceOrContainsReferences<T>() ||
             (!isNullable && !isRequired) ||
             (column.Options.Repetition == ParquetRepetition.Optional && !isNullable) ||
+            (header.Encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary &&
+             column.PhysicalType is ParquetPhysicalType.ByteArray or ParquetPhysicalType.Int96) ||
             !CanBatchFixedWidthProjection(column, physicalType, header.Encoding))
-            return false;
-        // The required dictionary decoder maps indexes directly into the caller's output. Materializing
-        // dictionary values for resumable batches measured slower in both single- and multi-threaded reads.
-        if (isRequired && header.Encoding is
-            (EncodingKind.RleDictionary or EncodingKind.PlainDictionary))
             return false;
         if (header.ValueCount == 0)
             return false;
@@ -414,7 +404,8 @@ static class ColumnChunkReader
             throw new CorruptParquetException(
                 $"ByteStreamSplit payload ({dataPayload.Length} bytes) is too short for " +
                 $"{physicalCount} {physicalSize}-byte values.");
-        else if (header.Encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
+        var reusableDictionaryValueCount = 0;
+        if (header.Encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
         {
             if (!buffers.HasDictionary)
                 return false;
@@ -424,8 +415,16 @@ static class ColumnChunkReader
             if (!dataPayload.IsEmpty && dataPayload[0] > 32)
                 throw new CorruptParquetException(
                     $"Dictionary bit width {dataPayload[0]} exceeds the maximum of 32.");
-            MaterializeFixedWidthDictionaryValues(dataPayload, physicalType, physicalCount,
-                ref buffers, bufferPool);
+            if (isRequired)
+            {
+                if (converter is not null || physicalType != typeof(T) ||
+                    !TryPrepareReusableRequiredDictionaryValues(dataPayload, physicalCount,
+                        ref buffers, bufferPool, out reusableDictionaryValueCount))
+                    return false;
+            }
+            else
+                MaterializeFixedWidthDictionaryValues(dataPayload, physicalType, physicalCount,
+                    ref buffers, bufferPool);
         }
 
         // An array-backed MemoryReadSource already keeps uncompressed page bytes alive. Required plain
@@ -447,6 +446,7 @@ static class ColumnChunkReader
                 Math.Max(Unsafe.SizeOf<T>(), GetDecodedFixedWidthSize(physicalType)),
                 Math.Max(GetEncodedFixedWidth(column),
                     isNullable && converter is not null ? sizeof(int) : 1)),
+            ReusableDictionaryValueCount = reusableDictionaryValueCount,
             DecoderKind = decoderKind,
             IsNullable = isNullable,
             BorrowedPlainPayload = borrowedPlainPayload
@@ -462,6 +462,17 @@ static class ColumnChunkReader
         System.Diagnostics.Debug.Assert(page.DecoderKind != FixedWidthDecoderKind.None);
         System.Diagnostics.Debug.Assert(page.DataOffset >= 0 && page.DataLength >= 0 &&
             page.DataOffset <= payload.Length - page.DataLength);
+
+        if (page.ReusableDictionaryValueCount != 0)
+        {
+            // Values holds one validated decoded index cycle. Returning prefixes of that immutable
+            // cycle keeps the public stream contiguous without expanding the whole repeated page.
+            var reusableCount = Math.Min(page.ReusableDictionaryValueCount,
+                page.ValueCount - page.ValueOffset);
+            page.ValueOffset += reusableCount;
+            page.PhysicalOffset += reusableCount;
+            return buffers.CreateNativeBuffer(reusableCount);
+        }
 
         var batchCapacity = Math.Max(1, DecodeBatchSizeBytes / page.BatchElementSize);
         var batchCount = Math.Min(batchCapacity, page.ValueCount - page.ValueOffset);
@@ -656,6 +667,56 @@ static class ColumnChunkReader
             MaterializeFixedWidthDictionaryValues<T, Guid>(payload, physicalCount, ref buffers, bufferPool);
         else
             throw new InvalidOperationException($"Unsupported fixed-width physical type '{physicalType}'.");
+    }
+
+    static bool TryPrepareReusableRequiredDictionaryValues<T>(ReadOnlySpan<byte> payload,
+        int valueCount, ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool,
+        out int reusableValueCount)
+    {
+        reusableValueCount = 0;
+        // A literal index block whose packed bytes repeat on a dictionary-sized boundary produces
+        // the same decoded values each cycle, regardless of dictionary ordering. Validate the full
+        // physical stream before exposing one decoded cycle repeatedly to the column enumerator.
+        var dictionary = buffers.GetDictionary<T>();
+        if (payload.IsEmpty || dictionary.Length < 8 || (dictionary.Length & 7) != 0 ||
+            valueCount < (long)dictionary.Length * 2 || (valueCount & 7) != 0)
+            return false;
+
+        var bitWidth = payload[0];
+        if (bitWidth is 0 or > 32)
+            return false;
+        payload = payload[1..];
+        var header = ReadUnsignedVarInt(ref payload);
+        if ((header & 1U) == 0)
+            return false;
+        var literalGroupCount = header >> 1;
+        if (literalGroupCount == 0 || literalGroupCount > uint.MaxValue / 8)
+            throw new CorruptParquetException(
+                $"Dictionary literal run group count {literalGroupCount} is invalid.");
+        var literalCount = literalGroupCount * 8U;
+        if (literalCount < (uint)valueCount)
+            return false;
+        var literalByteCount = (ulong)literalGroupCount * bitWidth;
+        if (literalByteCount > (ulong)payload.Length)
+            throw new CorruptParquetException(
+                $"Literal run claims {literalByteCount} bytes but only {payload.Length} remain.");
+
+        var requiredByteCountLong = (long)(valueCount / 8) * bitWidth;
+        var reusableByteCountLong = (long)(dictionary.Length / 8) * bitWidth;
+        if (requiredByteCountLong > int.MaxValue || reusableByteCountLong > int.MaxValue)
+            return false;
+        var requiredByteCount = (int)requiredByteCountLong;
+        var reusableByteCount = (int)reusableByteCountLong;
+        var comparedByteCount = requiredByteCount - reusableByteCount;
+        if (comparedByteCount < reusableByteCount ||
+            !payload[..comparedByteCount]
+                .SequenceEqual(payload.Slice(reusableByteCount, comparedByteCount)))
+            return false;
+
+        var reusable = buffers.GetValues<T>(dictionary.Length, bufferPool);
+        DecodeDictionaryLiteralIndexes(payload[..reusableByteCount], bitWidth, dictionary, reusable);
+        reusableValueCount = dictionary.Length;
+        return true;
     }
 
     static void MaterializeFixedWidthDictionaryValues<T, TValue>(ReadOnlySpan<byte> payload,

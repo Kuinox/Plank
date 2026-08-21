@@ -53,7 +53,6 @@ readonly struct ColumnBufferEnumerable<T>
         PageMetadataHandle _pageMetadata;
         ColumnReadBuffers<T> _buffers;
         ColumnChunkReader.FixedWidthPageState _fixedWidthPage;
-        readonly bool _batchDictionaryPages;
         bool _openedCursor;
 
         internal Enumerator(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
@@ -78,7 +77,6 @@ readonly struct ColumnBufferEnumerable<T>
             _pageMetadata = default;
             _buffers = default;
             _fixedWidthPage = default;
-            _batchDictionaryPages = ColumnChunkReader.CanBatchDictionaryPages<T>(definition.Column);
             _openedCursor = false;
             Current = default;
         }
@@ -114,9 +112,7 @@ readonly struct ColumnBufferEnumerable<T>
                         _cursor.CurrentPayload, _column, ref _buffers, _bufferPool))
                     continue;
 
-                if ((_batchDictionaryPages || _cursor.CurrentHeader.Encoding is not
-                        (EncodingKind.RleDictionary or EncodingKind.PlainDictionary)) &&
-                    ColumnChunkReader.TryStartFixedWidthPageBatches(_cursor.CurrentHeader,
+                if (ColumnChunkReader.TryStartFixedWidthPageBatches(_cursor.CurrentHeader,
                         _cursor.CurrentPayload,
                         _borrowRequiredPlainValues ? _cursor.CurrentBorrowedPayloadUnchecked : default,
                         _column, _rowCount, ref _buffers, _bufferPool,

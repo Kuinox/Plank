@@ -100,6 +100,32 @@ internal sealed class Dictionary11BitDecodingTests
     }
 
     [Test]
+    public void RequiredDoublePagesStreamRepeatedDictionaryCyclesAndFallbackForDifferentCycles()
+    {
+        var dictionary = CreateDoubleDictionary(2_048, includeSpecialValues: false);
+        var repeated = Enumerable.Range(0, dictionary.Length * 5 + 16)
+            .Select(index => dictionary[index & 2_047]).ToArray();
+        var different = repeated.ToArray();
+        different[dictionary.Length * 2 + 1_037] = dictionary[17];
+
+        foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        {
+            var (repeatedActual, repeatedCounts) = ReadRequiredDoubleDictionaryBuffers(repeated, pageVersion);
+            AssertDoubleBits(repeatedActual, repeated, $"repeated page/{pageVersion}");
+            var expectedCounts = Enumerable.Repeat(dictionary.Length, 5).Append(16).ToArray();
+            if (!repeatedCounts.SequenceEqual(expectedCounts))
+                throw new InvalidOperationException(
+                    $"Repeated {pageVersion} page buffers were [{string.Join(", ", repeatedCounts)}].");
+
+            var (differentActual, differentCounts) = ReadRequiredDoubleDictionaryBuffers(different, pageVersion);
+            AssertDoubleBits(differentActual, different, $"different page/{pageVersion}");
+            if (!differentCounts.SequenceEqual([different.Length]))
+                throw new InvalidOperationException(
+                    $"Non-repeating {pageVersion} page did not use the required dictionary fallback.");
+        }
+    }
+
+    [Test]
     public void Int32SmallBitWidthDecoderHandlesVectorScalarAndCorruptBoundaries()
     {
         foreach (var bitWidth in new[] { 1, 2, 8, 9 })
@@ -313,6 +339,37 @@ internal sealed class Dictionary11BitDecodingTests
         foreach (var buffer in reader.RowGroups[0].Column<T>(0))
             actual.AddRange(buffer.Values);
         AssertDoubleBits(actual, expected, pageVersion.ToString());
+    }
+
+    static (List<double> Values, int[] BufferCounts) ReadRequiredDoubleDictionaryBuffers(
+        double[] expected, ParquetDataPageVersion pageVersion)
+    {
+        var options = new ColumnOptions(ParquetRepetition.Required,
+            ImmutableArray.Create(EncodingKind.RleDictionary));
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Double, options,
+                pageStrategy: ForceDictionaryPageStrategy.Shared)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = pageVersion
+        });
+        var serialized = writer.CreateSerializedColumn<double>(schema.LeafColumns[0]);
+        serialized.Serialize(expected);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+
+        using var reader = schema.CreateReader(new MemoryReadSource(stream.ToArray()));
+        var actual = new List<double>(expected.Length);
+        var counts = new List<int>();
+        foreach (var buffer in reader.RowGroups[0].Column<double>(0))
+        {
+            actual.AddRange(buffer.Values);
+            counts.Add(buffer.Count);
+        }
+        return (actual, counts.ToArray());
     }
 
     static void AssertDecoded<T>(T[] dictionary, ParquetPhysicalType physicalType, byte[] payload,
