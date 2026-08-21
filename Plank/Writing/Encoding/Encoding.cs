@@ -571,15 +571,15 @@ static class Encoding
         ParquetBuffer rentedSuffixLengthsBytes = default;
         try
         {
-            Span<int> prefixLengths = default;
-            Span<int> suffixLengths = default;
+            Span<byte> prefixLengths = default;
+            Span<byte> suffixLengths = default;
             if (precomputeDeltaByteArrayLengths)
             {
-                var byteLength = checked(values.Length * sizeof(int));
+                var byteLength = values.Length;
                 rentedPrefixLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
                 rentedSuffixLengthsBytes = bufferWriters.RentScratch(checked((uint)byteLength));
-                prefixLengths = MemoryMarshal.Cast<byte, int>(rentedPrefixLengthsBytes.Span[..byteLength]);
-                suffixLengths = MemoryMarshal.Cast<byte, int>(rentedSuffixLengthsBytes.Span[..byteLength]);
+                prefixLengths = rentedPrefixLengthsBytes.Span[..byteLength];
+                suffixLengths = rentedSuffixLengthsBytes.Span[..byteLength];
             }
 
             WriteRequiredByteArrayDataPagesCore(bufferWriters, column, values, dataEncoding, pages,
@@ -594,7 +594,7 @@ static class Encoding
 
     static void WriteRequiredByteArrayDataPagesCore(BufferWriterFactory bufferWriters, Column column,
         ReadOnlySpan<byte[]> values, EncodingKind dataEncoding, PageList pages, int targetPageBytes,
-        Span<int> prefixLengths, Span<int> suffixLengths, ref PlainBinaryMinMax binaryMinMax)
+        Span<byte> prefixLengths, Span<byte> suffixLengths, ref PlainBinaryMinMax binaryMinMax)
     {
         var precomputeDeltaByteArrayLengths = !prefixLengths.IsEmpty;
         byte[]? columnMin = null;
@@ -615,6 +615,7 @@ static class Encoding
             var pageRowCount = 0;
             var pageBytes = 0;
             var totalSuffixBytes = 0;
+            var pageLengthsFitByte = true;
             while (rowsWritten < values.Length)
             {
                 var value = values[rowsWritten] ?? throw new InvalidOperationException(
@@ -627,8 +628,15 @@ static class Encoding
                 {
                     var prefixLength = previous.CommonPrefixLength(value);
                     var suffixLength = value.Length - prefixLength;
-                    prefixLengths[rowsWritten] = prefixLength;
-                    suffixLengths[rowsWritten] = suffixLength;
+                    if ((uint)prefixLength <= byte.MaxValue && (uint)suffixLength <= byte.MaxValue)
+                    {
+                        prefixLengths[rowsWritten] = (byte)prefixLength;
+                        suffixLengths[rowsWritten] = (byte)suffixLength;
+                    }
+                    else
+                    {
+                        pageLengthsFitByte = false;
+                    }
                     totalSuffixBytes = checked(totalSuffixBytes + suffixLength);
                     previous = value;
                 }
@@ -742,7 +750,7 @@ static class Encoding
 
             var pageIndex = AddNewDataPage(bufferWriters, pages);
             ref var page = ref pages[pageIndex];
-            if (precomputeDeltaByteArrayLengths)
+            if (precomputeDeltaByteArrayLengths && pageLengthsFitByte)
             {
                 DeltaByteArrayEncoding.WritePrecomputedRequiredByteArrayPage(
                     values.Slice(pageStart, pageRowCount), prefixLengths.Slice(pageStart, pageRowCount),
