@@ -368,6 +368,45 @@ static class PlainEncoding
         return ColumnStatistics.FromInt32(min, max, 0);
     }
 
+    internal static ColumnStatistics WriteAllPresentOptionalInt32PageWithStatistics(
+        ReadOnlySpan<int?> values, ref BufferWriter writer)
+    {
+        var byteCount = checked(values.Length * sizeof(int));
+        if (byteCount == 0)
+            return ColumnStatistics.Empty(0);
+
+        var destination = MemoryMarshal.Cast<byte, int>(writer.GetSpan(byteCount)[..byteCount]);
+        if (values.Length >= Vector256<int>.Count)
+        {
+            ref var nullableSource = ref MemoryMarshal.GetReference(values);
+            ref var source = ref Unsafe.As<int?, int>(ref nullableSource);
+            ref var target = ref MemoryMarshal.GetReference(destination);
+            var valueIndexes = Vector256.Create(1, 3, 5, 7, 1, 3, 5, 7);
+            var valueIndex = 0;
+            for (; values.Length - valueIndex >= 8; valueIndex += 8)
+            {
+                var firstRows = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
+                var secondRows = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 8));
+                var firstValues = Avx2.PermuteVar8x32(firstRows, valueIndexes);
+                var secondValues = Avx2.PermuteVar8x32(secondRows, valueIndexes);
+                Avx2.Permute2x128(firstValues, secondValues, 0x20)
+                    .StoreUnsafe(ref target, checked((nuint)valueIndex));
+            }
+
+            for (; valueIndex < values.Length; valueIndex++)
+                destination[valueIndex] = values[valueIndex]!.Value;
+        }
+        else
+        {
+            for (var i = 0; i < values.Length; i++)
+                destination[i] = values[i]!.Value;
+        }
+
+        MinMaxScan.Compute(destination, out var min, out var max);
+        writer.Advance(byteCount);
+        return ColumnStatistics.FromInt32(min, max, 0);
+    }
+
     internal static ColumnStatistics WriteInt64PageWithStatistics(ReadOnlySpan<long> values,
         ref BufferWriter writer)
     {
