@@ -147,6 +147,12 @@ internal sealed class NullableNumericEncodingTests
             };
         AssertFusedNullablePlainMatchesGeneric(allPresentDoubles, ParquetPhysicalType.Double, dataPageVersion,
             targetPageBytes: 1024);
+
+        var allPresentInts = new int?[40];
+        for (var i = 0; i < allPresentInts.Length; i++)
+            allPresentInts[i] = i switch { 0 => int.MinValue, 1 => int.MaxValue, _ => i * 7919 };
+        AssertFusedNullablePlainMatchesGeneric(allPresentInts, ParquetPhysicalType.Int32, dataPageVersion,
+            targetPageBytes: 1024);
     }
 
     static void AssertFusedNullablePlainMatchesGeneric<TValue>(TValue?[] values,

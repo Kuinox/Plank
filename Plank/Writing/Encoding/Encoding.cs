@@ -17,6 +17,7 @@ static class Encoding
     const int SmallInt64DictionaryCount = 256;
     static readonly bool HasCanonicalNullableInt64Layout = ProbeCanonicalNullableInt64Layout();
     static readonly bool HasCanonicalNullableDoubleLayout = ProbeCanonicalNullableDoubleLayout();
+    static readonly bool HasCanonicalNullableInt32Layout = ProbeCanonicalNullableInt32Layout();
 
     interface IPlainPrimitivePageWriter<T>
         where T : struct
@@ -36,10 +37,14 @@ static class Encoding
             => PlainEncoding.WriteBooleanPageWithStatistics(values, ref writer);
     }
 
-    readonly struct Int32PlainPageWriter : IPlainPrimitivePageWriter<int>
+    readonly struct Int32PlainPageWriter : IPlainPrimitivePageWriter<int>,
+        IAllPresentOptionalPlainPrimitivePageWriter<int>
     {
         public static ColumnStatistics Write(ReadOnlySpan<int> values, ref BufferWriter writer)
             => PlainEncoding.WriteInt32PageWithStatistics(values, ref writer);
+
+        public static ColumnStatistics Write(ReadOnlySpan<int?> values, ref BufferWriter writer)
+            => PlainEncoding.WriteAllPresentOptionalInt32PageWithStatistics(values, ref writer);
     }
 
     readonly struct Int64PlainPageWriter : IPlainPrimitivePageWriter<long>
@@ -844,9 +849,17 @@ static class Encoding
 
         if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int))
         {
+            var intValues = Unsafe.As<ReadOnlySpan<T?>, ReadOnlySpan<int?>>(ref values);
+            if (BitConverter.IsLittleEndian && HasCanonicalNullableInt32Layout && Avx2.IsSupported
+                && AreAllNullableInt32ValuesPresent(intValues))
+            {
+                EncodeAllPresentOptionalPlainPrimitivePages<int, Int32PlainPageWriter>(bufferWriters,
+                    intValues, checked((int)targetPageBytes), pages, dataPageVersion);
+                return true;
+            }
+
             EncodeOptionalPlainPrimitivePages<int, Int32PlainPageWriter>(bufferWriters,
-                Unsafe.As<ReadOnlySpan<T?>, ReadOnlySpan<int?>>(ref values), checked((int)targetPageBytes), pages,
-                dataPageVersion);
+                intValues, checked((int)targetPageBytes), pages, dataPageVersion);
             return true;
         }
 
@@ -1002,6 +1015,43 @@ static class Encoding
             if (!values[valueIndex].HasValue)
                 return false;
         return true;
+    }
+
+    static bool AreAllNullableInt32ValuesPresent(ReadOnlySpan<int?> values)
+    {
+        ref var nullableSource = ref MemoryMarshal.GetReference(values);
+        ref var source = ref Unsafe.As<int?, int>(ref nullableSource);
+        var flagIndexes = Vector256.Create(0, 2, 4, 6, 0, 2, 4, 6);
+        var expectedFlags = Vector256.Create(1);
+        var valueIndex = 0;
+        for (; values.Length - valueIndex >= 4; valueIndex += 4)
+        {
+            var rows = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
+            var flags = Avx2.PermuteVar8x32(rows, flagIndexes);
+            if (Avx2.MoveMask(Avx2.CompareEqual(flags, expectedFlags).AsByte()) != -1)
+                return false;
+        }
+
+        for (; valueIndex < values.Length; valueIndex++)
+            if (!values[valueIndex].HasValue)
+                return false;
+        return true;
+    }
+
+    static bool ProbeCanonicalNullableInt32Layout()
+    {
+        if (Unsafe.SizeOf<int?>() != sizeof(int) * 2)
+            return false;
+
+        const int expected = 0x01020304;
+        int? present = expected;
+        ref var presentBytes = ref Unsafe.As<int?, byte>(ref present);
+        if (presentBytes != 1
+            || Unsafe.ReadUnaligned<int>(ref Unsafe.Add(ref presentBytes, sizeof(int))) != expected)
+            return false;
+
+        int? absent = null;
+        return Unsafe.As<int?, byte>(ref absent) == 0;
     }
 
     static bool ProbeCanonicalNullableDoubleLayout()
