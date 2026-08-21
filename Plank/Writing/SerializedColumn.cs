@@ -1234,6 +1234,28 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
                 if (typeof(TValue) == typeof(long)
                     && _column.PhysicalType == ParquetPhysicalType.Int64
+                    && strategyContext.Strategy is DefaultStrategy
+                    && strategyContext.Strategy.GetDictionaryMode() == DictionaryMode.Disabled
+                    && EncodingKindResolver.GetDataEncodingKind(_column) == EncodingKind.DeltaBinaryPacked
+                    && _column.Options.BloomFilter is null)
+                {
+                    Pages.Clear();
+                    ColumnOrdinal = columnOrdinal;
+                    RowCount = checked((uint)values.Length);
+                    HasPendingData = true;
+                    var longValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<long?>>(ref values);
+                    Statistics = Plank.Writing.Encoding.Encoding.EncodeOptionalInt64DeltaBinaryPacked(
+                        _owner.BufferWriters, _column, longValues, strategyContext, Pages,
+                        _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal]);
+                    if (!TryAssignSingleDataPageStatistics(Statistics))
+                        throw new InvalidOperationException(
+                            "Fused optional int64 DELTA_BINARY_PACKED encoding produced multiple data pages.");
+                    _bloomFilterByteLength = 0;
+                    return;
+                }
+
+                if (typeof(TValue) == typeof(long)
+                    && _column.PhysicalType == ParquetPhysicalType.Int64
                     && strategyContext.Strategy is ForceDictionaryPageStrategy
                     && !_owner.WritePageIndexes && _column.Options.BloomFilter is null)
                 {

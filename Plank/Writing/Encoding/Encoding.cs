@@ -1615,6 +1615,109 @@ static class Encoding
         }
     }
 
+    /// <summary>
+    /// Encodes a single optional INT64 DELTA_BINARY_PACKED page without separate nullable compaction,
+    /// definition-level, and statistics passes.
+    /// </summary>
+    internal static ColumnStatistics EncodeOptionalInt64DeltaBinaryPacked(BufferWriterFactory bufferWriters,
+        Column column, ReadOnlySpan<long?> values, PageStrategyContext strategyContext, PageList pages,
+        ParquetDataPageVersion dataPageVersion, LeafProjectionInfo leafProjectionInfo)
+    {
+        ArgumentNullException.ThrowIfNull(column);
+        ArgumentNullException.ThrowIfNull(strategyContext);
+        ArgumentNullException.ThrowIfNull(pages);
+        if (column.Options.Repetition != ParquetRepetition.Optional
+            || column.PhysicalType != ParquetPhysicalType.Int64)
+            throw new InvalidOperationException($"Column '{column.Name}' is not an optional INT64 column.");
+        if (leafProjectionInfo.MaxDefinitionLevel != 1 || leafProjectionInfo.MaxRepetitionLevel != 0)
+            throw new NotSupportedException(
+                $"Column '{column.Name}' optional flat encoding requires a single optional leaf.");
+        if (strategyContext.Strategy is not DefaultStrategy
+            || strategyContext.Strategy.GetDictionaryMode() != DictionaryMode.Disabled
+            || EncodingKindResolver.GetDataEncodingKind(column) != EncodingKind.DeltaBinaryPacked)
+            throw new InvalidOperationException(
+                $"Column '{column.Name}' requires the default non-dictionary DELTA_BINARY_PACKED strategy.");
+
+        pages.Clear();
+        if (values.IsEmpty)
+            return ColumnStatistics.Empty(0);
+
+        var pageIndex = AddNewDataPage(bufferWriters, pages);
+        ref var page = ref pages[pageIndex];
+        var rentedValues = bufferWriters.RentScratch<long>(checked((uint)values.Length));
+        try
+        {
+            var denseValues = ParquetBuffer.AsSpan<long>(rentedValues, values.Length);
+            var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
+                ref page.Content);
+            var definitionStart = page.Content.WrittenLength;
+            var presentCount = 0;
+            var nullCount = 0;
+            var min = 0L;
+            var max = 0L;
+            var hasValue = false;
+            var currentLevel = -1;
+            var currentRunLength = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var level = 0;
+                if (values[i] is { } value)
+                {
+                    level = 1;
+                    denseValues[presentCount++] = value;
+                    if (!hasValue)
+                    {
+                        min = value;
+                        max = value;
+                        hasValue = true;
+                    }
+                    else
+                    {
+                        if (value < min)
+                            min = value;
+                        if (value > max)
+                            max = value;
+                    }
+                }
+                else
+                {
+                    nullCount++;
+                }
+
+                if (currentRunLength == 0)
+                {
+                    currentLevel = level;
+                    currentRunLength = 1;
+                }
+                else if (currentLevel == level)
+                {
+                    currentRunLength++;
+                }
+                else
+                {
+                    EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref page.Content);
+                    currentLevel = level;
+                    currentRunLength = 1;
+                }
+            }
+
+            if (currentRunLength > 0)
+                EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref page.Content);
+
+            var definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref page.Content);
+            DeltaBinaryPackedEncoding.WriteInt64(denseValues[..presentCount], ref page.Content);
+            WriteDataPageHeader(ref page, values.Length, values.Length, nullCount, 0, definitionLength,
+                EncodingKind.DeltaBinaryPacked);
+            return hasValue
+                ? ColumnStatistics.FromInt64(min, max, nullCount)
+                : ColumnStatistics.Empty(nullCount);
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rentedValues);
+        }
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static int GetOrAddForcedInt64DictionaryIndex(long value, ReusableDictionaryState<long> dictionaryState,
         Span<int> smallValueIndexes, ref bool usesSmallValueIndexes)
