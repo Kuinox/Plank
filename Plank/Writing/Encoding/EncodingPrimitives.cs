@@ -97,6 +97,41 @@ static class EncodingPrimitives
         return left.Length - right.Length;
     }
 
+    /// <summary>
+    /// Tests short BYTE_ARRAY payloads without entering CoreLib's variable-length sequence comparer.
+    /// Dictionary cycles overwhelmingly contain small identifiers, where two overlapping word loads
+    /// cover the payload with less setup than the general vectorized routine.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool PayloadEquals(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
+    {
+        var length = left.Length;
+        if (length != right.Length)
+            return false;
+        if (length > Vector128<byte>.Count)
+            return left.SequenceEqual(right);
+
+        ref var leftStart = ref MemoryMarshal.GetReference(left);
+        ref var rightStart = ref MemoryMarshal.GetReference(right);
+        if (length >= sizeof(ulong))
+        {
+            return Unsafe.ReadUnaligned<ulong>(ref leftStart) == Unsafe.ReadUnaligned<ulong>(ref rightStart)
+                   && Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref leftStart, length - sizeof(ulong)))
+                   == Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref rightStart, length - sizeof(ulong)));
+        }
+        if (length >= sizeof(uint))
+        {
+            return Unsafe.ReadUnaligned<uint>(ref leftStart) == Unsafe.ReadUnaligned<uint>(ref rightStart)
+                   && Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref leftStart, length - sizeof(uint)))
+                   == Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref rightStart, length - sizeof(uint)));
+        }
+        if (length == 0)
+            return true;
+        return leftStart == rightStart
+               && Unsafe.Add(ref leftStart, length >> 1) == Unsafe.Add(ref rightStart, length >> 1)
+               && Unsafe.Add(ref leftStart, length - 1) == Unsafe.Add(ref rightStart, length - 1);
+    }
+
     /// <summary>Writes an unsigned LEB128 varint, reserving the whole varint in one call.</summary>
     internal static void WriteUnsignedVarInt(uint value, ref BufferWriter writer)
     {

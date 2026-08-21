@@ -59,6 +59,40 @@ internal sealed class RequiredByteArrayDictionaryTests
         throw new InvalidOperationException("A required byte-array dictionary accepted a null value after an empty payload.");
     }
 
+    [Test]
+    public void ForcedDictionaryPreservesRepeatedCycleWithDivergentTail()
+    {
+        var cycle = Enumerable.Range(0, 17)
+            .Select(static i => System.Text.Encoding.UTF8.GetBytes($"cycle-{i:D2}"))
+            .ToArray();
+        var values = new byte[cycle.Length * 5 + 4][];
+        for (var i = 0; i < cycle.Length * 5; i++)
+            values[i] = cycle[i % cycle.Length].ToArray();
+        // The cycle shortcut must stop at the first mismatch and let the ordinary map path add and
+        // subsequently reuse new dictionary entries.
+        values[cycle.Length * 5] = "divergent-a"u8.ToArray();
+        values[cycle.Length * 5 + 1] = cycle[3].ToArray();
+        values[cycle.Length * 5 + 2] = "divergent-b"u8.ToArray();
+        values[cycle.Length * 5 + 3] = "divergent-a"u8.ToArray();
+
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(encodings: [EncodingKind.RleDictionary]),
+                pageStrategy: ForceDictionaryPageStrategy.Shared)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions { Compression = CompressionKind.None });
+        var serialized = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        if (GetDictionaryValueCount(serialized.Pages) != cycle.Length + 2)
+            throw new InvalidOperationException("The divergent tail did not produce the expected dictionary entries.");
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+
+        using var reader = new ParquetFileReader(new MemoryStream(stream.ToArray(), writable: false));
+        AssertRowGroup(reader, 0, values);
+    }
+
     static void WriteRowGroup(Plank.Writing.ParquetWriter writer, SerializedColumn<byte[]> serialized,
         byte[][] values)
     {

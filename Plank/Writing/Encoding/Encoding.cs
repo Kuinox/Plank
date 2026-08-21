@@ -2078,8 +2078,7 @@ static class Encoding
         dictionaryState.Reset(initialUniqueCapacity, knownSortOrder == DictionarySortOrder.Unsorted);
         if (dictionaryState.IsMapEnabled)
         {
-            for (var i = 0; i < values.Length; i++)
-                indexes[i] = dictionaryState.GetOrAddIndex(values[i]);
+            BuildForcedRequiredByteArrayDictionaryIndexesMap(values, indexes, dictionaryState, 0);
             return;
         }
 
@@ -2120,8 +2119,7 @@ static class Encoding
             if (knownSortOrder != DictionarySortOrder.Unsorted)
                 Volatile.Write(ref strategyContext.DictionarySortOrder, (int)DictionarySortOrder.Unsorted);
             dictionaryState.EnableMap();
-            for (; i < values.Length; i++)
-                indexes[i] = dictionaryState.GetOrAddIndex(values[i]);
+            BuildForcedRequiredByteArrayDictionaryIndexesMap(values, indexes, dictionaryState, i);
             return;
         }
 
@@ -2133,6 +2131,52 @@ static class Encoding
         };
         if (discoveredSortOrder != knownSortOrder)
             Volatile.Write(ref strategyContext.DictionarySortOrder, (int)discoveredSortOrder);
+    }
+
+    /// <summary>
+    /// Builds the map-backed tail of a required byte-array dictionary. If the first duplicate closes
+    /// an all-unique prefix, that prefix is also a possible repeating cycle. Validate it directly and
+    /// reuse its indexes; a byte comparison is substantially cheaper than hashing and probing every
+    /// later jagged payload. The first mismatch resumes the ordinary map path, so arbitrary inputs keep
+    /// exactly the same dictionary semantics.
+    /// </summary>
+    static void BuildForcedRequiredByteArrayDictionaryIndexesMap(ReadOnlySpan<byte[]> values, Span<int> indexes,
+        ReusableDictionaryState<byte[]> dictionaryState, int startIndex)
+    {
+        for (var i = startIndex; i < values.Length; i++)
+        {
+            var value = values[i] ?? throw new InvalidOperationException(
+                "A required byte-array dictionary does not support null values.");
+            var countBefore = dictionaryState.Count;
+            var dictionaryIndex = dictionaryState.GetOrAddIndex(value);
+            indexes[i] = dictionaryIndex;
+
+            // Count == i means rows [0, i) were all distinct. Returning index zero therefore closes
+            // the only cycle that can be reused without an auxiliary index-pattern search.
+            if (dictionaryIndex != 0 || countBefore != i || dictionaryState.Count != countBefore)
+                continue;
+
+            var period = i;
+            for (var repeatedIndex = i + 1; repeatedIndex < values.Length; repeatedIndex++)
+            {
+                var repeatedValue = values[repeatedIndex] ?? throw new InvalidOperationException(
+                    "A required byte-array dictionary does not support null values.");
+                var cycleIndex = repeatedIndex - period;
+                if (!EncodingPrimitives.PayloadEquals(repeatedValue, values[cycleIndex]))
+                {
+                    for (; repeatedIndex < values.Length; repeatedIndex++)
+                    {
+                        repeatedValue = values[repeatedIndex] ?? throw new InvalidOperationException(
+                            "A required byte-array dictionary does not support null values.");
+                        indexes[repeatedIndex] = dictionaryState.GetOrAddIndex(repeatedValue);
+                    }
+                    return;
+                }
+
+                indexes[repeatedIndex] = indexes[cycleIndex];
+            }
+            return;
+        }
     }
 
     /// <summary>
