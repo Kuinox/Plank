@@ -115,6 +115,56 @@ internal sealed class NullableNumericEncodingTests
         }
     }
 
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void FusedNullableInt64DeltaMatchesGenericOutput(ParquetDataPageVersion dataPageVersion)
+    {
+        long?[][] valuePatterns =
+        [
+            [7, 3, 7, -128, 127, 42, 3, 0, -9, 127, 7],
+            [null, 7, 7, null, 42, 7, 42, null, -9, -9, 0, null, 7],
+            [null, long.MinValue, null, 42, long.MaxValue, 42, null, -9, 0, null, 7],
+            Enumerable.Range(0, 700).Select(static value => (long?)(value * 17L - 3000)).ToArray()
+        ];
+
+        foreach (var values in valuePatterns)
+        {
+            foreach (var writePageIndexes in new[] { false, true })
+            {
+                var fused = WriteNullableInt64Delta(values, null, dataPageVersion, writePageIndexes);
+                var generic = WriteNullableInt64Delta(values,
+                    new FixedRowsPageStrategy(checked((uint)values.Length), DictionaryMode.Disabled), dataPageVersion,
+                    writePageIndexes);
+
+                if (!fused.AsSpan().SequenceEqual(generic))
+                    throw new InvalidOperationException(
+                        $"Fused optional int64 {dataPageVersion} DELTA_BINARY_PACKED encoding changed the Parquet bytes.");
+            }
+        }
+    }
+
+    static byte[] WriteNullableInt64Delta(long?[] values, IPageStrategy? pageStrategy,
+        ParquetDataPageVersion dataPageVersion, bool writePageIndexes)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("optional", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.DeltaBinaryPacked]), pageStrategy: pageStrategy)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            WritePageIndexes = writePageIndexes
+        });
+        var serialized = writer.CreateSerializedColumn<long?>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return stream.ToArray();
+    }
+
     static byte[] WriteNullableInt64Dictionary(long?[] values, IPageStrategy pageStrategy,
         ParquetDataPageVersion dataPageVersion)
     {
