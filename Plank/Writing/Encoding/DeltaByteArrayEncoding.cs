@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Numerics;
 using Plank.Schema;
 
 namespace Plank.Writing.Encoding;
@@ -76,6 +77,25 @@ static class DeltaByteArrayEncoding
     /// remaining traversal copies the suffix payloads into their final contiguous destination.
     /// </remarks>
     internal static void WritePrecomputedRequiredByteArrayPage(ReadOnlySpan<byte[]> values,
+        ReadOnlySpan<byte> prefixLengths, ReadOnlySpan<byte> suffixLengths, int totalSuffixBytes,
+        ref BufferWriter writer)
+    {
+        if (prefixLengths.Length != values.Length)
+            throw new ArgumentException("The prefix-length count must match the value count.",
+                nameof(prefixLengths));
+        if (suffixLengths.Length != values.Length)
+            throw new ArgumentException("The suffix-length count must match the value count.",
+                nameof(suffixLengths));
+        if (totalSuffixBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(totalSuffixBytes), totalSuffixBytes,
+                "The suffix byte count cannot be negative.");
+
+        DeltaBinaryPackedEncoding.WriteByteValuesAsInt32(prefixLengths, ref writer);
+        DeltaBinaryPackedEncoding.WriteByteValuesAsInt32(suffixLengths, ref writer);
+        WritePrecomputedSuffixPayloads(values, prefixLengths, suffixLengths, totalSuffixBytes, ref writer);
+    }
+
+    internal static void WritePrecomputedRequiredByteArrayPage(ReadOnlySpan<byte[]> values,
         ReadOnlySpan<int> prefixLengths, ReadOnlySpan<int> suffixLengths, int totalSuffixBytes,
         ref BufferWriter writer)
     {
@@ -91,6 +111,14 @@ static class DeltaByteArrayEncoding
 
         DeltaBinaryPackedEncoding.WriteInt32(prefixLengths, ref writer);
         DeltaBinaryPackedEncoding.WriteInt32(suffixLengths, ref writer);
+        WritePrecomputedSuffixPayloads(values, prefixLengths, suffixLengths, totalSuffixBytes, ref writer);
+    }
+
+    static void WritePrecomputedSuffixPayloads<TLength>(ReadOnlySpan<byte[]> values,
+        ReadOnlySpan<TLength> prefixLengths, ReadOnlySpan<TLength> suffixLengths, int totalSuffixBytes,
+        ref BufferWriter writer)
+        where TLength : unmanaged, IBinaryInteger<TLength>
+    {
         if (totalSuffixBytes == 0)
             return;
 
@@ -99,8 +127,8 @@ static class DeltaByteArrayEncoding
         for (var i = 0; i < values.Length; i++)
         {
             var current = values[i]!;
-            var prefixLength = prefixLengths[i];
-            var suffixLength = suffixLengths[i];
+            var prefixLength = int.CreateChecked(prefixLengths[i]);
+            var suffixLength = int.CreateChecked(suffixLengths[i]);
             if (suffixLength == 0)
                 continue;
             EncodingPrimitives.CopyPayload(current.AsSpan(prefixLength, suffixLength), destination[offset..]);

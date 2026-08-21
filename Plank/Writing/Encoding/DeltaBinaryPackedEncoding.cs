@@ -68,6 +68,58 @@ static class DeltaBinaryPackedEncoding
         }
     }
 
+    /// <summary>
+    /// Writes byte-sized values with the Int32 DELTA_BINARY_PACKED wire layout without widening the
+    /// whole input first. DELTA_BYTE_ARRAY prefix and suffix lengths overwhelmingly fit in one byte;
+    /// retaining them compactly reduces scratch traffic while this block-local loop still produces
+    /// byte-for-byte identical Parquet output.
+    /// </summary>
+    internal static void WriteByteValuesAsInt32(ReadOnlySpan<byte> values, ref BufferWriter writer)
+    {
+        var header = writer.GetSpan(MaxInt32HeaderByteCount);
+        ref var headerStart = ref MemoryMarshal.GetReference(header);
+        var headerLength = EncodingPrimitives.WriteUnsignedVarInt(BlockSize, ref headerStart);
+        headerLength += EncodingPrimitives.WriteUnsignedVarInt(MiniBlockCount,
+            ref Unsafe.Add(ref headerStart, headerLength));
+        headerLength += EncodingPrimitives.WriteUnsignedVarInt((ulong)values.Length,
+            ref Unsafe.Add(ref headerStart, headerLength));
+
+        if (values.Length == 0)
+        {
+            headerLength += EncodingPrimitives.WriteUnsignedVarInt(0,
+                ref Unsafe.Add(ref headerStart, headerLength));
+            writer.Advance(headerLength);
+            return;
+        }
+
+        ref var input = ref MemoryMarshal.GetReference(values);
+        headerLength += EncodingPrimitives.WriteUnsignedVarInt(ZigZag32(input),
+            ref Unsafe.Add(ref headerStart, headerLength));
+        writer.Advance(headerLength);
+        if (values.Length == 1)
+            return;
+
+        Span<long> deltas = stackalloc long[BlockSize];
+        ref var deltaBuffer = ref MemoryMarshal.GetReference(deltas);
+        var index = 1;
+        while (index < values.Length)
+        {
+            var count = Math.Min(BlockSize, values.Length - index);
+            var minDelta = long.MaxValue;
+            for (var i = 0; i < count; i++)
+            {
+                var delta = (long)Unsafe.Add(ref input, index + i) - Unsafe.Add(ref input, index + i - 1);
+                Unsafe.Add(ref deltaBuffer, i) = delta;
+                if (delta < minDelta)
+                    minDelta = delta;
+            }
+
+            FillPaddedDeltas(ref deltaBuffer, count, minDelta);
+            WriteDeltaBlock(ref deltaBuffer, minDelta, ref writer);
+            index += count;
+        }
+    }
+
     internal static void WriteInt64(ReadOnlySpan<long> values, ref BufferWriter writer)
     {
         var header = writer.GetSpan(MaxInt64HeaderByteCount);

@@ -396,6 +396,52 @@ internal sealed class PlainByteArrayStatisticsTests
     }
 
     [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void RequiredDeltaByteArrayLargeLengthsUseByteIdenticalFallback(
+        ParquetDataPageVersion dataPageVersion)
+    {
+        byte[][] values =
+        [
+            Enumerable.Repeat((byte)'a', 300).ToArray(),
+            Enumerable.Repeat((byte)'b', 300).ToArray(),
+            Enumerable.Repeat((byte)'c', 300).ToArray(),
+            Enumerable.Repeat((byte)'d', 300).ToArray()
+        ];
+
+        var sizedSchema = CreateDeltaByteArraySchema(EncodingKind.DeltaByteArray);
+        using var sizedStream = new MemoryStream();
+        var sizedWriter = sizedSchema.CreateWriter(sizedStream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = 608
+        });
+        var sizedColumn = sizedWriter.CreateSerializedColumn<byte[]>(sizedSchema.LeafColumns[0]);
+        sizedColumn.Serialize(values);
+        sizedWriter.StartRowGroup().Write(sizedColumn);
+        sizedWriter.CloseFile();
+
+        var fixedSchema = CreateDeltaByteArraySchema(EncodingKind.DeltaByteArray,
+            new FixedRowsPageStrategy(2));
+        using var fixedStream = new MemoryStream();
+        var fixedWriter = fixedSchema.CreateWriter(fixedStream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = 608
+        });
+        var fixedColumn = fixedWriter.CreateSerializedColumn<byte[]>(fixedSchema.LeafColumns[0]);
+        fixedColumn.Serialize(values);
+        fixedWriter.StartRowGroup().Write(fixedColumn);
+        fixedWriter.CloseFile();
+
+        if (!sizedStream.ToArray().AsSpan().SequenceEqual(fixedStream.ToArray()))
+            throw new InvalidOperationException(
+                $"Large DELTA_BYTE_ARRAY {dataPageVersion} lengths changed the Parquet bytes.");
+    }
+
+    [Test]
     public void RequiredDeltaByteArrayDecimalsKeepSignedPageAndColumnOrdering()
     {
         var schema = new PlankParquetSchema([

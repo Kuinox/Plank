@@ -265,6 +265,29 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
+    public void CompactByteInputMatchesInt32WireBytesAcrossBlockBoundaries()
+    {
+        int[] counts = [0, 1, 31, 127, 128, 129, 257];
+        foreach (var count in counts)
+        {
+            var values = new byte[count];
+            for (var i = 0; i < values.Length; i++)
+                values[i] = (byte)((i * 73 + (i >> 3) * 19) & 0xff);
+            var expected = EncodeInt32Reference(Array.ConvertAll(values, static value => (int)value));
+            var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 7, 7);
+            try
+            {
+                DeltaBinaryPackedEncoding.WriteByteValuesAsInt32(values, ref writer);
+                AssertEncodedBytes(ref writer, expected, requireMultipleSegments: count == 257);
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+        }
+    }
+
+    [Test]
     public void WriteInt32PackingDispatchMatchesReferenceAcrossWidthsAndPartialBlocks()
     {
         int[] counts = [3, 31, 32, 33, 127, 128, 129, 257];
