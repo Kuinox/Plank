@@ -45,7 +45,7 @@ public static class PublishedBenchmarkCommand
         return new PublishedBenchmarkOptions
         {
             Quick = quick,
-            Warmups = ReadInt(args, "--warmups") ?? (quick ? 1 : 2),
+            Warmups = ReadInt(args, "--warmups") ?? (quick ? 1 : 8),
             Iterations = ReadInt(args, "--iterations") ?? (quick ? 1 : 7),
             WorkerCount = ReadInt(args, "--workers") ?? Environment.ProcessorCount,
             SyntheticRows = ReadInt(args, "--synthetic-rows") ?? 1_000_000,

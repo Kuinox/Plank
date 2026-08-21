@@ -5,6 +5,14 @@ namespace Plank.Benchmarks.Tests;
 internal sealed class PublishedBenchmarkCaseFilterTests
 {
     [Test]
+    public async Task PublishedRunsWarmPastTieredCompilationByDefault()
+    {
+        await Assert.That(PublishedBenchmarkCommand.CreateOptions([]).Warmups).IsEqualTo(8);
+        await Assert.That(PublishedBenchmarkCommand.CreateOptions(["--quick"]).Warmups).IsEqualTo(1);
+        await Assert.That(PublishedBenchmarkCommand.CreateOptions(["--warmups", "3"]).Warmups).IsEqualTo(3);
+    }
+
+    [Test]
     public async Task CaseOptionRunsOnlyTheMatchingCaseInEachSuite()
     {
         var parsed = PublishedBenchmarkCommand.CreateOptions(["--quick", "--case", "target"]);
