@@ -16,6 +16,7 @@ static class ColumnChunkReader
     static readonly byte[] DefinitionByteCounts = CreateDefinitionByteCounts();
     static readonly bool NullableDateTimeHasCanonicalLayout = HasCanonicalNullableDateTimeLayout();
     static readonly bool NullableInt32HasCanonicalLayout = HasCanonicalNullableInt32Layout();
+    static readonly bool NullableInt64HasCanonicalLayout = HasCanonicalNullableInt64Layout();
     internal static bool TryDecodeDictionaryPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
@@ -1249,7 +1250,8 @@ static class ColumnChunkReader
     {
         if (encoding is not (EncodingKind.Plain or EncodingKind.ByteStreamSplit or
                 EncodingKind.RleDictionary or EncodingKind.PlainDictionary) &&
-            !(encoding == EncodingKind.DeltaBinaryPacked && typeof(TValue) == typeof(int)))
+            !(encoding == EncodingKind.DeltaBinaryPacked &&
+                (typeof(TValue) == typeof(int) || typeof(TValue) == typeof(long))))
         {
             physicalCount = 0;
             return false;
@@ -1260,13 +1262,16 @@ static class ColumnChunkReader
         var definitions = AsBytes(destination)[..valueCount];
         var isDeltaInt32 = encoding == EncodingKind.DeltaBinaryPacked &&
             typeof(T) == typeof(int?) && typeof(TValue) == typeof(int);
+        var isDeltaInt64 = encoding == EncodingKind.DeltaBinaryPacked &&
+            typeof(T) == typeof(long?) && typeof(TValue) == typeof(long);
+        var isDeltaInteger = isDeltaInt32 || isDeltaInt64;
         if (definitionPayload.IsEmpty)
         {
             physicalCount = valueCount;
-            if (!isDeltaInt32)
+            if (!isDeltaInteger)
                 definitions.Fill(1);
         }
-        else if (isDeltaInt32)
+        else if (isDeltaInteger)
             physicalCount = CountCompactDefinitionLevels(definitionPayload,
                 definitionLevelEncoding, valueCount);
         else
@@ -1287,7 +1292,16 @@ static class ColumnChunkReader
             return true;
         }
 
-        if (isDeltaInt32)
+        if (isDeltaInt64 && physicalCount == valueCount)
+        {
+            var nullable = Unsafe.As<Span<TValue?>, Span<long?>>(ref destination);
+            var raw = MemoryMarshal.Cast<byte, long>(AsBytes(nullable))[..physicalCount];
+            DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
+            ExpandAllPresentInt64Batch(raw, nullable);
+            return true;
+        }
+
+        if (isDeltaInteger)
             DecodeCompactDefinitionLevels(definitionPayload, definitionLevelEncoding,
                 definitions, out physicalCount);
 
@@ -1315,6 +1329,65 @@ static class ColumnChunkReader
                 $"Definition levels consumed {physicalCount - physicalIndex} physical values, " +
                 $"expected {physicalCount}.");
         return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static void ExpandAllPresentInt64Batch(ReadOnlySpan<long> source, Span<long?> destination,
+        bool allowVector = true)
+    {
+        if (source.Length != destination.Length)
+            throw new InvalidOperationException(
+                $"Nullable Int64 expansion received {source.Length} values for {destination.Length} destinations.");
+
+        var index = destination.Length;
+        if (allowVector && NullableInt64HasCanonicalLayout && Avx2.IsSupported)
+        {
+            ref var sourceStart = ref MemoryMarshal.GetReference(source);
+            ref var destinationStart = ref Unsafe.As<long?, long>(
+                ref MemoryMarshal.GetReference(destination));
+            var present = Vector256.Create(1L);
+
+            while ((index & (Vector256<long>.Count - 1)) != 0)
+            {
+                index--;
+                destination[index] = source[index];
+            }
+
+            while (index != 0)
+            {
+                var next = index - Vector256<long>.Count;
+                var values = Vector256.LoadUnsafe(ref sourceStart, (nuint)next);
+                var even = Avx2.UnpackLow(present, values);
+                var odd = Avx2.UnpackHigh(present, values);
+                Avx2.Permute2x128(even, odd, 0x20)
+                    .StoreUnsafe(ref destinationStart, (nuint)(next * 2));
+                Avx2.Permute2x128(even, odd, 0x31)
+                    .StoreUnsafe(ref destinationStart,
+                        (nuint)(next * 2 + Vector256<long>.Count));
+                index = next;
+            }
+        }
+
+        while (index != 0)
+        {
+            index--;
+            destination[index] = source[index];
+        }
+    }
+
+    internal static void ExpandAllPresentInt64BatchForTesting(ReadOnlySpan<long> source,
+        Span<long?> destination, bool allowVector)
+        => ExpandAllPresentInt64Batch(source, destination, allowVector);
+
+    static bool HasCanonicalNullableInt64Layout()
+    {
+        if (Unsafe.SizeOf<long?>() != 2 * sizeof(long))
+            return false;
+        const long expected = 0x1234_5678_9abc_def0;
+        long?[] probe = [expected];
+        ref var nullable = ref MemoryMarshal.GetArrayDataReference(probe);
+        ref var firstWord = ref Unsafe.As<long?, long>(ref nullable);
+        return firstWord == 1 && Unsafe.Add(ref firstWord, 1) == expected;
     }
 
     static bool TryDecodeNullableValuesByPhysicalType<T>(ReadOnlySpan<byte> payload,

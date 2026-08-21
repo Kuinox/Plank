@@ -230,6 +230,38 @@ internal sealed class NullableNumericDecodingTests
     }
 
     [Test]
+    public void NullableInt64DeltaBinaryPackedPreservesValuesAcrossPageVersionsAndNullPatterns()
+    {
+        foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        foreach (var pattern in Enum.GetValues<NullPattern>())
+        {
+            var expected = CreateValues<long>(pattern, CreateInt64);
+            expected[0] = long.MinValue;
+            expected[^1] = long.MaxValue;
+            AssertEqual(expected,
+                RoundTrip(ParquetPhysicalType.Int64, expected, EncodingKind.DeltaBinaryPacked,
+                    pageVersion),
+                EncodingKind.DeltaBinaryPacked, pageVersion, pattern);
+        }
+    }
+
+    [Test]
+    public void AllPresentInt64ExpansionPreservesBitsWithVectorAndScalarPaths()
+    {
+        long[] expected =
+        [
+            long.MinValue, -1, 0, 1, 0x1234_5678_9abc_def0, long.MaxValue, -17, 42, 99
+        ];
+        foreach (var allowVector in new[] { false, true })
+        {
+            var actual = new long?[expected.Length];
+            ColumnChunkReader.ExpandAllPresentInt64BatchForTesting(expected, actual, allowVector);
+            AssertEqual(expected.Select(static value => (long?)value).ToArray(), actual,
+                EncodingKind.DeltaBinaryPacked, ParquetDataPageVersion.V1, NullPattern.NoNulls);
+        }
+    }
+
+    [Test]
     public void LargeRequiredNumericPageIsSplitAcrossEncodingsPagesAndCompression()
     {
         ParquetDataPageVersion[] pageVersions =
