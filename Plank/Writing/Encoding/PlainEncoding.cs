@@ -445,21 +445,101 @@ static class PlainEncoding
         return ColumnStatistics.FromDoubleAccumulation(min, max, 0, nanCount, hasValue);
     }
 
+    internal static ColumnStatistics WriteAllPresentOptionalDoublePageWithStatistics(
+        ReadOnlySpan<double?> values, ref BufferWriter writer)
+    {
+        var byteCount = checked(values.Length * sizeof(double));
+        if (byteCount == 0)
+            return ColumnStatistics.FromDoubleAccumulation(0, 0, 0, 0, false);
+
+        var destination = MemoryMarshal.Cast<byte, double>(writer.GetSpan(byteCount)[..byteCount]);
+        bool hasValue;
+        double min;
+        double max;
+        long nanCount;
+        if (values.Length >= Vector256<double>.Count * 4)
+        {
+            hasValue = ExtractOptionalDoubleValuesAndGetStatistics(values, destination,
+                out min, out max, out nanCount);
+        }
+        else
+        {
+            for (var i = 0; i < values.Length; i++)
+                destination[i] = values[i]!.Value;
+            hasValue = ColumnStatistics.TryGetDoubleMinMax(destination, out min, out max, out nanCount);
+        }
+        writer.Advance(byteCount);
+        return ColumnStatistics.FromDoubleAccumulation(min, max, 0, nanCount, hasValue);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static bool ExtractOptionalDoubleValuesAndGetStatistics(ReadOnlySpan<double?> values, Span<double> destination,
+        out double min, out double max, out long nanCount)
+    {
+        ref var nullableSource = ref MemoryMarshal.GetReference(values);
+        ref var source = ref Unsafe.As<double?, long>(ref nullableSource);
+        return CopyDoubleValuesAndGetStatisticsCore<OptionalDoubleVectorSource>(ref source, values.Length,
+            destination, out min, out max, out nanCount);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static bool CopyDoubleValuesAndGetStatistics(ReadOnlySpan<double> values, Span<double> destination,
         out double min, out double max, out long nanCount)
     {
-        ref var source = ref MemoryMarshal.GetReference(values);
+        ref var source = ref Unsafe.As<double, long>(ref MemoryMarshal.GetReference(values));
+        return CopyDoubleValuesAndGetStatisticsCore<RequiredDoubleVectorSource>(ref source, values.Length,
+            destination, out min, out max, out nanCount);
+    }
+
+    interface IDoubleVectorSource
+    {
+        static abstract Vector256<double> LoadVector(ref long source, nuint valueIndex);
+        static abstract double LoadScalar(ref long source, nuint valueIndex);
+    }
+
+    readonly struct RequiredDoubleVectorSource : IDoubleVectorSource
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Vector256<double> LoadVector(ref long source, nuint valueIndex)
+            => Vector256.LoadUnsafe(ref source, valueIndex).AsDouble();
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static double LoadScalar(ref long source, nuint valueIndex)
+            => BitConverter.Int64BitsToDouble(Unsafe.Add(ref source, valueIndex));
+    }
+
+    readonly struct OptionalDoubleVectorSource : IDoubleVectorSource
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Vector256<double> LoadVector(ref long source, nuint valueIndex)
+        {
+            var first = Vector256.LoadUnsafe(ref source, checked(valueIndex * 2));
+            var second = Vector256.LoadUnsafe(ref source, checked(valueIndex * 2 + 4));
+            var firstValues = Avx2.Permute4x64(first, 0xdd);
+            var secondValues = Avx2.Permute4x64(second, 0xdd);
+            return Avx2.Permute2x128(firstValues, secondValues, 0x20).AsDouble();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static double LoadScalar(ref long source, nuint valueIndex)
+            => BitConverter.Int64BitsToDouble(Unsafe.Add(ref source, checked(valueIndex * 2 + 1)));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static bool CopyDoubleValuesAndGetStatisticsCore<TSource>(ref long source, int length,
+        Span<double> destination, out double min, out double max, out long nanCount)
+        where TSource : struct, IDoubleVectorSource
+    {
         ref var target = ref MemoryMarshal.GetReference(destination);
-        var count = (nuint)values.Length;
+        var count = (nuint)length;
         var width = (nuint)Vector256<double>.Count;
         var blockWidth = width * 4;
         var index = (nuint)0;
 
-        var min0 = Vector256.LoadUnsafe(ref source);
-        var min1 = Vector256.LoadUnsafe(ref source, width);
-        var min2 = Vector256.LoadUnsafe(ref source, width * 2);
-        var min3 = Vector256.LoadUnsafe(ref source, width * 3);
+        var min0 = TSource.LoadVector(ref source, 0);
+        var min1 = TSource.LoadVector(ref source, width);
+        var min2 = TSource.LoadVector(ref source, width * 2);
+        var min3 = TSource.LoadVector(ref source, width * 3);
         var max0 = min0;
         var max1 = min1;
         var max2 = min2;
@@ -476,10 +556,10 @@ static class PlainEncoding
 
         for (; count - index >= blockWidth; index += blockWidth)
         {
-            var current0 = Vector256.LoadUnsafe(ref source, index);
-            var current1 = Vector256.LoadUnsafe(ref source, index + width);
-            var current2 = Vector256.LoadUnsafe(ref source, index + width * 2);
-            var current3 = Vector256.LoadUnsafe(ref source, index + width * 3);
+            var current0 = TSource.LoadVector(ref source, index);
+            var current1 = TSource.LoadVector(ref source, index + width);
+            var current2 = TSource.LoadVector(ref source, index + width * 2);
+            var current3 = TSource.LoadVector(ref source, index + width * 3);
 
             current0.StoreUnsafe(ref target, index);
             current1.StoreUnsafe(ref target, index + width);
@@ -520,7 +600,7 @@ static class PlainEncoding
 
         for (; index < count; index++)
         {
-            var value = Unsafe.Add(ref source, index);
+            var value = TSource.LoadScalar(ref source, index);
             Unsafe.Add(ref target, index) = value;
             if (double.IsNaN(value))
             {
@@ -538,7 +618,7 @@ static class PlainEncoding
         // An all-non-positive page needs the positive-zero half of total zero ordering as well.
         // It is rare and outside the throughput-oriented path, so reuse the scalar implementation.
         if (ordered.ExtractMostSignificantBits() != (1u << Vector256<double>.Count) - 1 || max == 0)
-            return ColumnStatistics.TryGetDoubleMinMax(values, out min, out max, out nanCount);
+            return ColumnStatistics.TryGetDoubleMinMax(destination, out min, out max, out nanCount);
 
         nanCount = 0;
         if (min == 0)
