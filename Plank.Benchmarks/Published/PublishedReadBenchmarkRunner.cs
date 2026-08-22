@@ -32,8 +32,9 @@ public static class PublishedReadBenchmarkRunner
                 PageIndexes = false,
                 BloomFilters = false,
                 RowGroupBoundaries = "Every reader uses the same in-memory file for each case.",
-                TimingBoundary = "Reader creation through footer parsing, decoding, and deterministic consumption " +
-                    "of every logical value and every binary payload byte. Input file generation is excluded.",
+                TimingBoundary = "Reader creation through footer parsing, decoding, and additive consumption " +
+                    "of every logical value. Variable-length values contribute their byte length. Input file " +
+                    "generation is excluded.",
                 Quick = options.Quick
             },
             Suites = suites
@@ -59,7 +60,7 @@ public static class PublishedReadBenchmarkRunner
         PublishedBenchmarkOptions options, CancellationToken cancellationToken)
     {
         var fileBytes = await CreateInputAsync(dataSet, cancellationToken).ConfigureAwait(false);
-        var expected = PublishedReadFingerprint.Expected(dataSet);
+        var expected = PublishedReadChecksum.Expected(dataSet);
         var readers = PublishedBenchmarkReaderCatalog.Create(fileBytes, dataSet, options.WorkerCount);
         try
         {
@@ -165,7 +166,7 @@ public static class PublishedReadBenchmarkRunner
     {
         if (actual != expected)
             throw new InvalidDataException(
-                $"{label} returned {actual.ValueCount} values with fingerprint {actual.Fingerprint:X16}; " +
-                $"expected {expected.ValueCount} values with fingerprint {expected.Fingerprint:X16}.");
+                $"{label} returned {actual.ValueCount} values with checksum {actual.Checksum:X16}; " +
+                $"expected {expected.ValueCount} values with checksum {expected.Checksum:X16}.");
     }
 }

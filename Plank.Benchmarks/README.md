@@ -60,18 +60,16 @@ dotnet run -c Release --project Plank.Benchmarks -- --published-read
 ```
 
 It generates one audited in-memory file per case, then writes `docs/benchmarks/read-v1.json`.
-Every timed reader traverses every decoded logical value (and every byte of binary values) into a
-deterministic fingerprint. The fingerprint is validated after the timer, so the JIT cannot discard
-decoded buffers that a real consumer would observe. Multithreaded readers consume independent columns
-in parallel and combine their fingerprints in schema order.
+Every timed reader traverses every decoded logical value into a cheap additive checksum. Numeric values
+contribute their value, nulls contribute a sentinel, and variable-length values contribute their UTF-8
+byte length. The checksum is validated after the timer, so the JIT cannot discard decoded buffers that
+a real consumer would observe. Multithreaded readers consume independent columns in parallel and
+combine their checksums in schema order.
 
-**The fingerprint is inside the timed region, so it has to stay cheap.** It is charged to every
-implementation equally, but a hash that costs more than a decode makes every reader measure the same
-and the comparison says nothing. A single FNV chain hashing each value byte by byte cost ~11.9 ns per
-value — around 88% of a plain int32 read — so the fingerprint spreads its work over four independent
-lanes fed round-robin, which keeps four multiplies in flight and drops it to ~1.4 ns per value.
-Changing how values are mixed changes every published fingerprint, so a snapshot generated before such
-a change cannot be compared against one generated after it.
+The checksum is intentionally not collision-resistant and is not a substitute for correctness tests.
+It exists only to keep decoded results observable without making a serial hash chain part of the
+benchmark. Published read timings generated before this change cannot be compared directly with newer
+snapshots.
 
 Use `--data-dir`, `--output`, `--warmups`, `--iterations`, `--workers`, `--synthetic-rows`, or `--synthetic-width` to override the defaults. Pass `--case <id>` to run only the matching case in each suite where that ID exists; filtered runs default to `artifacts/benchmarks/{write,read}-case-v1.json` so they cannot replace a published snapshot.
 
