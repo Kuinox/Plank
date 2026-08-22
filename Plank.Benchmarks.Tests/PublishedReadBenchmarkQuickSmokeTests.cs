@@ -54,7 +54,7 @@ internal sealed class PublishedReadBenchmarkQuickSmokeTests
     }
 
     [Test]
-    public async Task ThreeColumnRunUsesDedicatedWorkersAndPreservesTheFingerprint()
+    public async Task ThreeColumnRunUsesDedicatedWorkersAndPreservesTheChecksum()
     {
         var options = new PublishedBenchmarkOptions
         {

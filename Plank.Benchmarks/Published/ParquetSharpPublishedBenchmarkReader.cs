@@ -54,7 +54,7 @@ sealed class ParquetSharpPublishedBenchmarkReader : IPublishedBenchmarkReader
             throw new InvalidDataException(
                 $"ParquetSharp found {reader.NumRowGroups} row groups instead of {_dataSet.RowGroupCount}.");
 
-        var aggregate = PublishedReadFingerprint.Start();
+        var aggregate = PublishedReadChecksum.Start();
         long valueCount = 0;
         for (var rowGroupIndex = 0; rowGroupIndex < reader.NumRowGroups; rowGroupIndex++)
         {
@@ -79,7 +79,7 @@ sealed class ParquetSharpPublishedBenchmarkReader : IPublishedBenchmarkReader
 
             for (var columnIndex = 0; columnIndex < pieces.Length; columnIndex++)
             {
-                aggregate = PublishedReadFingerprint.Combine(aggregate, pieces[columnIndex]);
+                aggregate = PublishedReadChecksum.Combine(aggregate, pieces[columnIndex]);
                 valueCount = checked(valueCount + pieces[columnIndex].ValueCount);
             }
             using var extraBatch = await batches.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
@@ -119,46 +119,46 @@ sealed class ParquetSharpPublishedBenchmarkReader : IPublishedBenchmarkReader
     static PublishedReadResult Consume<T>(PrimitiveArray<T> array, int columnIndex, int rowGroupIndex)
         where T : struct, IEquatable<T>
     {
-        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
+        var checksum = PublishedReadChecksum.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
         if (array.NullCount == 0)
         {
-            fingerprint.AddValues(array.Values);
+            checksum.AddValues(array.Values);
         }
         else
         {
             for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
-                fingerprint.AddValue(array.GetValue(valueIndex));
+                checksum.AddValue(array.GetValue(valueIndex));
         }
-        return new PublishedReadResult(array.Length, fingerprint.Finish());
+        return new PublishedReadResult(array.Length, checksum.Finish());
     }
 
     static PublishedReadResult Consume(BooleanArray array, int columnIndex, int rowGroupIndex)
     {
-        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
+        var checksum = PublishedReadChecksum.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
         for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
-            fingerprint.AddValue(array.GetValue(valueIndex));
-        return new PublishedReadResult(array.Length, fingerprint.Finish());
+            checksum.AddValue(array.GetValue(valueIndex));
+        return new PublishedReadResult(array.Length, checksum.Finish());
     }
 
     static PublishedReadResult Consume(TimestampArray array, int columnIndex, int rowGroupIndex)
     {
-        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
+        var checksum = PublishedReadChecksum.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
         for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
-            fingerprint.AddValue(array.GetTimestamp(valueIndex));
-        return new PublishedReadResult(array.Length, fingerprint.Finish());
+            checksum.AddValue(array.GetTimestamp(valueIndex));
+        return new PublishedReadResult(array.Length, checksum.Finish());
     }
 
     static PublishedReadResult Consume(StringArray array, int columnIndex, int rowGroupIndex)
     {
-        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
+        var checksum = PublishedReadChecksum.Accumulator.StartPiece(columnIndex, rowGroupIndex, array.Length);
         for (var valueIndex = 0; valueIndex < array.Length; valueIndex++)
         {
             var bytes = array.GetBytes(valueIndex, out var isNull);
             if (isNull)
-                fingerprint.AddNull();
+                checksum.AddNull();
             else
-                fingerprint.AddBytes(bytes);
+                checksum.AddBytes(bytes);
         }
-        return new PublishedReadResult(array.Length, fingerprint.Finish());
+        return new PublishedReadResult(array.Length, checksum.Finish());
     }
 }

@@ -47,7 +47,7 @@ sealed class ParquetNetPublishedBenchmarkReader : IPublishedBenchmarkReader
             throw new InvalidDataException(
                 $"Parquet.Net found {fields.Length} columns instead of {_dataSet.Columns.Count}.");
 
-        var aggregate = PublishedReadFingerprint.Start();
+        var aggregate = PublishedReadChecksum.Start();
         long valueCount = 0;
         for (var rowGroupIndex = 0; rowGroupIndex < reader.RowGroupCount; rowGroupIndex++)
         {
@@ -57,7 +57,7 @@ sealed class ParquetNetPublishedBenchmarkReader : IPublishedBenchmarkReader
             {
                 var piece = await ReadColumnAsync(rowGroup, fields[columnIndex], _dataSet.Columns[columnIndex],
                     columnIndex, rowGroupIndex, rowCount, cancellationToken).ConfigureAwait(false);
-                aggregate = PublishedReadFingerprint.Combine(aggregate, piece);
+                aggregate = PublishedReadChecksum.Combine(aggregate, piece);
                 valueCount = checked(valueCount + piece.ValueCount);
             }
         }
@@ -110,19 +110,19 @@ sealed class ParquetNetPublishedBenchmarkReader : IPublishedBenchmarkReader
     {
         var values = new string?[rowCount];
         await rowGroup.ReadAsync(field, values, null, cancellationToken).ConfigureAwait(false);
-        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, values.Length);
+        var checksum = PublishedReadChecksum.Accumulator.StartPiece(columnIndex, rowGroupIndex, values.Length);
         for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
             if (values[valueIndex] is { } value)
-                fingerprint.AddString(value);
+                checksum.AddString(value);
             else
-                fingerprint.AddNull();
-        return new PublishedReadResult(values.Length, fingerprint.Finish());
+                checksum.AddNull();
+        return new PublishedReadResult(values.Length, checksum.Finish());
     }
 
     static PublishedReadResult Consume<T>(ReadOnlySpan<T> values, int columnIndex, int rowGroupIndex)
     {
-        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroupIndex, values.Length);
-        fingerprint.AddValues(values);
-        return new PublishedReadResult(values.Length, fingerprint.Finish());
+        var checksum = PublishedReadChecksum.Accumulator.StartPiece(columnIndex, rowGroupIndex, values.Length);
+        checksum.AddValues(values);
+        return new PublishedReadResult(values.Length, checksum.Finish());
     }
 }

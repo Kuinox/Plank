@@ -41,7 +41,7 @@ sealed class PlankPublishedBenchmarkReader : IPublishedBenchmarkReader
         cancellationToken.ThrowIfCancellationRequested();
         using var reader = new ParquetReader();
         reader.Reset(_source);
-        var aggregate = PublishedReadFingerprint.Start();
+        var aggregate = PublishedReadChecksum.Start();
         long valueCount = 0;
         foreach (var rowGroup in reader.RowGroups)
         {
@@ -61,7 +61,7 @@ sealed class PlankPublishedBenchmarkReader : IPublishedBenchmarkReader
 
             for (var columnIndex = 0; columnIndex < pieces.Length; columnIndex++)
             {
-                aggregate = PublishedReadFingerprint.Combine(aggregate, pieces[columnIndex]);
+                aggregate = PublishedReadChecksum.Combine(aggregate, pieces[columnIndex]);
                 valueCount = checked(valueCount + pieces[columnIndex].ValueCount);
             }
         }
@@ -191,33 +191,33 @@ sealed class PlankPublishedBenchmarkReader : IPublishedBenchmarkReader
 
     static PublishedReadResult ReadFixed<T>(RowGroup rowGroup, int columnIndex, int rowCount)
     {
-        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroup.Index, rowCount);
+        var checksum = PublishedReadChecksum.Accumulator.StartPiece(columnIndex, rowGroup.Index, rowCount);
         var offset = 0;
         foreach (var buffer in rowGroup.Column<T>(columnIndex))
         {
             var values = buffer.Values;
-            fingerprint.AddValues(values);
+            checksum.AddValues(values);
             offset = checked(offset + buffer.Count);
         }
         ValidateCount(columnIndex, rowCount, offset);
-        return new PublishedReadResult(offset, fingerprint.Finish());
+        return new PublishedReadResult(offset, checksum.Finish());
     }
 
     static PublishedReadResult ReadBinary(RowGroup rowGroup, int columnIndex, int rowCount)
     {
-        var fingerprint = PublishedReadFingerprint.Accumulator.StartPiece(columnIndex, rowGroup.Index, rowCount);
+        var checksum = PublishedReadChecksum.Accumulator.StartPiece(columnIndex, rowGroup.Index, rowCount);
         var offset = 0;
         foreach (var buffer in rowGroup.Column<byte>(columnIndex))
         {
             for (var localIndex = 0; localIndex < buffer.Count; localIndex++)
                 if (buffer.IsNull(localIndex))
-                    fingerprint.AddNull();
+                    checksum.AddNull();
                 else
-                    fingerprint.AddBytes(buffer.GetValue(localIndex));
+                    checksum.AddBytes(buffer.GetValue(localIndex));
             offset = checked(offset + buffer.Count);
         }
         ValidateCount(columnIndex, rowCount, offset);
-        return new PublishedReadResult(offset, fingerprint.Finish());
+        return new PublishedReadResult(offset, checksum.Finish());
     }
 
     static void ValidateCount(int columnIndex, int expected, int actual)

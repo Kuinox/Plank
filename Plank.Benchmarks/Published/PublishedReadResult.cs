@@ -1,3 +1,3 @@
 namespace Plank.Benchmarks.Published;
 
-readonly record struct PublishedReadResult(long ValueCount, ulong Fingerprint);
+readonly record struct PublishedReadResult(long ValueCount, ulong Checksum);
