@@ -1,0 +1,1087 @@
+using System.Buffers.Binary;
+using System.Collections.Immutable;
+using System.Runtime.InteropServices;
+using DuckDB.NET.Data;
+using ParquetSharp;
+using Plank.Reading;
+using Plank.Reading.Logical;
+using Plank.Reading.Logical.Internal;
+using Plank.Schema;
+using Plank.Writing;
+using Plank.Writing.PageStrategy;
+using PlankDataPageVersion = Plank.Writing.ParquetDataPageVersion;
+using PlankLogicalType = Plank.Schema.LogicalType;
+using PlankParquetSchema = Plank.Schema.ParquetSchema;
+
+namespace Plank.Tests.Writer;
+
+internal sealed class ColumnStatisticsTests
+{
+    [Test]
+    public void FloatStatisticsIgnoreNaNs()
+    {
+        var column = new Plank.Schema.Column("value", ParquetPhysicalType.Float);
+        var statistics = ColumnStatistics.Create(column,
+            [float.NaN, 3.5f, 1.25f, float.NaN, 9.75f, 2f, 4f, 8f, 6f], 0);
+
+        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Float)
+            throw new InvalidOperationException($"Expected float statistics, got {statistics.ValueKind}.");
+        if (BitConverter.Int32BitsToSingle((int)statistics.MinBits) != 1.25f)
+            throw new InvalidOperationException("Float min statistic mismatch.");
+        if (BitConverter.Int32BitsToSingle((int)statistics.MaxBits) != 9.75f)
+            throw new InvalidOperationException("Float max statistic mismatch.");
+        if (statistics.NanCount != 2)
+            throw new InvalidOperationException($"Expected two float NaNs, got {statistics.NanCount}.");
+    }
+
+    [Test]
+    public void FloatStatisticsOmitMinMaxWhenAllValuesAreNaN()
+    {
+        var column = new Plank.Schema.Column("value", ParquetPhysicalType.Float);
+        var statistics = ColumnStatistics.Create(column, [float.NaN, float.NaN], 0);
+
+        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
+            throw new InvalidOperationException($"Expected no min/max statistics, got {statistics.ValueKind}.");
+        if (statistics.NanCount != 2)
+            throw new InvalidOperationException($"Expected two float NaNs, got {statistics.NanCount}.");
+    }
+
+    [Test]
+    public void DoubleStatisticsIgnoreNaNs()
+    {
+        var column = new Plank.Schema.Column("value", ParquetPhysicalType.Double);
+        var statistics = ColumnStatistics.Create(column,
+            [double.NaN, 3.5d, 1.25d, double.NaN, 9.75d, 2d, 4d, 8d, 6d], 0);
+
+        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Double)
+            throw new InvalidOperationException($"Expected double statistics, got {statistics.ValueKind}.");
+        if (BitConverter.Int64BitsToDouble(statistics.MinBits) != 1.25d)
+            throw new InvalidOperationException("Double min statistic mismatch.");
+        if (BitConverter.Int64BitsToDouble(statistics.MaxBits) != 9.75d)
+            throw new InvalidOperationException("Double max statistic mismatch.");
+        if (statistics.NanCount != 2)
+            throw new InvalidOperationException($"Expected two double NaNs, got {statistics.NanCount}.");
+    }
+
+    [Test]
+    public void DoubleStatisticsOmitMinMaxWhenAllValuesAreNaN()
+    {
+        var column = new Plank.Schema.Column("value", ParquetPhysicalType.Double);
+        var statistics = ColumnStatistics.Create(column, [double.NaN, double.NaN], 0);
+
+        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
+            throw new InvalidOperationException($"Expected no min/max statistics, got {statistics.ValueKind}.");
+        if (statistics.NanCount != 2)
+            throw new InvalidOperationException($"Expected two double NaNs, got {statistics.NanCount}.");
+    }
+
+    [Test]
+    public void FloatingPointStatisticsCanonicalizeSignedZeroBoundsOnVectorizedPaths()
+    {
+        var floatColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Float);
+        var floatValues = new float[System.Numerics.Vector<float>.Count * 2];
+        floatValues[System.Numerics.Vector<float>.Count] = -0.0f;
+        AssertFloatStatistics(ColumnStatistics.Create(floatColumn, floatValues, 0), int.MinValue, 0);
+
+        var doubleColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Double);
+        var doubleValues = new double[System.Numerics.Vector<double>.Count * 2];
+        doubleValues[System.Numerics.Vector<double>.Count] = -0.0d;
+        AssertDoubleStatistics(ColumnStatistics.Create(doubleColumn, doubleValues, 0), long.MinValue, 0);
+    }
+
+    [Test]
+    public void FloatingPointStatisticsCanonicalizeSignedZeroBoundsForOptionalAndRepeatedValues()
+    {
+        var optionalFloatColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Float,
+            new ColumnOptions(ParquetRepetition.Optional));
+        AssertFloatStatistics(ColumnStatistics.CreateOptional(optionalFloatColumn,
+            new float?[] { null, +0.0f, float.NaN, -0.0f }), int.MinValue, 0, nullCount: 1);
+
+        var optionalDoubleColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Double,
+            new ColumnOptions(ParquetRepetition.Optional));
+        AssertDoubleStatistics(ColumnStatistics.CreateOptional(optionalDoubleColumn,
+            new double?[] { null, +0.0d, double.NaN, -0.0d }), long.MinValue, 0, nullCount: 1);
+
+        var repeatedFloatColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Float,
+            new ColumnOptions(ParquetRepetition.Repeated));
+        AssertFloatStatistics(ColumnStatistics.Create(repeatedFloatColumn,
+            new float[][] { [+0.0f], [float.NaN, -0.0f] }, 0), int.MinValue, 0);
+
+        var repeatedDoubleColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Double,
+            new ColumnOptions(ParquetRepetition.Repeated));
+        AssertDoubleStatistics(ColumnStatistics.Create(repeatedDoubleColumn,
+            new double[][] { [+0.0d], [double.NaN, -0.0d] }, 0), long.MinValue, 0);
+    }
+
+    [Test]
+    public void FloatingPointStatisticsPreserveTheOnlyZeroSign()
+    {
+        var floatColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Float);
+        AssertFloatStatistics(ColumnStatistics.Create(floatColumn, [-0.0f], 0), int.MinValue, int.MinValue);
+        AssertFloatStatistics(ColumnStatistics.Create(floatColumn, [+0.0f], 0), 0, 0);
+
+        var doubleColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Double);
+        AssertDoubleStatistics(ColumnStatistics.Create(doubleColumn, [-0.0d], 0), long.MinValue, long.MinValue);
+        AssertDoubleStatistics(ColumnStatistics.Create(doubleColumn, [+0.0d], 0), 0, 0);
+    }
+
+    [Test]
+    public void OptionalFloatingPointStatisticsCountNullsAndNaNsWithoutMinMaxValues()
+    {
+        var floatColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Float,
+            new ColumnOptions(ParquetRepetition.Optional));
+        var floatStatistics = ColumnStatistics.CreateOptional(floatColumn,
+            new float?[] { null, float.NaN, null, float.NaN });
+        if (floatStatistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
+            throw new InvalidOperationException($"Expected no float min/max, got {floatStatistics.ValueKind}.");
+        if (floatStatistics.NullCount != 2 || floatStatistics.NanCount != 2)
+            throw new InvalidOperationException(
+                $"Expected two float nulls and NaNs, got {floatStatistics.NullCount} and {floatStatistics.NanCount}.");
+
+        var doubleColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Double,
+            new ColumnOptions(ParquetRepetition.Optional));
+        var doubleStatistics = ColumnStatistics.CreateOptional(doubleColumn,
+            new double?[] { double.NaN, null, double.NaN, null });
+        if (doubleStatistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
+            throw new InvalidOperationException($"Expected no double min/max, got {doubleStatistics.ValueKind}.");
+        if (doubleStatistics.NullCount != 2 || doubleStatistics.NanCount != 2)
+            throw new InvalidOperationException(
+                $"Expected two double nulls and NaNs, got {doubleStatistics.NullCount} and {doubleStatistics.NanCount}.");
+    }
+
+    [Test]
+    public void OptionalFloatingPointStatisticsDoNotAllocateDenseArrays()
+    {
+        var floatColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Float,
+            new ColumnOptions(ParquetRepetition.Optional));
+        var doubleColumn = new Plank.Schema.Column("value", ParquetPhysicalType.Double,
+            new ColumnOptions(ParquetRepetition.Optional));
+        var floatValues = new float?[1024];
+        var doubleValues = new double?[1024];
+        for (var i = 0; i < floatValues.Length; i++)
+        {
+            floatValues[i] = i % 7 == 0 ? null : i;
+            doubleValues[i] = i % 11 == 0 ? null : i;
+        }
+
+        _ = ColumnStatistics.CreateOptional(floatColumn, floatValues);
+        _ = ColumnStatistics.CreateOptional(doubleColumn, doubleValues);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var floatStatistics = ColumnStatistics.CreateOptional(floatColumn, floatValues);
+        var doubleStatistics = ColumnStatistics.CreateOptional(doubleColumn, doubleValues);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        if (allocated != 0)
+            throw new InvalidOperationException(
+                $"Expected optional floating-point statistics to allocate zero bytes, saw {allocated}.");
+        if (!floatStatistics.HasStatistics || !doubleStatistics.HasStatistics)
+            throw new InvalidOperationException("Expected optional floating-point statistics to be present.");
+    }
+
+    [Test]
+    public void BinaryStatisticsPreserveUnsignedLexicographicOrderingAcrossVectorBoundaries()
+    {
+        var requiredColumn = new Plank.Schema.Column("value", ParquetPhysicalType.ByteArray);
+        var commonPrefix = Enumerable.Repeat((byte)0x5a, 63).ToArray();
+        var low = commonPrefix.Concat([(byte)0x00, (byte)0xff]).ToArray();
+        var middle = commonPrefix.Concat([(byte)0x80]).ToArray();
+        var high = commonPrefix.Concat([(byte)0xff, (byte)0x00]).ToArray();
+        byte[][] values = [middle, high, commonPrefix, low];
+
+        var required = ColumnStatistics.Create(requiredColumn, values, 0);
+        if (!required.MinValue!.AsSpan().SequenceEqual(commonPrefix))
+            throw new InvalidOperationException("Required binary minimum statistic mismatch.");
+        if (!required.MaxValue!.AsSpan().SequenceEqual(high))
+            throw new InvalidOperationException("Required binary maximum statistic mismatch.");
+
+        var optionalColumn = new Plank.Schema.Column("value", ParquetPhysicalType.ByteArray,
+            new ColumnOptions(ParquetRepetition.Optional));
+        byte[][] optionalValues = [null!, middle, high, commonPrefix, low, null!];
+        var optional = ColumnStatistics.CreateOptional(optionalColumn, optionalValues);
+        if (!optional.MinValue!.AsSpan().SequenceEqual(commonPrefix))
+            throw new InvalidOperationException("Optional binary minimum statistic mismatch.");
+        if (!optional.MaxValue!.AsSpan().SequenceEqual(high))
+            throw new InvalidOperationException("Optional binary maximum statistic mismatch.");
+        if (optional.NullCount != 2)
+            throw new InvalidOperationException($"Expected two nulls, got {optional.NullCount}.");
+    }
+
+    [Test]
+    public void WriterEmitsColumnChunkStatistics()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-statistics-{Guid.NewGuid():N}.parquet");
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32),
+            Plank.Schema.ColumnDefinition.Leaf("optional_id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional)),
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray, null, new PlankLogicalType.String()),
+            Plank.Schema.ColumnDefinition.Leaf("active", ParquetPhysicalType.Boolean)
+        ]);
+
+        try
+        {
+            using (var stream = File.Create(path))
+            {
+                var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
+                var idColumn = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+                var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[1]);
+                var nameColumn = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[2]);
+                var activeColumn = writer.CreateSerializedColumn<bool>(schema.LeafColumns[3]);
+                var rowGroup = writer.StartRowGroup();
+                idColumn.Serialize([30, 10, 20]);
+                optionalIdColumn.Serialize([3, null, 1]);
+                nameColumn.Serialize(["beta"u8.ToArray(), "alpha"u8.ToArray(), "gamma"u8.ToArray()]);
+                activeColumn.Serialize([true, false, true]);
+                rowGroup.Write(idColumn);
+                rowGroup.Write(optionalIdColumn);
+                rowGroup.Write(nameColumn);
+                rowGroup.Write(activeColumn);
+                writer.CloseFile();
+            }
+
+            using var reader = new ParquetSharp.ParquetFileReader(path);
+            using var rowGroupMetadata = reader.RowGroup(0);
+            AssertInt32Statistics(rowGroupMetadata, columnIndex: 0, min: 10, max: 30, nullCount: 0);
+            AssertInt32Statistics(rowGroupMetadata, columnIndex: 1, min: 1, max: 3, nullCount: 1);
+            AssertHasMinMaxStatistics(rowGroupMetadata, columnIndex: 2, nullCount: 0);
+            AssertBooleanStatistics(rowGroupMetadata, columnIndex: 3, min: false, max: true, nullCount: 0);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    public void WriterEmitsAllNullColumnChunkStatistics()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-statistics-all-null-{Guid.NewGuid():N}.parquet");
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("optional_id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional))
+        ]);
+
+        try
+        {
+            using (var stream = File.Create(path))
+            {
+                var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
+                var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
+                var rowGroup = writer.StartRowGroup();
+                optionalIdColumn.Serialize([null, null, null]);
+                rowGroup.Write(optionalIdColumn);
+                writer.CloseFile();
+            }
+
+            using var reader = new ParquetSharp.ParquetFileReader(path);
+            using var rowGroupMetadata = reader.RowGroup(0);
+            AssertNoMinMaxStatistics(rowGroupMetadata, columnIndex: 0, nullCount: 3);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    public void WriterEmitsRepeatedColumnChunkStatistics()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-statistics-repeated-{Guid.NewGuid():N}.parquet");
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.List("numbers", ColumnDefinition.RequiredLeaf("element", ParquetPhysicalType.Int32),
+                repetition: ParquetRepetition.Required)
+        ]);
+
+        int[][] rows =
+        [
+            [5, 7],
+            [],
+            [1, 9]
+        ];
+
+        try
+        {
+            using (var stream = File.Create(path))
+            {
+                var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
+                var numbersColumn = writer.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
+                var rowGroup = writer.StartRowGroup();
+                numbersColumn.Serialize(rows);
+                rowGroup.Write(numbersColumn);
+                writer.CloseFile();
+            }
+
+            using var reader = new ParquetSharp.ParquetFileReader(path);
+            using var rowGroupMetadata = reader.RowGroup(0);
+            AssertInt32Statistics(rowGroupMetadata, columnIndex: 0, min: 1, max: 9, nullCount: 1);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    [Arguments(PlankDataPageVersion.V1)]
+    [Arguments(PlankDataPageVersion.V2)]
+    public void WriterEmitsPageIndexes(PlankDataPageVersion dataPageVersion)
+    {
+        var path = Path.Combine(Path.GetTempPath(),
+            $"plank-page-index-{dataPageVersion}-{Guid.NewGuid():N}.parquet");
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.Leaf("optional_id", ParquetPhysicalType.Int32,
+                new ColumnOptions(ParquetRepetition.Optional), pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
+
+        try
+        {
+            using (var stream = File.Create(path))
+            {
+                var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+                {
+                    WritePageIndexes = true,
+                    DataPageVersion = dataPageVersion
+                });
+                var idColumn = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+                var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[1]);
+                var rowGroup = writer.StartRowGroup();
+                idColumn.Serialize([10, 20, 30, 40, 50]);
+                optionalIdColumn.Serialize([1, null, 3, 4, null]);
+                rowGroup.Write(idColumn);
+                rowGroup.Write(optionalIdColumn);
+                writer.CloseFile();
+            }
+
+            var columns = ReadFirstRowGroupColumns(path);
+            var fileBytes = File.ReadAllBytes(path);
+            AssertPageIndexMetadata(fileBytes, columns[0], expectedPageCount: 3);
+            AssertPageIndexMetadata(fileBytes, columns[1], expectedPageCount: 3);
+
+            using var reader = new ParquetSharp.ParquetFileReader(path);
+            using var rowGroupMetadata = reader.RowGroup(0);
+            AssertInt32Statistics(rowGroupMetadata, columnIndex: 0, min: 10, max: 50, nullCount: 0);
+            AssertInt32Statistics(rowGroupMetadata, columnIndex: 1, min: 1, max: 4, nullCount: 2);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    [Arguments(PlankDataPageVersion.V1)]
+    [Arguments(PlankDataPageVersion.V2)]
+    public void WriterEmitsPageHeaderStatisticsWithoutPageIndexes(PlankDataPageVersion dataPageVersion)
+    {
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32,
+                pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            WritePageIndexes = false,
+            DataPageVersion = dataPageVersion
+        });
+        var column = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        column.Serialize([10, 50, -5, 40, 0]);
+        writer.StartRowGroup().Write(column);
+        writer.CloseFile();
+
+        using var reader = schema.CreateReader(new MemoryStream(stream.ToArray()));
+        var metadata = reader.RowGroups[0].GetColumnMetadata(0);
+        if (metadata.HasColumnIndex || metadata.HasOffsetIndex)
+            throw new InvalidOperationException("The fixture unexpectedly contains page indexes.");
+
+        using var pages = metadata.OpenPages();
+        AssertPageInt32Statistics(pages[0], min: 10, max: 50, nullCount: 0);
+        AssertPageInt32Statistics(pages[1], min: -5, max: 40, nullCount: 0);
+        AssertPageInt32Statistics(pages[2], min: 0, max: 0, nullCount: 0);
+    }
+
+    [Test]
+    public void RequiredInt32PageStatisticsMatchPageBoundaries()
+    {
+        using var stream = new MemoryStream();
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32,
+                pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
+        var idColumn = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+
+        idColumn.Serialize([10, 50, -5, 40, 0]);
+
+        AssertDataPageInt32Statistics(idColumn.Pages, pageIndex: 0, min: 10, max: 50, nullCount: 0);
+        AssertDataPageInt32Statistics(idColumn.Pages, pageIndex: 1, min: -5, max: 40, nullCount: 0);
+        AssertDataPageInt32Statistics(idColumn.Pages, pageIndex: 2, min: 0, max: 0, nullCount: 0);
+    }
+
+    [Test]
+    public void RequiredPlainBooleanEncodingUsesSharedPageFusion()
+    {
+        using var stream = new MemoryStream();
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("value", ParquetPhysicalType.Boolean,
+                new ColumnOptions(encodings: [EncodingKind.Plain]))
+        ]);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions { TargetDataPageSizeBytes = 1 });
+        var column = writer.CreateSerializedColumn<bool>(schema.LeafColumns[0]);
+        bool[] values =
+        [
+            true, true, true, true, true, true, true, true,
+            false, false, true, false, true, false, false, false
+        ];
+
+        column.Serialize(values);
+
+        if (column.Statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Boolean
+            || column.Statistics.MinBits != 0 || column.Statistics.MaxBits != 1)
+            throw new InvalidOperationException("Boolean column statistics mismatch.");
+
+        Span<byte> expectedPages = [0xff, 0x14];
+        var dataPageIndex = 0;
+        for (var i = 0; i < column.Pages.Count; i++)
+        {
+            ref var page = ref column.Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (!page.Content.TryGetSingleWrittenSpan(out var encoded) || encoded.Length != 1
+                || encoded[0] != expectedPages[dataPageIndex])
+                throw new InvalidOperationException($"Boolean page {dataPageIndex} payload mismatch.");
+            var expectedMin = dataPageIndex == 0 ? 1 : 0;
+            if (page.Statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Boolean
+                || page.Statistics.MinBits != expectedMin || page.Statistics.MaxBits != 1)
+                throw new InvalidOperationException($"Boolean page {dataPageIndex} statistics mismatch.");
+            dataPageIndex++;
+        }
+    }
+
+    [Test]
+    public void Int64PageStatisticsMatchRequiredAndOptionalPageBoundaries()
+    {
+        using var stream = new MemoryStream();
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("required_value", ParquetPhysicalType.Int64,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.Leaf("optional_value", ParquetPhysicalType.Int64,
+                new ColumnOptions(ParquetRepetition.Optional), pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
+        var requiredColumn = writer.CreateSerializedColumn<long>(schema.LeafColumns[0]);
+        var optionalColumn = writer.CreateSerializedColumn<long?>(schema.LeafColumns[1]);
+
+        requiredColumn.Serialize([10L, 50L, -5L, 40L, 0L]);
+        optionalColumn.Serialize([10L, null, -5L, 40L, null]);
+
+        AssertInt64Statistics(requiredColumn.Statistics, min: -5, max: 50, nullCount: 0);
+        AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 0, min: 10, max: 50, nullCount: 0);
+        AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 1, min: -5, max: 40, nullCount: 0);
+        AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 2, min: 0, max: 0, nullCount: 0);
+
+        AssertInt64Statistics(optionalColumn.Statistics, min: -5, max: 40, nullCount: 2);
+        AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 0, min: 10, max: 10, nullCount: 1);
+        AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 1, min: -5, max: 40, nullCount: 0);
+        AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 2, min: null, max: null, nullCount: 1);
+    }
+
+    [Test]
+    public void RequiredPlainFloatEncodingUsesSharedPageFusion()
+    {
+        using var stream = new MemoryStream();
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("value", ParquetPhysicalType.Float,
+                new ColumnOptions(encodings: [EncodingKind.Plain]))
+        ]);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 4 * sizeof(float)
+        });
+        var column = writer.CreateSerializedColumn<float>(schema.LeafColumns[0]);
+        float[] values =
+        [
+            +0.0f, -0.0f, 10f, float.NaN,
+            float.NaN, float.NaN, float.NaN, float.NaN,
+            -0.0f, +0.0f, -3f, 4f
+        ];
+
+        column.Serialize(values);
+
+        AssertFloatStatistics(column.Statistics, BitConverter.SingleToInt32Bits(-3f),
+            BitConverter.SingleToInt32Bits(10f), nanCount: 5);
+        AssertDataPageFloatStatistics(column.Pages, pageIndex: 0, minBits: int.MinValue,
+            maxBits: BitConverter.SingleToInt32Bits(10f), nanCount: 1);
+        AssertDataPageFloatStatistics(column.Pages, pageIndex: 1, minBits: null, maxBits: null, nanCount: 4);
+        AssertDataPageFloatStatistics(column.Pages, pageIndex: 2, minBits: BitConverter.SingleToInt32Bits(-3f),
+            maxBits: BitConverter.SingleToInt32Bits(4f), nanCount: 0);
+
+        var rowOffset = 0;
+        for (var i = 0; i < column.Pages.Count; i++)
+        {
+            ref var page = ref column.Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (!page.Content.TryGetSingleWrittenSpan(out var encoded))
+                throw new InvalidOperationException("Expected one contiguous Plain page payload.");
+            var pageRows = values.AsSpan(rowOffset, checked((int)page.RowCount));
+            if (!encoded.SequenceEqual(MemoryMarshal.AsBytes(pageRows)))
+                throw new InvalidOperationException($"Plain Float page {rowOffset / 4} bytes differ.");
+            rowOffset += pageRows.Length;
+        }
+    }
+
+    [Test]
+    public void RequiredPlainDoubleEncodingFusesCopyAndPageStatistics()
+    {
+        using var stream = new MemoryStream();
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("value", ParquetPhysicalType.Double,
+                new ColumnOptions(encodings: [EncodingKind.Plain]))
+        ]);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 16 * sizeof(double)
+        });
+        var column = writer.CreateSerializedColumn<double>(schema.LeafColumns[0]);
+        var values = new double[48];
+        for (var i = 0; i < 16; i++)
+            values[i] = i + 1;
+        values[0] = +0.0d;
+        values[1] = -0.0d;
+        for (var i = 16; i < 32; i++)
+            values[i] = double.NaN;
+        for (var i = 32; i < 48; i++)
+            values[i] = -0.0d;
+        values[39] = +0.0d;
+
+        column.Serialize(values);
+
+        AssertDoubleStatistics(column.Statistics, long.MinValue, BitConverter.DoubleToInt64Bits(16d),
+            nanCount: 16);
+        AssertDataPageDoubleStatistics(column.Pages, pageIndex: 0, minBits: long.MinValue,
+            maxBits: BitConverter.DoubleToInt64Bits(16d), nanCount: 0);
+        AssertDataPageDoubleStatistics(column.Pages, pageIndex: 1, minBits: null, maxBits: null, nanCount: 16);
+        AssertDataPageDoubleStatistics(column.Pages, pageIndex: 2, minBits: long.MinValue, maxBits: 0,
+            nanCount: 0);
+
+        var rowOffset = 0;
+        for (var i = 0; i < column.Pages.Count; i++)
+        {
+            ref var page = ref column.Pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (!page.Content.TryGetSingleWrittenSpan(out var encoded))
+                throw new InvalidOperationException("Expected one contiguous Plain page payload.");
+            var pageRows = values.AsSpan(rowOffset, checked((int)page.RowCount));
+            if (!encoded.SequenceEqual(MemoryMarshal.AsBytes(pageRows)))
+                throw new InvalidOperationException($"Plain Double page {rowOffset / 16} bytes differ.");
+            rowOffset += pageRows.Length;
+        }
+    }
+
+    [Test]
+    [Arguments(2)]
+    [Arguments(16)]
+    public void DictionaryInt64StatisticsMatchRequiredAndOptionalPageBoundaries(int rowsPerPage)
+    {
+        using var stream = new MemoryStream();
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("required_value", ParquetPhysicalType.Int64,
+                pageStrategy: new FixedRowsPageStrategy(rowsPerPage, DictionaryMode.Forced)),
+            Plank.Schema.ColumnDefinition.Leaf("optional_value", ParquetPhysicalType.Int64,
+                new ColumnOptions(ParquetRepetition.Optional),
+                pageStrategy: new FixedRowsPageStrategy(rowsPerPage, DictionaryMode.Forced))
+        ]);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
+        var requiredColumn = writer.CreateSerializedColumn<long>(schema.LeafColumns[0]);
+        var optionalColumn = writer.CreateSerializedColumn<long?>(schema.LeafColumns[1]);
+
+        requiredColumn.Serialize([10L, 50L, -5L, 40L, 0L]);
+        optionalColumn.Serialize([10L, null, -5L, 40L, null]);
+
+        AssertInt64Statistics(requiredColumn.Statistics, min: -5, max: 50, nullCount: 0);
+        AssertInt64Statistics(optionalColumn.Statistics, min: -5, max: 40, nullCount: 2);
+        var expectedDataPageCount = rowsPerPage >= 5 ? 1 : 3;
+        AssertDictionaryPageLayout(requiredColumn.Pages, expectedDataPageCount);
+        AssertDictionaryPageLayout(optionalColumn.Pages, expectedDataPageCount);
+        if (rowsPerPage >= 5)
+        {
+            AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 0, min: -5, max: 50, nullCount: 0);
+            AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 0, min: -5, max: 40, nullCount: 2);
+            return;
+        }
+
+        AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 0, min: 10, max: 50, nullCount: 0);
+        AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 1, min: -5, max: 40, nullCount: 0);
+        AssertDataPageInt64Statistics(requiredColumn.Pages, pageIndex: 2, min: 0, max: 0, nullCount: 0);
+        AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 0, min: 10, max: 10, nullCount: 1);
+        AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 1, min: -5, max: 40, nullCount: 0);
+        AssertDataPageInt64Statistics(optionalColumn.Pages, pageIndex: 2, min: null, max: null, nullCount: 1);
+    }
+
+    [Test]
+    public void PageIndexesAreReadableByDuckDb()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-page-index-duckdb-{Guid.NewGuid():N}.parquet");
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.Leaf("optional_id", ParquetPhysicalType.Int32,
+                new ColumnOptions(ParquetRepetition.Optional), pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
+
+        try
+        {
+            using (var stream = File.Create(path))
+            {
+                var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
+                var idColumn = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+                var optionalIdColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[1]);
+                var rowGroup = writer.StartRowGroup();
+                idColumn.Serialize([10, 20, 30, 40, 50]);
+                optionalIdColumn.Serialize([1, null, 3, 4, null]);
+                rowGroup.Write(idColumn);
+                rowGroup.Write(optionalIdColumn);
+                writer.CloseFile();
+            }
+
+            var columns = ReadFirstRowGroupColumns(path);
+            var fileBytes = File.ReadAllBytes(path);
+            AssertPageIndexMetadata(fileBytes, columns[0], expectedPageCount: 3);
+            AssertPageIndexMetadata(fileBytes, columns[1], expectedPageCount: 3);
+
+            AssertDuckDbCanReadPageIndexedFile(path);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    static void AssertInt32Statistics(ParquetSharp.RowGroupReader rowGroupMetadata, int columnIndex, int min, int max,
+        long nullCount)
+    {
+        using var columnMetadata = rowGroupMetadata.MetaData.GetColumnChunkMetaData(columnIndex);
+        using var statistics = columnMetadata.Statistics
+            ?? throw new InvalidOperationException($"Column {columnIndex} did not write statistics.");
+        if (!statistics.HasMinMax)
+            throw new InvalidOperationException($"Column {columnIndex} statistics did not include min/max.");
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Column {columnIndex} null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+        if (statistics.MinUntyped is not int actualMin || actualMin != min)
+            throw new InvalidOperationException(
+                $"Column {columnIndex} min mismatch. Expected {min}, got {statistics.MinUntyped}.");
+        if (statistics.MaxUntyped is not int actualMax || actualMax != max)
+            throw new InvalidOperationException(
+                $"Column {columnIndex} max mismatch. Expected {max}, got {statistics.MaxUntyped}.");
+    }
+
+    static void AssertHasMinMaxStatistics(ParquetSharp.RowGroupReader rowGroupMetadata, int columnIndex, long nullCount)
+    {
+        using var columnMetadata = rowGroupMetadata.MetaData.GetColumnChunkMetaData(columnIndex);
+        using var statistics = columnMetadata.Statistics
+            ?? throw new InvalidOperationException($"Column {columnIndex} did not write statistics.");
+        if (!statistics.HasMinMax)
+            throw new InvalidOperationException($"Column {columnIndex} statistics did not include min/max.");
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Column {columnIndex} null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+    }
+
+    static void AssertBooleanStatistics(ParquetSharp.RowGroupReader rowGroupMetadata, int columnIndex, bool min, bool max,
+        long nullCount)
+    {
+        using var columnMetadata = rowGroupMetadata.MetaData.GetColumnChunkMetaData(columnIndex);
+        using var statistics = columnMetadata.Statistics
+            ?? throw new InvalidOperationException($"Column {columnIndex} did not write statistics.");
+        if (!statistics.HasMinMax)
+            throw new InvalidOperationException($"Column {columnIndex} statistics did not include min/max.");
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Column {columnIndex} null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+        if (statistics.MinUntyped is not bool actualMin || actualMin != min)
+            throw new InvalidOperationException(
+                $"Column {columnIndex} min mismatch. Expected {min}, got {statistics.MinUntyped}.");
+        if (statistics.MaxUntyped is not bool actualMax || actualMax != max)
+            throw new InvalidOperationException(
+                $"Column {columnIndex} max mismatch. Expected {max}, got {statistics.MaxUntyped}.");
+    }
+
+    static void AssertNoMinMaxStatistics(ParquetSharp.RowGroupReader rowGroupMetadata, int columnIndex, long nullCount)
+    {
+        using var columnMetadata = rowGroupMetadata.MetaData.GetColumnChunkMetaData(columnIndex);
+        using var statistics = columnMetadata.Statistics
+            ?? throw new InvalidOperationException($"Column {columnIndex} did not write statistics.");
+        if (statistics.HasMinMax)
+            throw new InvalidOperationException($"Column {columnIndex} statistics unexpectedly included min/max.");
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Column {columnIndex} null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+    }
+
+    static void AssertDuckDbCanReadPageIndexedFile(string path)
+    {
+        using var connection = new DuckDBConnection("Data Source=:memory:");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT
+                count(*)::BIGINT,
+                sum(id)::BIGINT,
+                min(id)::INTEGER,
+                max(id)::INTEGER,
+                count(optional_id)::BIGINT,
+                sum(optional_id)::BIGINT
+            FROM read_parquet('{EscapeDuckDbPath(path)}')
+            WHERE id BETWEEN 20 AND 40
+            """;
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+            throw new InvalidOperationException("DuckDB returned no rows.");
+        AssertDuckDbInt64(reader, ordinal: 0, expected: 3);
+        AssertDuckDbInt64(reader, ordinal: 1, expected: 90);
+        AssertDuckDbInt32(reader, ordinal: 2, expected: 20);
+        AssertDuckDbInt32(reader, ordinal: 3, expected: 40);
+        AssertDuckDbInt64(reader, ordinal: 4, expected: 2);
+        AssertDuckDbInt64(reader, ordinal: 5, expected: 7);
+        if (reader.Read())
+            throw new InvalidOperationException("DuckDB returned more than one aggregate row.");
+    }
+
+    static void AssertFloatStatistics(ColumnStatistics statistics, int minBits, int maxBits, long nullCount = 0,
+        long? nanCount = null)
+    {
+        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Float)
+            throw new InvalidOperationException($"Expected float statistics, got {statistics.ValueKind}.");
+        if ((int)statistics.MinBits != minBits)
+            throw new InvalidOperationException(
+                $"Float min bits mismatch. Expected {minBits:X8}, got {(int)statistics.MinBits:X8}.");
+        if ((int)statistics.MaxBits != maxBits)
+            throw new InvalidOperationException(
+                $"Float max bits mismatch. Expected {maxBits:X8}, got {(int)statistics.MaxBits:X8}.");
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Float null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+        if (nanCount.HasValue && statistics.NanCount != nanCount.Value)
+            throw new InvalidOperationException(
+                $"Float NaN count mismatch. Expected {nanCount.Value}, got {statistics.NanCount}.");
+    }
+
+    static void AssertDoubleStatistics(ColumnStatistics statistics, long minBits, long maxBits, long nullCount = 0,
+        long? nanCount = null)
+    {
+        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Double)
+            throw new InvalidOperationException($"Expected double statistics, got {statistics.ValueKind}.");
+        if (statistics.MinBits != minBits)
+            throw new InvalidOperationException(
+                $"Double min bits mismatch. Expected {minBits:X16}, got {statistics.MinBits:X16}.");
+        if (statistics.MaxBits != maxBits)
+            throw new InvalidOperationException(
+                $"Double max bits mismatch. Expected {maxBits:X16}, got {statistics.MaxBits:X16}.");
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Double null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+        if (nanCount.HasValue && statistics.NanCount != nanCount.Value)
+            throw new InvalidOperationException(
+                $"Double NaN count mismatch. Expected {nanCount.Value}, got {statistics.NanCount}.");
+    }
+
+    static void AssertInt64Statistics(ColumnStatistics statistics, long? min, long? max, long nullCount)
+    {
+        var expectedKind = min.HasValue
+            ? ColumnStatistics.ColumnStatisticsValueKind.Int64
+            : ColumnStatistics.ColumnStatisticsValueKind.None;
+        if (statistics.ValueKind != expectedKind)
+            throw new InvalidOperationException(
+                $"Int64 statistics kind mismatch. Expected {expectedKind}, got {statistics.ValueKind}.");
+        if (statistics.MinBits != min.GetValueOrDefault())
+            throw new InvalidOperationException(
+                $"Int64 min mismatch. Expected {min.GetValueOrDefault()}, got {statistics.MinBits}.");
+        if (statistics.MaxBits != max.GetValueOrDefault())
+            throw new InvalidOperationException(
+                $"Int64 max mismatch. Expected {max.GetValueOrDefault()}, got {statistics.MaxBits}.");
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Int64 null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+    }
+
+    static void AssertDuckDbInt64(DuckDBDataReader reader, int ordinal, long expected)
+    {
+        var actual = reader.GetInt64(ordinal);
+        if (actual != expected)
+            throw new InvalidOperationException($"DuckDB column {ordinal} mismatch. Expected {expected}, got {actual}.");
+    }
+
+    static void AssertDuckDbInt32(DuckDBDataReader reader, int ordinal, int expected)
+    {
+        var actual = reader.GetInt32(ordinal);
+        if (actual != expected)
+            throw new InvalidOperationException($"DuckDB column {ordinal} mismatch. Expected {expected}, got {actual}.");
+    }
+
+    static void AssertDataPageInt32Statistics(PageList pages, int pageIndex, int min, int max, long nullCount)
+    {
+        var dataPageIndex = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (dataPageIndex == pageIndex)
+            {
+                var statistics = page.Statistics;
+                if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Int32)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} statistics kind mismatch. Expected Int32, got {statistics.ValueKind}.");
+                if (statistics.MinBits != min)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} min mismatch. Expected {min}, got {statistics.MinBits}.");
+                if (statistics.MaxBits != max)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} max mismatch. Expected {max}, got {statistics.MaxBits}.");
+                if (statistics.NullCount != nullCount)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+                return;
+            }
+
+            dataPageIndex++;
+        }
+
+        throw new InvalidOperationException($"Data page {pageIndex} was not written.");
+    }
+
+    static void AssertDataPageInt64Statistics(PageList pages, int pageIndex, long? min, long? max, long nullCount)
+    {
+        var dataPageIndex = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (dataPageIndex == pageIndex)
+            {
+                AssertInt64Statistics(page.Statistics, min, max, nullCount);
+                return;
+            }
+
+            dataPageIndex++;
+        }
+
+        throw new InvalidOperationException($"Data page {pageIndex} was not written.");
+    }
+
+    static void AssertDataPageFloatStatistics(PageList pages, int pageIndex, int? minBits, int? maxBits,
+        long nanCount)
+    {
+        var dataPageIndex = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (dataPageIndex == pageIndex)
+            {
+                var statistics = page.Statistics;
+                var expectedKind = minBits.HasValue
+                    ? ColumnStatistics.ColumnStatisticsValueKind.Float
+                    : ColumnStatistics.ColumnStatisticsValueKind.None;
+                if (statistics.ValueKind != expectedKind)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} statistics kind mismatch. Expected {expectedKind}, got {statistics.ValueKind}.");
+                if ((int)statistics.MinBits != minBits.GetValueOrDefault())
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} min bits mismatch. Expected {minBits.GetValueOrDefault():X8}, got {(int)statistics.MinBits:X8}.");
+                if ((int)statistics.MaxBits != maxBits.GetValueOrDefault())
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} max bits mismatch. Expected {maxBits.GetValueOrDefault():X8}, got {(int)statistics.MaxBits:X8}.");
+                if (statistics.NanCount != nanCount)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} NaN count mismatch. Expected {nanCount}, got {statistics.NanCount}.");
+                return;
+            }
+
+            dataPageIndex++;
+        }
+
+        throw new InvalidOperationException($"Data page {pageIndex} was not written.");
+    }
+
+    static void AssertDataPageDoubleStatistics(PageList pages, int pageIndex, long? minBits, long? maxBits,
+        long nanCount)
+    {
+        var dataPageIndex = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            if (page.Kind != PageKind.DataV2)
+                continue;
+            if (dataPageIndex == pageIndex)
+            {
+                var statistics = page.Statistics;
+                var expectedKind = minBits.HasValue
+                    ? ColumnStatistics.ColumnStatisticsValueKind.Double
+                    : ColumnStatistics.ColumnStatisticsValueKind.None;
+                if (statistics.ValueKind != expectedKind)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} statistics kind mismatch. Expected {expectedKind}, got {statistics.ValueKind}.");
+                if (statistics.MinBits != minBits.GetValueOrDefault())
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} min bits mismatch. Expected {minBits.GetValueOrDefault():X16}, got {statistics.MinBits:X16}.");
+                if (statistics.MaxBits != maxBits.GetValueOrDefault())
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} max bits mismatch. Expected {maxBits.GetValueOrDefault():X16}, got {statistics.MaxBits:X16}.");
+                if (statistics.NanCount != nanCount)
+                    throw new InvalidOperationException(
+                        $"Page {pageIndex} NaN count mismatch. Expected {nanCount}, got {statistics.NanCount}.");
+                return;
+            }
+
+            dataPageIndex++;
+        }
+
+        throw new InvalidOperationException($"Data page {pageIndex} was not written.");
+    }
+
+    static void AssertDictionaryPageLayout(PageList pages, int expectedDataPageCount)
+    {
+        var dictionaryPageCount = 0;
+        var dataPageCount = 0;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            ref var page = ref pages[i];
+            if (page.Kind == PageKind.Dictionary)
+                dictionaryPageCount++;
+            else if (page.Kind == PageKind.DataV2)
+                dataPageCount++;
+        }
+
+        if (dictionaryPageCount != 1 || dataPageCount != expectedDataPageCount)
+            throw new InvalidOperationException(
+                $"Expected one dictionary page and {expectedDataPageCount} data pages, got " +
+                $"{dictionaryPageCount} and {dataPageCount}.");
+    }
+
+    static void AssertPageInt32Statistics(ParquetDataPageMetadata page, int min, int max, long nullCount)
+    {
+        var statistics = page.Statistics;
+        if (!statistics.HasMinimum || BinaryPrimitives.ReadInt32LittleEndian(statistics.Minimum) != min)
+            throw new InvalidOperationException($"Page minimum mismatch. Expected {min}.");
+        if (!statistics.HasMaximum || BinaryPrimitives.ReadInt32LittleEndian(statistics.Maximum) != max)
+            throw new InvalidOperationException($"Page maximum mismatch. Expected {max}.");
+        if (statistics.NullCount != nullCount)
+            throw new InvalidOperationException(
+                $"Page null count mismatch. Expected {nullCount}, got {statistics.NullCount}.");
+    }
+
+    static string EscapeDuckDbPath(string path)
+        => path.Replace('\\', '/').Replace("'", "''", StringComparison.Ordinal);
+
+    static void AssertPageIndexMetadata(byte[] fileBytes, InternalColumnChunkMetadata column, int expectedPageCount)
+    {
+        if (column.ColumnIndexOffset <= 0)
+            throw new InvalidOperationException("Column index offset was not written.");
+        if (column.ColumnIndexLength <= 0)
+            throw new InvalidOperationException("Column index length was not written.");
+        if (column.OffsetIndexOffset <= 0)
+            throw new InvalidOperationException("Offset index offset was not written.");
+        if (column.OffsetIndexLength <= 0)
+            throw new InvalidOperationException("Offset index length was not written.");
+        if (column.ColumnIndexOffset < column.ChunkOffset)
+            throw new InvalidOperationException("Column index was written before the column chunk.");
+        if (column.OffsetIndexOffset <= column.ColumnIndexOffset)
+            throw new InvalidOperationException("Offset index was not written after the column index.");
+        var actualStatisticsCount = ReadColumnIndexPageCount(fileBytes, (long)column.ColumnIndexOffset, (int)column.ColumnIndexLength);
+        if (actualStatisticsCount != expectedPageCount)
+            throw new InvalidOperationException(
+                $"Column index page count mismatch. Expected {expectedPageCount}, got {actualStatisticsCount}.");
+        var actualPageCount = ReadOffsetIndexPageCount(fileBytes, (long)column.OffsetIndexOffset, (int)column.OffsetIndexLength);
+        if (actualPageCount != expectedPageCount)
+            throw new InvalidOperationException(
+                $"Offset index page count mismatch. Expected {expectedPageCount}, got {actualPageCount}.");
+    }
+
+    static InternalColumnChunkMetadata[] ReadFirstRowGroupColumns(string path)
+    {
+        using var stream = File.OpenRead(path);
+        using var reader = new ParquetReader();
+        reader.Reset(stream);
+        foreach (var rowGroup in reader.RowGroups)
+            return rowGroup.PreviousColumns;
+
+        throw new InvalidOperationException("Expected at least one row group.");
+    }
+
+    static int ReadColumnIndexPageCount(byte[] fileBytes, long offset, int length)
+    {
+        var reader = new CompactProtocolReader(fileBytes.AsSpan(checked((int)offset), length));
+        reader.BeginStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
+        {
+            if (fieldId != 1)
+            {
+                reader.Skip(type, inlineBool);
+                continue;
+            }
+
+            var (count, elementType) = reader.ReadListHeader();
+            if (elementType is not (CompactProtocolType.BooleanTrue or CompactProtocolType.BooleanFalse))
+                throw new InvalidOperationException("Column index null_pages was not a bool list.");
+            for (var i = 0U; i < count; i++)
+                _ = reader.ReadBool(inlineBool: null);
+            return checked((int)count);
+        }
+
+        throw new InvalidOperationException("Column index did not include null page flags.");
+    }
+
+    static int ReadOffsetIndexPageCount(byte[] fileBytes, long offset, int length)
+    {
+        var reader = new CompactProtocolReader(fileBytes.AsSpan(checked((int)offset), length));
+        reader.BeginStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
+        {
+            if (fieldId != 1)
+            {
+                reader.Skip(type, inlineBool);
+                continue;
+            }
+
+            var (count, elementType) = reader.ReadListHeader();
+            if (elementType != CompactProtocolType.Struct)
+                throw new InvalidOperationException("Offset index page_locations was not a struct list.");
+            return checked((int)count);
+        }
+
+        throw new InvalidOperationException("Offset index did not include page locations.");
+    }
+
+    sealed class FixedRowsPageStrategy : IPageStrategy
+    {
+        readonly DictionaryMode _dictionaryMode;
+        readonly int _rowsPerPage;
+
+        internal FixedRowsPageStrategy(int rowsPerPage, DictionaryMode dictionaryMode = DictionaryMode.Disabled)
+        {
+            _rowsPerPage = rowsPerPage;
+            _dictionaryMode = dictionaryMode;
+        }
+
+        public DictionaryMode GetDictionaryMode()
+            => _dictionaryMode;
+
+        public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
+            => false;
+
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => Math.Min((uint)_rowsPerPage, totalRowCount - rowsWritten);
+    }
+}

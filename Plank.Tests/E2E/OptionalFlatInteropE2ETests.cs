@@ -1,0 +1,157 @@
+using Parquet;
+using Parquet.Schema;
+using ParquetSharp;
+using Plank.Schema;
+using Plank.Writing;
+using PlankLogicalType = Plank.Schema.LogicalType;
+using PlankDataPageVersion = Plank.Writing.ParquetDataPageVersion;
+using PlankParquetSchema = Plank.Schema.ParquetSchema;
+
+namespace Plank.Tests.E2E;
+
+internal sealed class OptionalFlatInteropE2ETests
+{
+    [Test]
+    public async Task OptionalFlatColumnsWithNoNullsAreReadableByInteropReaders()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-optional-flat-no-nulls-{Guid.NewGuid():N}.parquet");
+        int?[] expectedIds = [10, 20, 30, 40];
+        string[] expectedNames = ["alpha", "beta", "gamma", "delta"];
+
+        try
+        {
+            WriteOptionalFlatFile(path, expectedIds, expectedNames, new ParquetWriterOptions());
+            AssertParquetSharp(path, expectedIds, expectedNames);
+            await AssertParquetNetAsync(path, expectedIds, expectedNames).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    [Arguments(PlankDataPageVersion.V1, CompressionKind.None)]
+    [Arguments(PlankDataPageVersion.V1, CompressionKind.Gzip)]
+    [Arguments(PlankDataPageVersion.V2, CompressionKind.Gzip)]
+    public async Task OptionalFlatNullsRoundTripWithSelectedDataPageVersion(
+        PlankDataPageVersion dataPageVersion, CompressionKind compression)
+    {
+        var path = Path.Combine(Path.GetTempPath(),
+            $"plank-optional-flat-{dataPageVersion}-{compression}-{Guid.NewGuid():N}.parquet");
+        int?[] expectedIds = [10, null, 30, null, 50];
+        string[] expectedNames = ["alpha", "beta", "gamma", "delta", "epsilon"];
+        var schema = CreateSchema();
+
+        try
+        {
+            WriteOptionalFlatFile(path, expectedIds, expectedNames, new ParquetWriterOptions
+            {
+                Compression = compression,
+                DataPageVersion = dataPageVersion
+            });
+            AssertPlank(path, schema, expectedIds);
+            AssertParquetSharp(path, expectedIds, expectedNames);
+            await AssertParquetNetAsync(path, expectedIds, expectedNames).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    static void WriteOptionalFlatFile(string path, int?[] ids, string[] names, ParquetWriterOptions options)
+    {
+        var schema = CreateSchema();
+
+        using var stream = File.Create(path);
+        var writer = schema.CreateWriter(stream, options);
+        var idColumn = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
+        var nameColumn = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[1]);
+        var rowGroup = writer.StartRowGroup();
+        idColumn.Serialize(ids);
+        nameColumn.Serialize(names.Select(static value => System.Text.Encoding.UTF8.GetBytes(value)).ToArray());
+        rowGroup.Write(idColumn);
+        rowGroup.Write(nameColumn);
+        writer.CloseFile();
+    }
+
+    static PlankParquetSchema CreateSchema()
+        => new([
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32, new ColumnOptions(ParquetRepetition.Optional)),
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray, new ColumnOptions(ParquetRepetition.Optional),
+                new PlankLogicalType.String())
+        ]);
+
+    static void AssertPlank(string path, PlankParquetSchema schema, IReadOnlyList<int?> expectedIds)
+    {
+        using var stream = File.OpenRead(path);
+        using var reader = schema.CreateReader(stream);
+        var actualIds = new List<int?>();
+        foreach (var buffer in reader.RowGroups[0].Column<int?>(schema.LeafColumns[0]))
+            actualIds.AddRange(buffer.Values);
+
+        AssertNullableValues(actualIds, expectedIds, "Plank id");
+    }
+
+    static void AssertParquetSharp(string path, IReadOnlyList<int?> expectedIds, IReadOnlyList<string> expectedNames)
+    {
+        using var reader = new ParquetFileReader(path);
+        using var rowGroup = reader.RowGroup(0);
+        var rowCount = checked((int)rowGroup.MetaData.NumRows);
+        var actualIds = rowGroup.Column(0).LogicalReader<int?>().ReadAll(rowCount);
+        var actualNames = rowGroup.Column(1).LogicalReader<string>().ReadAll(rowCount);
+
+        AssertNullableValues(actualIds, expectedIds, "ParquetSharp id");
+        AssertValues(actualNames, expectedNames, "ParquetSharp name");
+    }
+
+    static async Task AssertParquetNetAsync(string path, IReadOnlyList<int?> expectedIds, IReadOnlyList<string> expectedNames)
+    {
+        using var stream = File.OpenRead(path);
+        await using var reader = await ParquetReader.CreateAsync(stream).ConfigureAwait(false);
+        var fields = reader.Schema.GetDataFields();
+        using var rowGroup = reader.OpenRowGroupReader(0);
+        var rowCount = checked((int)rowGroup.RowCount);
+        var actualIds = new int?[rowCount];
+        var actualNames = new string?[rowCount];
+
+        await rowGroup.ReadAsync<int>(GetField(fields, "id"), actualIds, null, default).ConfigureAwait(false);
+        await rowGroup.ReadAsync(GetField(fields, "name"), actualNames, null, default).ConfigureAwait(false);
+
+        AssertNullableValues(actualIds, expectedIds, "Parquet.Net id");
+        AssertValues(actualNames, expectedNames, "Parquet.Net name");
+    }
+
+    static DataField GetField(DataField[] fields, string name)
+    {
+        for (var i = 0; i < fields.Length; i++)
+            if (fields[i].Name == name)
+                return fields[i];
+
+        throw new InvalidOperationException($"Could not find field '{name}'.");
+    }
+
+    static void AssertNullableValues<T>(IReadOnlyList<T?> actual, IReadOnlyList<T?> expected, string label)
+        where T : struct
+    {
+        if (actual.Count != expected.Count)
+            throw new InvalidOperationException($"{label} length mismatch. Expected {expected.Count}, got {actual.Count}.");
+
+        for (var i = 0; i < expected.Count; i++)
+            if (!EqualityComparer<T?>.Default.Equals(actual[i], expected[i]))
+                throw new InvalidOperationException($"{label} mismatch at index {i}. Expected '{expected[i]}', got '{actual[i]}'.");
+    }
+
+    static void AssertValues<T>(IReadOnlyList<T> actual, IReadOnlyList<T> expected, string label)
+    {
+        if (actual.Count != expected.Count)
+            throw new InvalidOperationException($"{label} length mismatch. Expected {expected.Count}, got {actual.Count}.");
+
+        for (var i = 0; i < expected.Count; i++)
+            if (!EqualityComparer<T>.Default.Equals(actual[i], expected[i]))
+                throw new InvalidOperationException($"{label} mismatch at index {i}. Expected '{expected[i]}', got '{actual[i]}'.");
+    }
+}

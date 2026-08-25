@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <PackageId>Plank.Native.Zlib</PackageId>
+    <Version>1.3.1.1</Version>
+    <Authors>Plank contributors</Authors>
+    <Description>Native zlib runtime assets for Plank.</Description>
+    <PackageTags>zlib;native;runtime;compression</PackageTags>
+    <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryType>git</RepositoryType>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="LICENSE.txt" Pack="true" PackagePath="" />
+    <None Include="THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="" />
+    <None Include="README.md" Pack="true" PackagePath="" />
+    <None Include="runtimes\**\*"
+          Pack="true"
+          PackagePath="runtimes\%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="empty\_._"
+          Pack="true"
+          PackagePath="lib\netstandard2.0\_._" />
+  </ItemGroup>
+
+</Project>

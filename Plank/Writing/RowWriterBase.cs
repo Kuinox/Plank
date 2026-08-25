@@ -1,0 +1,394 @@
+using System.Runtime.ExceptionServices;
+using Plank.Schema;
+
+namespace Plank.Writing;
+
+/// <summary>Provides the parallel serialization pipeline used by generated row writers.</summary>
+/// <typeparam name="TSlot">The generated row-buffer slot type.</typeparam>
+/// <remarks>
+/// This unstable API supports Plank-generated code and is not intended for direct use by applications.
+/// </remarks>
+public abstract class RowWriterBase<TSlot>
+    where TSlot : class
+{
+    readonly ParquetWriter _writer;
+    readonly IParquetWriteSource? _rollingFile;
+    readonly ParquetFilePath? _filePath;
+    readonly IParquetBufferPool _bufferPool;
+    readonly ulong _targetFileSizeBytes;
+    readonly Queue<QueuedSlot> _readySlots;
+    readonly Queue<TSlot> _freeSlots;
+    readonly Thread[] _workers;
+    readonly ParquetExecutionOptions _execution;
+    readonly object _gate;
+    readonly object _writeGate;
+    bool _initialSlotTaken;
+    bool _slotsInitialized;
+    ulong _nextQueuedSequence;
+    ulong _nextWriteSequence;
+    bool _addingCompleted;
+    bool _completed;
+    ulong _fileIndex;
+    bool _rolloverPending;
+    ExceptionDispatchInfo? _fault;
+
+    /// <summary>Initializes the pipeline used by a generated row writer.</summary>
+    /// <param name="stream">The destination stream.</param>
+    /// <param name="schema">The generated Parquet schema.</param>
+    /// <param name="maxParallelism">The maximum number of serialization workers.</param>
+    /// <param name="options">The Parquet writer options.</param>
+    protected RowWriterBase(Stream stream, ParquetSchema schema, uint maxParallelism, ParquetWriterOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(schema);
+        ArgumentNullException.ThrowIfNull(options);
+        if (maxParallelism == 0)
+            throw new ArgumentOutOfRangeException(nameof(maxParallelism), maxParallelism,
+                "Max parallelism must be greater than zero.");
+        if (maxParallelism > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(maxParallelism), maxParallelism,
+                $"Max parallelism must be <= {int.MaxValue}.");
+
+        _writer = schema.CreateWriter(stream, options);
+        _rollingFile = null;
+        _filePath = null;
+        _bufferPool = options.BufferPool;
+        _targetFileSizeBytes = options.TargetFileSizeBytes;
+        var workerCount = checked((int)maxParallelism);
+        _execution = options.Execution;
+        _readySlots = new Queue<QueuedSlot>(workerCount);
+        _freeSlots = new Queue<TSlot>(workerCount);
+        _workers = new Thread[workerCount];
+        _gate = new object();
+        _writeGate = new object();
+        _initialSlotTaken = false;
+        _slotsInitialized = false;
+        _nextQueuedSequence = 0;
+        _nextWriteSequence = 0;
+        _addingCompleted = false;
+        _completed = false;
+        _fileIndex = 0;
+        _rolloverPending = false;
+        _fault = null;
+    }
+
+    /// <summary>Initializes a rolling pipeline used by a generated row writer.</summary>
+    /// <param name="file">The reusable destination used for each produced file.</param>
+    /// <param name="filePath">Selects the path of each produced file.</param>
+    /// <param name="schema">The generated Parquet schema.</param>
+    /// <param name="maxParallelism">The maximum number of serialization workers.</param>
+    /// <param name="options">The Parquet writer options.</param>
+    protected RowWriterBase(IParquetWriteSource file, ParquetFilePath filePath, ParquetSchema schema,
+        uint maxParallelism, ParquetWriterOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        ArgumentNullException.ThrowIfNull(filePath);
+        ArgumentNullException.ThrowIfNull(schema);
+        ArgumentNullException.ThrowIfNull(options);
+        if (maxParallelism == 0)
+            throw new ArgumentOutOfRangeException(nameof(maxParallelism), maxParallelism,
+                "Max parallelism must be greater than zero.");
+        if (maxParallelism > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(maxParallelism), maxParallelism,
+                $"Max parallelism must be <= {int.MaxValue}.");
+
+        options.Validate();
+        OpenRollingFile(file, filePath, 0, options.BufferPool);
+        try
+        {
+            _writer = schema.CreateWriter(file, options);
+        }
+        catch
+        {
+            file.Close();
+            throw;
+        }
+
+        _rollingFile = file;
+        _filePath = filePath;
+        _bufferPool = options.BufferPool;
+        _targetFileSizeBytes = options.TargetFileSizeBytes;
+        var workerCount = checked((int)maxParallelism);
+        _execution = options.Execution;
+        _readySlots = new Queue<QueuedSlot>(workerCount);
+        _freeSlots = new Queue<TSlot>(workerCount);
+        _workers = new Thread[workerCount];
+        _gate = new object();
+        _writeGate = new object();
+        _initialSlotTaken = false;
+        _slotsInitialized = false;
+        _nextQueuedSequence = 0;
+        _nextWriteSequence = 0;
+        _addingCompleted = false;
+        _completed = false;
+        _fileIndex = 0;
+        _rolloverPending = false;
+        _fault = null;
+    }
+
+    /// <summary>Creates a generated row-buffer slot.</summary>
+    /// <param name="writer">The destination Parquet writer.</param>
+    /// <returns>A new buffer slot.</returns>
+    protected abstract TSlot CreateSlot(ParquetWriter writer);
+    /// <summary>Serializes a generated row-buffer slot.</summary>
+    /// <param name="slot">The slot to serialize.</param>
+    protected abstract void SerializeSlot(TSlot slot);
+    /// <summary>Writes a serialized slot to a row group.</summary>
+    /// <param name="slot">The serialized slot.</param>
+    /// <param name="rowGroupWriter">The destination row-group writer.</param>
+    protected abstract void WriteSerializedSlot(TSlot slot, RowGroupWriter rowGroupWriter);
+    /// <summary>Resets a generated slot before it is reused.</summary>
+    /// <param name="slot">The slot to reset.</param>
+    protected abstract void ResetSlotForReuse(TSlot slot);
+    /// <summary>Gets the name prefix used for serialization worker threads.</summary>
+    protected virtual string WorkerThreadNamePrefix
+        => "PlankRowApiWorker";
+
+    /// <summary>Handles successful writing of a generated slot.</summary>
+    /// <param name="slot">The slot that was written.</param>
+    protected virtual void OnSlotWritten(TSlot slot)
+    {
+    }
+
+    /// <summary>Creates the generated slots and starts serialization workers.</summary>
+    protected void InitializeSlots()
+    {
+        lock (_gate)
+        {
+            if (_slotsInitialized)
+                throw new InvalidOperationException("Row writer slots are already initialized.");
+
+            for (var i = 0; i < _workers.Length; i++)
+                _freeSlots.Enqueue(CreateSlotChecked());
+
+            for (var i = 0; i < _workers.Length; i++)
+            {
+                var workerIndex = i;
+                _workers[i] = new Thread(WorkerLoop)
+                {
+                    IsBackground = true,
+                    Name = $"{WorkerThreadNamePrefix}-{i}"
+                };
+                _workers[i].Start(workerIndex);
+            }
+
+            _slotsInitialized = true;
+        }
+    }
+
+    /// <summary>Takes the first slot used by a generated writer.</summary>
+    /// <returns>The first writable slot.</returns>
+    protected TSlot TakeInitialSlot()
+    {
+        lock (_gate)
+        {
+            ThrowIfNotInitialized();
+            ThrowIfFaulted();
+            if (_completed)
+                throw new InvalidOperationException("Row writer is already completed.");
+            if (_initialSlotTaken)
+                throw new InvalidOperationException("Initial slot was already taken.");
+
+            _initialSlotTaken = true;
+            return TakeFreeSlotNoLock();
+        }
+    }
+
+    /// <summary>Queues a filled slot and obtains the next writable slot.</summary>
+    /// <param name="slot">The filled slot to queue.</param>
+    /// <returns>The next writable slot.</returns>
+    protected TSlot EnqueueAndTakeFree(TSlot slot)
+    {
+        ArgumentNullException.ThrowIfNull(slot);
+
+        lock (_gate)
+        {
+            ThrowIfNotInitialized();
+            ThrowIfFaulted();
+            if (_completed)
+                throw new InvalidOperationException("Row writer is already completed.");
+
+            EnqueueReadySlotNoLock(slot);
+            return TakeFreeSlotNoLock();
+        }
+    }
+
+    /// <summary>Completes the serialization pipeline and closes the Parquet file.</summary>
+    /// <param name="activeSlot">The generated writer's active slot.</param>
+    /// <param name="hasRows">Whether the active slot contains rows to write.</param>
+    protected void Complete(TSlot activeSlot, bool hasRows)
+    {
+        ArgumentNullException.ThrowIfNull(activeSlot);
+
+        lock (_gate)
+        {
+            ThrowIfNotInitialized();
+            if (!_completed)
+            {
+                if (hasRows && _fault is null)
+                    EnqueueReadySlotNoLock(activeSlot);
+
+                _completed = true;
+                _addingCompleted = true;
+                Monitor.PulseAll(_gate);
+            }
+        }
+
+        for (var i = 0; i < _workers.Length; i++)
+            _workers[i].Join();
+
+        ThrowIfFaulted();
+        _writer.CloseFile();
+    }
+
+    /// <summary>Rethrows a failure reported by a serialization worker.</summary>
+    protected void ThrowIfFaulted()
+    {
+        var fault = _fault;
+        if (fault is not null)
+            fault.Throw();
+    }
+
+    void ThrowIfNotInitialized()
+    {
+        if (!_slotsInitialized)
+            throw new InvalidOperationException("Row writer slots are not initialized. Call InitializeSlots() first.");
+    }
+
+    TSlot CreateSlotChecked()
+    {
+        var slot = CreateSlot(_writer);
+        ArgumentNullException.ThrowIfNull(slot);
+        return slot;
+    }
+
+    void EnqueueReadySlotNoLock(TSlot slot)
+    {
+        _readySlots.Enqueue(new QueuedSlot(slot, _nextQueuedSequence++));
+        Monitor.PulseAll(_gate);
+    }
+
+    TSlot TakeFreeSlotNoLock()
+    {
+        while (_freeSlots.Count == 0)
+        {
+            ThrowIfFaulted();
+            Monitor.Wait(_gate);
+        }
+
+        return _freeSlots.Dequeue();
+    }
+
+    void WorkerLoop(object? state)
+    {
+        var workerIndex = (int)state!;
+        var workerName = Thread.CurrentThread.Name ?? $"{WorkerThreadNamePrefix}-{workerIndex}";
+        try
+        {
+            _execution.OnWorkerStarted?.Invoke(new ParquetWorkerContext(workerIndex, _workers.Length, workerName));
+        }
+        catch (Exception ex)
+        {
+            RecordFault(ex);
+        }
+
+        while (true)
+        {
+            QueuedSlot queuedSlot;
+            lock (_gate)
+            {
+                while (_readySlots.Count == 0 && !_addingCompleted && _fault is null)
+                    Monitor.Wait(_gate);
+
+                if (_readySlots.Count == 0)
+                    return;
+
+                queuedSlot = _readySlots.Dequeue();
+            }
+
+            try
+            {
+                SerializeSlot(queuedSlot.Slot);
+                lock (_writeGate)
+                {
+                    while (queuedSlot.Sequence != _nextWriteSequence && _fault is null)
+                        Monitor.Wait(_writeGate);
+
+                    ThrowIfFaulted();
+                    if (_rolloverPending)
+                        Rollover();
+                    var rowGroupWriter = _writer.StartRowGroup();
+                    WriteSerializedSlot(queuedSlot.Slot, rowGroupWriter);
+                    OnSlotWritten(queuedSlot.Slot);
+                    if (_rollingFile is not null && checked((ulong)_writer.FileOffset) >= _targetFileSizeBytes)
+                        _rolloverPending = true;
+                    _nextWriteSequence++;
+                    Monitor.PulseAll(_writeGate);
+                }
+            }
+            catch (Exception ex)
+            {
+                RecordFault(ex);
+            }
+            finally
+            {
+                ResetSlotForReuse(queuedSlot.Slot);
+                lock (_gate)
+                {
+                    _freeSlots.Enqueue(queuedSlot.Slot);
+                    Monitor.PulseAll(_gate);
+                }
+            }
+        }
+    }
+
+    void RecordFault(Exception exception)
+    {
+        var captured = ExceptionDispatchInfo.Capture(exception);
+        if (Interlocked.CompareExchange(ref _fault, captured, null) is not null)
+            return;
+
+        lock (_gate)
+        {
+            _addingCompleted = true;
+            Monitor.PulseAll(_gate);
+        }
+
+        lock (_writeGate)
+            Monitor.PulseAll(_writeGate);
+    }
+
+    void Rollover()
+    {
+        var file = _rollingFile ?? throw new InvalidOperationException("The row writer does not have a rolling file.");
+        var filePath = _filePath ?? throw new InvalidOperationException("The row writer does not have a file path selector.");
+        _writer.FinishFile();
+        _fileIndex = checked(_fileIndex + 1);
+        OpenRollingFile(file, filePath, _fileIndex, _bufferPool);
+        _writer.Reset(file);
+        _rolloverPending = false;
+    }
+
+    static void OpenRollingFile(IParquetWriteSource file, ParquetFilePath filePath, ulong fileIndex,
+        IParquetBufferPool bufferPool)
+    {
+        var path = filePath(fileIndex, bufferPool, out var allocation);
+        try
+        {
+            if (path.IsEmpty)
+                throw new InvalidOperationException("The row writer file path selector returned an empty path.");
+            file.Open(path, FileMode.Create);
+        }
+        finally
+        {
+            if (allocation is { } owner)
+                owner.Dispose();
+        }
+    }
+
+    readonly struct QueuedSlot(TSlot slot, ulong sequence)
+    {
+        internal TSlot Slot { get; } = slot;
+        internal ulong Sequence { get; } = sequence;
+    }
+}

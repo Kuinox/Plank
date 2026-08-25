@@ -1,0 +1,12 @@
+#nullable enable
+*REMOVED*Plank.Schema.EncodingKind.ByteStreamSplit = 8 -> Plank.Schema.EncodingKind
+*REMOVED*Plank.Schema.EncodingKind.PlainDictionary = 1 -> Plank.Schema.EncodingKind
+*REMOVED*Plank.Schema.EncodingKind.RleDictionary = 2 -> Plank.Schema.EncodingKind
+Plank.Reading.MemoryReadSource.Dispose() -> void
+Plank.Reading.StreamReadSource.Dispose() -> void
+Plank.Schema.EncodingKind.Alp = 10 -> Plank.Schema.EncodingKind
+Plank.Schema.EncodingKind.ByteStreamSplit = 9 -> Plank.Schema.EncodingKind
+Plank.Schema.EncodingKind.PlainDictionary = 2 -> Plank.Schema.EncodingKind
+Plank.Schema.EncodingKind.RleDictionary = 8 -> Plank.Schema.EncodingKind
+Plank.Writing.PageStrategy.IPageStrategy.GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten) -> uint
+Plank.Writing.ParquetWriter.Dispose() -> void

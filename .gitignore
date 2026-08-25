@@ -1,0 +1,17 @@
+bin/
+obj/
+/packages/
+riderModule.iml
+/_ReSharper.Caches/
+/.vs
+/.idea/
+*.DotSettings.user
+.dotnet
+/.tools/
+/artifacts/
+/benchmarks/
+/docs/_site/
+/docs/api/.manifest
+/docs/api/*.yml
+__pycache__
+core.*

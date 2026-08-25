@@ -1,0 +1,1 @@
+T:System.Buffers.ArrayPool`1;Use IParquetBufferPool instead of direct ArrayPool<T>.

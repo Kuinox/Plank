@@ -1,0 +1,619 @@
+using System.Runtime.CompilerServices;
+using ParquetSharp;
+using Plank.Schema;
+using Plank.Writing;
+using Plank.Writing.PageStrategy;
+using ParquetDataPageVersion = Plank.Writing.ParquetDataPageVersion;
+
+namespace Plank.Tests.Writer;
+
+internal sealed class NullableNumericEncodingTests
+{
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void RequiredAndNullableValuesRoundTripAcrossNumericEncodings(ParquetDataPageVersion dataPageVersion)
+    {
+        AssertRoundTrip(CreateBooleanValues(), ParquetPhysicalType.Boolean,
+            [EncodingKind.Plain, EncodingKind.Rle], dataPageVersion);
+        AssertRoundTrip(CreateInt32Values(), ParquetPhysicalType.Int32,
+            [EncodingKind.Plain, EncodingKind.RleDictionary, EncodingKind.DeltaBinaryPacked,
+                EncodingKind.ByteStreamSplit], dataPageVersion);
+        AssertRoundTrip(CreateInt64Values(), ParquetPhysicalType.Int64,
+            [EncodingKind.Plain, EncodingKind.RleDictionary, EncodingKind.DeltaBinaryPacked,
+                EncodingKind.ByteStreamSplit], dataPageVersion);
+        AssertRoundTrip(CreateFloatValues(), ParquetPhysicalType.Float,
+            [EncodingKind.Plain, EncodingKind.RleDictionary, EncodingKind.ByteStreamSplit], dataPageVersion);
+        AssertRoundTrip(CreateDoubleValues(), ParquetPhysicalType.Double,
+            [EncodingKind.Plain, EncodingKind.RleDictionary, EncodingKind.ByteStreamSplit], dataPageVersion);
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void ForcedNullablePrimitiveDictionaryUsesOneDataPageAndPreservesStatistics(
+        ParquetDataPageVersion dataPageVersion)
+    {
+        AssertForcedNullableDictionary(CreateInt32Values(), ParquetPhysicalType.Int32, dataPageVersion);
+        AssertForcedNullableDictionary(CreateInt64Values(), ParquetPhysicalType.Int64, dataPageVersion);
+
+        var doubles = CreateDoubleValues();
+        doubles[42] = doubles[2];
+        doubles[43] = doubles[2];
+        doubles[100] = doubles[3];
+        AssertForcedNullableDictionary(doubles, ParquetPhysicalType.Double, dataPageVersion);
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void FusedNullableInt32DictionaryMatchesGenericOutput(ParquetDataPageVersion dataPageVersion)
+    {
+        int?[][] valuePatterns =
+        [
+            [7, 3, 7, 0, 511, 42, 3, 255, -9, 511, 7],
+            [null, 7, 7, null, 265, 7, 42, null, -9, -9, 0, null, 7],
+            [null, 7, 7, int.MinValue, null, 42, 7, int.MaxValue, 42, null, -9, 511, 0, null, 7],
+            Enumerable.Range(0, 700).Select(static value => (int?)value).ToArray()
+        ];
+
+        foreach (var values in valuePatterns)
+        {
+            var fused = WriteNullableInt32Dictionary(values, ForceDictionaryPageStrategy.Shared, dataPageVersion);
+            var generic = WriteNullableInt32Dictionary(values,
+                new FixedRowsPageStrategy(checked((uint)values.Length), DictionaryMode.Forced), dataPageVersion);
+
+            if (!fused.AsSpan().SequenceEqual(generic))
+                throw new InvalidOperationException(
+                    $"Fused optional int32 {dataPageVersion} dictionary encoding changed the Parquet bytes.");
+        }
+    }
+
+    static byte[] WriteNullableInt32Dictionary(int?[] values, IPageStrategy pageStrategy,
+        ParquetDataPageVersion dataPageVersion)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("optional", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.RleDictionary]), pageStrategy: pageStrategy)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            WritePageIndexes = false
+        });
+        var serialized = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return stream.ToArray();
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void FusedNullableInt64DictionaryMatchesGenericOutput(ParquetDataPageVersion dataPageVersion)
+    {
+        long?[][] valuePatterns =
+        [
+            [7, 3, 7, -128, 127, 42, 3, 0, -9, 127, 7],
+            [null, 7, 7, null, 42, 7, 42, null, -9, -9, 0, null, 7],
+            [null, 7, 7, long.MinValue, null, 42, 7, long.MaxValue, 42, null, -9, -9, 0, null, 7],
+            Enumerable.Range(0, 300).Select(static value => (long?)value).ToArray()
+        ];
+
+        foreach (var values in valuePatterns)
+        {
+            var fused = WriteNullableInt64Dictionary(values, ForceDictionaryPageStrategy.Shared, dataPageVersion);
+            var generic = WriteNullableInt64Dictionary(values,
+                new FixedRowsPageStrategy(checked((uint)values.Length), DictionaryMode.Forced), dataPageVersion);
+
+            if (!fused.AsSpan().SequenceEqual(generic))
+                throw new InvalidOperationException(
+                    $"Fused optional int64 {dataPageVersion} dictionary encoding changed the Parquet bytes.");
+        }
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void FusedNullableInt64DeltaMatchesGenericOutput(ParquetDataPageVersion dataPageVersion)
+    {
+        long?[][] valuePatterns =
+        [
+            [7, 3, 7, -128, 127, 42, 3, 0, -9, 127, 7],
+            [null, 7, 7, null, 42, 7, 42, null, -9, -9, 0, null, 7],
+            [null, long.MinValue, null, 42, long.MaxValue, 42, null, -9, 0, null, 7],
+            Enumerable.Range(0, 700).Select(static value => (long?)(value * 17L - 3000)).ToArray()
+        ];
+
+        foreach (var values in valuePatterns)
+        {
+            foreach (var writePageIndexes in new[] { false, true })
+            {
+                var fused = WriteNullableInt64Delta(values, null, dataPageVersion, writePageIndexes);
+                var generic = WriteNullableInt64Delta(values,
+                    new FixedRowsPageStrategy(checked((uint)values.Length), DictionaryMode.Disabled), dataPageVersion,
+                    writePageIndexes);
+
+                if (!fused.AsSpan().SequenceEqual(generic))
+                    throw new InvalidOperationException(
+                        $"Fused optional int64 {dataPageVersion} DELTA_BINARY_PACKED encoding changed the Parquet bytes.");
+            }
+        }
+    }
+
+    static byte[] WriteNullableInt64Delta(long?[] values, IPageStrategy? pageStrategy,
+        ParquetDataPageVersion dataPageVersion, bool writePageIndexes)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("optional", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.DeltaBinaryPacked]), pageStrategy: pageStrategy)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            WritePageIndexes = writePageIndexes
+        });
+        var serialized = writer.CreateSerializedColumn<long?>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return stream.ToArray();
+    }
+
+    static byte[] WriteNullableInt64Dictionary(long?[] values, IPageStrategy pageStrategy,
+        ParquetDataPageVersion dataPageVersion)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("optional", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.RleDictionary]), pageStrategy: pageStrategy)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            WritePageIndexes = false
+        });
+        var serialized = writer.CreateSerializedColumn<long?>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return stream.ToArray();
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void FusedNullableInt64PlainMatchesGenericOutput(ParquetDataPageVersion dataPageVersion)
+    {
+        long?[][] valuePatterns =
+        [
+            [null, long.MinValue, -9, 0, null, 17, long.MaxValue, null, 42, -1, 7, null, 99],
+            [long.MinValue, -100, -9, -1, 0, 1, 7, 17, 42, 99, 100, long.MaxValue],
+            new long?[20]
+        ];
+
+        uint[] targetPageBytes = [1, 18, 90];
+        foreach (var targetBytes in targetPageBytes)
+        foreach (var values in valuePatterns)
+        {
+            var fused = WriteNullableInt64Plain(values, null, dataPageVersion, targetBytes);
+            var generic = WriteNullableInt64Plain(values, new TargetBytesPageStrategy(targetBytes),
+                dataPageVersion, targetBytes);
+            if (!fused.AsSpan().SequenceEqual(generic))
+                throw new InvalidOperationException(
+                    $"Fused optional int64 {dataPageVersion} PLAIN encoding changed the Parquet bytes "
+                    + $"at a {targetBytes}-byte page target.");
+
+            using var readStream = new MemoryStream(fused, writable: false);
+            using var reader = new ParquetFileReader(readStream, leaveOpen: false);
+            using var rowGroup = reader.RowGroup(0);
+            using var column = rowGroup.Column(0).LogicalReader<long?>();
+            AssertColumn(column.ReadAll(values.Length), values, EncodingKind.Plain, "optional");
+        }
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void FusedNullableFixedWidthPlainMatchesGenericOutput(ParquetDataPageVersion dataPageVersion)
+    {
+        AssertFusedNullablePlainMatchesGeneric<int>(
+            [null, int.MinValue, -9, 0, null, 17, int.MaxValue, null, 42, -1, 7, null, 99],
+            ParquetPhysicalType.Int32, dataPageVersion);
+        AssertFusedNullablePlainMatchesGeneric<float>(
+            [null, float.NegativeInfinity, -0.0f, float.NaN, +0.0f, 17.5f, float.PositiveInfinity, null, -9.25f],
+            ParquetPhysicalType.Float, dataPageVersion);
+        AssertFusedNullablePlainMatchesGeneric<double>(
+            [null, double.NegativeInfinity, -0.0d, double.NaN, +0.0d, 17.5d, double.PositiveInfinity, null,
+                -9.25d], ParquetPhysicalType.Double, dataPageVersion);
+
+        var allPresentDoubles = new double?[40];
+        for (var i = 0; i < allPresentDoubles.Length; i++)
+            allPresentDoubles[i] = i switch
+            {
+                0 => -0.0d,
+                1 => +0.0d,
+                2 => double.NaN,
+                _ => (i - 20) / 7d
+            };
+        AssertFusedNullablePlainMatchesGeneric(allPresentDoubles, ParquetPhysicalType.Double, dataPageVersion,
+            targetPageBytes: 1024);
+
+        var allPresentInts = new int?[40];
+        for (var i = 0; i < allPresentInts.Length; i++)
+            allPresentInts[i] = i switch { 0 => int.MinValue, 1 => int.MaxValue, _ => i * 7919 };
+        AssertFusedNullablePlainMatchesGeneric(allPresentInts, ParquetPhysicalType.Int32, dataPageVersion,
+            targetPageBytes: 1024);
+    }
+
+    static void AssertFusedNullablePlainMatchesGeneric<TValue>(TValue?[] values,
+        ParquetPhysicalType physicalType, ParquetDataPageVersion dataPageVersion, uint targetPageBytes = 90)
+        where TValue : struct
+    {
+        var fused = WriteNullablePlain(values, physicalType, null, dataPageVersion, targetPageBytes);
+        var generic = WriteNullablePlain(values, physicalType, new TargetBytesPageStrategy(targetPageBytes),
+            dataPageVersion, targetPageBytes);
+        if (!fused.AsSpan().SequenceEqual(generic))
+            throw new InvalidOperationException(
+                $"Fused optional {physicalType} {dataPageVersion} PLAIN encoding changed the Parquet bytes "
+                + $"at a {targetPageBytes}-byte page target.");
+
+        using var readStream = new MemoryStream(fused, writable: false);
+        using var reader = new ParquetFileReader(readStream, leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var column = rowGroup.Column(0).LogicalReader<TValue?>();
+        AssertColumn(column.ReadAll(values.Length), values, EncodingKind.Plain, "optional");
+    }
+
+    static byte[] WriteNullablePlain<TValue>(TValue?[] values, ParquetPhysicalType physicalType,
+        IPageStrategy? pageStrategy, ParquetDataPageVersion dataPageVersion, uint targetPageBytes)
+        where TValue : struct
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("optional", physicalType,
+                new ColumnOptions(encodings: [EncodingKind.Plain]), pageStrategy: pageStrategy)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = targetPageBytes,
+            WritePageIndexes = true
+        });
+        var serialized = writer.CreateSerializedColumn<TValue?>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return stream.ToArray();
+    }
+
+    static byte[] WriteNullableInt64Plain(long?[] values, IPageStrategy? pageStrategy,
+        ParquetDataPageVersion dataPageVersion, uint targetPageBytes)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("optional", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.Plain]), pageStrategy: pageStrategy)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = targetPageBytes,
+            WritePageIndexes = true
+        });
+        var serialized = writer.CreateSerializedColumn<long?>(schema.LeafColumns[0]);
+        serialized.Serialize(values);
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        return stream.ToArray();
+    }
+
+
+    static void AssertForcedNullableDictionary<TValue>(TValue[] requiredValues,
+        ParquetPhysicalType physicalType, ParquetDataPageVersion dataPageVersion)
+        where TValue : struct
+    {
+        var values = CreateOptionalValues(requiredValues);
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("optional", physicalType,
+                new ColumnOptions(encodings: [EncodingKind.RleDictionary]),
+                pageStrategy: ForceDictionaryPageStrategy.Shared)
+        ]);
+        var expectedStatistics = ColumnStatistics.CreateOptional(schema.LeafColumns[0].Column, values);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions { DataPageVersion = dataPageVersion });
+        var serialized = writer.CreateSerializedColumn<TValue?>(schema.LeafColumns[0]);
+
+        serialized.Serialize(values);
+
+        AssertStatistics(serialized.Statistics, expectedStatistics, EncodingKind.RleDictionary, "optional");
+        var dictionaryPages = 0;
+        var dataPages = 0;
+        for (var pageIndex = 0; pageIndex < serialized.Pages.Count; pageIndex++)
+        {
+            ref var page = ref serialized.Pages[pageIndex];
+            if (page.Kind == PageKind.Dictionary)
+            {
+                dictionaryPages++;
+                continue;
+            }
+
+            dataPages++;
+            if (page.RowCount != (uint)values.Length)
+                throw new InvalidOperationException(
+                    $"Forced dictionary data page row count mismatch. Expected {values.Length}, got {page.RowCount}.");
+        }
+        if (dictionaryPages != 1 || dataPages != 1)
+            throw new InvalidOperationException(
+                $"Expected one dictionary and one data page, got {dictionaryPages} dictionary and {dataPages} data pages.");
+
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+        using var readStream = new MemoryStream(stream.ToArray(), writable: false);
+        using var reader = new ParquetFileReader(readStream, leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var column = rowGroup.Column(0).LogicalReader<TValue?>();
+        AssertColumn(column.ReadAll(values.Length), values, EncodingKind.RleDictionary, "optional");
+    }
+
+    static void AssertRoundTrip<TValue>(TValue[] requiredValues, ParquetPhysicalType physicalType,
+        ReadOnlySpan<EncodingKind> encodings, ParquetDataPageVersion dataPageVersion)
+        where TValue : struct
+    {
+        var optionalValues = CreateOptionalValues(requiredValues);
+        for (var encodingIndex = 0; encodingIndex < encodings.Length; encodingIndex++)
+        {
+            var encoding = encodings[encodingIndex];
+            var strategy = new FixedRowsPageStrategy(33,
+                encoding == EncodingKind.RleDictionary ? DictionaryMode.Forced : DictionaryMode.Disabled);
+            var schema = new ParquetSchema([
+                ColumnDefinition.RequiredLeaf("required", physicalType,
+                    new ColumnOptions(encodings: [encoding]), pageStrategy: strategy),
+                ColumnDefinition.OptionalLeaf("optional", physicalType,
+                    new ColumnOptions(encodings: [encoding]), pageStrategy: strategy)
+            ]);
+            var expectedRequiredStatistics = ColumnStatistics.Create(schema.LeafColumns[0].Column, requiredValues, 0);
+            var expectedOptionalStatistics = ColumnStatistics.CreateOptional(schema.LeafColumns[1].Column,
+                optionalValues);
+
+            using var stream = new MemoryStream();
+            var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+            {
+                DataPageVersion = dataPageVersion,
+                WritePageIndexes = true
+            });
+            var required = writer.CreateSerializedColumn<TValue>(schema.LeafColumns[0]);
+            var optional = writer.CreateSerializedColumn<TValue?>(schema.LeafColumns[1]);
+            required.Serialize(requiredValues);
+            optional.Serialize(optionalValues);
+            AssertStatistics(required.Statistics, expectedRequiredStatistics, encoding, "required");
+            AssertStatistics(optional.Statistics, expectedOptionalStatistics, encoding, "optional");
+
+            var rowGroup = writer.StartRowGroup();
+            rowGroup.Write(required);
+            rowGroup.Write(optional);
+            writer.CloseFile();
+
+            using var readStream = new MemoryStream(stream.ToArray(), writable: false);
+            using var reader = new ParquetFileReader(readStream, leaveOpen: false);
+            using var parquetRowGroup = reader.RowGroup(0);
+            using var requiredReader = parquetRowGroup.Column(0).LogicalReader<TValue>();
+            using var optionalReader = parquetRowGroup.Column(1).LogicalReader<TValue?>();
+            AssertColumn(requiredReader.ReadAll(requiredValues.Length), requiredValues, encoding, "required");
+            AssertColumn(optionalReader.ReadAll(optionalValues.Length), optionalValues, encoding, "optional");
+        }
+
+        AssertAllNullPlainRoundTrip<TValue>(physicalType, dataPageVersion, requiredValues.Length);
+    }
+
+    static void AssertAllNullPlainRoundTrip<TValue>(ParquetPhysicalType physicalType,
+        ParquetDataPageVersion dataPageVersion, int count)
+        where TValue : struct
+    {
+        var strategy = new FixedRowsPageStrategy(33, DictionaryMode.Disabled);
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("all_null", physicalType,
+                new ColumnOptions(encodings: [EncodingKind.Plain]), pageStrategy: strategy)
+        ]);
+        var expected = new TValue?[count];
+        var expectedStatistics = ColumnStatistics.CreateOptional(schema.LeafColumns[0].Column, expected);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            DataPageVersion = dataPageVersion,
+            WritePageIndexes = true
+        });
+        var serialized = writer.CreateSerializedColumn<TValue?>(schema.LeafColumns[0]);
+        serialized.Serialize(expected);
+        AssertStatistics(serialized.Statistics, expectedStatistics, EncodingKind.Plain, "all-null");
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+
+        using var readStream = new MemoryStream(stream.ToArray(), writable: false);
+        using var reader = new ParquetFileReader(readStream, leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var column = rowGroup.Column(0).LogicalReader<TValue?>();
+        AssertColumn(column.ReadAll(expected.Length), expected, EncodingKind.Plain, "all-null");
+    }
+
+    static TValue?[] CreateOptionalValues<TValue>(ReadOnlySpan<TValue> values)
+        where TValue : struct
+    {
+        var optional = new TValue?[values.Length];
+        for (var i = 0; i < values.Length; i++)
+            if (i != 0 && i != values.Length - 1 && i % 17 != 0 && i % 33 != 0)
+                optional[i] = values[i];
+        return optional;
+    }
+
+    static bool[] CreateBooleanValues()
+    {
+        var values = new bool[259];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = ((i / 7) & 1) == 0;
+        return values;
+    }
+
+    static int[] CreateInt32Values()
+    {
+        var values = new int[259];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = i switch
+            {
+                1 => -1_000_000_000,
+                2 => 1_000_000_000,
+                _ => unchecked((i * 7919) ^ (i << 23)) % 1_000_000_000
+            };
+        return values;
+    }
+
+    static long[] CreateInt64Values()
+    {
+        var values = new long[259];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = i switch
+            {
+                1 => -4_000_000_000_000_000,
+                2 => 4_000_000_000_000_000,
+                _ => unchecked((long)((ulong)i * 0x9E3779B97F4A7C15UL)) % 4_000_000_000_000_000
+            };
+        return values;
+    }
+
+    static float[] CreateFloatValues()
+    {
+        var values = new float[259];
+        for (var i = 0; i < values.Length; i++)
+        {
+            var bits = i switch
+            {
+                1 => unchecked((int)0x80000000U),
+                2 => 0x7FC00001,
+                3 => 0x7FC00002,
+                4 => 0,
+                5 => 0x7F800000,
+                6 => unchecked((int)0xFF800000U),
+                _ => unchecked((int)(0x3F800000U ^ ((uint)i * 0x00010001U)))
+            };
+            values[i] = BitConverter.Int32BitsToSingle(bits);
+        }
+        return values;
+    }
+
+    static double[] CreateDoubleValues()
+    {
+        var values = new double[259];
+        for (var i = 0; i < values.Length; i++)
+        {
+            var bits = i switch
+            {
+                1 => unchecked((long)0x8000000000000000UL),
+                2 => 0x7FF8000000000001L,
+                3 => 0x7FF8000000000002L,
+                4 => 0,
+                5 => 0x7FF0000000000000L,
+                6 => unchecked((long)0xFFF0000000000000UL),
+                _ => unchecked((long)(0x3FF0000000000000UL ^ ((ulong)i * 0x0000000100010001UL)))
+            };
+            values[i] = BitConverter.Int64BitsToDouble(bits);
+        }
+        return values;
+    }
+
+    static void AssertStatistics(ColumnStatistics actual, ColumnStatistics expected, EncodingKind encoding,
+        string column)
+    {
+        if (actual.ValueKind != expected.ValueKind || actual.MinBits != expected.MinBits
+            || actual.MaxBits != expected.MaxBits || actual.NullCount != expected.NullCount
+            || actual.DistinctCount != expected.DistinctCount || actual.NanCount != expected.NanCount
+            || actual.HasStatistics != expected.HasStatistics)
+            throw new InvalidOperationException(
+                $"{encoding} {column} statistics changed after nullable compaction.");
+    }
+
+    static void AssertColumn<TValue>(TValue[] actual, ReadOnlySpan<TValue> expected,
+        EncodingKind encoding, string column)
+    {
+        if (actual.Length != expected.Length)
+            throw new InvalidOperationException(
+                $"{encoding} {column} length mismatch. Expected {expected.Length}, got {actual.Length}.");
+
+        for (var i = 0; i < expected.Length; i++)
+            if (!ValuesEqual(actual[i], expected[i]))
+                throw new InvalidOperationException($"{encoding} {column} value mismatch at index {i}.");
+    }
+
+    static bool ValuesEqual<TValue>(TValue left, TValue right)
+    {
+        if (typeof(TValue) == typeof(float))
+            return BitConverter.SingleToInt32Bits(Unsafe.As<TValue, float>(ref left)) ==
+                   BitConverter.SingleToInt32Bits(Unsafe.As<TValue, float>(ref right));
+        if (typeof(TValue) == typeof(float?))
+        {
+            var leftValue = Unsafe.As<TValue, float?>(ref left);
+            var rightValue = Unsafe.As<TValue, float?>(ref right);
+            return leftValue.HasValue == rightValue.HasValue &&
+                   (!leftValue.HasValue || BitConverter.SingleToInt32Bits(leftValue.Value) ==
+                       BitConverter.SingleToInt32Bits(rightValue!.Value));
+        }
+        if (typeof(TValue) == typeof(double))
+            return BitConverter.DoubleToInt64Bits(Unsafe.As<TValue, double>(ref left)) ==
+                   BitConverter.DoubleToInt64Bits(Unsafe.As<TValue, double>(ref right));
+        if (typeof(TValue) == typeof(double?))
+        {
+            var leftValue = Unsafe.As<TValue, double?>(ref left);
+            var rightValue = Unsafe.As<TValue, double?>(ref right);
+            return leftValue.HasValue == rightValue.HasValue &&
+                   (!leftValue.HasValue || BitConverter.DoubleToInt64Bits(leftValue.Value) ==
+                       BitConverter.DoubleToInt64Bits(rightValue!.Value));
+        }
+        return EqualityComparer<TValue>.Default.Equals(left, right);
+    }
+
+    sealed class FixedRowsPageStrategy : IPageStrategy
+    {
+        readonly uint _rowsPerPage;
+        readonly DictionaryMode _dictionaryMode;
+
+        internal FixedRowsPageStrategy(uint rowsPerPage, DictionaryMode dictionaryMode)
+        {
+            _rowsPerPage = rowsPerPage;
+            _dictionaryMode = dictionaryMode;
+        }
+
+        public DictionaryMode GetDictionaryMode()
+            => _dictionaryMode;
+
+        public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
+            => false;
+
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => Math.Min(_rowsPerPage, totalRowCount - rowsWritten);
+    }
+
+    sealed class TargetBytesPageStrategy(uint targetBytes) : IPageStrategy
+    {
+        public DictionaryMode GetDictionaryMode()
+            => DictionaryMode.Disabled;
+
+        public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
+            => false;
+
+        public bool TryGetTargetDataPageSizeBytes(out uint sizeBytes)
+        {
+            sizeBytes = targetBytes;
+            return true;
+        }
+
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => totalRowCount - rowsWritten;
+    }
+}

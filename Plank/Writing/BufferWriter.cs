@@ -1,0 +1,329 @@
+namespace Plank.Writing;
+
+struct BufferWriter : IDisposable
+{
+    Segment[]? _segments;
+    readonly IParquetBufferPool? _pool;
+    readonly int _chunkSizeBytes;
+    int _segmentCount;
+    int _currentSegmentIndex;
+    int _currentSegmentWritten;
+
+    internal BufferWriter(IParquetBufferPool pool, uint chunkSizeBytes, uint initialBufferBytes)
+    {
+        ArgumentNullException.ThrowIfNull(pool);
+        if (chunkSizeBytes == 0)
+            throw new ArgumentOutOfRangeException(nameof(chunkSizeBytes), chunkSizeBytes,
+                "Buffer chunk size must be greater than zero.");
+        if (initialBufferBytes == 0)
+            throw new ArgumentOutOfRangeException(nameof(initialBufferBytes), initialBufferBytes,
+                "Initial buffer size must be greater than zero.");
+        if (chunkSizeBytes > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(chunkSizeBytes), chunkSizeBytes,
+                $"Buffer chunk size must be <= {int.MaxValue}.");
+        if (initialBufferBytes > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(initialBufferBytes), initialBufferBytes,
+                $"Initial buffer size must be <= {int.MaxValue}.");
+
+        _pool = pool;
+        _chunkSizeBytes = checked((int)chunkSizeBytes);
+        _segments = new Segment[GetInitialSegmentCapacity(initialBufferBytes, chunkSizeBytes)];
+        _segmentCount = 0;
+        _currentSegmentIndex = 0;
+        _currentSegmentWritten = 0;
+        WrittenLength = 0;
+    }
+
+    internal void Advance(int count)
+    {
+        if (count < 0)
+            throw new ArgumentOutOfRangeException(nameof(count), count, "Advance count must be non-negative.");
+        if (_segments is null || _segmentCount == 0)
+            throw new InvalidOperationException("BufferWriter is not initialized.");
+
+        ref var segment = ref _segments[_currentSegmentIndex];
+        if (count > segment.Buffer.Length - _currentSegmentWritten)
+            throw new InvalidOperationException("Advance exceeds available buffer capacity.");
+
+        _currentSegmentWritten += count;
+        segment.Written = _currentSegmentWritten;
+        WrittenLength += count;
+    }
+
+    internal Span<byte> GetSpan(int sizeHint = 0)
+    {
+        EnsureWritable(sizeHint);
+        return _segments![_currentSegmentIndex].Buffer.Span[_currentSegmentWritten..];
+    }
+
+    internal bool IsInitialized
+        => _segments is not null;
+
+    internal int WrittenLength { get; private set; }
+
+    internal bool TryGetSingleWrittenSpan(out ReadOnlySpan<byte> span)
+    {
+        if (_segments is null || WrittenLength == 0)
+        {
+            span = [];
+            return true;
+        }
+
+        var segmentWithData = -1;
+        for (var i = 0; i < _segmentCount; i++)
+        {
+            if (_segments[i].Written == 0)
+                continue;
+            if (segmentWithData >= 0)
+            {
+                span = default;
+                return false;
+            }
+
+            segmentWithData = i;
+        }
+
+        if (segmentWithData < 0)
+        {
+            span = [];
+            return true;
+        }
+
+        span = _segments[segmentWithData].Buffer.Span[.._segments[segmentWithData].Written];
+        return true;
+    }
+
+    internal void Reset()
+    {
+        if (_segments is null)
+            return;
+
+        for (var i = 0; i < _segmentCount; i++)
+            _segments[i].Written = 0;
+
+        _currentSegmentIndex = 0;
+        _currentSegmentWritten = 0;
+        WrittenLength = 0;
+    }
+
+    internal void Truncate(int length)
+    {
+        if (length < 0 || length > WrittenLength)
+            throw new ArgumentOutOfRangeException(nameof(length), length,
+                $"Length must be between zero and {WrittenLength}.");
+        if (_segments is null || length == WrittenLength)
+            return;
+
+        var remaining = length;
+        var currentSegment = 0;
+        var currentWritten = 0;
+        for (var i = 0; i < _segmentCount; i++)
+        {
+            var written = _segments[i].Written;
+            var retained = Math.Min(written, remaining);
+            _segments[i].Written = retained;
+            remaining -= retained;
+            if (retained > 0 || length == 0)
+            {
+                currentSegment = i;
+                currentWritten = retained;
+            }
+        }
+        if (length == 0)
+        {
+            currentSegment = 0;
+            currentWritten = 0;
+        }
+
+        _currentSegmentIndex = currentSegment;
+        _currentSegmentWritten = currentWritten;
+        WrittenLength = length;
+    }
+
+    internal void WriteTo(IParquetWriteSource destination, ulong offset)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        if (_segments is null || WrittenLength == 0)
+            return;
+
+        for (var i = 0; i < _segmentCount; i++)
+        {
+            var written = _segments[i].Written;
+            if (written == 0)
+                continue;
+            destination.Write(offset, _segments[i].Buffer.Span[..written]);
+            offset = checked(offset + (uint)written);
+        }
+    }
+
+    internal void CopyTo(Span<byte> destination)
+    {
+        if (destination.Length < WrittenLength)
+            throw new ArgumentException("Destination span is smaller than written content.", nameof(destination));
+        if (_segments is null || WrittenLength == 0)
+            return;
+
+        var offset = 0;
+        for (var i = 0; i < _segmentCount; i++)
+        {
+            var written = _segments[i].Written;
+            if (written == 0)
+                continue;
+
+            _segments[i].Buffer.Span[..written].CopyTo(destination[offset..]);
+            offset += written;
+        }
+    }
+
+    internal uint ComputeCrc32()
+    {
+        var state = ParquetCrc32.InitialState;
+        if (_segments is not null)
+            for (var i = 0; i < _segmentCount; i++)
+            {
+                var written = _segments[i].Written;
+                if (written != 0)
+                    state = ParquetCrc32.Append(state, _segments[i].Buffer.Span[..written]);
+            }
+
+        return ParquetCrc32.Complete(state);
+    }
+
+    internal void Write(ReadOnlySpan<byte> source)
+    {
+        var remaining = source;
+        while (remaining.Length > 0)
+        {
+            var destination = GetSpan(remaining.Length);
+            var toCopy = Math.Min(destination.Length, remaining.Length);
+            remaining[..toCopy].CopyTo(destination);
+            Advance(toCopy);
+            remaining = remaining[toCopy..];
+        }
+    }
+
+    internal void CopyFrom(ref BufferWriter source)
+    {
+        if (source._segments is null || source.WrittenLength == 0)
+            return;
+
+        for (var i = 0; i < source._segmentCount; i++)
+        {
+            var written = source._segments[i].Written;
+            if (written == 0)
+                continue;
+            Write(source._segments[i].Buffer.Span[..written]);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_segments is null)
+            return;
+
+        for (var i = 0; i < _segmentCount; i++)
+        {
+            _segments[i].Buffer.Dispose();
+            _segments[i] = default;
+        }
+
+        _segments = null;
+        _segmentCount = 0;
+        _currentSegmentIndex = 0;
+        _currentSegmentWritten = 0;
+        WrittenLength = 0;
+    }
+
+    void EnsureWritable(int sizeHint)
+    {
+        if (sizeHint < 0)
+            throw new ArgumentOutOfRangeException(nameof(sizeHint), sizeHint, "Size hint must be non-negative.");
+        if (_segments is null || _pool is null)
+            throw new InvalidOperationException("BufferWriter is not initialized.");
+
+        if (sizeHint == 0)
+            sizeHint = 1;
+
+        if (_segmentCount == 0)
+        {
+            EnsureCurrentSegment(sizeHint);
+            return;
+        }
+
+        ref var current = ref _segments[_currentSegmentIndex];
+        if (sizeHint <= current.Buffer.Length - _currentSegmentWritten)
+            return;
+
+        current.Written = _currentSegmentWritten;
+
+        var nextIndex = _currentSegmentIndex + 1;
+        while (nextIndex < _segmentCount)
+        {
+            if (sizeHint <= _segments[nextIndex].Buffer.Length)
+            {
+                _currentSegmentIndex = nextIndex;
+                _currentSegmentWritten = 0;
+                _segments[nextIndex].Written = 0;
+                return;
+            }
+
+            _segments[nextIndex].Written = 0;
+            nextIndex++;
+        }
+
+        _currentSegmentIndex = _segmentCount;
+        _currentSegmentWritten = 0;
+        EnsureCurrentSegment(sizeHint);
+    }
+
+    void EnsureCurrentSegment(int sizeHint)
+    {
+        if (_segments is null || _pool is null)
+            throw new InvalidOperationException("BufferWriter is not initialized.");
+
+        EnsureSegmentCapacity(_currentSegmentIndex + 1);
+        if (_currentSegmentIndex < _segmentCount)
+            return;
+
+        var minimumSize = Math.Max(_chunkSizeBytes, sizeHint);
+        var buffer = _pool.Rent(checked((uint)minimumSize));
+        _segments[_currentSegmentIndex] = new Segment(buffer);
+        _segmentCount = _currentSegmentIndex + 1;
+    }
+
+    void EnsureSegmentCapacity(int required)
+    {
+        if (_segments is null)
+            throw new InvalidOperationException("BufferWriter is not initialized.");
+        if (required <= _segments.Length)
+            return;
+
+        var newCapacity = _segments.Length == 0 ? 4 : _segments.Length;
+        while (newCapacity < required)
+            newCapacity = checked(newCapacity * 2);
+
+        Array.Resize(ref _segments, newCapacity);
+        ParquetMetrics.BufferWriterSegmentTableAllocations.Add(1);
+    }
+
+    static int GetInitialSegmentCapacity(uint initialBufferBytes, uint chunkSizeBytes)
+    {
+        var count = (initialBufferBytes + chunkSizeBytes - 1) / chunkSizeBytes;
+        if (count > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(initialBufferBytes), initialBufferBytes,
+                $"Initial segment capacity must be <= {int.MaxValue}.");
+        return checked((int)count);
+    }
+
+    struct Segment
+    {
+        internal ParquetBuffer Buffer;
+        internal int Written;
+
+        internal Segment(ParquetBuffer buffer)
+        {
+            Buffer = buffer;
+            Written = 0;
+        }
+    }
+}
