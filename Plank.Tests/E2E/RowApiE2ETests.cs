@@ -9,6 +9,7 @@ using PlankRowGroupWriter = Plank.Writing.RowGroupWriter;
 
 namespace Plank.Tests.E2E;
 
+[NotInParallel]
 internal sealed class RowApiE2ETests
 {
     [Test]
