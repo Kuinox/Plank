@@ -93,6 +93,82 @@ internal sealed class ParquetBufferTests
     }
 
     [Test]
+    public void ZeroAllocationPolicyRetainsTheObservedHighWaterMark()
+    {
+        using var pool = new DefaultParquetBufferPool(ParquetBufferRetentionPolicy.ZeroAllocation);
+        var firstAddresses = CompleteDemandCycle(pool, 80, 1024);
+        var allocationsAfterWarmup = pool.NativeAllocationCount;
+
+        if (pool.RetainedBytes != 80 * 1088)
+            throw new InvalidOperationException(
+                $"Expected all 80 buffers to remain retained, retained {pool.RetainedBytes} bytes.");
+
+        var secondAddresses = CompleteDemandCycle(pool, 80, 1024);
+        if (!firstAddresses.SetEquals(secondAddresses))
+            throw new InvalidOperationException("Expected the warmed pool to reuse every allocation.");
+        if (pool.NativeAllocationCount != allocationsAfterWarmup)
+            throw new InvalidOperationException("Expected no native allocations after warming the pool.");
+    }
+
+    [Test]
+    public void AdaptivePolicyRetainsTheRollingP99Demand()
+    {
+        using var pool = new DefaultParquetBufferPool(ParquetBufferRetentionPolicy.Adaptive);
+        _ = CompleteDemandCycle(pool, 10, 1024);
+        var allocationBytes = pool.RetainedBytes / 10;
+
+        for (var i = 0; i < 99; i++)
+            _ = CompleteDemandCycle(pool, 1, 1024);
+
+        if (pool.RetainedBytes != allocationBytes)
+            throw new InvalidOperationException(
+                $"Expected one p99 buffer ({allocationBytes} bytes), retained {pool.RetainedBytes} bytes.");
+    }
+
+    [Test]
+    public void RetainedByteBudgetCapsEitherPolicy()
+    {
+        const int allocationBytesFor64ByteBuffer = 128;
+        using var pool = new DefaultParquetBufferPool(ParquetBufferRetentionPolicy.ZeroAllocation,
+            2 * allocationBytesFor64ByteBuffer);
+
+        _ = CompleteDemandCycle(pool, 4, 64);
+
+        if (pool.RetainedBytes != 2 * allocationBytesFor64ByteBuffer)
+            throw new InvalidOperationException(
+                $"Expected the byte budget to retain 256 bytes, retained {pool.RetainedBytes} bytes.");
+    }
+
+    [Test]
+    public void MemoryPressureReleasesIdleBuffers()
+    {
+        using var pool = new DefaultParquetBufferPool(ParquetBufferRetentionPolicy.ZeroAllocation, long.MaxValue,
+            static () => true, minimumRetainedBytesForPressureCheck: 0,
+            memoryPressureCheckIntervalMilliseconds: 0);
+
+        _ = CompleteDemandCycle(pool, 4, 1024);
+
+        if (pool.RetainedBytes != 0)
+            throw new InvalidOperationException(
+                $"Expected memory pressure to trim every idle buffer, retained {pool.RetainedBytes} bytes.");
+    }
+
+    [Test]
+    public void TrimReleasesIdleBuffersWithoutForgettingDemand()
+    {
+        using var pool = new DefaultParquetBufferPool(ParquetBufferRetentionPolicy.ZeroAllocation);
+        _ = CompleteDemandCycle(pool, 4, 1024);
+
+        pool.Trim();
+        if (pool.RetainedBytes != 0)
+            throw new InvalidOperationException("Expected Trim to release every idle buffer.");
+
+        _ = CompleteDemandCycle(pool, 4, 1024);
+        if (pool.RetainedBytes == 0)
+            throw new InvalidOperationException("Expected the high-water mark to remain learned after Trim.");
+    }
+
+    [Test]
     public void RetainAndReleaseAreThreadSafe()
     {
         using var buffer = DefaultParquetBufferPool.Shared.Rent(64);
@@ -137,6 +213,22 @@ internal sealed class ParquetBufferTests
 
         if (allocated != 0)
             throw new InvalidOperationException($"Expected retain/release to allocate zero bytes, saw {allocated}.");
+    }
+
+    static HashSet<nint> CompleteDemandCycle(DefaultParquetBufferPool pool, int count, uint byteLength)
+    {
+        var buffers = new ParquetBuffer[count];
+        var addresses = new HashSet<nint>();
+        for (var i = 0; i < buffers.Length; i++)
+        {
+            buffers[i] = pool.Rent(byteLength);
+            addresses.Add(buffers[i].DangerousGetAddress());
+        }
+
+        for (var i = 0; i < buffers.Length; i++)
+            buffers[i].Dispose();
+
+        return addresses;
     }
 
     sealed class TrackingBufferPool : IParquetBufferPool
