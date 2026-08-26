@@ -19,6 +19,14 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Check unshipped public API
+        run: |
+          diff --unified \
+            --label expected \
+            --label Plank/PublicAPI.Unshipped.txt \
+            <(printf '#nullable enable\n') \
+            Plank/PublicAPI.Unshipped.txt
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
