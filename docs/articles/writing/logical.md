@@ -13,7 +13,7 @@ using Plank.Sample;
 using Plank.Schema;
 
 using var stream = File.Create("events.parquet");
-var writer = EventSchema.CreateWriter(stream);
+using var writer = EventSchema.CreateWriter(stream);
 
 var rowGroup = writer.StartRowGroup();
 ```
@@ -48,7 +48,7 @@ var runtimeSchema = new ParquetSchema([
 ]);
 
 using var runtimeStream = File.Create("runtime-events.parquet");
-var runtimeWriter = runtimeSchema.CreateWriter(runtimeStream);
+using var runtimeWriter = runtimeSchema.CreateWriter(runtimeStream);
 var runtimeIds = runtimeWriter.CreateSerializedColumn<int>(runtimeSchema.LeafColumns[0]);
 
 var runtimeRowGroup = runtimeWriter.StartRowGroup();
@@ -65,4 +65,5 @@ After all column buffers have been written, close the parquet file:
 writer.CloseFile();
 ```
 
-`CloseFile` writes the footer and flushes the destination.
+`CloseFile` writes the footer and flushes the destination. If writing fails first, `Dispose()` releases resources
+without writing a footer. A disposed writer cannot be reused.

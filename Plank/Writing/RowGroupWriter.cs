@@ -42,6 +42,7 @@ public sealed class RowGroupWriter
 
     public void Write<T>(SerializedColumn<T> serialized)
     {
+        _writer.ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(serialized);
         if (!ReferenceEquals(serialized._owner, _writer))
             throw new InvalidOperationException("SerializedColumn belongs to another ParquetWriter.");

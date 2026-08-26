@@ -124,11 +124,13 @@ Plank.RowApi.RowReaderOptions.RowReaderOptions() -> void
 static Plank.RowApi.RowReaderOptions.Default.get -> Plank.RowApi.RowReaderOptions!
 Plank.Writing.RowWriterBase<TSlot>
 Plank.Writing.RowWriterBase<TSlot>.Complete(TSlot! activeSlot, bool hasRows) -> void
+Plank.Writing.RowWriterBase<TSlot>.Dispose() -> void
 Plank.Writing.RowWriterBase<TSlot>.EnqueueAndTakeFree(TSlot! slot) -> TSlot!
 Plank.Writing.RowWriterBase<TSlot>.InitializeSlots() -> void
 Plank.Writing.RowWriterBase<TSlot>.RowWriterBase(System.IO.Stream! stream, Plank.Schema.ParquetSchema! schema, uint maxParallelism, Plank.Writing.ParquetWriterOptions! options) -> void
 Plank.Writing.RowWriterBase<TSlot>.TakeInitialSlot() -> TSlot!
 Plank.Writing.RowWriterBase<TSlot>.ThrowIfFaulted() -> void
+Plank.Writing.RowWriterBase<TSlot>.ThrowIfDisposed() -> void
 virtual Plank.Writing.RowWriterBase<TSlot>.OnSlotWritten(TSlot! slot) -> void
 virtual Plank.Writing.RowWriterBase<TSlot>.WorkerThreadNamePrefix.get -> string!
 Plank.CorruptParquetException

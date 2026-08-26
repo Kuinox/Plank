@@ -7,7 +7,7 @@ static class ColumnApiSample
         var path = Path.Combine(Path.GetTempPath(), $"plank-sample-column-{Guid.NewGuid():N}.parquet");
 
         using var stream = File.Create(path);
-        var writer = EventSchema.CreateWriter(stream);
+        using var writer = EventSchema.CreateWriter(stream);
         var rowGroup = writer.StartRowGroup();
 
         var ids = rowGroup.Id;

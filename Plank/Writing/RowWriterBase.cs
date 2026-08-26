@@ -8,7 +8,7 @@ namespace Plank.Writing;
 /// <remarks>
 /// This unstable API supports Plank-generated code and is not intended for direct use by applications.
 /// </remarks>
-public abstract class RowWriterBase<TSlot>
+public abstract class RowWriterBase<TSlot> : IDisposable
     where TSlot : class
 {
     readonly ParquetWriter _writer;
@@ -19,6 +19,7 @@ public abstract class RowWriterBase<TSlot>
     readonly Queue<QueuedSlot> _readySlots;
     readonly Queue<TSlot> _freeSlots;
     readonly Thread[] _workers;
+    readonly TSlot?[] _slots;
     readonly ParquetExecutionOptions _execution;
     readonly object _gate;
     readonly object _writeGate;
@@ -30,6 +31,7 @@ public abstract class RowWriterBase<TSlot>
     bool _completed;
     ulong _fileIndex;
     bool _rolloverPending;
+    bool _disposed;
     ExceptionDispatchInfo? _fault;
 
     /// <summary>Initializes the pipeline used by a generated row writer.</summary>
@@ -59,6 +61,7 @@ public abstract class RowWriterBase<TSlot>
         _readySlots = new Queue<QueuedSlot>(workerCount);
         _freeSlots = new Queue<TSlot>(workerCount);
         _workers = new Thread[workerCount];
+        _slots = new TSlot?[workerCount];
         _gate = new object();
         _writeGate = new object();
         _initialSlotTaken = false;
@@ -69,6 +72,7 @@ public abstract class RowWriterBase<TSlot>
         _completed = false;
         _fileIndex = 0;
         _rolloverPending = false;
+        _disposed = false;
         _fault = null;
     }
 
@@ -113,6 +117,7 @@ public abstract class RowWriterBase<TSlot>
         _readySlots = new Queue<QueuedSlot>(workerCount);
         _freeSlots = new Queue<TSlot>(workerCount);
         _workers = new Thread[workerCount];
+        _slots = new TSlot?[workerCount];
         _gate = new object();
         _writeGate = new object();
         _initialSlotTaken = false;
@@ -123,6 +128,7 @@ public abstract class RowWriterBase<TSlot>
         _completed = false;
         _fileIndex = 0;
         _rolloverPending = false;
+        _disposed = false;
         _fault = null;
     }
 
@@ -155,11 +161,16 @@ public abstract class RowWriterBase<TSlot>
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
             if (_slotsInitialized)
                 throw new InvalidOperationException("Row writer slots are already initialized.");
 
             for (var i = 0; i < _workers.Length; i++)
-                _freeSlots.Enqueue(CreateSlotChecked());
+            {
+                var slot = CreateSlotChecked();
+                _slots[i] = slot;
+                _freeSlots.Enqueue(slot);
+            }
 
             for (var i = 0; i < _workers.Length; i++)
             {
@@ -182,6 +193,7 @@ public abstract class RowWriterBase<TSlot>
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
             ThrowIfNotInitialized();
             ThrowIfFaulted();
             if (_completed)
@@ -203,6 +215,7 @@ public abstract class RowWriterBase<TSlot>
 
         lock (_gate)
         {
+            ThrowIfDisposed();
             ThrowIfNotInitialized();
             ThrowIfFaulted();
             if (_completed)
@@ -218,10 +231,12 @@ public abstract class RowWriterBase<TSlot>
     /// <param name="hasRows">Whether the active slot contains rows to write.</param>
     protected void Complete(TSlot activeSlot, bool hasRows)
     {
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(activeSlot);
 
         lock (_gate)
         {
+            ThrowIfDisposed();
             ThrowIfNotInitialized();
             if (!_completed)
             {
@@ -241,12 +256,74 @@ public abstract class RowWriterBase<TSlot>
         _writer.CloseFile();
     }
 
+    /// <summary>Aborts the pipeline and releases its workers, pooled buffers, and destination.</summary>
+    /// <remarks>
+    /// Disposing does not complete the Parquet file. Call the generated writer's <c>Complete()</c> method before
+    /// disposal to commit a valid file. Once disposed, the writer cannot be reused.
+    /// </remarks>
+    public void Dispose()
+    {
+        for (var i = 0; i < _workers.Length; i++)
+            if (ReferenceEquals(Thread.CurrentThread, _workers[i]))
+                throw new InvalidOperationException("A row writer cannot be disposed from one of its worker threads.");
+
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            _addingCompleted = true;
+            _readySlots.Clear();
+            Monitor.PulseAll(_gate);
+        }
+
+        lock (_writeGate)
+            Monitor.PulseAll(_writeGate);
+
+        for (var i = 0; i < _workers.Length; i++)
+            if (_workers[i] is { IsAlive: true } worker)
+                worker.Join();
+
+        ExceptionDispatchInfo? cleanupFailure = null;
+        for (var i = 0; i < _slots.Length; i++)
+        {
+            if (_slots[i] is not { } slot)
+                continue;
+            try
+            {
+                ResetSlotForReuse(slot);
+            }
+            catch (Exception ex)
+            {
+                cleanupFailure ??= ExceptionDispatchInfo.Capture(ex);
+            }
+        }
+
+        try
+        {
+            _writer.Dispose();
+        }
+        catch (Exception ex)
+        {
+            cleanupFailure ??= ExceptionDispatchInfo.Capture(ex);
+        }
+
+        cleanupFailure?.Throw();
+    }
+
     /// <summary>Rethrows a failure reported by a serialization worker.</summary>
     protected void ThrowIfFaulted()
     {
-        var fault = _fault;
-        if (fault is not null)
-            fault.Throw();
+        ThrowIfDisposed();
+        RethrowFault();
+    }
+
+    /// <summary>Throws if this writer has been disposed.</summary>
+    protected void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(GetType().FullName);
     }
 
     void ThrowIfNotInitialized()
@@ -272,10 +349,13 @@ public abstract class RowWriterBase<TSlot>
     {
         while (_freeSlots.Count == 0)
         {
-            ThrowIfFaulted();
+            ThrowIfDisposed();
+            RethrowFault();
             Monitor.Wait(_gate);
         }
 
+        ThrowIfDisposed();
+        RethrowFault();
         return _freeSlots.Dequeue();
     }
 
@@ -297,10 +377,10 @@ public abstract class RowWriterBase<TSlot>
             QueuedSlot queuedSlot;
             lock (_gate)
             {
-                while (_readySlots.Count == 0 && !_addingCompleted && _fault is null)
+                while (_readySlots.Count == 0 && !_addingCompleted && _fault is null && !_disposed)
                     Monitor.Wait(_gate);
 
-                if (_readySlots.Count == 0)
+                if (_disposed || _readySlots.Count == 0)
                     return;
 
                 queuedSlot = _readySlots.Dequeue();
@@ -311,10 +391,12 @@ public abstract class RowWriterBase<TSlot>
                 SerializeSlot(queuedSlot.Slot);
                 lock (_writeGate)
                 {
-                    while (queuedSlot.Sequence != _nextWriteSequence && _fault is null)
+                    while (queuedSlot.Sequence != _nextWriteSequence && _fault is null && !_disposed)
                         Monitor.Wait(_writeGate);
 
-                    ThrowIfFaulted();
+                    if (_disposed)
+                        return;
+                    RethrowFault();
                     if (_rolloverPending)
                         Rollover();
                     var rowGroupWriter = _writer.StartRowGroup();
@@ -356,6 +438,13 @@ public abstract class RowWriterBase<TSlot>
 
         lock (_writeGate)
             Monitor.PulseAll(_writeGate);
+    }
+
+    void RethrowFault()
+    {
+        var fault = _fault;
+        if (fault is not null)
+            fault.Throw();
     }
 
     void Rollover()
