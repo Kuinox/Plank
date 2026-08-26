@@ -28,4 +28,4 @@ writer.Complete();
 
 `GetRow()` returns the reusable row buffer. Call `Next()` after filling it, then `Complete()` after the last row.
 
-Yes, that's it. This API was made to hide the complexity of the Parquet format.
+The row writer handles row-group construction, encoding, and file finalization.
