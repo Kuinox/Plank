@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <NoWarn>$(NoWarn);RS0026</NoWarn>
   </PropertyGroup>
 
@@ -27,7 +28,9 @@
     <ProjectReference Include="..\Plank.Snappy\Plank.Snappy.csproj" />
     <ProjectReference Include="..\Plank.SourceGen\Plank.SourceGen.csproj"
                       OutputItemType="Analyzer"
-                      ReferenceOutputAssembly="false" />
+                      IncludeAssets="analyzers"
+                      Private="false"
+                      PrivateAssets="none" />
   </ItemGroup>
 
   <ItemGroup>

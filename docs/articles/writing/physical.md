@@ -19,7 +19,7 @@ var schema = new ParquetSchema([
 ]);
 
 using var stream = File.Create("events.parquet");
-var writer = schema.CreateWriter(stream);
+using var writer = schema.CreateWriter(stream);
 
 var ids = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
 var names = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[1]);
@@ -59,6 +59,7 @@ writer.CloseFile();
 ```
 
 `CloseFile` writes the footer and flushes the destination. It throws if the current row group is missing columns.
+If writing fails first, `Dispose()` releases resources without writing a footer. A disposed writer cannot be reused.
 
 ## Reuse the writer
 

@@ -94,6 +94,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     public void Serialize(ReadOnlySpan<T> values)
     {
+        _owner.ThrowIfDisposed();
         SerializeValues(values);
         PreparePages();
     }

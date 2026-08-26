@@ -344,7 +344,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("    public static SchemaWriter CreateWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions? options = null)");
         builder.AppendLine("        => new(stream, options ?? global::Plank.Writing.ParquetWriterOptions.Default);");
         builder.AppendLine();
-        builder.AppendLine("    public sealed class SchemaWriter");
+        builder.AppendLine("    public sealed class SchemaWriter : global::System.IDisposable");
         builder.AppendLine("    {");
         builder.AppendLine("        readonly global::Plank.Writing.ParquetWriter _writer;");
         builder.AppendLine();
@@ -363,6 +363,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        public void CloseFile()");
         builder.AppendLine("            => _writer.CloseFile();");
+        builder.AppendLine();
+        builder.AppendLine("        public void Dispose()");
+        builder.AppendLine("            => _writer.Dispose();");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    public sealed class RowGroup");

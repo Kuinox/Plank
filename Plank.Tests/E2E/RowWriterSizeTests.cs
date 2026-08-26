@@ -7,6 +7,44 @@ namespace Plank.Tests.E2E;
 internal sealed class RowWriterSizeTests
 {
     [Test]
+    public void GeneratedSchemaWriterDisposalAbortsAndRejectsReuse()
+    {
+        using var stream = new MemoryStream();
+        using var resetStream = new MemoryStream();
+        var writer = DatasetRowSchema.CreateWriter(stream);
+
+        writer.Dispose();
+        writer.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => writer.StartRowGroup());
+        Assert.Throws<ObjectDisposedException>(() => writer.Reset(resetStream));
+        Assert.Throws<ObjectDisposedException>(() => writer.CloseFile());
+        if (!stream.ToArray().AsSpan().SequenceEqual("PAR1"u8))
+            throw new InvalidOperationException("Disposing an incomplete schema writer wrote a Parquet footer.");
+    }
+
+    [Test]
+    public void GeneratedPipelineWriterDisposalAbortsAndRejectsReuse()
+    {
+        using var stream = new MemoryStream();
+        var writer = DatasetRowSchema.CreateRowWriter(stream, maxParallelism: 1,
+            new ParquetWriterOptions());
+        var row = writer.GetRow();
+        row.Value = 42;
+        row.Path = ReadOnlyMemory<byte>.Empty;
+        writer.Next();
+
+        writer.Dispose();
+        writer.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => writer.GetRow());
+        Assert.Throws<ObjectDisposedException>(() => writer.Next());
+        Assert.Throws<ObjectDisposedException>(() => writer.Complete());
+        if (!stream.ToArray().AsSpan().SequenceEqual("PAR1"u8))
+            throw new InvalidOperationException("Disposing an incomplete pipeline writer wrote a Parquet footer.");
+    }
+
+    [Test]
     public async Task GeneratedRowWriterTargetsRowGroupsByBufferedSize()
     {
         var path = NewPath();
@@ -14,7 +52,7 @@ internal sealed class RowWriterSizeTests
         {
             using (var writeStream = File.Create(path))
             {
-                var writer = DatasetRowSchema.CreateRowWriter(writeStream, new ParquetWriterOptions
+                using var writer = DatasetRowSchema.CreateRowWriter(writeStream, new ParquetWriterOptions
                 {
                     RowApiMaxParallelism = 1,
                     TargetRowGroupSizeBytes = 16
@@ -41,7 +79,7 @@ internal sealed class RowWriterSizeTests
     public async Task RollingRowWriterStartsANewFileAtTheTarget()
     {
         using var files = new RollingFileSet();
-        var writer = DatasetRowSchema.CreateRowWriter(files.SelectPath, files, new ParquetWriterOptions
+        using var writer = DatasetRowSchema.CreateRowWriter(files.SelectPath, files, new ParquetWriterOptions
         {
             RowApiMaxParallelism = 1,
             TargetRowGroupSizeBytes = 16,

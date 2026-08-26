@@ -7,7 +7,7 @@ static class RowApiSample
         var path = Path.Combine(Path.GetTempPath(), $"plank-sample-row-{Guid.NewGuid():N}.parquet");
 
         using var stream = File.Create(path);
-        var rowWriter = EventSchema.CreateRowWriter(stream);
+        using var rowWriter = EventSchema.CreateRowWriter(stream);
 
         var now = DateTimeOffset.UtcNow;
         for (var i = 0; i < 3; i++)

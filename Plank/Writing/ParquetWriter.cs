@@ -140,10 +140,17 @@ public sealed class ParquetWriter : IDisposable
     }
 
     public uint RowApiMaxParallelism
-        => _options.RowApiMaxParallelism;
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _options.RowApiMaxParallelism;
+        }
+    }
 
     public SerializedColumn<T> CreateSerializedColumn<T>(LeafColumn column)
     {
+        ThrowIfDisposed();
         var ordinal = GetColumnOrdinal(column);
         var retainedValues = _latestRowGroupValues?.GetValues<T>(checked((int)ordinal));
         var serialized = new SerializedColumn<T>(this, column, _options.InitialPageCapacity, retainedValues);
@@ -153,6 +160,7 @@ public sealed class ParquetWriter : IDisposable
 
     public void Reset(Stream stream)
     {
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(stream);
         if (_destination is StreamParquetSource streamSource && ReferenceEquals(stream, streamSource.Stream))
         {
@@ -165,6 +173,7 @@ public sealed class ParquetWriter : IDisposable
 
     public void Reset(IParquetWriteSource destination)
     {
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(destination);
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot reset while a row group is open.");
@@ -250,6 +259,7 @@ public sealed class ParquetWriter : IDisposable
 
     public void CloseFile()
     {
+        ThrowIfDisposed();
         FinishFile();
         ReleaseBuffers();
     }
@@ -288,8 +298,15 @@ public sealed class ParquetWriter : IDisposable
 
     void ThrowIfFileClosed()
     {
+        ThrowIfDisposed();
         if (_fileClosed)
             throw new InvalidOperationException("The current file is closed. Call Reset(file) to start a new file.");
+    }
+
+    internal void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(ParquetWriter));
     }
 
     void CloseCurrentFile()

@@ -12,7 +12,7 @@ It can also roll over to a new file around the [512 MiB](https://iceberg.apache.
 
 ```csharp
 using var stream = File.Create("events.parquet");
-var writer = EventSchema.CreateRowWriter(stream);
+using var writer = EventSchema.CreateRowWriter(stream);
 
 for (var id = 0; id < 100; id++)
 {
@@ -28,4 +28,6 @@ writer.Complete();
 
 `GetRow()` returns the reusable row buffer. Call `Next()` after filling it, then `Complete()` after the last row.
 
-The row writer handles row-group construction, encoding, and file finalization.
+The row writer handles row-group construction, encoding, and file finalization. `Complete()` commits the file. If
+writing fails first, `Dispose()` stops the workers and releases resources without committing the incomplete file.
+A disposed writer cannot be reused.
