@@ -22,6 +22,15 @@ git submodule update --init third_party/parquet-testing
 dotnet test --solution Plank.sln --configuration Release
 ```
 
+## Buffer pooling
+
+Native buffers flow through `IParquetBufferPool`. `DefaultParquetBufferPool.Shared`
+adaptively retains the rolling p99 peak demand for each buffer size. For allocation-free
+reuse after warmup, pass
+`new DefaultParquetBufferPool(ParquetBufferRetentionPolicy.ZeroAllocation)` through
+the writer or reader options. Custom pools can also set a hard retained-byte limit and
+release idle memory with `Trim()`.
+
 ## Documentation
 
 The documentation source is under `docs/`. Build it with:
