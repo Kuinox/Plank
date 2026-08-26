@@ -9,5 +9,19 @@ Declare schemas as C# types. Source generators create type-safe readers and writ
 Start with the [schema guide](articles/schema.md), then choose the row, logical-column,
 or physical API documented in the reading and writing sections.
 
-Benchmarks and other experimental work are maintained separately in
-[Plank-Lab](https://github.com/Kuinox/Plank-Lab).
+## Fast. Really fast.
+
+Writing Parquet should not be the slow part of your pipeline. These results include the
+complete in-memory file write, from writer creation to the footer and close.
+
+The benchmark data and renderer live in the public
+[Plank-Lab repository](https://github.com/Kuinox/Plank-Lab). You can also
+[open the benchmark matrix directly](https://kuinox.github.io/Plank-Lab/).
+
+<iframe
+  src="https://kuinox.github.io/Plank-Lab/"
+  title="Plank benchmark results"
+  loading="lazy"
+  referrerpolicy="no-referrer"
+  style="display:block; width:100%; min-height:52rem; border:1px solid var(--bs-border-color); border-radius:0.375rem; background:white;"
+></iframe>
