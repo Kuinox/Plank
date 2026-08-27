@@ -44,8 +44,8 @@ public sealed class ParquetFileReader : IDisposable
     /// <remarks>
     /// <para>
     /// The reader takes ownership of <paramref name="stream"/>: it is closed when the reader is reset onto a
-    /// different source, and when the reader is disposed. Pass a <see cref="IParquetReadSource"/> instead to keep
-    /// ownership of the underlying resource.
+    /// different source, when the reader is disposed, and before a failed reset returns. Pass a
+    /// <see cref="IParquetReadSource"/> instead to keep ownership of the underlying resource.
     /// </para>
     /// <para>
     /// Resetting the reader invalidates page cursors created from an earlier source. After the first stream reset,
@@ -64,14 +64,26 @@ public sealed class ParquetFileReader : IDisposable
         if (!ReferenceEquals(_ownedStream, stream))
             DisposeOwnedStream();
 
-        if (_ownedSource is null)
-            _ownedSource = new StreamReadSource(stream);
-        else
-            _ownedSource.Reset(stream);
-
-        ResetCore(_ownedSource);
-        _source = _ownedSource;
         _ownedStream = stream;
+        try
+        {
+            if (_ownedSource is null)
+                _ownedSource = new StreamReadSource(stream);
+            else
+                _ownedSource.Reset(stream);
+
+            ResetCore(_ownedSource);
+            _source = _ownedSource;
+        }
+        catch
+        {
+            // Ownership transfers when Reset is called. A rejected stream is no
+            // longer useful to the reader, and leaving it untracked would leak
+            // callers such as Reset(File.OpenRead(path)). Clear the field before
+            // disposing so a later reset or reader disposal cannot dispose it again.
+            DisposeOwnedStream();
+            throw;
+        }
     }
 
     /// <summary>
