@@ -58,7 +58,7 @@ static class ParquetDecompressor
     {
         try
         {
-            return Plank.Snappy.SnappyCodec.Decompress(payload, destination);
+            return Snappier.Snappy.Decompress(payload, destination);
         }
         catch (InvalidOperationException ex)
         {
