@@ -1,4 +1,4 @@
-using Plank.Snappy;
+using Snappier;
 
 namespace Plank.Writing.Compression;
 
@@ -7,9 +7,9 @@ static class SnappyCompression
     internal static void Compress(CompressionContext context, ref BufferWriter source, ref BufferWriter destination)
     {
         var sourceSpan = context.GetContiguousSourceSpan(ref source);
-        var maxLength = SnappyCodec.GetMaxCompressedLength(sourceSpan.Length);
+        var maxLength = Snappy.GetMaxCompressedLength(sourceSpan.Length);
         var destinationSpan = destination.GetSpan(maxLength);
-        var written = SnappyCodec.Compress(sourceSpan, destinationSpan);
+        var written = Snappy.Compress(sourceSpan, destinationSpan);
         destination.Advance(written);
     }
 }

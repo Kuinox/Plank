@@ -11,7 +11,7 @@ fuzzing infrastructure, and autonomous research tooling live in
 
 - `Plank` — the reader and writer package.
 - `Plank.SourceGen` — generated row readers and writers.
-- `Plank.Snappy` and `Plank.Native.Zlib` — compression support.
+- `Plank.Native.Zlib` — packaged Zlib-ng compression support.
 - `Plank.Tests` and `Plank.SourceGen.Tests` — package and generator tests.
 - `Samples/Plank.Sample` — row and column API examples.
 

@@ -9,7 +9,6 @@ on:
       - ".github/workflows/docs.yml"
       - "docs/**"
       - "Plank/**"
-      - "Plank.Snappy/**"
       - "Plank.SourceGen/**"
       - "Plank.Native.Zlib/artifacts/packages/**"
       - "NuGet.config"
