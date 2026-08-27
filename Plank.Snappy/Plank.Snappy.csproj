@@ -4,7 +4,6 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Description>Snappy compression support for Plank.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
@@ -15,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="libsnappy.redist" Version="1.1.7" />
+    <PackageReference Include="Snappier" Version="1.3.1" />
   </ItemGroup>
 
 </Project>
