@@ -8,6 +8,7 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <AnalysisLevel>latest</AnalysisLevel>
     <AnalysisMode>All</AnalysisMode>
+    <IsPackable>false</IsPackable>
     <NoWarn>$(NoWarn);CA1822</NoWarn>
   </PropertyGroup>
 

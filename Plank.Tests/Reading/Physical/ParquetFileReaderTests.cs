@@ -117,6 +117,22 @@ internal sealed class ParquetFileReaderTests
     }
 
     [Test]
+    public async Task FailedResetDisposesRejectedStreamExactlyOnce()
+    {
+        var rejected = new DisposeTrackingMemoryStream([1, 2, 3]);
+        var reader = new ParquetFileReader();
+
+        await Assert.ThrowsAsync<CorruptParquetException>(async () =>
+            await Task.Run(() => reader.Reset(rejected)).ConfigureAwait(false));
+        await Assert.That(rejected.DisposeCount).IsEqualTo(1);
+
+        reader.Reset(CreateFile(CompressionKind.None));
+        reader.Dispose();
+
+        await Assert.That(rejected.DisposeCount).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task FailedFooterParseClearsPartialMetadata()
     {
         using var reader = new ParquetFileReader();
@@ -223,6 +239,17 @@ internal sealed class ParquetFileReaderTests
         stream.Write("PAR1"u8);
         stream.Position = 0;
         return stream;
+    }
+
+    sealed class DisposeTrackingMemoryStream(byte[] buffer) : MemoryStream(buffer)
+    {
+        internal int DisposeCount { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            DisposeCount++;
+            base.Dispose(disposing);
+        }
     }
 
 }

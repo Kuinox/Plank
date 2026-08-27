@@ -1,0 +1,10 @@
+<Project>
+
+  <PropertyGroup>
+    <Authors>Kuinox</Authors>
+    <PackageProjectUrl>https://github.com/Kuinox/Plank</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Kuinox/Plank.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+</Project>
