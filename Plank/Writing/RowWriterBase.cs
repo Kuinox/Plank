@@ -16,8 +16,11 @@ public abstract class RowWriterBase<TSlot> : IDisposable
     readonly ParquetFilePath? _filePath;
     readonly IParquetBufferPool _bufferPool;
     readonly ulong _targetFileSizeBytes;
-    readonly Queue<QueuedSlot> _readySlots;
+    // Slots own reusable input and serialized buffers. Pinning each slot to one worker avoids migrating those hot
+    // buffers between cores (and potentially CCDs); the owner map routes a slot back after the producer returns it.
+    readonly Queue<QueuedSlot>[] _workerReadySlots;
     readonly Queue<TSlot> _freeSlots;
+    readonly Dictionary<TSlot, int> _slotOwners;
     readonly Thread[] _workers;
     readonly TSlot?[] _slots;
     readonly ParquetExecutionOptions _execution;
@@ -58,8 +61,9 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         _targetFileSizeBytes = options.TargetFileSizeBytes;
         var workerCount = checked((int)maxParallelism);
         _execution = options.Execution;
-        _readySlots = new Queue<QueuedSlot>(workerCount);
+        _workerReadySlots = CreateWorkerReadySlots(workerCount);
         _freeSlots = new Queue<TSlot>(workerCount);
+        _slotOwners = new Dictionary<TSlot, int>(workerCount, ReferenceEqualityComparer.Instance);
         _workers = new Thread[workerCount];
         _slots = new TSlot?[workerCount];
         _gate = new object();
@@ -114,8 +118,9 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         _targetFileSizeBytes = options.TargetFileSizeBytes;
         var workerCount = checked((int)maxParallelism);
         _execution = options.Execution;
-        _readySlots = new Queue<QueuedSlot>(workerCount);
+        _workerReadySlots = CreateWorkerReadySlots(workerCount);
         _freeSlots = new Queue<TSlot>(workerCount);
+        _slotOwners = new Dictionary<TSlot, int>(workerCount, ReferenceEqualityComparer.Instance);
         _workers = new Thread[workerCount];
         _slots = new TSlot?[workerCount];
         _gate = new object();
@@ -169,6 +174,8 @@ public abstract class RowWriterBase<TSlot> : IDisposable
             {
                 var slot = CreateSlotChecked();
                 _slots[i] = slot;
+                // Keep the slot's reusable input and serialized buffers on the same worker across every reuse.
+                _slotOwners.Add(slot, i);
                 _freeSlots.Enqueue(slot);
             }
 
@@ -274,7 +281,8 @@ public abstract class RowWriterBase<TSlot> : IDisposable
 
             _disposed = true;
             _addingCompleted = true;
-            _readySlots.Clear();
+            for (var i = 0; i < _workerReadySlots.Length; i++)
+                _workerReadySlots[i].Clear();
             Monitor.PulseAll(_gate);
         }
 
@@ -341,7 +349,9 @@ public abstract class RowWriterBase<TSlot> : IDisposable
 
     void EnqueueReadySlotNoLock(TSlot slot)
     {
-        _readySlots.Enqueue(new QueuedSlot(slot, _nextQueuedSequence++));
+        if (!_slotOwners.TryGetValue(slot, out var workerIndex))
+            throw new InvalidOperationException("The row-writer slot does not belong to this pipeline.");
+        _workerReadySlots[workerIndex].Enqueue(new QueuedSlot(slot, _nextQueuedSequence++));
         Monitor.PulseAll(_gate);
     }
 
@@ -362,6 +372,7 @@ public abstract class RowWriterBase<TSlot> : IDisposable
     void WorkerLoop(object? state)
     {
         var workerIndex = (int)state!;
+        var readySlots = _workerReadySlots[workerIndex];
         var workerName = Thread.CurrentThread.Name ?? $"{WorkerThreadNamePrefix}-{workerIndex}";
         try
         {
@@ -377,13 +388,13 @@ public abstract class RowWriterBase<TSlot> : IDisposable
             QueuedSlot queuedSlot;
             lock (_gate)
             {
-                while (_readySlots.Count == 0 && !_addingCompleted && _fault is null && !_disposed)
+                while (readySlots.Count == 0 && !_addingCompleted && _fault is null && !_disposed)
                     Monitor.Wait(_gate);
 
-                if (_disposed || _readySlots.Count == 0)
+                if (_disposed || readySlots.Count == 0)
                     return;
 
-                queuedSlot = _readySlots.Dequeue();
+                queuedSlot = readySlots.Dequeue();
             }
 
             try
@@ -445,6 +456,14 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         var fault = _fault;
         if (fault is not null)
             fault.Throw();
+    }
+
+    static Queue<QueuedSlot>[] CreateWorkerReadySlots(int workerCount)
+    {
+        var queues = new Queue<QueuedSlot>[workerCount];
+        for (var i = 0; i < queues.Length; i++)
+            queues[i] = new Queue<QueuedSlot>(1);
+        return queues;
     }
 
     void Rollover()

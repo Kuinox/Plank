@@ -203,6 +203,57 @@ internal sealed class RowApiE2ETests
         }
     }
 
+    [Test]
+    public async Task ReusedSlotsStayWithTheirAssignedWorker()
+    {
+        using var worker0Started = new ManualResetEventSlim(false);
+        using var worker1Started = new ManualResetEventSlim(false);
+        using var releaseWorker1 = new ManualResetEventSlim(false);
+        using var slot1SerializeStarted = new ManualResetEventSlim(false);
+        using var stream = new MemoryStream();
+        using var writer = new WorkerOwnedPipelineWriter(stream, rowBatchSize: 1, maxParallelism: 2,
+            new ParquetWriterOptions
+            {
+                Execution = new ParquetExecutionOptions
+                {
+                    WorkerCount = 2,
+                    OnWorkerStarted = context =>
+                    {
+                        if (context.WorkerIndex == 0)
+                            worker0Started.Set();
+                        else
+                        {
+                            worker1Started.Set();
+                            releaseWorker1.Wait(TimeSpan.FromSeconds(5));
+                        }
+                    }
+                }
+            }, slotIndex =>
+            {
+                if (slotIndex == 1)
+                    slot1SerializeStarted.Set();
+            });
+
+        try
+        {
+            await Assert.That(worker0Started.Wait(TimeSpan.FromSeconds(2))).IsTrue();
+            await Assert.That(worker1Started.Wait(TimeSpan.FromSeconds(2))).IsTrue();
+
+            writer.Write(1);
+            writer.Next();
+            writer.Write(2);
+            writer.Next();
+
+            await Assert.That(slot1SerializeStarted.Wait(TimeSpan.FromMilliseconds(250))).IsFalse();
+            releaseWorker1.Set();
+            writer.CompleteWriting();
+        }
+        finally
+        {
+            releaseWorker1.Set();
+        }
+    }
+
     static async Task AssertParquetNetAsync(string path, int[] expected)
     {
         using var stream = File.OpenRead(path);
@@ -246,6 +297,91 @@ internal sealed class RowApiE2ETests
             if (fields[i].Name == name)
                 return fields[i];
         throw new InvalidOperationException($"Could not find field '{name}'.");
+    }
+
+    sealed class WorkerOwnedPipelineWriter : RowWriterBase<WorkerOwnedSlot>
+    {
+        readonly int _rowBatchSize;
+        readonly Action<int> _onSerialize;
+        WorkerOwnedSlot _active;
+        int _nextSlotIndex;
+        bool _completed;
+
+        internal WorkerOwnedPipelineWriter(Stream stream, int rowBatchSize, uint maxParallelism,
+            ParquetWriterOptions options, Action<int> onSerialize)
+            : base(stream, TestIntPipelineWriter.Schema, maxParallelism, options)
+        {
+            _rowBatchSize = rowBatchSize;
+            _onSerialize = onSerialize;
+            InitializeSlots();
+            _active = TakeInitialSlot();
+        }
+
+        protected override WorkerOwnedSlot CreateSlot(PlankParquetWriter writer)
+            => new(writer, _rowBatchSize, _nextSlotIndex++, _onSerialize);
+
+        protected override void SerializeSlot(WorkerOwnedSlot slot)
+            => slot.SerializeColumns();
+
+        protected override void WriteSerializedSlot(WorkerOwnedSlot slot, PlankRowGroupWriter rowGroupWriter)
+            => slot.WriteSerialized(rowGroupWriter);
+
+        protected override void ResetSlotForReuse(WorkerOwnedSlot slot)
+            => slot.ResetForReuse();
+
+        internal void Write(int value)
+            => _active.Value = value;
+
+        internal void Next()
+        {
+            _active.Next();
+            _active = EnqueueAndTakeFree(_active);
+        }
+
+        internal void CompleteWriting()
+        {
+            if (_completed)
+                return;
+            Complete(_active, hasRows: false);
+            _completed = true;
+        }
+    }
+
+    sealed class WorkerOwnedSlot
+    {
+        readonly int[] _values;
+        readonly SerializedColumn<int> _serialized;
+        readonly int _slotIndex;
+        readonly Action<int> _onSerialize;
+        int _index;
+
+        internal WorkerOwnedSlot(PlankParquetWriter writer, int rowCount, int slotIndex, Action<int> onSerialize)
+        {
+            _values = new int[rowCount];
+            _serialized = writer.CreateSerializedColumn<int>(TestIntPipelineWriter.Schema.LeafColumns[0]);
+            _slotIndex = slotIndex;
+            _onSerialize = onSerialize;
+        }
+
+        internal int Value
+        {
+            set => _values[_index] = value;
+        }
+
+        internal void Next()
+            => _index++;
+
+        internal void SerializeColumns()
+        {
+            _onSerialize(_slotIndex);
+            _serialized.Serialize(new ReadOnlySpan<int>(_values, 0, _index));
+        }
+
+        internal void WriteSerialized(PlankRowGroupWriter rowGroupWriter)
+            => rowGroupWriter.Write(_serialized);
+
+        internal void ResetForReuse()
+            => _index = 0;
     }
 
     sealed class TestIntPipelineWriter : RowWriterBase<TestIntSlot>
