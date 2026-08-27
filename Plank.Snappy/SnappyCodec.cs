@@ -1,17 +1,13 @@
-using System.Runtime.InteropServices;
-
 namespace Plank.Snappy;
 
 public static class SnappyCodec
 {
-    static readonly bool _useNative = TryInitializeNative();
+    static SnappyCodec()
+        => SnappyLibraryResolver.Register();
 
     public static int GetMaxCompressedLength(int sourceLength)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(sourceLength);
-
-        if (!_useNative)
-            return Snappier.Snappy.GetMaxCompressedLength(sourceLength);
 
         var maxLength = SnappyNative.MaxCompressedLength((nuint)sourceLength);
         if (maxLength > int.MaxValue)
@@ -36,17 +32,13 @@ public static class SnappyCodec
             return false;
         }
 
-        if (!_useNative)
-            return Snappier.Snappy.TryCompress(source, destination, out written);
-
         var compressedLength = (nuint)destination.Length;
         unsafe
         {
             fixed (byte* sourcePointer = source)
             fixed (byte* destinationPointer = destination)
             {
-                var status = SnappyNative.Compress(sourcePointer, (nuint)source.Length, destinationPointer,
-                    ref compressedLength);
+                var status = SnappyNative.Compress(sourcePointer, (nuint)source.Length, destinationPointer, ref compressedLength);
                 if (status == SnappyStatus.Ok)
                 {
                     if (compressedLength > int.MaxValue)
@@ -72,9 +64,6 @@ public static class SnappyCodec
 
     public static int GetUncompressedLength(ReadOnlySpan<byte> source)
     {
-        if (!_useNative)
-            return Snappier.Snappy.GetUncompressedLength(source);
-
         unsafe
         {
             nuint result = 0;
@@ -103,9 +92,6 @@ public static class SnappyCodec
         if (destination.Length < expectedLength)
             throw new ArgumentException("Destination buffer is too small for the uncompressed payload.", nameof(destination));
 
-        if (!_useNative)
-            return Snappier.Snappy.Decompress(source, destination);
-
         unsafe
         {
             var uncompressedLength = (nuint)destination.Length;
@@ -128,23 +114,5 @@ public static class SnappyCodec
         }
 
         throw new InvalidOperationException("Snappy decompression failed with an unknown status code.");
-    }
-
-    static bool TryInitializeNative()
-    {
-        if (RuntimeInformation.ProcessArchitecture is Architecture.Arm or Architecture.Arm64)
-            return false;
-
-        SnappyLibraryResolver.Register();
-        try
-        {
-            _ = SnappyNative.MaxCompressedLength(0);
-            return true;
-        }
-        catch (Exception exception) when (exception is DllNotFoundException or BadImageFormatException or
-                                          EntryPointNotFoundException)
-        {
-            return false;
-        }
     }
 }
