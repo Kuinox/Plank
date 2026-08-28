@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Plank.Writing;
 
 namespace Plank.RowApi;
@@ -191,6 +192,7 @@ public abstract class RowBufferSlot
     }
 
     /// <summary>Throws if the generated writer has filled this slot.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected void EnsureRowAvailable()
     {
         if (Index >= _rowCount)

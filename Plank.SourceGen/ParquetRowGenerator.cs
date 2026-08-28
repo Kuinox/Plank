@@ -457,9 +457,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        protected override BufferSlot CreateSlot(global::Plank.Writing.ParquetWriter writer)");
         builder.AppendLine("            => new(writer, RowBatchSize);");
         builder.AppendLine();
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
         builder.AppendLine("        public Row GetRow()");
         builder.AppendLine("            => GetSlotForRow().GetRow();");
         builder.AppendLine();
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
         builder.AppendLine("        public void Next()");
         builder.AppendLine("            => NextRow();");
         builder.AppendLine();
@@ -526,6 +528,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        {");
         builder.AppendLine("        }");
         builder.AppendLine();
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
         builder.AppendLine("        internal Row GetRow()");
         builder.AppendLine("        {");
         builder.AppendLine("            EnsureRowAvailable();");
