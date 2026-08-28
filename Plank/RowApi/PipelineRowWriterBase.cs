@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Plank.Schema;
 using Plank.Writing;
 
@@ -92,6 +93,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
 
     /// <summary>Gets the current buffer slot for generated row assignment.</summary>
     /// <returns>The current writable slot.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected TSlot GetSlotForRow()
     {
         ThrowIfFaulted();
@@ -101,6 +103,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
     }
 
     /// <summary>Advances the generated writer to its next row.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected void NextRow()
     {
         ThrowIfFaulted();
