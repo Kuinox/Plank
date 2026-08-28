@@ -52,6 +52,60 @@ internal sealed class TimestampConversionTests
     }
 
     [Test]
+    public void ConvertNullableDateTimesMatchesScalarDivisionAtBoundariesAndRandomTicks()
+    {
+        var random = new Random(20260828);
+        foreach (var unit in new[] { TimeUnit.Millis, TimeUnit.Micros })
+        {
+            var divisor = unit == TimeUnit.Millis ? TimeSpan.TicksPerMillisecond : 10;
+            long[] boundaryTicks =
+            [
+                0, 1, divisor - 1, divisor, divisor + 1,
+                DateTime.UnixEpoch.Ticks - divisor - 1,
+                DateTime.UnixEpoch.Ticks - divisor,
+                DateTime.UnixEpoch.Ticks - 1,
+                DateTime.UnixEpoch.Ticks,
+                DateTime.UnixEpoch.Ticks + 1,
+                DateTime.UnixEpoch.Ticks + divisor - 1,
+                DateTime.UnixEpoch.Ticks + divisor,
+                DateTime.MaxValue.Ticks - divisor,
+                DateTime.MaxValue.Ticks - 1,
+                DateTime.MaxValue.Ticks
+            ];
+            var values = new DateTime?[boundaryTicks.Length + 20_000];
+            for (var i = 0; i < boundaryTicks.Length; i++)
+                values[i] = new DateTime(boundaryTicks[i], DateTimeKind.Utc);
+            for (var i = boundaryTicks.Length; i < values.Length; i++)
+            {
+                if (i % 17 != 0)
+                    values[i] = new DateTime(random.NextInt64(0, DateTime.MaxValue.Ticks + 1),
+                        DateTimeKind.Utc);
+            }
+
+            var actual = new long[values.Length];
+            var actualCount = TimestampConversion.ConvertNullableDateTimes(values, actual, unit,
+                DateTimeKind.Utc);
+            var expectedCount = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                if (values[i] is not { } value)
+                    continue;
+                var expected = TimestampConversion.DivideFloor(value.Ticks - DateTime.UnixEpoch.Ticks,
+                    divisor);
+                if (actual[expectedCount] != expected)
+                    throw new InvalidOperationException(
+                        $"{unit} nullable conversion of {value.Ticks} ticks at source index {i} "
+                        + $"produced {actual[expectedCount]}, expected {expected}.");
+                expectedCount++;
+            }
+
+            if (actualCount != expectedCount)
+                throw new InvalidOperationException(
+                    $"{unit} nullable conversion compacted {actualCount} values, expected {expectedCount}.");
+        }
+    }
+
+    [Test]
     public void ConvertDateTimesRejectsAMismatchedKindAnywhereInTheSpan()
     {
         foreach (var unit in Units)
