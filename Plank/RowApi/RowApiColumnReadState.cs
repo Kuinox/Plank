@@ -17,6 +17,7 @@ abstract class RowApiColumnReadState : IDisposable
         Projected = false;
         Materialized = false;
         CurrentIndex = -1;
+        BufferedValueCount = 0;
     }
 
     internal readonly RowApiColumnDescriptor Descriptor;
@@ -34,6 +35,8 @@ abstract class RowApiColumnReadState : IDisposable
     internal bool Materialized;
 
     internal int CurrentIndex;
+
+    internal int BufferedValueCount;
 
     internal void ResetForProjection(bool projected)
     {
@@ -65,7 +68,21 @@ abstract class RowApiColumnReadState : IDisposable
 
     internal abstract void Open(RowGroup rowGroup);
 
-    internal abstract void Advance();
+    internal virtual bool SupportsBatchAdvance
+        => false;
+
+    internal virtual int PrepareBatch(int consumedRows)
+        => throw new InvalidOperationException($"Column '{PropertyName}' does not support batched row advancement.");
+
+    internal void Advance()
+    {
+        CurrentIndex++;
+        if ((uint)CurrentIndex < (uint)BufferedValueCount)
+            return;
+        AdvanceBuffer();
+    }
+
+    internal abstract void AdvanceBuffer();
 
     internal abstract void DisposeBuffers();
 

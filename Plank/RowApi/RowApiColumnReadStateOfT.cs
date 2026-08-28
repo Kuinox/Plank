@@ -24,6 +24,7 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
         _missing = default!;
         _usingMissing = false;
         CurrentIndex = -1;
+        BufferedValueCount = 0;
         _buffersOpen = false;
     }
 
@@ -38,6 +39,7 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
         _buffer = default;
         _usingMissing = false;
         CurrentIndex = -1;
+        BufferedValueCount = 0;
     }
 
     internal override void SetMissingValue()
@@ -46,6 +48,7 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
         _missing = default!;
         _usingMissing = true;
         CurrentIndex = 0;
+        BufferedValueCount = 1;
     }
 
     internal override void Open(RowGroup rowGroup)
@@ -58,20 +61,49 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
         _buffer = default;
         _usingMissing = false;
         CurrentIndex = -1;
+        BufferedValueCount = 0;
     }
 
-    internal override void Advance()
+    internal override bool SupportsBatchAdvance
+        => true;
+
+    internal override int PrepareBatch(int consumedRows)
     {
-        CurrentIndex++;
-        while ((uint)CurrentIndex >= (uint)_buffer.ValueCount)
+        // Missing columns expose one synthetic default value for every row. They are
+        // normally excluded from the advancing-state list, but keeping this method
+        // total prevents a future caller from exhausting that synthetic value.
+        if (_usingMissing)
+            return int.MaxValue;
+
+        if (CurrentIndex < 0)
+        {
+            AdvanceBuffer();
+        }
+        else
+        {
+            CurrentIndex = checked(CurrentIndex + consumedRows);
+            if (CurrentIndex == BufferedValueCount)
+                AdvanceBuffer();
+            else if ((uint)CurrentIndex > (uint)BufferedValueCount)
+                throw new CorruptParquetException(
+                    $"Column '{PropertyName}' advanced beyond its current value buffer.");
+        }
+
+        return BufferedValueCount - CurrentIndex;
+    }
+
+    internal override void AdvanceBuffer()
+    {
+        while (true)
         {
             if (!_buffers.MoveNext())
                 throw new CorruptParquetException($"Column '{PropertyName}' ended before the row group was complete.");
 
             _buffer = _buffers.Current;
+            BufferedValueCount = _buffer.ValueCount;
             CurrentIndex = 0;
-            if (_buffer.ValueCount == 0)
-                CurrentIndex = -1;
+            if (BufferedValueCount != 0)
+                return;
         }
     }
 
