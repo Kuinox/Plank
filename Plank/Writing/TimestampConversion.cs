@@ -23,9 +23,12 @@ static class TimestampConversion
     const long EpochMicros = 62_135_596_800_000_000L;
 
     /// <summary>
-    /// Round-up reciprocals for <c>ticks / 10_000</c> and <c>ticks / 10</c>. Both are exact for every
-    /// <c>ticks</c> in <c>[0, DateTime.MaxValue.Ticks]</c>; neither is exact over the full UInt64
-    /// range, so they may only be applied to tick values.
+    /// Round-up reciprocals for <c>ticks / 10_000</c> and <c>ticks / 10</c>. For
+    /// <c>m = ceil(2^(64 + shift) / divisor)</c>, the reciprocal quotient is exact while
+    /// <c>ticks * (m * divisor - 2^(64 + shift)) &lt; 2^(64 + shift)</c>. At the maximum
+    /// <see cref="DateTime.Ticks"/> value, those bounds are <c>MaxTicks * 2608 &lt; 2^73</c> for
+    /// milliseconds and <c>MaxTicks * 4 &lt; 2^64</c> for microseconds. Neither reciprocal is exact
+    /// over the full UInt64 range, so they may only be applied to tick values.
     /// </summary>
     const ulong MillisMagic = 944_473_296_573_929_043UL;
 
@@ -78,6 +81,26 @@ static class TimestampConversion
         }
     }
 
+    /// <summary>
+    /// Compacts the present nullable values into <paramref name="destination"/> while converting them
+    /// to their Parquet representation. Millisecond and microsecond conversion use the same exact
+    /// reciprocal scaling as the required-value bulk path, avoiding a signed division per value.
+    /// </summary>
+    internal static int ConvertNullableDateTimes(ReadOnlySpan<DateTime?> values, Span<long> destination,
+        TimeUnit unit, DateTimeKind expectedKind)
+    {
+        return unit switch
+        {
+            TimeUnit.Millis => ConvertNullableScaled(values, destination, expectedKind,
+                MillisMagic, MillisShift, EpochMillis),
+            TimeUnit.Micros => ConvertNullableScaled(values, destination, expectedKind,
+                MicrosMagic, MicrosShift, EpochMicros),
+            TimeUnit.Nanos => ConvertNullableNanos(values, destination, expectedKind),
+            _ => throw new ArgumentOutOfRangeException(nameof(unit), unit,
+                "Time unit must be a defined TimeUnit value.")
+        };
+    }
+
     static void ConvertScaled(ReadOnlySpan<DateTime> values, Span<long> destination,
         DateTimeKind expectedKind, ulong magic, int shift, long epoch)
     {
@@ -89,9 +112,26 @@ static class TimestampConversion
         for (var i = start; i < source.Length; i++)
         {
             RequireKind(values, i, expectedKind);
-            var scaled = MultiplyHigh(source[i] & TicksMask, magic) >> shift;
-            destination[i] = (long)scaled - epoch;
+            destination[i] = ScaleTicks(source[i] & TicksMask, magic, shift, epoch);
         }
+    }
+
+    static int ConvertNullableScaled(ReadOnlySpan<DateTime?> values, Span<long> destination,
+        DateTimeKind expectedKind, ulong magic, int shift, long epoch)
+    {
+        var count = 0;
+        for (var i = 0; i < values.Length; i++)
+        {
+            if (values[i] is not { } value)
+                continue;
+            if (value.Kind != expectedKind)
+                throw new InvalidOperationException(
+                    $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
+
+            destination[count++] = ScaleTicks((ulong)value.Ticks, magic, shift, epoch);
+        }
+
+        return count;
     }
 
     /// <summary>
@@ -140,6 +180,24 @@ static class TimestampConversion
         }
     }
 
+    static int ConvertNullableNanos(ReadOnlySpan<DateTime?> values, Span<long> destination,
+        DateTimeKind expectedKind)
+    {
+        var count = 0;
+        for (var i = 0; i < values.Length; i++)
+        {
+            if (values[i] is not { } value)
+                continue;
+            if (value.Kind != expectedKind)
+                throw new InvalidOperationException(
+                    $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
+
+            destination[count++] = checked((value.Ticks - DateTime.UnixEpoch.Ticks) * 100);
+        }
+
+        return count;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static void RequireKind(ReadOnlySpan<DateTime> values, int index, DateTimeKind expectedKind)
     {
@@ -173,6 +231,10 @@ static class TimestampConversion
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static ulong MultiplyHigh(ulong left, ulong right)
         => Math.BigMul(left, right, out _);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static long ScaleTicks(ulong ticks, ulong magic, int shift, long epoch)
+        => (long)(MultiplyHigh(ticks, magic) >> shift) - epoch;
 
     /// <summary>64x64 to high-64 multiply built from the 32x32 partial products.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

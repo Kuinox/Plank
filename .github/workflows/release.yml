@@ -1,0 +1,260 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and pack
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: recursive
+
+      - name: Read version from tag
+        id: version
+        shell: bash
+        run: |
+          semver_core='(0|[1-9][0-9]*)'
+          semver_prerelease='[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*'
+
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v${semver_core}\.${semver_core}\.${semver_core}(-${semver_prerelease})?$ ]]; then
+            echo "::error::Release tags must use vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE."
+            exit 1
+          fi
+
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Test
+        run: dotnet test --solution Plank.sln --configuration Release
+
+      - name: Pack
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir artifacts
+
+          dotnet pack Plank.Native.Zlib/Plank.Native.Zlib.csproj \
+            --configuration Release \
+            --no-build \
+            --output artifacts
+
+          dotnet pack Plank.SourceGen/Plank.SourceGen.csproj \
+            --configuration Release \
+            --output artifacts \
+            -p:PackageVersion="$VERSION"
+
+          dotnet pack Plank/Plank.csproj \
+            --configuration Release \
+            --no-build \
+            --output artifacts \
+            -p:PackageVersion="$VERSION" \
+            -p:IncludeSymbols=true \
+            -p:SymbolPackageFormat=snupkg
+
+      - name: Verify packages
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          version = os.environ["VERSION"]
+          directory = Path("artifacts")
+          expected_files = {
+              f"Plank.{version}.nupkg",
+              f"Plank.{version}.snupkg",
+              f"Plank.SourceGen.{version}.nupkg",
+              "Plank.Native.Zlib.1.3.1.1.nupkg",
+          }
+          actual_files = {path.name for path in directory.iterdir() if path.is_file()}
+          if actual_files != expected_files:
+              raise SystemExit(
+                  f"Unexpected package set. Expected {sorted(expected_files)}, got {sorted(actual_files)}"
+              )
+
+          def metadata(package_name):
+              with ZipFile(directory / package_name) as package:
+                  nuspecs = [name for name in package.namelist() if name.endswith(".nuspec")]
+                  if len(nuspecs) != 1:
+                      raise SystemExit(f"{package_name} contains {len(nuspecs)} nuspec files")
+                  root = ET.fromstring(package.read(nuspecs[0]))
+
+              namespace = root.tag.removesuffix("package")
+              value = root.find(f"{namespace}metadata")
+              if value is None:
+                  raise SystemExit(f"{package_name} has no package metadata")
+              return value, namespace
+
+          def verify_identity(package_name, expected_id, expected_version):
+              value, namespace = metadata(package_name)
+              package_id = value.findtext(f"{namespace}id")
+              package_version = value.findtext(f"{namespace}version")
+              if (package_id, package_version) != (expected_id, expected_version):
+                  raise SystemExit(
+                      f"{package_name} identifies itself as {package_id} {package_version}"
+                  )
+              return value, namespace
+
+          verify_identity(
+              "Plank.Native.Zlib.1.3.1.1.nupkg",
+              "Plank.Native.Zlib",
+              "1.3.1.1",
+          )
+          verify_identity(
+              f"Plank.SourceGen.{version}.nupkg",
+              "Plank.SourceGen",
+              version,
+          )
+          plank, namespace = verify_identity(
+              f"Plank.{version}.nupkg",
+              "Plank",
+              version,
+          )
+
+          dependencies = {
+              dependency.attrib["id"]: dependency.attrib["version"]
+              for dependency in plank.findall(f".//{namespace}dependency")
+          }
+          expected_dependencies = {
+              "Plank.Native.Zlib": "1.3.1.1",
+              "Plank.SourceGen": version,
+          }
+          for package_id, expected_version in expected_dependencies.items():
+              actual_version = dependencies.get(package_id)
+              if actual_version != expected_version:
+                  raise SystemExit(
+                      f"Plank dependency {package_id} is {actual_version}, expected {expected_version}"
+                  )
+
+          with ZipFile(directory / "Plank.Native.Zlib.1.3.1.1.nupkg") as package:
+              expected_native_assets = {
+                  "runtimes/android-arm64/native/libz.so",
+                  "runtimes/android-x64/native/libz.so",
+                  "runtimes/linux-arm64/native/libz.so",
+                  "runtimes/linux-x64/native/libz.so",
+                  "runtimes/osx-arm64/native/libz.dylib",
+                  "runtimes/osx-x64/native/libz.dylib",
+                  "runtimes/win-arm64/native/zlib.dll",
+                  "runtimes/win-x64/native/zlib.dll",
+                  "runtimes/win-x86/native/zlib.dll",
+              }
+              missing = expected_native_assets.difference(package.namelist())
+              if missing:
+                  raise SystemExit(f"Native package is missing assets: {sorted(missing)}")
+
+          with ZipFile(directory / f"Plank.{version}.snupkg") as package:
+              if "lib/net10.0/Plank.pdb" not in package.namelist():
+                  raise SystemExit("Plank symbol package does not contain Plank.pdb")
+          PY
+
+      - name: Upload packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nuget-packages-${{ steps.version.outputs.version }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment: nuget
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: nuget-packages-${{ needs.build.outputs.version }}
+          path: artifacts
+
+      - name: Check NuGet configuration
+        env:
+          NUGET_USER: ${{ vars.NUGET_USER }}
+        run: |
+          if [[ -z "$NUGET_USER" ]]; then
+            echo "::error::Set the NUGET_USER variable on the nuget environment."
+            exit 1
+          fi
+
+      - name: Log in to NuGet
+        id: login
+        uses: NuGet/login@d22cc5f58ff5b88bf9bd452535b4335137e24544 # v1.2.0
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Publish packages
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          source='https://api.nuget.org/v3/index.json'
+
+          dotnet nuget push "artifacts/Plank.Native.Zlib.1.3.1.1.nupkg" \
+            --source "$source" \
+            --api-key "$NUGET_API_KEY" \
+            --skip-duplicate
+
+          dotnet nuget push "artifacts/Plank.SourceGen.${VERSION}.nupkg" \
+            --source "$source" \
+            --api-key "$NUGET_API_KEY" \
+            --skip-duplicate
+
+          dotnet nuget push "artifacts/Plank.${VERSION}.nupkg" \
+            --source "$source" \
+            --api-key "$NUGET_API_KEY" \
+            --skip-duplicate
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" artifacts/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+            exit 0
+          fi
+
+          release_flags=()
+          if [[ "$VERSION" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+
+          gh release create "$GITHUB_REF_NAME" artifacts/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME" \
+            "${release_flags[@]}"

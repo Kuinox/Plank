@@ -1880,15 +1880,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         LogicalType.Timestamp timestamp)
     {
         var expectedKind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
-        return timestamp.Unit switch
-        {
-            TimeUnit.Millis => ConvertNullableDateTimesDivided(values, destination, expectedKind,
-                TimeSpan.TicksPerMillisecond),
-            TimeUnit.Micros => ConvertNullableDateTimesDivided(values, destination, expectedKind, 10),
-            TimeUnit.Nanos => ConvertNullableDateTimesNanos(values, destination, expectedKind),
-            _ => throw new ArgumentOutOfRangeException(nameof(timestamp), timestamp.Unit,
-                "Time unit must be a defined TimeUnit value.")
-        };
+        return TimestampConversion.ConvertNullableDateTimes(values, destination, timestamp.Unit,
+            expectedKind);
     }
 
     static int CompactPresentValues<TValue>(ReadOnlySpan<TValue?> values, Span<TValue> destination)
@@ -1908,42 +1901,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             if (values[i].HasValue)
                 return i;
         return -1;
-    }
-
-    static int ConvertNullableDateTimesDivided(ReadOnlySpan<DateTime?> values, Span<long> destination,
-        DateTimeKind expectedKind, long divisor)
-    {
-        var count = 0;
-        for (var i = 0; i < values.Length; i++)
-        {
-            if (values[i] is not { } value)
-                continue;
-            if (value.Kind != expectedKind)
-                throw new InvalidOperationException(
-                    $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
-
-            destination[count++] = TimestampConversion.DivideFloor(value.Ticks - DateTime.UnixEpoch.Ticks, divisor);
-        }
-
-        return count;
-    }
-
-    static int ConvertNullableDateTimesNanos(ReadOnlySpan<DateTime?> values, Span<long> destination,
-        DateTimeKind expectedKind)
-    {
-        var count = 0;
-        for (var i = 0; i < values.Length; i++)
-        {
-            if (values[i] is not { } value)
-                continue;
-            if (value.Kind != expectedKind)
-                throw new InvalidOperationException(
-                    $"DateTime values must have kind '{expectedKind}', got '{value.Kind}'.");
-
-            destination[count++] = checked((value.Ticks - DateTime.UnixEpoch.Ticks) * 100);
-        }
-
-        return count;
     }
 
     static int ConvertNullableDateTimeOffsets(ReadOnlySpan<DateTimeOffset?> values, Span<long> destination,
