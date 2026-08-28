@@ -21,15 +21,19 @@ public abstract class RowWriterBase<TSlot> : IDisposable
     readonly Queue<QueuedSlot>[] _workerReadySlots;
     readonly Queue<TSlot> _freeSlots;
     readonly Dictionary<TSlot, int> _slotOwners;
+    readonly Dictionary<ulong, QueuedSlot> _serializedSlots;
     readonly Thread[] _workers;
     readonly TSlot?[] _slots;
     readonly ParquetExecutionOptions _execution;
     readonly object _gate;
     readonly object _writeGate;
+    readonly SemaphoreSlim[] _workerReadySignals;
+    readonly SemaphoreSlim _freeSignal;
     bool _initialSlotTaken;
     bool _slotsInitialized;
     ulong _nextQueuedSequence;
     ulong _nextWriteSequence;
+    bool _writerActive;
     bool _addingCompleted;
     bool _completed;
     ulong _fileIndex;
@@ -64,14 +68,18 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         _workerReadySlots = CreateWorkerReadySlots(workerCount);
         _freeSlots = new Queue<TSlot>(workerCount);
         _slotOwners = new Dictionary<TSlot, int>(workerCount, ReferenceEqualityComparer.Instance);
+        _serializedSlots = new Dictionary<ulong, QueuedSlot>(workerCount);
         _workers = new Thread[workerCount];
         _slots = new TSlot?[workerCount];
         _gate = new object();
         _writeGate = new object();
+        _workerReadySignals = CreateWorkerReadySignals(workerCount);
+        _freeSignal = new SemaphoreSlim(0);
         _initialSlotTaken = false;
         _slotsInitialized = false;
         _nextQueuedSequence = 0;
         _nextWriteSequence = 0;
+        _writerActive = false;
         _addingCompleted = false;
         _completed = false;
         _fileIndex = 0;
@@ -121,14 +129,18 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         _workerReadySlots = CreateWorkerReadySlots(workerCount);
         _freeSlots = new Queue<TSlot>(workerCount);
         _slotOwners = new Dictionary<TSlot, int>(workerCount, ReferenceEqualityComparer.Instance);
+        _serializedSlots = new Dictionary<ulong, QueuedSlot>(workerCount);
         _workers = new Thread[workerCount];
         _slots = new TSlot?[workerCount];
         _gate = new object();
         _writeGate = new object();
+        _workerReadySignals = CreateWorkerReadySignals(workerCount);
+        _freeSignal = new SemaphoreSlim(0);
         _initialSlotTaken = false;
         _slotsInitialized = false;
         _nextQueuedSequence = 0;
         _nextWriteSequence = 0;
+        _writerActive = false;
         _addingCompleted = false;
         _completed = false;
         _fileIndex = 0;
@@ -177,6 +189,7 @@ public abstract class RowWriterBase<TSlot> : IDisposable
                 // Keep the slot's reusable input and serialized buffers on the same worker across every reuse.
                 _slotOwners.Add(slot, i);
                 _freeSlots.Enqueue(slot);
+                _freeSignal.Release();
             }
 
             for (var i = 0; i < _workers.Length; i++)
@@ -209,8 +222,9 @@ public abstract class RowWriterBase<TSlot> : IDisposable
                 throw new InvalidOperationException("Initial slot was already taken.");
 
             _initialSlotTaken = true;
-            return TakeFreeSlotNoLock();
         }
+
+        return TakeFreeSlot();
     }
 
     /// <summary>Queues a filled slot and obtains the next writable slot.</summary>
@@ -229,8 +243,9 @@ public abstract class RowWriterBase<TSlot> : IDisposable
                 throw new InvalidOperationException("Row writer is already completed.");
 
             EnqueueReadySlotNoLock(slot);
-            return TakeFreeSlotNoLock();
         }
+
+        return TakeFreeSlot();
     }
 
     /// <summary>Completes the serialization pipeline and closes the Parquet file.</summary>
@@ -252,9 +267,10 @@ public abstract class RowWriterBase<TSlot> : IDisposable
 
                 _completed = true;
                 _addingCompleted = true;
-                Monitor.PulseAll(_gate);
             }
         }
+
+        SignalWorkers();
 
         for (var i = 0; i < _workers.Length; i++)
             _workers[i].Join();
@@ -283,11 +299,10 @@ public abstract class RowWriterBase<TSlot> : IDisposable
             _addingCompleted = true;
             for (var i = 0; i < _workerReadySlots.Length; i++)
                 _workerReadySlots[i].Clear();
-            Monitor.PulseAll(_gate);
         }
 
-        lock (_writeGate)
-            Monitor.PulseAll(_writeGate);
+        SignalWorkers();
+        _freeSignal.Release();
 
         for (var i = 0; i < _workers.Length; i++)
             if (_workers[i] is { IsAlive: true } worker)
@@ -317,6 +332,9 @@ public abstract class RowWriterBase<TSlot> : IDisposable
             cleanupFailure ??= ExceptionDispatchInfo.Capture(ex);
         }
 
+        for (var i = 0; i < _workerReadySignals.Length; i++)
+            _workerReadySignals[i].Dispose();
+        _freeSignal.Dispose();
         cleanupFailure?.Throw();
     }
 
@@ -352,27 +370,29 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         if (!_slotOwners.TryGetValue(slot, out var workerIndex))
             throw new InvalidOperationException("The row-writer slot does not belong to this pipeline.");
         _workerReadySlots[workerIndex].Enqueue(new QueuedSlot(slot, _nextQueuedSequence++));
-        Monitor.PulseAll(_gate);
+        _workerReadySignals[workerIndex].Release();
     }
 
-    TSlot TakeFreeSlotNoLock()
+    TSlot TakeFreeSlot()
     {
-        while (_freeSlots.Count == 0)
+        while (true)
         {
-            ThrowIfDisposed();
-            RethrowFault();
-            Monitor.Wait(_gate);
+            _freeSignal.Wait();
+            lock (_gate)
+            {
+                ThrowIfDisposed();
+                RethrowFault();
+                if (_freeSlots.Count != 0)
+                    return _freeSlots.Dequeue();
+            }
         }
-
-        ThrowIfDisposed();
-        RethrowFault();
-        return _freeSlots.Dequeue();
     }
 
     void WorkerLoop(object? state)
     {
         var workerIndex = (int)state!;
         var readySlots = _workerReadySlots[workerIndex];
+        var readySignal = _workerReadySignals[workerIndex];
         var workerName = Thread.CurrentThread.Name ?? $"{WorkerThreadNamePrefix}-{workerIndex}";
         try
         {
@@ -385,14 +405,14 @@ public abstract class RowWriterBase<TSlot> : IDisposable
 
         while (true)
         {
+            readySignal.Wait();
             QueuedSlot queuedSlot;
             lock (_gate)
             {
-                while (readySlots.Count == 0 && !_addingCompleted && _fault is null && !_disposed)
-                    Monitor.Wait(_gate);
-
-                if (_disposed || readySlots.Count == 0)
+                if (_disposed || _fault is not null || readySlots.Count == 0 && _addingCompleted)
                     return;
+                if (readySlots.Count == 0)
+                    continue;
 
                 queuedSlot = readySlots.Dequeue();
             }
@@ -400,24 +420,66 @@ public abstract class RowWriterBase<TSlot> : IDisposable
             try
             {
                 SerializeSlot(queuedSlot.Slot);
-                lock (_writeGate)
-                {
-                    while (queuedSlot.Sequence != _nextWriteSequence && _fault is null && !_disposed)
-                        Monitor.Wait(_writeGate);
+                EnqueueSerializedSlot(queuedSlot);
+            }
+            catch (Exception ex)
+            {
+                RecordFault(ex);
+                ReturnSlot(queuedSlot.Slot);
+            }
+        }
+    }
 
-                    if (_disposed)
-                        return;
-                    RethrowFault();
-                    if (_rolloverPending)
-                        Rollover();
-                    var rowGroupWriter = _writer.StartRowGroup();
-                    WriteSerializedSlot(queuedSlot.Slot, rowGroupWriter);
-                    OnSlotWritten(queuedSlot.Slot);
-                    if (_rollingFile is not null && checked((ulong)_writer.FileOffset) >= _targetFileSizeBytes)
-                        _rolloverPending = true;
-                    _nextWriteSequence++;
-                    Monitor.PulseAll(_writeGate);
+    void EnqueueSerializedSlot(QueuedSlot queuedSlot)
+    {
+        // A serializer deposits its result and immediately stops competing for the ordered-write lock.
+        // Whichever serializer makes the next sequence available becomes the sole ordered drainer.
+        var drain = false;
+        lock (_writeGate)
+        {
+            if (_disposed)
+            {
+                ReturnSlot(queuedSlot.Slot);
+                return;
+            }
+            RethrowFault();
+            _serializedSlots.Add(queuedSlot.Sequence, queuedSlot);
+            if (!_writerActive && _serializedSlots.ContainsKey(_nextWriteSequence))
+            {
+                _writerActive = true;
+                drain = true;
+            }
+        }
+
+        if (drain)
+            DrainSerializedSlots();
+    }
+
+    void DrainSerializedSlots()
+    {
+        while (true)
+        {
+            QueuedSlot queuedSlot;
+            lock (_writeGate)
+            {
+                if (_disposed || _fault is not null ||
+                    !_serializedSlots.Remove(_nextWriteSequence, out queuedSlot))
+                {
+                    _writerActive = false;
+                    return;
                 }
+            }
+
+            try
+            {
+                if (_rolloverPending)
+                    Rollover();
+                var rowGroupWriter = _writer.StartRowGroup();
+                WriteSerializedSlot(queuedSlot.Slot, rowGroupWriter);
+                OnSlotWritten(queuedSlot.Slot);
+                if (_rollingFile is not null && checked((ulong)_writer.FileOffset) >= _targetFileSizeBytes)
+                    _rolloverPending = true;
+                _nextWriteSequence++;
             }
             catch (Exception ex)
             {
@@ -425,14 +487,30 @@ public abstract class RowWriterBase<TSlot> : IDisposable
             }
             finally
             {
-                ResetSlotForReuse(queuedSlot.Slot);
-                lock (_gate)
-                {
-                    _freeSlots.Enqueue(queuedSlot.Slot);
-                    Monitor.PulseAll(_gate);
-                }
+                ReturnSlot(queuedSlot.Slot);
             }
         }
+    }
+
+    void ReturnSlot(TSlot slot)
+    {
+        try
+        {
+            ResetSlotForReuse(slot);
+        }
+        catch (Exception ex)
+        {
+            RecordFault(ex);
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+            _freeSlots.Enqueue(slot);
+        }
+        _freeSignal.Release();
     }
 
     void RecordFault(Exception exception)
@@ -444,11 +522,10 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         lock (_gate)
         {
             _addingCompleted = true;
-            Monitor.PulseAll(_gate);
         }
 
-        lock (_writeGate)
-            Monitor.PulseAll(_writeGate);
+        SignalWorkers();
+        _freeSignal.Release();
     }
 
     void RethrowFault()
@@ -464,6 +541,20 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         for (var i = 0; i < queues.Length; i++)
             queues[i] = new Queue<QueuedSlot>(1);
         return queues;
+    }
+
+    static SemaphoreSlim[] CreateWorkerReadySignals(int workerCount)
+    {
+        var signals = new SemaphoreSlim[workerCount];
+        for (var i = 0; i < signals.Length; i++)
+            signals[i] = new SemaphoreSlim(0);
+        return signals;
+    }
+
+    void SignalWorkers()
+    {
+        for (var i = 0; i < _workerReadySignals.Length; i++)
+            _workerReadySignals[i].Release();
     }
 
     void Rollover()
