@@ -4448,16 +4448,20 @@ static class ColumnChunkReader
             }
 
             var literalGroupCount = header >> 1;
+            if (literalGroupCount == 0)
+                throw new CorruptParquetException("Boolean RLE contains an empty bit-packed run.");
             if (literalGroupCount > uint.MaxValue / 8)
                 throw new CorruptParquetException($"Boolean RLE literal run group count {literalGroupCount} is too large.");
             var literalCount = literalGroupCount * 8U;
-            for (var i = 0U; i < literalCount && valueIndex < destinationLength; i++)
-                destination[(int)valueIndex++] = ReadBitPackedValue(ref payload, bitWidth: 1, (int)i) != 0;
-
             var literalByteCount = (literalCount + 7U) >> 3;
             if (literalByteCount > (uint)payload.Length)
                 throw new CorruptParquetException(
                     $"Boolean RLE literal group claims {literalByteCount} bytes but only {payload.Length} remain.");
+
+            var literalCopyLength = Math.Min(literalCount, destinationLength - valueIndex);
+            BooleanBitUnpacker.Unpack(payload[..(int)literalByteCount], 0,
+                destination.Slice((int)valueIndex, (int)literalCopyLength));
+            valueIndex += literalCopyLength;
             payload = payload[(int)literalByteCount..];
         }
     }
