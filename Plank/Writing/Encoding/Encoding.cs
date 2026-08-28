@@ -912,7 +912,8 @@ static class Encoding
 
     internal static void EncodeOptional<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T?> values,
         PageStrategyContext strategyContext, PageList pages, ParquetDataPageVersion dataPageVersion,
-        LeafProjectionInfo leafProjectionInfo, ReusableDictionaryState<T> dictionaryState)
+        LeafProjectionInfo leafProjectionInfo, ReusableDictionaryState<T> dictionaryState,
+        out PlainBinaryMinMax binaryMinMax)
         where T : struct
     {
         ArgumentNullException.ThrowIfNull(column);
@@ -925,6 +926,7 @@ static class Encoding
             throw new NotSupportedException(
                 $"Column '{column.Name}' optional flat encoding requires a single optional leaf.");
 
+        binaryMinMax = default;
         pages.Clear();
         if (values.Length == 0)
             return;
@@ -936,10 +938,9 @@ static class Encoding
 
             var memoryValues = Unsafe.As<ReadOnlySpan<T?>, ReadOnlySpan<ReadOnlyMemory<byte>?>>(ref values);
             var memoryDictionary = (ReusableDictionaryState<ReadOnlyMemory<byte>>)(object)dictionaryState;
-            var memoryMinMax = default(PlainBinaryMinMax);
             EncodeOptionalFlatByteArrays<ReadOnlyMemory<byte>?, ReadOnlyMemory<byte>,
                 NullableValueRow<ReadOnlyMemory<byte>>, OptionalMemoryRow>(bufferWriters, column, memoryValues,
-                strategyContext, pages, dataPageVersion, memoryDictionary, ref memoryMinMax);
+                strategyContext, pages, dataPageVersion, memoryDictionary, ref binaryMinMax);
             return;
         }
 
@@ -2518,6 +2519,16 @@ static class Encoding
                             out pageMinIndex, out pageMaxIndex, out nullCount, out presentRows,
                             out definitionLength, out pageHasOnlySingleBytePayloads);
                     }
+                    else if (typeof(TRow) == typeof(ReadOnlyMemory<byte>?))
+                    {
+                        var memoryRows = Unsafe.As<ReadOnlySpan<TRow>,
+                            ReadOnlySpan<ReadOnlyMemory<byte>?>>(ref values);
+                        pageRowCount = MeasureMemoryPageRowsAndWriteDefinitionLevels(column, memoryRows,
+                            rowsWritten, presentValueBytes, targetPageBytes, trackMinMax, ref binaryMinMax,
+                            dataPageVersion == ParquetDataPageVersion.V1, ref page.Content, out pageBytes,
+                            out pageMinIndex, out pageMaxIndex, out nullCount, out presentRows,
+                            out definitionLength, out pageHasOnlySingleBytePayloads);
+                    }
                     else
                     {
                         pageRowCount = MeasureByteArrayPageRows<TRow, TValue, TProbe>(column, values, rowsWritten,
@@ -2543,13 +2554,28 @@ static class Encoding
                         dictionaryIndexes.Slice(denseOffset, presentRows), dictionaryBitWidth, ref page.Content);
                 }
                 else if (BitConverter.IsLittleEndian && dataEncoding == EncodingKind.Plain
-                    && column.PhysicalType == ParquetPhysicalType.ByteArray && typeof(TRow) == typeof(byte[])
-                    && pageHasOnlySingleBytePayloads)
+                    && column.PhysicalType == ParquetPhysicalType.ByteArray && pageHasOnlySingleBytePayloads)
                 {
-                    var byteArrayRows = MemoryMarshal.CreateReadOnlySpan(
-                        ref Unsafe.As<TRow, byte[]>(ref MemoryMarshal.GetReference(pageRows)), pageRows.Length);
-                    PlainEncoding.WriteOptionalSingleByteArrayPayloads(byteArrayRows, presentRows,
-                        ref page.Content);
+                    if (typeof(TRow) == typeof(byte[]))
+                    {
+                        var byteArrayRows = MemoryMarshal.CreateReadOnlySpan(
+                            ref Unsafe.As<TRow, byte[]>(ref MemoryMarshal.GetReference(pageRows)), pageRows.Length);
+                        PlainEncoding.WriteOptionalSingleByteArrayPayloads(byteArrayRows, presentRows,
+                            ref page.Content);
+                    }
+                    else if (typeof(TRow) == typeof(ReadOnlyMemory<byte>?))
+                    {
+                        var memoryRows = Unsafe.As<ReadOnlySpan<TRow>,
+                            ReadOnlySpan<ReadOnlyMemory<byte>?>>(ref pageRows);
+                        PlainEncoding.WriteOptionalSingleByteMemoryPayloads(memoryRows, presentRows,
+                            ref page.Content);
+                    }
+                    else
+                    {
+                        ValueEncodingDispatcher.WriteOptionalValues<TRow, TRowAccess>(dataEncoding, column, pageRows,
+                            bufferWriters, pageBytes >= 0 && presentValueBytes == 0 ? pageBytes - pageRowCount : -1,
+                            ref page.Content);
+                    }
                 }
                 // Encode even with nothing present. PLAIN is happy to emit zero
                 // bytes, but DELTA_BINARY_PACKED and the DELTA_*_BYTE_ARRAY
@@ -2571,16 +2597,30 @@ static class Encoding
                     useDictionary ? dictionaryEncoding : dataEncoding);
                 // A single complete page takes the column statistics in SerializedColumn, so avoid
                 // renting and copying a second pair of binary extrema buffers that it would immediately overwrite.
-                if (useTargetPageBytes && trackMinMax && typeof(TRow) == typeof(byte[])
+                if (useTargetPageBytes && trackMinMax
+                    && (typeof(TRow) == typeof(byte[]) || typeof(TRow) == typeof(ReadOnlyMemory<byte>?))
                     && (pageStart != 0 || rowsWritten != values.Length))
                 {
-                    var byteArrayRows = MemoryMarshal.CreateReadOnlySpan(
-                        ref Unsafe.As<TRow, byte[]>(ref MemoryMarshal.GetReference(values)), values.Length);
-                    page.Statistics = pageMinIndex < 0
-                        ? ColumnStatistics.Empty(nullCount)
-                        : ColumnStatistics.CreateBinaryFromKnownExtremes(column, byteArrayRows,
-                            pageMinIndex, pageMaxIndex, nullCount, ref page.StatisticsMinValueBuffer,
-                            ref page.StatisticsMaxValueBuffer, bufferWriters.BufferPool);
+                    if (typeof(TRow) == typeof(byte[]))
+                    {
+                        var byteArrayRows = MemoryMarshal.CreateReadOnlySpan(
+                            ref Unsafe.As<TRow, byte[]>(ref MemoryMarshal.GetReference(values)), values.Length);
+                        page.Statistics = pageMinIndex < 0
+                            ? ColumnStatistics.Empty(nullCount)
+                            : ColumnStatistics.CreateBinaryFromKnownExtremes(column, byteArrayRows,
+                                pageMinIndex, pageMaxIndex, nullCount, ref page.StatisticsMinValueBuffer,
+                                ref page.StatisticsMaxValueBuffer, bufferWriters.BufferPool);
+                    }
+                    else if (typeof(TRow) == typeof(ReadOnlyMemory<byte>?))
+                    {
+                        var memoryRows = Unsafe.As<ReadOnlySpan<TRow>,
+                            ReadOnlySpan<ReadOnlyMemory<byte>?>>(ref values);
+                        page.Statistics = pageMinIndex < 0
+                            ? ColumnStatistics.Empty(nullCount)
+                            : ColumnStatistics.CreateBinaryFromKnownOptionalMemoryExtremes(column, memoryRows,
+                                pageMinIndex, pageMaxIndex, nullCount, ref page.StatisticsMinValueBuffer,
+                                ref page.StatisticsMaxValueBuffer, bufferWriters.BufferPool);
+                    }
                 }
                 denseOffset += presentRows;
                 totalNullCount += nullCount;
@@ -2722,6 +2762,119 @@ static class Encoding
                 if (EncodingPrimitives.ComparePayload(pageMin, rows[binaryMinMax.MinIndex]) < 0)
                     binaryMinMax.MinIndex = pageMinIndex;
                 if (EncodingPrimitives.ComparePayload(pageMax!, rows[binaryMinMax.MaxIndex]) > 0)
+                    binaryMinMax.MaxIndex = pageMaxIndex;
+            }
+        }
+
+        return i - startIndex;
+    }
+
+    /// <summary>
+    /// Nullable <see cref="ReadOnlyMemory{T}"/> page measurement fused with definition levels, one-byte detection,
+    /// and lexicographic extrema. This removes two otherwise redundant full passes over the same values.
+    /// </summary>
+    static int MeasureMemoryPageRowsAndWriteDefinitionLevels(Column column,
+        ReadOnlySpan<ReadOnlyMemory<byte>?> rows, int startIndex, int presentValueBytes, int targetPageBytes,
+        bool trackMinMax, ref PlainBinaryMinMax binaryMinMax, bool writeLengthPrefix, ref BufferWriter writer,
+        out int pageBytes, out int pageMinIndex, out int pageMaxIndex, out int nullCount, out int presentRows,
+        out int definitionLength, out bool hasOnlySingleBytePayloads)
+    {
+        var lengthPrefix = ReserveLevelLengthPrefix(writeLengthPrefix, ref writer);
+        var definitionStart = writer.WrittenLength;
+        var currentLevel = -1;
+        var currentRunLength = 0;
+        var pageMin = default(ReadOnlyMemory<byte>);
+        var pageMax = default(ReadOnlyMemory<byte>);
+        pageMinIndex = -1;
+        pageMaxIndex = -1;
+        nullCount = 0;
+        presentRows = 0;
+        var allPresentPayloadsAreSingleByte = true;
+        pageBytes = 0;
+        var i = startIndex;
+        for (; i < rows.Length; i++)
+        {
+            var row = rows[i];
+            if (!row.HasValue)
+            {
+                if (i > startIndex && 1 > targetPageBytes - pageBytes)
+                    break;
+                pageBytes = checked(pageBytes + 1);
+                nullCount++;
+            }
+            else
+            {
+                var memory = row.GetValueOrDefault();
+                var payload = memory.Span;
+                var rowBytes = presentValueBytes > 0
+                    ? 1 + presentValueBytes
+                    : checked(1 + sizeof(int) + payload.Length);
+                if (i > startIndex && rowBytes > targetPageBytes - pageBytes)
+                    break;
+                pageBytes = checked(pageBytes + rowBytes);
+                presentRows++;
+                allPresentPayloadsAreSingleByte &= payload.Length == 1;
+
+                if (trackMinMax)
+                {
+                    if (pageMinIndex < 0)
+                    {
+                        pageMin = memory;
+                        pageMax = memory;
+                        pageMinIndex = i;
+                        pageMaxIndex = i;
+                    }
+                    else if (payload.SequenceCompareTo(pageMin.Span) < 0)
+                    {
+                        pageMin = memory;
+                        pageMinIndex = i;
+                    }
+                    else if (payload.SequenceCompareTo(pageMax.Span) > 0)
+                    {
+                        pageMax = memory;
+                        pageMaxIndex = i;
+                    }
+                }
+            }
+
+            var level = row.HasValue ? 1 : 0;
+            if (currentRunLength == 0)
+            {
+                currentLevel = level;
+                currentRunLength = 1;
+            }
+            else if (currentLevel == level)
+            {
+                currentRunLength++;
+            }
+            else
+            {
+                EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref writer);
+                currentLevel = level;
+                currentRunLength = 1;
+            }
+        }
+
+        if (currentRunLength > 0)
+            EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref writer);
+        definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref writer);
+        hasOnlySingleBytePayloads = presentRows > 0 && allPresentPayloadsAreSingleByte;
+
+        if (pageMinIndex >= 0)
+        {
+            if (!binaryMinMax.Found)
+            {
+                binaryMinMax.Found = true;
+                binaryMinMax.MinIndex = pageMinIndex;
+                binaryMinMax.MaxIndex = pageMaxIndex;
+            }
+            else
+            {
+                if (pageMin.Span.SequenceCompareTo(
+                        rows[binaryMinMax.MinIndex].GetValueOrDefault().Span) < 0)
+                    binaryMinMax.MinIndex = pageMinIndex;
+                if (pageMax.Span.SequenceCompareTo(
+                        rows[binaryMinMax.MaxIndex].GetValueOrDefault().Span) > 0)
                     binaryMinMax.MaxIndex = pageMaxIndex;
             }
         }

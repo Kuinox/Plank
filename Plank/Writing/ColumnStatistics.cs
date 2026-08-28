@@ -187,6 +187,20 @@ internal readonly struct ColumnStatistics
     }
 
     /// <summary>
+    /// Builds nullable memory statistics from extrema found while sizing BYTE_ARRAY pages.
+    /// </summary>
+    internal static ColumnStatistics CreateBinaryFromKnownOptionalMemoryExtremes(Column column,
+        ReadOnlySpan<ReadOnlyMemory<byte>?> values, int minIndex, int maxIndex, long nullCount,
+        ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
+    {
+        var min = values[minIndex].GetValueOrDefault().Span;
+        var max = values[maxIndex].GetValueOrDefault().Span;
+        CopyToReusableBuffer(min, ref minBuffer, bufferPool);
+        CopyToReusableBuffer(max, ref maxBuffer, bufferPool);
+        return new ColumnStatistics(minBuffer, min.Length, maxBuffer, max.Length, nullCount, true);
+    }
+
+    /// <summary>
     /// Whether the column's BYTE_ARRAY values compare as plain unsigned byte sequences. Decimals do
     /// not: their bytes are a two's complement number, so they are ordered by sign and magnitude.
     /// </summary>

@@ -1313,16 +1313,34 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         Pages.Clear();
         ColumnOrdinal = columnOrdinal;
         RowCount = checked((uint)values.Length);
-        Statistics = ColumnStatistics.CreateOptionalWithReusableBinaryBuffers(_column, values,
-            ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
         HasPendingData = true;
 
         Plank.Writing.Encoding.Encoding.EncodeOptional(_owner.BufferWriters, _column, values, strategyContext, Pages,
             _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
-            GetOrCreateDictionaryState<TValue>());
+            GetOrCreateDictionaryState<TValue>(), out var binaryMinMax);
+        if (typeof(TValue) == typeof(ReadOnlyMemory<byte>)
+            && ColumnStatistics.OrdersBinaryValuesLexicographically(_column))
+        {
+            var memoryValues = Unsafe.As<ReadOnlySpan<TValue?>,
+                ReadOnlySpan<ReadOnlyMemory<byte>?>>(ref values);
+            Statistics = binaryMinMax.Found
+                ? ColumnStatistics.CreateBinaryFromKnownOptionalMemoryExtremes(_column, memoryValues,
+                    binaryMinMax.MinIndex, binaryMinMax.MaxIndex, binaryMinMax.NullCount,
+                    ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool)
+                : binaryMinMax.NullCount == values.Length
+                    ? ColumnStatistics.Empty(binaryMinMax.NullCount)
+                    : ColumnStatistics.CreateOptionalWithReusableBinaryBuffers(_column, values,
+                        ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer,
+                        _owner.BufferWriters.BufferPool);
+        }
+        else
+        {
+            Statistics = ColumnStatistics.CreateOptionalWithReusableBinaryBuffers(_column, values,
+                ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
+        }
         _bloomFilterByteLength = BloomFilterBuilder.BuildOptional(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
-        if (!TryAssignSingleDataPageStatistics(Statistics))
+        if (!TryAssignSingleDataPageStatistics(Statistics) && !AllDataPagesHaveStatistics())
             AssignOptionalPageStatistics(values);
     }
 

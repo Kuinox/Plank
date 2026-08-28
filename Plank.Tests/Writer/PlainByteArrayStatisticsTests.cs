@@ -161,6 +161,28 @@ internal sealed class PlainByteArrayStatisticsTests
     }
 
     [Test]
+    public void OptionalMemoryMinAndMaxAndPageStatisticsSpanEveryPage()
+    {
+        var column = CreateOptionalMemoryColumn(36);
+        ReadOnlyMemory<byte>?[] values =
+        [
+            "mmmmmmmmmmmm"u8.ToArray(),
+            null,
+            "zzzzzzzzzzzz"u8.ToArray(),
+            "qqqqqqqqqqqq"u8.ToArray(),
+            null,
+            "aaaaaaaaaaaa"u8.ToArray()
+        ];
+
+        column.Serialize(values);
+
+        AssertMinMax(column.Statistics, "aaaaaaaaaaaa"u8, "zzzzzzzzzzzz"u8);
+        AssertNullCount(column.Statistics, 2);
+        AssertDataPageMinMax(column.Pages, pageIndex: 0, "mmmmmmmmmmmm"u8, "zzzzzzzzzzzz"u8);
+        AssertDataPageMinMax(column.Pages, pageIndex: 1, "aaaaaaaaaaaa"u8, "qqqqqqqqqqqq"u8);
+    }
+
+    [Test]
     public void OptionalNullsDoNotBecomeTheSmallestValue()
     {
         var column = CreateOptionalByteArrayColumn(1024);
@@ -493,6 +515,19 @@ internal sealed class PlainByteArrayStatisticsTests
             TargetDataPageSizeBytes = targetDataPageSizeBytes
         });
         return writer.CreateSerializedColumn<byte[]?>(schema.LeafColumns[0]);
+    }
+
+    static SerializedColumn<ReadOnlyMemory<byte>?> CreateOptionalMemoryColumn(uint targetDataPageSizeBytes)
+    {
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("name", ParquetPhysicalType.ByteArray,
+                new ColumnOptions(ParquetRepetition.Optional))
+        ]);
+        var writer = schema.CreateWriter(new MemoryStream(), new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = targetDataPageSizeBytes
+        });
+        return writer.CreateSerializedColumn<ReadOnlyMemory<byte>?>(schema.LeafColumns[0]);
     }
 
     static void AssertNullCount(ColumnStatistics statistics, long expected)
