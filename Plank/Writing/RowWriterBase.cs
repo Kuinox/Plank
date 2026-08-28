@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using Plank.Schema;
 
@@ -339,6 +340,7 @@ public abstract class RowWriterBase<TSlot> : IDisposable
     }
 
     /// <summary>Rethrows a failure reported by a serialization worker.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected void ThrowIfFaulted()
     {
         ThrowIfDisposed();
@@ -346,6 +348,7 @@ public abstract class RowWriterBase<TSlot> : IDisposable
     }
 
     /// <summary>Throws if this writer has been disposed.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected void ThrowIfDisposed()
     {
         if (_disposed)
@@ -528,6 +531,7 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         _freeSignal.Release();
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void RethrowFault()
     {
         var fault = _fault;
