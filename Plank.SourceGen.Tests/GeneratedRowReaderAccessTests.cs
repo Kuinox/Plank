@@ -3,7 +3,7 @@ namespace Plank.SourceGen.Tests;
 internal sealed class GeneratedRowReaderAccessTests
 {
     [Test]
-    public async Task FlatReadPropertiesUsePrivateOrdinalAccessor()
+    public async Task FlatReadPropertiesUseValidatedSchemaOrdinals()
     {
         const string source = """
             using Plank.Schema;
@@ -26,8 +26,7 @@ internal sealed class GeneratedRowReaderAccessTests
         await Assert.That(result.CompilationDiagnostics.Where(static diagnostic =>
             diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)).IsEmpty();
         var generated = result.GeneratedSources.Single().Text;
-        await Assert.That(generated).Contains("UnsafeAccessorKind.Method, Name = \"GetCurrentByOrdinalV1\"");
-        await Assert.That(generated).Contains("GetCurrentByOrdinalV1<int>(_core, 0)");
-        await Assert.That(generated).Contains("GetCurrentByOrdinalV1<long?>(_core, 1)");
+        await Assert.That(generated).Contains("_core.GetCurrent<int>(0)");
+        await Assert.That(generated).Contains("_core.GetCurrent<long?>(1)");
     }
 }

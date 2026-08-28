@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Runtime.CompilerServices;
 using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Schema;
@@ -147,10 +146,12 @@ public sealed class RowReaderCore : IDisposable
         return ref values[GetCurrentIndex(state)];
     }
 
-    // Frozen source-generator ABI used through UnsafeAccessor. Never remove or
-    // change this signature; add a V2 method and retain V1 for future changes.
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    ref T GetCurrentByOrdinalV1<T>(int columnIndex)
+    /// <summary>Gets a generated property's current value by its schema ordinal.</summary>
+    /// <typeparam name="T">The column's generated CLR value type.</typeparam>
+    /// <param name="columnIndex">The generated schema ordinal.</param>
+    /// <returns>A reference to the current value.</returns>
+    /// <remarks>The source generator supplies an ordinal and type validated when the reader is constructed.</remarks>
+    public ref T GetCurrent<T>(int columnIndex)
     {
         ThrowIfNotPositioned();
         var state = (RowApiColumnReadState<T>)_states[columnIndex];

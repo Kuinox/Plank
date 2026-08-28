@@ -106,6 +106,7 @@ Plank.RowApi.RowReaderBinaryValue.Value.get -> System.ReadOnlySpan<byte>
 Plank.RowApi.RowReaderCore
 Plank.RowApi.RowReaderCore.Dispose() -> void
 Plank.RowApi.RowReaderCore.GetCurrent<T>(Plank.RowApi.RowApiColumnDescriptor<T>! column) -> T
+Plank.RowApi.RowReaderCore.GetCurrent<T>(int columnIndex) -> T
 Plank.RowApi.RowReaderCore.GetCurrentBinary<T>(Plank.RowApi.RowApiColumnDescriptor<T>! column) -> Plank.RowApi.RowReaderBinaryValue
 Plank.RowApi.RowReaderCore.MoveNext() -> bool
 Plank.RowApi.RowReaderCore.Reset(Plank.Reading.IParquetReadSource! source, Plank.RowApi.RowApiColumnDescriptor![]? projection, Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null) -> void
