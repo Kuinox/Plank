@@ -114,6 +114,26 @@ internal sealed class PlainEncodingTests
     }
 
     [Test]
+    public void OptionalSingleByteMemoryFastPathMatchesLengthPrefixedParquetBytes()
+    {
+        byte[][] source = [null!, [0x11], null!, [0x22], [0x33], null!, [0x44]];
+        ReadOnlyMemory<byte>?[] values = source
+            .Select(static value => value is null ? (ReadOnlyMemory<byte>?)null : value)
+            .ToArray();
+        var expected = EncodeLengthPrefixed(source.Where(static value => value is not null)!);
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 128 * 1024, 128 * 1024);
+        try
+        {
+            PlainEncoding.WriteOptionalSingleByteMemoryPayloads(values, 4, ref writer);
+            AssertEqual(expected, CopyWritten(ref writer));
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+    }
+
+    [Test]
     public void FixedLengthInt96AndGuidValuesMatchCanonicalParquetBytes()
     {
         var first = Enumerable.Range(0, 16).Select(static i => (byte)i).ToArray();
