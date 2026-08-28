@@ -193,18 +193,40 @@ public abstract class RowWriterBase<TSlot> : IDisposable
                 _freeSignal.Release();
             }
 
-            for (var i = 0; i < _workers.Length; i++)
-            {
-                var workerIndex = i;
-                _workers[i] = new Thread(WorkerLoop)
-                {
-                    IsBackground = true,
-                    Name = $"{WorkerThreadNamePrefix}-{i}"
-                };
-                _workers[i].Start(workerIndex);
-            }
+            StartWorkersNoLock();
 
             _slotsInitialized = true;
+        }
+    }
+
+    /// <summary>Resets a completed generated row-writer pipeline to a new destination stream.</summary>
+    /// <param name="stream">The new destination stream.</param>
+    protected void ResetPipeline(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ThrowIfNotInitialized();
+            if (_rollingFile is not null)
+                throw new InvalidOperationException("A rolling row writer cannot be reset to a stream.");
+            if (!_completed)
+                throw new InvalidOperationException("The row writer must be completed before it can be reset.");
+            RethrowFault();
+            if (_freeSlots.Count != _slots.Length)
+                throw new InvalidOperationException("The completed row writer did not return every buffer slot.");
+
+            _writer.Reset(stream);
+            _initialSlotTaken = false;
+            _nextQueuedSequence = 0;
+            _nextWriteSequence = 0;
+            _writerActive = false;
+            _addingCompleted = false;
+            _completed = false;
+            _fileIndex = 0;
+            _rolloverPending = false;
+            StartWorkersNoLock();
         }
     }
 
@@ -366,6 +388,20 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         var slot = CreateSlot(_writer);
         ArgumentNullException.ThrowIfNull(slot);
         return slot;
+    }
+
+    void StartWorkersNoLock()
+    {
+        for (var i = 0; i < _workers.Length; i++)
+        {
+            var workerIndex = i;
+            _workers[i] = new Thread(WorkerLoop)
+            {
+                IsBackground = true,
+                Name = $"{WorkerThreadNamePrefix}-{i}"
+            };
+            _workers[i].Start(workerIndex);
+        }
     }
 
     void EnqueueReadySlotNoLock(TSlot slot)

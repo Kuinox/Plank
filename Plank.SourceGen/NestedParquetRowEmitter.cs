@@ -400,7 +400,6 @@ static class NestedParquetRowEmitter
             builder.AppendLine(",");
         }
         builder.AppendLine("    ]);");
-        builder.AppendLine("    const int DefaultRowBatchSize = 1024;");
     }
 
     static void AppendDefinition(StringBuilder builder, Node node)
@@ -569,7 +568,7 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        internal Writer(global::Plank.Writing.RowGroupWriter rowGroupWriter, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("        {");
         builder.AppendLine("            _ = options ?? throw new global::System.ArgumentNullException(nameof(options));");
-        builder.AppendLine("            var slot = new BufferSlot(rowGroupWriter, DefaultRowBatchSize);");
+        builder.AppendLine("            var slot = new BufferSlot(rowGroupWriter, options.RowApiInitialRowCapacity);");
         builder.AppendLine("            _core = new global::Plank.RowApi.RowGroupWriterCore<BufferSlot>(rowGroupWriter, slot);");
         builder.AppendLine("        }");
         builder.AppendLine("        public Row GetRow() => _core.GetSlotForRow().GetRow();");
@@ -582,17 +581,18 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, options.RowApiMaxParallelism, null, options) { }");
         builder.AppendLine("        internal PipelineWriter(global::Plank.Writing.IParquetWriteSource file, global::Plank.Writing.ParquetFilePath filePath, global::Plank.Writing.ParquetWriterOptions options)");
-        builder.AppendLine("            : base(file, filePath, Schema, options.RowApiMaxParallelism, null, options, DefaultRowBatchSize, \"PlankNestedRowApiWorker\") { }");
+        builder.AppendLine("            : base(file, filePath, Schema, options.RowApiMaxParallelism, null, options, options.RowApiInitialRowCapacity, \"PlankNestedRowApiWorker\") { }");
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, options.RowApiMaxParallelism, onFlush, options) { }");
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, uint maxParallelism, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, maxParallelism, null, options) { }");
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, uint maxParallelism, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
-        builder.AppendLine("            : base(stream, Schema, maxParallelism, onFlush, options, DefaultRowBatchSize, \"PlankNestedRowApiWorker\") { }");
+        builder.AppendLine("            : base(stream, Schema, maxParallelism, onFlush, options, options.RowApiInitialRowCapacity, \"PlankNestedRowApiWorker\") { }");
         builder.AppendLine("        protected override BufferSlot CreateSlot(global::Plank.Writing.ParquetWriter writer) => new(writer, RowBatchSize);");
         builder.AppendLine("        public Row GetRow() => GetSlotForRow().GetRow();");
         builder.AppendLine("        public void Next() => NextRow();");
         builder.AppendLine("        public void Complete() => CompleteWriter();");
+        builder.AppendLine("        public void Reset(global::System.IO.Stream stream) => ResetWriter(stream);");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.Append("    public sealed class DatasetWriter : global::Plank.Dataset.DatasetWriterBase<")
@@ -600,13 +600,13 @@ static class NestedParquetRowEmitter
         builder.AppendLine("    {");
         builder.AppendLine("        readonly Route _route;");
         builder.AppendLine("        internal DatasetWriter(Route route, global::Plank.Writing.IParquetWriteSource[] files, global::Plank.Dataset.DatasetWriterOptions options)");
-        builder.AppendLine("            : base(Schema, s_rowApiColumns, DefaultRowBatchSize, files, options)");
+        builder.AppendLine("            : base(Schema, s_rowApiColumns, options.WriterOptions.RowApiInitialRowCapacity, files, options)");
         builder.AppendLine("        {");
         builder.AppendLine("            _route = route;");
         builder.AppendLine("            InitializeSlots();");
         builder.AppendLine("        }");
         builder.AppendLine("        internal DatasetWriter(Route route, global::Plank.Dataset.DatasetFilePath filePath, global::Plank.Writing.IParquetWriteSource[] files, global::Plank.Dataset.DatasetWriterOptions options)");
-        builder.AppendLine("            : base(Schema, s_rowApiColumns, DefaultRowBatchSize, files, filePath, options)");
+        builder.AppendLine("            : base(Schema, s_rowApiColumns, options.WriterOptions.RowApiInitialRowCapacity, files, filePath, options)");
         builder.AppendLine("        {");
         builder.AppendLine("            _route = route;");
         builder.AppendLine("            InitializeSlots();");

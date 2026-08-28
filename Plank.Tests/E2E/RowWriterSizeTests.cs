@@ -1,4 +1,5 @@
 using System.Text;
+using Plank.Reading;
 using Plank.Reading.Physical;
 using Plank.Writing;
 
@@ -76,6 +77,28 @@ internal sealed class RowWriterSizeTests
     }
 
     [Test]
+    public async Task GeneratedPipelineWriterCanBeResetToANewStream()
+    {
+        using var first = new MemoryStream();
+        using var second = new MemoryStream();
+        using var writer = DatasetRowSchema.CreateRowWriter(first, new ParquetWriterOptions
+        {
+            RowApiMaxParallelism = 1,
+            RowApiInitialRowCapacity = 1,
+            TargetRowGroupSizeBytes = 16
+        });
+
+        WriteRows(writer, 10);
+        writer.Complete();
+        writer.Reset(second);
+        WriteRows(writer, 5);
+        writer.Complete();
+
+        await Assert.That(ReadValues(first).SequenceEqual(Enumerable.Range(0, 10))).IsTrue();
+        await Assert.That(ReadValues(second).SequenceEqual(Enumerable.Range(0, 5))).IsTrue();
+    }
+
+    [Test]
     public async Task RollingRowWriterStartsANewFileAtTheTarget()
     {
         using var files = new RollingFileSet();
@@ -109,6 +132,16 @@ internal sealed class RowWriterSizeTests
             row.Path = ReadOnlyMemory<byte>.Empty;
             writer.Next();
         }
+    }
+
+    static List<int> ReadValues(MemoryStream stream)
+    {
+        using var source = new MemoryReadSource(stream.ToArray());
+        using var reader = DatasetRowSchema.CreateRowReader(source);
+        var values = new List<int>();
+        while (reader.MoveNext())
+            values.Add(reader.Current.Value);
+        return values;
     }
 
     static string NewPath()

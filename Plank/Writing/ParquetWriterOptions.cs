@@ -21,6 +21,9 @@ public sealed class ParquetWriterOptions
 
     public uint InitialPageCapacity { get; init; } = 4;
 
+    /// <summary>Gets or initializes the initial row capacity of each generated row-writer buffer.</summary>
+    public int RowApiInitialRowCapacity { get; init; } = 1024;
+
     public uint TargetDataPageSizeBytes { get; init; } = 1024 * 1024;
 
     /// <summary>Gets or initializes the target uncompressed size of row groups produced by the row APIs.</summary>
@@ -74,6 +77,9 @@ public sealed class ParquetWriterOptions
         if (TargetDataPageSizeBytes > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(TargetDataPageSizeBytes), TargetDataPageSizeBytes,
                 $"Target data page size must be <= {int.MaxValue}.");
+        if (RowApiInitialRowCapacity <= 0)
+            throw new ArgumentOutOfRangeException(nameof(RowApiInitialRowCapacity), RowApiInitialRowCapacity,
+                "The row API initial row capacity must be greater than zero.");
         if (TargetRowGroupSizeBytes == 0)
             throw new ArgumentOutOfRangeException(nameof(TargetRowGroupSizeBytes), TargetRowGroupSizeBytes,
                 "Target row group size must be greater than zero.");

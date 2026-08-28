@@ -278,7 +278,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.AppendLine();
         }
         builder.AppendLine("    ]);");
-        builder.AppendLine("    const int DefaultRowBatchSize = 1024;");
         builder.AppendLine();
         builder.Append("    public delegate global::System.ReadOnlySpan<byte> ").Append(routeTypeName).Append('(')
             .Append(rowTypeName)
@@ -407,7 +406,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             .AppendLine("(global::Plank.Writing.RowGroupWriter rowGroupWriter, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("        {");
         builder.AppendLine("            _ = options ?? throw new global::System.ArgumentNullException(nameof(options));");
-        builder.AppendLine("            var slot = new BufferSlot(rowGroupWriter, DefaultRowBatchSize);");
+        builder.AppendLine("            var slot = new BufferSlot(rowGroupWriter, options.RowApiInitialRowCapacity);");
         builder.AppendLine("            _core = new global::Plank.RowApi.RowGroupWriterCore<BufferSlot>(rowGroupWriter, slot);");
         builder.AppendLine("        }");
         builder.AppendLine();
@@ -430,7 +429,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        internal PipelineWriter(global::Plank.Writing.IParquetWriteSource file, global::Plank.Writing.ParquetFilePath filePath, global::Plank.Writing.ParquetWriterOptions options)");
         builder.Append("            : base(file, filePath, ").Append(schemaMemberName)
-            .Append(", options.RowApiMaxParallelism, null, options, DefaultRowBatchSize, \"Plank")
+            .Append(", options.RowApiMaxParallelism, null, options, options.RowApiInitialRowCapacity, \"Plank")
             .Append(Escape(schemaType.Name))
             .AppendLine("RowApiWorker\")");
         builder.AppendLine("        {");
@@ -448,7 +447,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, uint maxParallelism, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
         builder.Append("            : base(stream, ").Append(schemaMemberName)
-            .Append(", maxParallelism, onFlush, options, DefaultRowBatchSize, \"Plank")
+            .Append(", maxParallelism, onFlush, options, options.RowApiInitialRowCapacity, \"Plank")
             .Append(Escape(schemaType.Name))
             .AppendLine("RowApiWorker\")");
         builder.AppendLine("        {");
@@ -467,6 +466,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        public void Complete()");
         builder.AppendLine("            => CompleteWriter();");
+        builder.AppendLine();
+        builder.AppendLine("        public void Reset(global::System.IO.Stream stream)");
+        builder.AppendLine("            => ResetWriter(stream);");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.Append("    public sealed class ").Append(datasetWriterTypeName)
@@ -478,7 +480,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.Append("        internal ").Append(datasetWriterTypeName).Append('(').Append(routeTypeName)
             .AppendLine(" route, global::Plank.Writing.IParquetWriteSource[] files, global::Plank.Dataset.DatasetWriterOptions options)");
         builder.Append("            : base(").Append(schemaMemberName)
-            .AppendLine(", s_rowApiColumns, DefaultRowBatchSize, files, options)");
+            .AppendLine(", s_rowApiColumns, options.WriterOptions.RowApiInitialRowCapacity, files, options)");
         builder.AppendLine("        {");
         builder.AppendLine("            _route = route;");
         builder.AppendLine("            InitializeSlots();");
@@ -487,7 +489,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.Append("        internal ").Append(datasetWriterTypeName).Append('(').Append(routeTypeName)
             .AppendLine(" route, global::Plank.Dataset.DatasetFilePath filePath, global::Plank.Writing.IParquetWriteSource[] files, global::Plank.Dataset.DatasetWriterOptions options)");
         builder.Append("            : base(").Append(schemaMemberName)
-            .AppendLine(", s_rowApiColumns, DefaultRowBatchSize, files, filePath, options)");
+            .AppendLine(", s_rowApiColumns, options.WriterOptions.RowApiInitialRowCapacity, files, filePath, options)");
         builder.AppendLine("        {");
         builder.AppendLine("            _route = route;");
         builder.AppendLine("            InitializeSlots();");
