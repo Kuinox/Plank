@@ -18,6 +18,7 @@ sealed class RowApiBinaryColumnReadState : RowApiColumnReadState
         _buffer = default;
         _usingMissing = false;
         CurrentIndex = -1;
+        BufferedValueCount = 0;
         _buffersOpen = false;
     }
 
@@ -33,6 +34,7 @@ sealed class RowApiBinaryColumnReadState : RowApiColumnReadState
         _buffer = default;
         _usingMissing = false;
         CurrentIndex = -1;
+        BufferedValueCount = 0;
     }
 
     internal override void SetMissingValue()
@@ -41,6 +43,7 @@ sealed class RowApiBinaryColumnReadState : RowApiColumnReadState
         _buffer = default;
         _usingMissing = true;
         CurrentIndex = 0;
+        BufferedValueCount = 1;
     }
 
     internal override void Open(RowGroup rowGroup)
@@ -51,20 +54,21 @@ sealed class RowApiBinaryColumnReadState : RowApiColumnReadState
         _buffer = default;
         _usingMissing = false;
         CurrentIndex = -1;
+        BufferedValueCount = 0;
     }
 
-    internal override void Advance()
+    internal override void AdvanceBuffer()
     {
-        CurrentIndex++;
-        while ((uint)CurrentIndex >= (uint)_buffer.ValueCount)
+        while (true)
         {
             if (!_buffers.MoveNext())
                 throw new CorruptParquetException($"Column '{PropertyName}' ended before the row group was complete.");
 
             _buffer = _buffers.Current;
+            BufferedValueCount = _buffer.ValueCount;
             CurrentIndex = 0;
-            if (_buffer.ValueCount == 0)
-                CurrentIndex = -1;
+            if (BufferedValueCount != 0)
+                return;
         }
     }
 

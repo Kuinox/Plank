@@ -1,6 +1,7 @@
 namespace Plank.Tests.E2E;
 
 using Plank.Schema;
+using Plank.Writing;
 
 internal sealed class GeneratedRowReaderE2ETests
 {
@@ -103,6 +104,54 @@ internal sealed class GeneratedRowReaderE2ETests
 
         await Assert.That(ids).IsEquivalentTo([1, 2, 3]);
         await Assert.That(added).IsEquivalentTo([0, 0, 0]);
+    }
+
+    [Test]
+    public void GeneratedRowReaderBatchesPresentAndMissingColumnsAcrossEmptyRowGroupsAndBufferBoundaries()
+    {
+        const int rowCount = 4_097;
+        using var stream = CreateBatchedEvolvingFile(rowCount, prependEmptyRowGroup: true);
+        AssertBatchedEvolvingFileShape(stream.ToArray());
+        using var reader = EvolvingRowSchema.CreateRowReader(stream,
+            EvolvingRowSchema.Projection.Id | EvolvingRowSchema.Projection.Added,
+            schemaEvolution: MissingColumnEvolution);
+
+        var rowIndex = 0;
+        while (reader.MoveNext())
+        {
+            var row = reader.Current;
+            var expectedId = CreateBatchedId(rowIndex);
+            if (row.Id != expectedId)
+                throw new InvalidOperationException($"Expected id {expectedId}, got {row.Id}.");
+            if (row.Added != 0)
+                throw new InvalidOperationException(
+                    $"Expected the missing column default at row {rowIndex + 1}, got {row.Added}.");
+            rowIndex++;
+        }
+
+        if (rowIndex != rowCount)
+            throw new InvalidOperationException($"Expected {rowCount} rows, got {rowIndex}.");
+    }
+
+    [Test]
+    public void GeneratedRowReaderResetsBetweenBatchedAndMissingOnlyProjections()
+    {
+        const int rowCount = 513;
+        using var source = CreateBatchedEvolvingFile(rowCount, prependEmptyRowGroup: true);
+        var file = source.ToArray();
+        using var reader = EvolvingRowSchema.CreateRowReader(source,
+            EvolvingRowSchema.Projection.Id | EvolvingRowSchema.Projection.Maybe,
+            schemaEvolution: MissingColumnEvolution);
+
+        AssertBatchedEvolvingRows(reader, rowCount, includeId: true, includeMaybe: true, includeAdded: false);
+
+        using var missingOnlySource = new MemoryStream(file, writable: false);
+        reader.Reset(missingOnlySource, EvolvingRowSchema.Projection.Added);
+        AssertBatchedEvolvingRows(reader, rowCount, includeId: false, includeMaybe: false, includeAdded: true);
+
+        using var mixedSource = new MemoryStream(file, writable: false);
+        reader.Reset(mixedSource, EvolvingRowSchema.Projection.Id | EvolvingRowSchema.Projection.Added);
+        AssertBatchedEvolvingRows(reader, rowCount, includeId: true, includeMaybe: false, includeAdded: true);
     }
 
     [Test]
@@ -357,6 +406,102 @@ internal sealed class GeneratedRowReaderE2ETests
         writer.CloseFile();
         return new MemoryStream(stream.ToArray());
     }
+
+    static MemoryStream CreateBatchedEvolvingFile(int rowCount, bool prependEmptyRowGroup)
+    {
+        var schema = CreateBatchedEvolvingSchema();
+        var stream = new MemoryStream();
+        using var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            TargetDataPageSizeBytes = 63
+        });
+
+        if (prependEmptyRowGroup)
+            WriteBatchedEvolvingRowGroup(writer, schema, [], []);
+
+        var ids = new int[rowCount];
+        var maybe = new int?[rowCount];
+        for (var i = 0; i < rowCount; i++)
+        {
+            ids[i] = CreateBatchedId(i);
+            maybe[i] = i % 5 == 1 ? null : (i + 1) * 10;
+        }
+        WriteBatchedEvolvingRowGroup(writer, schema, ids, maybe);
+
+        writer.CloseFile();
+        return new MemoryStream(stream.ToArray(), writable: false);
+    }
+
+    static ParquetSchema CreateBatchedEvolvingSchema()
+        => new([
+            ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.DeltaBinaryPacked])),
+            ColumnDefinition.Leaf("maybe", ParquetPhysicalType.Int32,
+                new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.Plain]))
+        ]);
+
+    static void AssertBatchedEvolvingFileShape(byte[] file)
+    {
+        var schema = CreateBatchedEvolvingSchema();
+        using var stream = new MemoryStream(file, writable: false);
+        using var reader = schema.CreateReader(stream);
+        if (reader.RowGroups.Count != 2 || reader.RowGroups[0].RowCount != 0)
+            throw new InvalidOperationException("Expected an empty row group before the populated row group.");
+
+        var rowGroup = reader.RowGroups[1];
+        var idBuffers = new List<int>();
+        foreach (var buffer in rowGroup.Column<int>(schema.LeafColumns[0]))
+            idBuffers.Add(buffer.Count);
+        var maybeBuffers = new List<int>();
+        foreach (var buffer in rowGroup.Column<int?>(schema.LeafColumns[1]))
+            maybeBuffers.Add(buffer.Count);
+
+        if (idBuffers.Count != 1 || maybeBuffers.Count <= 1)
+            throw new InvalidOperationException(
+                $"Expected one id buffer and multiple optional buffers; got {idBuffers.Count} and {maybeBuffers.Count}.");
+    }
+
+    static void WriteBatchedEvolvingRowGroup(ParquetWriter writer, ParquetSchema schema,
+        ReadOnlySpan<int> ids, ReadOnlySpan<int?> maybe)
+    {
+        var rowGroup = writer.StartRowGroup();
+        var id = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        id.Serialize(ids);
+        rowGroup.Write(id);
+        var optional = rowGroup.CreateSerializedColumn<int?>(schema.LeafColumns[1]);
+        optional.Serialize(maybe);
+        rowGroup.Write(optional);
+    }
+
+    static void AssertBatchedEvolvingRows(EvolvingRowSchema.RowReader reader, int rowCount,
+        bool includeId, bool includeMaybe, bool includeAdded)
+    {
+        var index = 0;
+        while (reader.MoveNext())
+        {
+            var row = reader.Current;
+            var expectedId = CreateBatchedId(index);
+            if (includeId && row.Id != expectedId)
+                throw new InvalidOperationException($"Expected id {expectedId}, got {row.Id}.");
+            if (includeMaybe)
+            {
+                int? expectedMaybe = index % 5 == 1 ? null : (index + 1) * 10;
+                if (row.Maybe != expectedMaybe)
+                    throw new InvalidOperationException(
+                        $"Expected optional value {expectedMaybe} at row {index + 1}, got {row.Maybe}.");
+            }
+            if (includeAdded && row.Added != 0)
+                throw new InvalidOperationException(
+                    $"Expected the missing column default at row {index + 1}, got {row.Added}.");
+            index++;
+        }
+
+        if (index != rowCount)
+            throw new InvalidOperationException($"Expected {rowCount} rows, got {index}.");
+    }
+
+    static int CreateBatchedId(int index)
+        => unchecked((index * 1_103_515_245 + 12_345) ^ (index << 16));
 
     static void WriteEncodedRows(string path)
     {

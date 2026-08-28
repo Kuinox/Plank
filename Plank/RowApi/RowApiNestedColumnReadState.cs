@@ -35,6 +35,7 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
         _hasBuffer = false;
         _usingMissing = false;
         CurrentIndex = -1;
+        BufferedValueCount = 0;
     }
 
     internal override void SetMissingValue()
@@ -43,6 +44,7 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
         Current = default!;
         _usingMissing = true;
         CurrentIndex = 0;
+        BufferedValueCount = 1;
     }
 
     internal override void Open(RowGroup rowGroup)
@@ -75,9 +77,10 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
         _buffersOpen = true;
         _usingMissing = false;
         CurrentIndex = -1;
+        BufferedValueCount = 0;
     }
 
-    internal override void Advance()
+    internal override void AdvanceBuffer()
     {
         if (!Projected || _usingMissing)
             return;
@@ -107,7 +110,6 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
                 $"Column '{PropertyName}' materialized {denseValueIndex} dense values but decoded {_values.Count}.");
 
         Current = value is null ? default! : (TShape)value;
-        CurrentIndex++;
     }
 
     internal override void DisposeBuffers()

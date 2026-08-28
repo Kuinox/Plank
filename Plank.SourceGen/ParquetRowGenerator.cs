@@ -933,7 +933,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             {
                 builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ')
                     .Append(EscapeIdentifier(propertyName)).AppendLine();
-                builder.Append("            => ref _core.GetCurrent(").Append(descriptorName).AppendLine(");");
+                builder.Append("            => ref _core.GetCurrent<").Append(columns[i].ClrTypeName).Append(">(")
+                    .Append(i).AppendLine(");");
             }
             if (i < columns.Length - 1)
                 builder.AppendLine();

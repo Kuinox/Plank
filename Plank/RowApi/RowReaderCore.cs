@@ -23,6 +23,10 @@ public sealed class RowReaderCore : IDisposable
     bool _hasCurrent;
     bool _disposed;
     int _projectedStateCount;
+    bool _batchAdvance;
+    int _batchLength;
+    int _batchOffset;
+    int _currentBatchOffset;
 
     /// <summary>Initializes a generated row reader over a stream.</summary>
     /// <param name="stream">The source stream.</param>
@@ -70,6 +74,10 @@ public sealed class RowReaderCore : IDisposable
         _started = false;
         _hasCurrent = false;
         _disposed = false;
+        _batchAdvance = false;
+        _batchLength = 0;
+        _batchOffset = 0;
+        _currentBatchOffset = 0;
         ApplyProjection(projection);
         ResolveFileSchema();
         RebuildProjectedStates();
@@ -119,6 +127,9 @@ public sealed class RowReaderCore : IDisposable
         _rowGroupRowsRemaining = 0;
         _started = false;
         _hasCurrent = false;
+        _batchLength = 0;
+        _batchOffset = 0;
+        _currentBatchOffset = 0;
         ResolveFileSchema();
         RebuildProjectedStates();
     }
@@ -132,7 +143,22 @@ public sealed class RowReaderCore : IDisposable
         ThrowIfNotPositioned();
         var state = GetState<T>(column);
         var values = state.CurrentSpan;
-        return ref values[state.CurrentIndex];
+        return ref values[GetCurrentIndex(state)];
+    }
+
+    /// <summary>Gets a generated property's current value by its schema ordinal.</summary>
+    /// <typeparam name="T">The column's generated CLR value type.</typeparam>
+    /// <param name="columnIndex">The generated schema ordinal.</param>
+    /// <returns>A reference to the current value.</returns>
+    /// <remarks>The source generator supplies an ordinal and type validated when the reader is constructed.</remarks>
+    public ref T GetCurrent<T>(int columnIndex)
+    {
+        ThrowIfNotPositioned();
+        var state = (RowApiColumnReadState<T>)_states[columnIndex];
+        if (!state.Projected && !state.Materialized)
+            throw new InvalidOperationException($"Column '{state.PropertyName}' was not selected.");
+        var values = state.CurrentSpan;
+        return ref values[GetCurrentIndex(state)];
     }
 
     /// <summary>Gets the current zero-copy value for a variable-length byte column.</summary>
@@ -232,8 +258,17 @@ public sealed class RowReaderCore : IDisposable
                 return false;
             }
 
-        for (var i = 0; i < _projectedStateCount; i++)
-            _projectedStates[i].Advance();
+        if (_batchAdvance)
+        {
+            if (_batchOffset == _batchLength)
+                PrepareBatch();
+            _currentBatchOffset = _batchOffset++;
+        }
+        else
+        {
+            for (var i = 0; i < _projectedStateCount; i++)
+                _projectedStates[i].Advance();
+        }
 
         _rowGroupRowsRemaining--;
         return true;
@@ -249,6 +284,9 @@ public sealed class RowReaderCore : IDisposable
 
             _rowGroup = _rowGroups.Current;
             _rowGroupRowsRemaining = _rowGroup.RowCount;
+            _batchLength = 0;
+            _batchOffset = 0;
+            _currentBatchOffset = 0;
             if (_rowGroupRowsRemaining == 0)
                 continue;
 
@@ -291,13 +329,38 @@ public sealed class RowReaderCore : IDisposable
     void RebuildProjectedStates()
     {
         _projectedStateCount = 0;
+        _batchAdvance = true;
         for (var i = 0; i < _states.Length; i++)
         {
             var state = _states[i];
+            // A materialized missing column exposes one row-independent default
+            // value and therefore must never participate in advancement.
             if (state.Projected)
+            {
                 _projectedStates[_projectedStateCount++] = state;
+                _batchAdvance &= state.SupportsBatchAdvance;
+            }
         }
+        _batchAdvance &= _projectedStateCount != 0;
     }
+
+    void PrepareBatch()
+    {
+        var consumedRows = _batchLength;
+        var availableRows = int.MaxValue;
+        for (var i = 0; i < _projectedStateCount; i++)
+            availableRows = Math.Min(availableRows, _projectedStates[i].PrepareBatch(consumedRows));
+
+        if (availableRows <= 0)
+            throw new CorruptParquetException("A projected row API column produced an empty value batch.");
+        _batchLength = checked((int)Math.Min((ulong)availableRows, _rowGroupRowsRemaining));
+        _batchOffset = 0;
+    }
+
+    int GetCurrentIndex(RowApiColumnReadState state)
+        => state.Materialized || !_batchAdvance
+            ? state.CurrentIndex
+            : checked(state.CurrentIndex + _currentBatchOffset);
 
     int ResolveColumnOrdinal(ImmutableArray<Column> fileColumns, Column expected, string columnName, string propertyName,
         bool projected)
