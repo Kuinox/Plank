@@ -878,6 +878,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     {
         builder.AppendLine("    public readonly ref struct ReadRow");
         builder.AppendLine("    {");
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.UnsafeAccessor(global::System.Runtime.CompilerServices.UnsafeAccessorKind.Method, Name = \"GetCurrentByOrdinalV1\")]");
+        builder.AppendLine("        static extern ref T GetCurrentByOrdinalV1<T>(global::Plank.RowApi.RowReaderCore core, int columnIndex);");
+        builder.AppendLine();
         builder.AppendLine("        readonly global::Plank.RowApi.RowReaderCore _core;");
         builder.AppendLine();
         builder.AppendLine("        internal ReadRow(global::Plank.RowApi.RowReaderCore core)");
@@ -933,8 +936,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             {
                 builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ')
                     .Append(EscapeIdentifier(propertyName)).AppendLine();
-                builder.Append("            => ref _core.GetCurrent<").Append(columns[i].ClrTypeName).Append(">(")
-                    .Append(i).AppendLine(");");
+                builder.Append("            => ref GetCurrentByOrdinalV1<").Append(columns[i].ClrTypeName)
+                    .Append(">(_core, ").Append(i).AppendLine(");");
             }
             if (i < columns.Length - 1)
                 builder.AppendLine();

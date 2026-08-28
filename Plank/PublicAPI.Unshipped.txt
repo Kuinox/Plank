@@ -1,2 +1,1 @@
 #nullable enable
-Plank.RowApi.RowReaderCore.GetCurrent<T>(int columnIndex) -> T
