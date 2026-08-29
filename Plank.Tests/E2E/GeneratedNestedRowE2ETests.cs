@@ -41,7 +41,6 @@ internal sealed class GeneratedNestedRowE2ETests
                     row.Times = CreateTimes(i);
                     row.Timestamps = CreateTimestamps(i);
                     row.Instants = CreateInstants(i);
-                    writer.Next();
                 }
                 writer.Complete();
             }

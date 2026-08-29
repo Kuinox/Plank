@@ -44,13 +44,12 @@ internal sealed class OwnedBufferRowApiTests
 
                     var row = writer.GetRow();
                     row.SetPayload(owner);
-                    writer.Next();
                 }
+
+                writer.Complete();
 
                 if (owners.Any(static o => !o.IsDisposed))
                     throw new InvalidOperationException("Expected all owners from the flushed slot to be disposed after reuse.");
-
-                writer.Complete();
             }
 
             using var reader = new ParquetFileReader(path);
@@ -94,7 +93,6 @@ internal sealed class OwnedBufferRowApiTests
                     owners.Add(owner);
                     var row = writer.GetRow();
                     row.SetValue(owner);
-                    writer.Next();
                 }
 
                 writer.Complete();
@@ -135,7 +133,6 @@ internal sealed class OwnedBufferRowApiTests
 
                 var row = writer.GetRow();
                 row.SetPayload(owner);
-                writer.Next();
                 writer.Complete();
             }
 

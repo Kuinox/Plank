@@ -12,6 +12,7 @@ public sealed class RowGroupWriterCore<TSlot>
 {
     readonly RowGroupWriter _rowGroupWriter;
     readonly TSlot _slot;
+    bool _rowPending;
     bool _written;
 
     /// <summary>Initializes the core used by a generated row-group writer.</summary>
@@ -21,6 +22,7 @@ public sealed class RowGroupWriterCore<TSlot>
     {
         _rowGroupWriter = rowGroupWriter ?? throw new ArgumentNullException(nameof(rowGroupWriter));
         _slot = slot ?? throw new ArgumentNullException(nameof(slot));
+        _rowPending = false;
         _written = false;
     }
 
@@ -29,20 +31,22 @@ public sealed class RowGroupWriterCore<TSlot>
     public TSlot GetSlotForRow()
     {
         ThrowIfWritten("Rows are already written for this row group.");
+        if (_rowPending)
+            _slot.Next();
+        else
+            _rowPending = true;
         return _slot;
-    }
-
-    /// <summary>Advances the generated writer to its next row.</summary>
-    public void Next()
-    {
-        ThrowIfWritten("Rows are already written for this row group.");
-        _slot.Next();
     }
 
     /// <summary>Serializes and writes the generated row buffer.</summary>
     public void Write()
     {
         ThrowIfWritten("This row writer was already written.");
+        if (_rowPending)
+        {
+            _slot.Next();
+            _rowPending = false;
+        }
         _slot.SerializeColumns();
         _slot.WriteSerialized(_rowGroupWriter);
         _written = true;

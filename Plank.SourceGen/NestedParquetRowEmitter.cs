@@ -576,17 +576,15 @@ static class NestedParquetRowEmitter
         builder.AppendLine("            _core = new global::Plank.RowApi.RowGroupWriterCore<BufferSlot>(rowGroupWriter, slot);");
         builder.AppendLine("        }");
         builder.AppendLine("        public Row GetRow() => _core.GetSlotForRow().GetRow();");
-        builder.AppendLine("        public void Next() => _core.Next();");
         builder.AppendLine("        public void Write() => _core.Write();");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    public sealed class PipelineWriter : global::Plank.RowApi.PipelineRowWriterBase<BufferSlot>");
         builder.AppendLine("    {");
         if (rowSizePlan.IsFixed)
-        {
             builder.AppendLine("        readonly int _rowsPerGroup;");
-            builder.AppendLine();
-        }
+        builder.AppendLine("        bool _rowPending;");
+        builder.AppendLine();
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, options.RowApiMaxParallelism, null, options) { }");
         builder.AppendLine("        internal PipelineWriter(global::Plank.Writing.IParquetWriteSource file, global::Plank.Writing.ParquetFilePath filePath, global::Plank.Writing.ParquetWriterOptions options)");
@@ -606,14 +604,38 @@ static class NestedParquetRowEmitter
             builder.Append("            _rowsPerGroup = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
         builder.AppendLine("        }");
         builder.AppendLine("        protected override BufferSlot CreateSlot(global::Plank.Writing.ParquetWriter writer) => new(writer, RowBatchSize);");
-        builder.AppendLine("        public Row GetRow() => GetSlotForRow().GetRow();");
+        builder.AppendLine("        public Row GetRow()");
+        builder.AppendLine("        {");
+        builder.AppendLine("            var slot = GetSlotForRow();");
+        builder.AppendLine("            if (_rowPending)");
         if (rowSizePlan.IsFixed)
-            builder.AppendLine("        public void Next() => NextFixedRow(_rowsPerGroup);");
+            builder.AppendLine("                slot = CommitFixedRow(slot, _rowsPerGroup);");
         else
-            builder.Append("        public void Next() => NextVariableRow(GetSlotForRow().GetRowSize(")
+            builder.Append("                slot = CommitVariableRow(slot, slot.GetRowSize(")
                 .Append(rowSizePlan.FixedSizeExpression).AppendLine("));");
-        builder.AppendLine("        public void Complete() => CompleteWriter();");
-        builder.AppendLine("        public void Reset(global::System.IO.Stream stream) => ResetWriter(stream);");
+        builder.AppendLine("            else");
+        builder.AppendLine("                _rowPending = true;");
+        builder.AppendLine("            return slot.GetRow();");
+        builder.AppendLine("        }");
+        builder.AppendLine("        public void Complete()");
+        builder.AppendLine("        {");
+        builder.AppendLine("            if (_rowPending)");
+        builder.AppendLine("            {");
+        builder.AppendLine("                var slot = GetSlotForRow();");
+        if (rowSizePlan.IsFixed)
+            builder.AppendLine("                CommitFixedRow(slot, _rowsPerGroup);");
+        else
+            builder.Append("                CommitVariableRow(slot, slot.GetRowSize(")
+                .Append(rowSizePlan.FixedSizeExpression).AppendLine("));");
+        builder.AppendLine("                _rowPending = false;");
+        builder.AppendLine("            }");
+        builder.AppendLine("            CompleteWriter();");
+        builder.AppendLine("        }");
+        builder.AppendLine("        public void Reset(global::System.IO.Stream stream)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            ResetWriter(stream);");
+        builder.AppendLine("            _rowPending = false;");
+        builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.Append("    public sealed class DatasetWriter : global::Plank.Dataset.DatasetWriterBase<")
@@ -686,7 +708,6 @@ static class NestedParquetRowEmitter
         builder.AppendLine();
         builder.AppendLine("        internal Row GetRow()");
         builder.AppendLine("        {");
-        builder.AppendLine("            EnsureRowAvailable();");
         builder.AppendLine("            return new Row(Index, this);");
         builder.AppendLine("        }");
         if (!rowSizePlan.IsFixed)
@@ -694,13 +715,13 @@ static class NestedParquetRowEmitter
             builder.AppendLine();
             builder.AppendLine("        internal ulong GetRowSize(ulong fixedSizeBytes)");
             builder.AppendLine("        {");
-            builder.AppendLine("            EnsureRowAvailable();");
             builder.AppendLine("            var size = fixedSizeBytes;");
             foreach (var columnIndex in rowSizePlan.VariableColumnIndices)
             {
                 var leaf = model.Leaves[columnIndex];
-                builder.Append("            size = checked(size + EstimateValueSize(_column")
-                    .Append(columnIndex).Append("[Index], global::Plank.Schema.ParquetPhysicalType.")
+                builder.Append("            size = checked(size + EstimateValueSize(")
+                    .Append(UncheckedBufferElement($"_column{columnIndex}", "Index"))
+                    .Append(", global::Plank.Schema.ParquetPhysicalType.")
                     .Append(leaf.Node.Scalar!.PhysicalType).Append(", ").Append(leaf.Node.Scalar.TypeLength)
                     .AppendLine("U));");
             }
@@ -742,8 +763,9 @@ static class NestedParquetRowEmitter
         {
             var leaf = root.Leaves[0];
             builder.Append("        public ref ").Append(root.UserType).Append(' ')
-                .Append(EscapeIdentifier(root.PropertyName)).Append(" => ref _ownerSlot._column")
-                .Append(leaf.Ordinal).AppendLine("[_index];");
+                .Append(EscapeIdentifier(root.PropertyName)).Append(" => ref ")
+                .Append(UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"))
+                .AppendLine(";");
             return;
         }
 
@@ -751,19 +773,25 @@ static class NestedParquetRowEmitter
             .Append(EscapeIdentifier(root.PropertyName)).AppendLine();
         builder.AppendLine("        {");
         builder.Append("            get => Read").Append(ToIdentifier(root.PropertyName)).Append('(');
-        AppendLeafArguments(builder, root, static leaf => $"_ownerSlot._column{leaf.Ordinal}[_index]");
+        AppendLeafArguments(builder, root,
+            static leaf => UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"));
         builder.AppendLine(");");
         builder.AppendLine("            set");
         builder.AppendLine("            {");
         for (var i = 0; i < root.Leaves.Count; i++)
         {
             var leaf = root.Leaves[i];
-            builder.Append("                _ownerSlot._column").Append(leaf.Ordinal).Append("[_index] = Project")
+            builder.Append("                ")
+                .Append(UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"))
+                .Append(" = Project")
                 .Append(leaf.UniqueName).AppendLine("(value);");
         }
         builder.AppendLine("            }");
         builder.AppendLine("        }");
     }
+
+    static string UncheckedBufferElement(string bufferExpression, string indexExpression)
+        => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference({bufferExpression}), {indexExpression})";
 
     static void AppendRowReader(StringBuilder builder, Model model)
     {

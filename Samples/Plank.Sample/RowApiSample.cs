@@ -21,7 +21,6 @@ static class RowApiSample
                 _ => "deleted"u8.ToArray()
             };
             row.OccurredAt = now.AddMinutes(i);
-            rowWriter.Next();
         }
 
         rowWriter.Complete();
