@@ -3,7 +3,7 @@ namespace Plank.SourceGen.Tests;
 internal sealed class GeneratedRowWriterAccessTests
 {
     [Test]
-    public async Task FlatRowsReferenceCachedTypedBuffers()
+    public async Task FlatRowsReferencePinnedTypedBuffers()
     {
         const string source = """
             using Plank.Schema;
@@ -20,14 +20,67 @@ internal sealed class GeneratedRowWriterAccessTests
 
         var generated = Generate(source);
 
-        await Assert.That(generated).Contains("internal int[] _column0 = null!;");
-        await Assert.That(generated).Contains("_column0 = GetValues<int>(0);");
+        await Assert.That(generated).Contains("PinnedColumn<int> _column0Pinned;");
+        await Assert.That(generated).Contains("_column0Pinned = GetPinnedColumn<int>(0);");
+        await Assert.That(generated).Contains("=> ref _column0Pinned[index];");
         await Assert.That(generated).Contains("return new Row(Index, this);");
-        await Assert.That(generated).Contains(
-            "public ref int Value => ref global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_ownerSlot._column0), _index);");
+        await Assert.That(generated).Contains("public ref int Value => ref _ownerSlot.GetColumn0(_index);");
         await Assert.That(generated.Contains("_ownerSlot._column0[_index]", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("return new Row(Index, this, GetValues", StringComparison.Ordinal))
             .IsFalse();
+    }
+
+    [Test]
+    public async Task NullableFlatRowsReferencePinnedTypedBuffers()
+    {
+        const string source = """
+            using Plank.Schema;
+
+            namespace Regression;
+
+            [ParquetSchema]
+            partial class RowSchema
+            {
+                public int? Value { get; set; }
+            }
+            """;
+
+        var generated = Generate(source);
+
+        await Assert.That(generated).Contains("PinnedColumn<int?> _column0Pinned;");
+        await Assert.That(generated).Contains("_column0Pinned = GetPinnedColumn<int?>(0);");
+        await Assert.That(generated).Contains("public ref int? Value => ref _ownerSlot.GetColumn0(_index);");
+        await Assert.That(generated.Contains("internal int?[] _column0", StringComparison.Ordinal)).IsFalse();
+    }
+
+    [Test]
+    public async Task NestedScalarLeavesReferencePinnedTypedBuffers()
+    {
+        const string source = """
+            using Plank.Schema;
+
+            namespace Regression;
+
+            [ParquetSchema(AllowAllocatingValues = true)]
+            partial class RowSchema
+            {
+                public Details Value { get; set; } = new();
+            }
+
+            class Details
+            {
+                public int Count { get; set; }
+                public string Name { get; set; } = "";
+            }
+            """;
+
+        var generated = Generate(source);
+
+        await Assert.That(generated).Contains("PinnedColumn<int> _column0Pinned;");
+        await Assert.That(generated).Contains("_column0Pinned = GetPinnedColumn<int>(0);");
+        await Assert.That(generated).Contains("_ownerSlot.GetColumn0(_index)");
+        await Assert.That(generated).Contains("_column1 = GetValues<string>(1);");
+        await Assert.That(generated.Contains("_column1Pinned", StringComparison.Ordinal)).IsFalse();
     }
 
     [Test]
@@ -51,6 +104,7 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated).Contains("return new Row(Index, this);");
         await Assert.That(generated).Contains(
             "Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_ownerSlot._column0), _index)");
+        await Assert.That(generated.Contains("_column0Pinned", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("_ownerSlot._column0[_index]", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("return new Row(Index, this, GetValues", StringComparison.Ordinal))
             .IsFalse();

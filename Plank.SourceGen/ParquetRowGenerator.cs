@@ -550,8 +550,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("    public sealed class BufferSlot : global::Plank.RowApi.RowBufferSlot");
         builder.AppendLine("    {");
         for (var i = 0; i < columns.Length; i++)
-            builder.Append("        internal ").Append(columns[i].ClrTypeName).Append("[] _column")
-                .Append(i).AppendLine(" = null!;");
+        {
+            if (columns[i].IsUnmanagedType)
+                builder.Append("        PinnedColumn<").Append(columns[i].ClrTypeName).Append("> _column")
+                    .Append(i).AppendLine("Pinned;");
+            else
+                builder.Append("        internal ").Append(columns[i].ClrTypeName).Append("[] _column")
+                    .Append(i).AppendLine(" = null!;");
+        }
         builder.AppendLine();
         builder.AppendLine("        internal BufferSlot(global::Plank.Writing.RowGroupWriter rowGroupWriter, int rowCount)");
         builder.AppendLine("            : base(rowGroupWriter, s_rowApiColumns, rowCount)");
@@ -570,6 +576,16 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        {");
         builder.AppendLine("            return new Row(Index, this);");
         builder.AppendLine("        }");
+        for (var i = 0; i < columns.Length; i++)
+        {
+            if (!columns[i].IsUnmanagedType)
+                continue;
+            builder.AppendLine();
+            builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+            builder.Append("        internal ref ").Append(columns[i].ClrTypeName).Append(" GetColumn")
+                .Append(i).AppendLine("(int index)");
+            builder.Append("            => ref _column").Append(i).AppendLine("Pinned[index];");
+        }
         if (!rowSizePlan.IsFixed)
         {
             builder.AppendLine();
@@ -595,8 +611,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        void RefreshBuffers()");
         builder.AppendLine("        {");
         for (var i = 0; i < columns.Length; i++)
-            builder.Append("            _column").Append(i).Append(" = GetValues<")
-                .Append(columns[i].ClrTypeName).Append(">(").Append(i).AppendLine(");");
+        {
+            if (columns[i].IsUnmanagedType)
+                builder.Append("            _column").Append(i).Append("Pinned = GetPinnedColumn<")
+                    .Append(columns[i].ClrTypeName).Append(">(").Append(i).AppendLine(");");
+            else
+                builder.Append("            _column").Append(i).Append(" = GetValues<")
+                    .Append(columns[i].ClrTypeName).Append(">(").Append(i).AppendLine(");");
+        }
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -613,7 +635,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         for (var i = 0; i < columns.Length; i++)
         {
-            var bufferElement = UncheckedBufferElement($"_ownerSlot._column{i}", "_index");
+            var bufferElement = columns[i].IsUnmanagedType
+                ? $"_ownerSlot.GetColumn{i}(_index)"
+                : UncheckedBufferElement($"_ownerSlot._column{i}", "_index");
             builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ')
                 .Append(EscapeIdentifier(columns[i].PropertyName)).Append(" => ref ")
                 .Append(bufferElement).AppendLine(";");
@@ -670,7 +694,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             return false;
         }
 
-        mapped = new MappedColumn(column.Name, ToIdentifier(column.RowPropertyName), column.ClrTypeName);
+        mapped = new MappedColumn(column.Name, ToIdentifier(column.RowPropertyName), column.ClrTypeName,
+            column.IsUnmanagedType);
         return true;
     }
 
@@ -1196,6 +1221,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
         column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, property.Type.IsValueType,
+            property.Type.IsUnmanagedType,
             logicalType, property.Name, encodings,
             GetTypeLength(physicalType, converter?.PhysicalClrTypeName ?? clrTypeName, logicalType), converter?.TypeName,
             fieldId, compression, compressionLevel, bloomFilter, bloomFilterFalsePositiveProbability,
@@ -2130,7 +2156,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     readonly struct SchemaColumn
     {
         public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName, bool isValueType,
-            LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings, uint typeLength,
+            bool isUnmanagedType, LogicalTypeSpec? logicalType, string rowPropertyName,
+            ImmutableArray<string> encodings, uint typeLength,
             string? converterTypeName, int? fieldId, string? compression, int? compressionLevel,
             bool bloomFilter, double bloomFilterFalsePositiveProbability, uint bloomFilterExpectedDistinctValueCount,
             uint bloomFilterMaximumBytes)
@@ -2140,6 +2167,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             Repetition = repetition;
             ClrTypeName = clrTypeName;
             IsValueType = isValueType;
+            IsUnmanagedType = isUnmanagedType;
             LogicalType = logicalType;
             RowPropertyName = rowPropertyName;
             Encodings = encodings;
@@ -2163,6 +2191,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public string ClrTypeName { get; }
 
         public bool IsValueType { get; }
+
+        public bool IsUnmanagedType { get; }
 
         public LogicalTypeSpec? LogicalType { get; }
 
@@ -2246,11 +2276,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     readonly struct MappedColumn
     {
-        public MappedColumn(string name, string propertyName, string clrTypeName)
+        public MappedColumn(string name, string propertyName, string clrTypeName, bool isUnmanagedType)
         {
             Name = name;
             PropertyName = propertyName;
             ClrTypeName = clrTypeName;
+            IsUnmanagedType = isUnmanagedType;
         }
 
         public string Name { get; }
@@ -2258,5 +2289,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public string PropertyName { get; }
 
         public string ClrTypeName { get; }
+
+        public bool IsUnmanagedType { get; }
     }
 }

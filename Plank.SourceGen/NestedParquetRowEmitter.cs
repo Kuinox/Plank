@@ -691,8 +691,14 @@ static class NestedParquetRowEmitter
         builder.AppendLine("    public sealed class BufferSlot : global::Plank.RowApi.RowBufferSlot");
         builder.AppendLine("    {");
         for (var i = 0; i < model.Leaves.Length; i++)
-            builder.Append("        internal ").Append(model.Leaves[i].StorageShapeType).Append("[] _column")
-                .Append(i).AppendLine(" = null!;");
+        {
+            if (model.Leaves[i].UsesPinnedBuffer)
+                builder.Append("        PinnedColumn<").Append(model.Leaves[i].StorageShapeType)
+                    .Append("> _column").Append(i).AppendLine("Pinned;");
+            else
+                builder.Append("        internal ").Append(model.Leaves[i].StorageShapeType).Append("[] _column")
+                    .Append(i).AppendLine(" = null!;");
+        }
         builder.AppendLine();
         builder.AppendLine("        internal BufferSlot(global::Plank.Writing.RowGroupWriter rowGroupWriter, int rowCount)");
         builder.AppendLine("            : base(rowGroupWriter, s_rowApiColumns, rowCount)");
@@ -710,6 +716,17 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        {");
         builder.AppendLine("            return new Row(Index, this);");
         builder.AppendLine("        }");
+        for (var i = 0; i < model.Leaves.Length; i++)
+        {
+            var leaf = model.Leaves[i];
+            if (!leaf.UsesPinnedBuffer)
+                continue;
+            builder.AppendLine();
+            builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+            builder.Append("        internal ref ").Append(leaf.StorageShapeType).Append(" GetColumn")
+                .Append(i).AppendLine("(int index)");
+            builder.Append("            => ref _column").Append(i).AppendLine("Pinned[index];");
+        }
         if (!rowSizePlan.IsFixed)
         {
             builder.AppendLine();
@@ -720,7 +737,7 @@ static class NestedParquetRowEmitter
             {
                 var leaf = model.Leaves[columnIndex];
                 builder.Append("            size = checked(size + EstimateValueSize(")
-                    .Append(UncheckedBufferElement($"_column{columnIndex}", "Index"))
+                    .Append(BufferElement(leaf, null, "Index"))
                     .Append(", global::Plank.Schema.ParquetPhysicalType.")
                     .Append(leaf.Node.Scalar!.PhysicalType).Append(", ").Append(leaf.Node.Scalar.TypeLength)
                     .AppendLine("U));");
@@ -735,8 +752,15 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        void RefreshBuffers()");
         builder.AppendLine("        {");
         for (var i = 0; i < model.Leaves.Length; i++)
-            builder.Append("            _column").Append(i).Append(" = GetValues<")
-                .Append(model.Leaves[i].StorageShapeType).Append(">(").Append(i).AppendLine(");");
+        {
+            var leaf = model.Leaves[i];
+            if (leaf.UsesPinnedBuffer)
+                builder.Append("            _column").Append(i).Append("Pinned = GetPinnedColumn<")
+                    .Append(leaf.StorageShapeType).Append(">(").Append(i).AppendLine(");");
+            else
+                builder.Append("            _column").Append(i).Append(" = GetValues<")
+                    .Append(leaf.StorageShapeType).Append(">(").Append(i).AppendLine(");");
+        }
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -764,7 +788,7 @@ static class NestedParquetRowEmitter
             var leaf = root.Leaves[0];
             builder.Append("        public ref ").Append(root.UserType).Append(' ')
                 .Append(EscapeIdentifier(root.PropertyName)).Append(" => ref ")
-                .Append(UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"))
+                .Append(BufferElement(leaf, "_ownerSlot", "_index"))
                 .AppendLine(";");
             return;
         }
@@ -774,7 +798,7 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        {");
         builder.Append("            get => Read").Append(ToIdentifier(root.PropertyName)).Append('(');
         AppendLeafArguments(builder, root,
-            static leaf => UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"));
+            static leaf => BufferElement(leaf, "_ownerSlot", "_index"));
         builder.AppendLine(");");
         builder.AppendLine("            set");
         builder.AppendLine("            {");
@@ -782,7 +806,7 @@ static class NestedParquetRowEmitter
         {
             var leaf = root.Leaves[i];
             builder.Append("                ")
-                .Append(UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"))
+                .Append(BufferElement(leaf, "_ownerSlot", "_index"))
                 .Append(" = Project")
                 .Append(leaf.UniqueName).AppendLine("(value);");
         }
@@ -792,6 +816,14 @@ static class NestedParquetRowEmitter
 
     static string UncheckedBufferElement(string bufferExpression, string indexExpression)
         => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference({bufferExpression}), {indexExpression})";
+
+    static string BufferElement(Leaf leaf, string? ownerExpression, string indexExpression)
+    {
+        var prefix = ownerExpression is null ? string.Empty : ownerExpression + ".";
+        return leaf.UsesPinnedBuffer
+            ? $"{prefix}GetColumn{leaf.Ordinal}({indexExpression})"
+            : UncheckedBufferElement($"{prefix}_column{leaf.Ordinal}", indexExpression);
+    }
 
     static void AppendRowReader(StringBuilder builder, Model model)
     {
@@ -1271,7 +1303,7 @@ static class NestedParquetRowEmitter
             "global::System.TimeOnly";
         scalar = new Scalar(userType, normalized, physicalType, logicalExpression, encodings,
             normalized == "global::System.Guid" ? 16u : 0u, compression, compressionLevel, storageType,
-            supportsNestedStorage,
+            supportsNestedStorage, type.IsUnmanagedType,
             physicalType is "ByteArray" or "FixedLenByteArray" or "Int96");
         error = string.Empty;
         return true;
@@ -1689,7 +1721,7 @@ static class NestedParquetRowEmitter
 
     sealed class Scalar(string userType, string nonNullableUserType, string physicalType,
         string? logicalExpression, ImmutableArray<string> encodings, uint typeLength, string? compression,
-        int? compressionLevel, string storageType, bool supportsNestedStorage, bool isBinary)
+        int? compressionLevel, string storageType, bool supportsNestedStorage, bool isUnmanagedType, bool isBinary)
     {
         internal string UserType { get; } = userType;
         internal string NonNullableUserType { get; } = nonNullableUserType;
@@ -1701,6 +1733,7 @@ static class NestedParquetRowEmitter
         internal int? CompressionLevel { get; } = compressionLevel;
         internal string StorageType { get; } = storageType;
         internal bool SupportsNestedStorage { get; } = supportsNestedStorage;
+        internal bool IsUnmanagedType { get; } = isUnmanagedType;
         internal bool IsBinary { get; } = isBinary;
     }
 
@@ -1721,6 +1754,7 @@ static class NestedParquetRowEmitter
         internal int Ordinal { get; set; }
         internal string DescriptorName => $"s_{UniqueName}RowApiColumn";
         internal bool UsesNestedDescriptor => MaxRepetitionLevel > 0;
+        internal bool UsesPinnedBuffer => CollectionLevels.IsEmpty && Node.Scalar!.IsUnmanagedType;
     }
 
     readonly struct CollectionLevel
