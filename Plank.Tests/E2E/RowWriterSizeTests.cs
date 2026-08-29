@@ -143,6 +143,28 @@ internal sealed class RowWriterSizeTests
     }
 
     [Test]
+    public async Task GeneratedPipelineWriterCommitsRowsOnGetRowAndComplete()
+    {
+        using var stream = new MemoryStream();
+        using var writer = DatasetRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
+        {
+            RowApiMaxParallelism = 1,
+            RowApiInitialRowCapacity = 1,
+            TargetRowGroupSizeBytes = 16
+        });
+
+        for (var i = 0; i < 10; i++)
+        {
+            var row = writer.GetRow();
+            row.Value = i;
+            row.Path = ReadOnlyMemory<byte>.Empty;
+        }
+        writer.Complete();
+
+        await Assert.That(ReadValues(stream).SequenceEqual(Enumerable.Range(0, 10))).IsTrue();
+    }
+
+    [Test]
     public async Task RollingRowWriterStartsANewFileAtTheTarget()
     {
         using var files = new RollingFileSet();

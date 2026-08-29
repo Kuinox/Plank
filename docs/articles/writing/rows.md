@@ -20,13 +20,13 @@ for (var id = 0; id < 100; id++)
     row.Id = id;
     row.Name = "event"u8.ToArray();
     row.OccurredAt = DateTimeOffset.UtcNow;
-    writer.Next();
 }
 
 writer.Complete();
 ```
 
-`GetRow()` returns the reusable row buffer. Call `Next()` after filling it, then `Complete()` after the last row.
+`GetRow()` commits the previously returned row and returns the next reusable row buffer. `Complete()` commits the
+last row. `Next()` remains available for existing code that explicitly advances after every row.
 
 The row writer handles row-group construction, encoding, and file finalization. `Complete()` commits the file. If
 writing fails first, `Dispose()` stops the workers and releases resources without committing the incomplete file.

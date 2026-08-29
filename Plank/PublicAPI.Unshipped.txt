@@ -1,1 +1,3 @@
 #nullable enable
+Plank.RowApi.PipelineRowWriterBase<TSlot>.CommitFixedRow(TSlot! slot, int rowsPerGroup) -> TSlot!
+Plank.RowApi.PipelineRowWriterBase<TSlot>.CommitVariableRow(TSlot! slot, ulong rowSizeBytes) -> TSlot!
