@@ -8,6 +8,12 @@ static class RowValueSizeEstimator
 {
     internal static bool TryGetFixedSize<T>(Column column, out ulong size)
     {
+        if (column.PhysicalType is ParquetPhysicalType.FixedLenByteArray && IsBinaryBuffer<T>())
+        {
+            size = column.Options.TypeLength;
+            return true;
+        }
+
         if (typeof(T) == typeof(ReadOnlyMemory<byte>) ||
             typeof(T) == typeof(ReadOnlyMemory<byte>?) ||
             typeof(T) == typeof(Memory<byte>) ||
@@ -24,6 +30,13 @@ static class RowValueSizeEstimator
         size = GetScalarSize<T>(column);
         return true;
     }
+
+    static bool IsBinaryBuffer<T>()
+        => typeof(T) == typeof(byte[]) ||
+           typeof(T) == typeof(ReadOnlyMemory<byte>) ||
+           typeof(T) == typeof(ReadOnlyMemory<byte>?) ||
+           typeof(T) == typeof(Memory<byte>) ||
+           typeof(T) == typeof(Memory<byte>?);
 
     internal static ulong Estimate<T>(T value, Column column)
     {
