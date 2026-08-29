@@ -6,6 +6,25 @@ namespace Plank.RowApi;
 
 static class RowValueSizeEstimator
 {
+    internal static bool TryGetFixedSize<T>(Column column, out ulong size)
+    {
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>) ||
+            typeof(T) == typeof(ReadOnlyMemory<byte>?) ||
+            typeof(T) == typeof(Memory<byte>) ||
+            typeof(T) == typeof(Memory<byte>?) ||
+            typeof(T) == typeof(byte[]) ||
+            typeof(T) == typeof(string) ||
+            typeof(T).IsArray ||
+            !typeof(T).IsValueType)
+        {
+            size = 0;
+            return false;
+        }
+
+        size = GetScalarSize<T>(column);
+        return true;
+    }
+
     internal static ulong Estimate<T>(T value, Column column)
     {
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))

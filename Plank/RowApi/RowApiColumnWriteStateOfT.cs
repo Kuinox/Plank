@@ -13,6 +13,9 @@ sealed class RowApiColumnWriteState<T> : RowApiColumnWriteState
         ArgumentNullException.ThrowIfNull(descriptor);
 
         _descriptor = descriptor;
+        FixedValueSizeBytes = RowValueSizeEstimator.TryGetFixedSize<T>(descriptor.Column.Column, out var size)
+            ? size
+            : null;
         Values = rowCount == 0 ? [] : new T[rowCount];
     }
 
@@ -33,6 +36,8 @@ sealed class RowApiColumnWriteState<T> : RowApiColumnWriteState
     }
 
     internal T[] Values;
+
+    internal override ulong? FixedValueSizeBytes { get; }
 
     internal override void Bind(ParquetWriter writer)
     {

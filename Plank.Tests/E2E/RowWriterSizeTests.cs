@@ -1,12 +1,24 @@
 using System.Text;
 using Plank.Reading;
 using Plank.Reading.Physical;
+using Plank.RowApi;
 using Plank.Writing;
 
 namespace Plank.Tests.E2E;
 
 internal sealed class RowWriterSizeTests
 {
+    [Test]
+    public async Task RowValueSizesAreClassifiedAtInitialization()
+    {
+        var valueColumn = DatasetRowSchema.Schema.LeafColumns[0].Column;
+        var pathColumn = DatasetRowSchema.Schema.LeafColumns[1].Column;
+
+        await Assert.That(RowValueSizeEstimator.TryGetFixedSize<int>(valueColumn, out var valueSize)).IsTrue();
+        await Assert.That(valueSize).IsEqualTo(4UL);
+        await Assert.That(RowValueSizeEstimator.TryGetFixedSize<ReadOnlyMemory<byte>>(pathColumn, out _)).IsFalse();
+    }
+
     [Test]
     public void GeneratedSchemaWriterDisposalAbortsAndRejectsReuse()
     {

@@ -11,6 +11,8 @@ public abstract class RowBufferSlot
 {
     int _rowCount;
     readonly RowApiColumnWriteState[] _columns;
+    readonly RowApiColumnWriteState[] _variableSizeColumns;
+    readonly ulong _fixedRowSizeBytes;
     List<IDisposable>? _ownedBuffers;
     ulong _bufferedSizeBytes;
 
@@ -22,6 +24,7 @@ public abstract class RowBufferSlot
 
         _rowCount = rowCount;
         _columns = CreateColumnStates(columns, rowCount);
+        (_fixedRowSizeBytes, _variableSizeColumns) = ClassifyColumnSizes(_columns);
         Index = 0;
         _bufferedSizeBytes = 0;
     }
@@ -39,6 +42,7 @@ public abstract class RowBufferSlot
 
         _rowCount = rowCount;
         _columns = CreateColumnStates(rowGroupWriter, columns, rowCount);
+        (_fixedRowSizeBytes, _variableSizeColumns) = ClassifyColumnSizes(_columns);
         Index = 0;
         _bufferedSizeBytes = 0;
     }
@@ -56,6 +60,7 @@ public abstract class RowBufferSlot
 
         _rowCount = rowCount;
         _columns = CreateColumnStates(writer, columns, rowCount);
+        (_fixedRowSizeBytes, _variableSizeColumns) = ClassifyColumnSizes(_columns);
         Index = 0;
         _bufferedSizeBytes = 0;
     }
@@ -108,8 +113,9 @@ public abstract class RowBufferSlot
     {
         if (Index >= _rowCount)
             throw new InvalidOperationException("No more row slots are available.");
-        for (var i = 0; i < _columns.Length; i++)
-            _bufferedSizeBytes = checked(_bufferedSizeBytes + _columns[i].GetValueSize(Index));
+        _bufferedSizeBytes = checked(_bufferedSizeBytes + _fixedRowSizeBytes);
+        for (var i = 0; i < _variableSizeColumns.Length; i++)
+            _bufferedSizeBytes = checked(_bufferedSizeBytes + _variableSizeColumns[i].GetValueSize(Index));
         Index++;
     }
 
@@ -244,5 +250,27 @@ public abstract class RowBufferSlot
         }
 
         return states;
+    }
+
+    static (ulong FixedRowSizeBytes, RowApiColumnWriteState[] VariableSizeColumns) ClassifyColumnSizes(
+        RowApiColumnWriteState[] columns)
+    {
+        ulong fixedRowSizeBytes = 0;
+        var variableCount = 0;
+        for (var i = 0; i < columns.Length; i++)
+            if (columns[i].FixedValueSizeBytes is { } size)
+                fixedRowSizeBytes = checked(fixedRowSizeBytes + size);
+            else
+                variableCount++;
+
+        if (variableCount == 0)
+            return (fixedRowSizeBytes, []);
+
+        var variableSizeColumns = new RowApiColumnWriteState[variableCount];
+        var variableIndex = 0;
+        for (var i = 0; i < columns.Length; i++)
+            if (columns[i].FixedValueSizeBytes is null)
+                variableSizeColumns[variableIndex++] = columns[i];
+        return (fixedRowSizeBytes, variableSizeColumns);
     }
 }
