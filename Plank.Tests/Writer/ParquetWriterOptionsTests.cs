@@ -12,8 +12,22 @@ internal sealed class ParquetWriterOptionsTests
 
         await Assert.That(options.FileVersion).IsEqualTo(ParquetFileVersion.V1);
         await Assert.That(options.DataPageVersion).IsEqualTo(ParquetDataPageVersion.V2);
+        await Assert.That(options.RowApiInitialRowCapacity).IsEqualTo(1024);
         await Assert.That(options.TargetRowGroupSizeBytes).IsEqualTo(128UL * 1024 * 1024);
         await Assert.That(options.TargetFileSizeBytes).IsEqualTo(512UL * 1024 * 1024);
+    }
+
+    [Test]
+    public void NonPositiveRowApiInitialCapacityIsRejected()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ParquetWriterOptions
+        {
+            RowApiInitialRowCapacity = 0
+        }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ParquetWriterOptions
+        {
+            RowApiInitialRowCapacity = -1
+        }.Validate());
     }
 
     [Test]

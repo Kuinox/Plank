@@ -127,4 +127,16 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         Complete(_active, !_active.IsEmpty);
         _completed = true;
     }
+
+    /// <summary>Resets a completed generated writer to a new destination stream.</summary>
+    /// <param name="stream">The new destination stream.</param>
+    protected void ResetWriter(Stream stream)
+    {
+        if (!_completed)
+            throw new InvalidOperationException("Pipeline writer must be completed before it can be reset.");
+
+        ResetPipeline(stream);
+        _active = TakeInitialSlot();
+        _completed = false;
+    }
 }
