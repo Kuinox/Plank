@@ -280,7 +280,7 @@ public abstract class DatasetWriterBase<TRow>
         if (state.RolloverPending)
             Rollover(state);
         CopyRow(row, state.SlotIndex, state.Slot.Count);
-        state.Slot.Next();
+        state.Slot.NextSized();
         if (state.Slot.BufferedSizeBytes >= _targetRowGroupSizeBytes ||
             state.Slot.IsFull && !state.Slot.Grow())
             WriteRows(state);
@@ -422,7 +422,7 @@ public abstract class DatasetWriterBase<TRow>
                 Rollover(state);
 
             _parkedRows.CopyRowTo(current, state.Slot, state.Slot.Count);
-            state.Slot.Next();
+            state.Slot.NextSized();
             RemoveParkedRow(current, previous, next);
             _pendingKeys[keyIndex].RowCount--;
             if (state.Slot.BufferedSizeBytes >= _targetRowGroupSizeBytes ||
@@ -587,7 +587,7 @@ public abstract class DatasetWriterBase<TRow>
         state.Slot.SerializeColumns();
         var rowGroupWriter = state.Writer.StartRowGroup();
         state.Slot.WriteSerialized(rowGroupWriter);
-        state.Slot.ResetForReuse();
+        state.Slot.ResetForReuseAndSize();
         if (_createFileParts && checked((ulong)state.Writer.FileOffset) >= _targetFileSizeBytes)
             state.RolloverPending = true;
     }
@@ -681,7 +681,7 @@ public abstract class DatasetWriterBase<TRow>
         finally
         {
             state.Slot.Unbind();
-            state.Slot.ResetForReuse();
+            state.Slot.ResetForReuseAndSize();
             state.File = null;
             state.Writer = null;
             state.RolloverPending = false;
@@ -807,8 +807,30 @@ public abstract class DatasetWriterBase<TRow>
         internal bool Active;
     }
 
-    sealed class DatasetBufferSlot(RowApiColumnDescriptor[] columns, int rowCount)
-        : RowBufferSlot(columns, rowCount);
+    sealed class DatasetBufferSlot : RowBufferSlot
+    {
+        readonly RowBufferSizeTracker _sizeTracker;
+
+        internal DatasetBufferSlot(RowApiColumnDescriptor[] columns, int rowCount)
+            : base(columns, rowCount)
+        {
+            _sizeTracker = CreateSizeTracker();
+        }
+
+        internal ulong BufferedSizeBytes { get; private set; }
+
+        internal void NextSized()
+        {
+            BufferedSizeBytes = checked(BufferedSizeBytes + _sizeTracker.GetRowSize(Count));
+            Next();
+        }
+
+        internal void ResetForReuseAndSize()
+        {
+            ResetForReuse();
+            BufferedSizeBytes = 0;
+        }
+    }
 
     struct PendingKeyState
     {

@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Plank.Schema;
 using Plank.Writing;
 
 namespace Plank.RowApi;
@@ -11,10 +12,7 @@ public abstract class RowBufferSlot
 {
     int _rowCount;
     readonly RowApiColumnWriteState[] _columns;
-    readonly RowApiColumnWriteState[] _variableSizeColumns;
-    readonly ulong _fixedRowSizeBytes;
     List<IDisposable>? _ownedBuffers;
-    ulong _bufferedSizeBytes;
 
     internal RowBufferSlot(RowApiColumnDescriptor[] columns, int rowCount)
     {
@@ -24,9 +22,7 @@ public abstract class RowBufferSlot
 
         _rowCount = rowCount;
         _columns = CreateColumnStates(columns, rowCount);
-        (_fixedRowSizeBytes, _variableSizeColumns) = ClassifyColumnSizes(_columns);
         Index = 0;
-        _bufferedSizeBytes = 0;
     }
 
     /// <summary>Initializes a generated buffer slot that writes directly to a row group.</summary>
@@ -42,9 +38,7 @@ public abstract class RowBufferSlot
 
         _rowCount = rowCount;
         _columns = CreateColumnStates(rowGroupWriter, columns, rowCount);
-        (_fixedRowSizeBytes, _variableSizeColumns) = ClassifyColumnSizes(_columns);
         Index = 0;
-        _bufferedSizeBytes = 0;
     }
 
     /// <summary>Initializes a generated buffer slot whose columns can be serialized in parallel.</summary>
@@ -60,9 +54,7 @@ public abstract class RowBufferSlot
 
         _rowCount = rowCount;
         _columns = CreateColumnStates(writer, columns, rowCount);
-        (_fixedRowSizeBytes, _variableSizeColumns) = ClassifyColumnSizes(_columns);
         Index = 0;
-        _bufferedSizeBytes = 0;
     }
 
     internal bool IsFull
@@ -73,9 +65,6 @@ public abstract class RowBufferSlot
 
     internal int Count
         => Index;
-
-    internal ulong BufferedSizeBytes
-        => _bufferedSizeBytes;
 
     internal void Bind(ParquetWriter writer)
     {
@@ -109,15 +98,27 @@ public abstract class RowBufferSlot
         throw new InvalidOperationException($"Row API column at index {columnIndex} cannot be written as {typeof(T)}.");
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Next()
     {
         if (Index >= _rowCount)
             throw new InvalidOperationException("No more row slots are available.");
-        _bufferedSizeBytes = checked(_bufferedSizeBytes + _fixedRowSizeBytes);
-        for (var i = 0; i < _variableSizeColumns.Length; i++)
-            _bufferedSizeBytes = checked(_bufferedSizeBytes + _variableSizeColumns[i].GetValueSize(Index));
         Index++;
     }
+
+    internal ulong GetRowSize()
+    {
+        if (Index >= _rowCount)
+            throw new InvalidOperationException("No more row slots are available.");
+
+        ulong size = 0;
+        for (var i = 0; i < _columns.Length; i++)
+            size = checked(size + (_columns[i].FixedValueSizeBytes ?? _columns[i].GetValueSize(Index)));
+        return size;
+    }
+
+    internal RowBufferSizeTracker CreateSizeTracker()
+        => new(_columns);
 
     internal bool Grow()
     {
@@ -171,7 +172,6 @@ public abstract class RowBufferSlot
         for (var i = 0; i < _columns.Length; i++)
             _columns[i].ResetForReuse(0, Index);
         Index = 0;
-        _bufferedSizeBytes = 0;
     }
 
     internal void ClearRow(int index)
@@ -210,6 +210,16 @@ public abstract class RowBufferSlot
         if (Index >= _rowCount)
             throw new InvalidOperationException("No more row slots are available.");
     }
+
+    /// <summary>Estimates the buffered size of one generated variable-width value.</summary>
+    /// <typeparam name="T">The generated CLR storage type.</typeparam>
+    /// <param name="value">The value stored for the current row.</param>
+    /// <param name="physicalType">The generated Parquet physical type.</param>
+    /// <param name="typeLength">The generated fixed-length binary size, or zero otherwise.</param>
+    /// <returns>The estimated number of buffered bytes.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    protected static ulong EstimateValueSize<T>(T value, ParquetPhysicalType physicalType, uint typeLength)
+        => RowValueSizeEstimator.Estimate(value, physicalType, typeLength);
 
     static RowApiColumnWriteState[] CreateColumnStates(RowGroupWriter rowGroupWriter, RowApiColumnDescriptor[] columns,
         int rowCount)
@@ -258,25 +268,4 @@ public abstract class RowBufferSlot
         return states;
     }
 
-    static (ulong FixedRowSizeBytes, RowApiColumnWriteState[] VariableSizeColumns) ClassifyColumnSizes(
-        RowApiColumnWriteState[] columns)
-    {
-        ulong fixedRowSizeBytes = 0;
-        var variableCount = 0;
-        for (var i = 0; i < columns.Length; i++)
-            if (columns[i].FixedValueSizeBytes is { } size)
-                fixedRowSizeBytes = checked(fixedRowSizeBytes + size);
-            else
-                variableCount++;
-
-        if (variableCount == 0)
-            return (fixedRowSizeBytes, []);
-
-        var variableSizeColumns = new RowApiColumnWriteState[variableCount];
-        var variableIndex = 0;
-        for (var i = 0; i < columns.Length; i++)
-            if (columns[i].FixedValueSizeBytes is null)
-                variableSizeColumns[variableIndex++] = columns[i];
-        return (fixedRowSizeBytes, variableSizeColumns);
-    }
 }
