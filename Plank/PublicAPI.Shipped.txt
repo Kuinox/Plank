@@ -78,6 +78,7 @@ Plank.RowApi.RowApiColumnDescriptor<T>
 Plank.RowApi.RowApiColumnDescriptor<T>.RowApiColumnDescriptor(string! propertyName, Plank.Schema.LeafColumn! column) -> void
 Plank.RowApi.RowBufferSlot
 Plank.RowApi.RowBufferSlot.EnsureRowAvailable() -> void
+static Plank.RowApi.RowBufferSlot.EstimateValueSize<T>(T value, Plank.Schema.ParquetPhysicalType physicalType, uint typeLength) -> ulong
 Plank.RowApi.RowBufferSlot.RowBufferSlot(Plank.Writing.ParquetWriter! writer, Plank.RowApi.RowApiColumnDescriptor![]! columns, int rowCount) -> void
 Plank.RowApi.RowBufferSlot.RowBufferSlot(Plank.Writing.RowGroupWriter! rowGroupWriter, Plank.RowApi.RowApiColumnDescriptor![]! columns, int rowCount) -> void
 Plank.RowApi.RowBufferSlot.GetValues<T>(int columnIndex) -> T[]!
@@ -88,7 +89,10 @@ Plank.RowApi.PipelineRowWriterBase<TSlot>
 Plank.RowApi.PipelineRowWriterBase<TSlot>.CompleteWriter() -> void
 Plank.RowApi.PipelineRowWriterBase<TSlot>.PipelineRowWriterBase(System.IO.Stream! stream, Plank.Schema.ParquetSchema! schema, uint maxParallelism, System.Action<int>? onFlush, Plank.Writing.ParquetWriterOptions! options, int rowBatchSize, string! workerThreadNamePrefix) -> void
 Plank.RowApi.PipelineRowWriterBase<TSlot>.GetSlotForRow() -> TSlot!
+Plank.RowApi.PipelineRowWriterBase<TSlot>.GetFixedRowsPerGroup(ulong fixedRowSizeBytes) -> int
+Plank.RowApi.PipelineRowWriterBase<TSlot>.NextFixedRow(int rowsPerGroup) -> void
 Plank.RowApi.PipelineRowWriterBase<TSlot>.NextRow() -> void
+Plank.RowApi.PipelineRowWriterBase<TSlot>.NextVariableRow(ulong rowSizeBytes) -> void
 Plank.RowApi.PipelineRowWriterBase<TSlot>.RowBatchSize.get -> int
 override Plank.RowApi.PipelineRowWriterBase<TSlot>.WorkerThreadNamePrefix.get -> string!
 override Plank.RowApi.PipelineRowWriterBase<TSlot>.OnSlotWritten(TSlot! slot) -> void

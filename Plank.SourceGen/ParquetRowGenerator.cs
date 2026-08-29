@@ -238,6 +238,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static string BuildSource(INamedTypeSymbol schemaType, ImmutableArray<SchemaColumn> schemaColumns,
         ImmutableArray<MappedColumn> columns)
     {
+        var rowSizePlan = CreateRowSizePlan(schemaColumns.Select(static column =>
+            new RowSizeColumn(column.PhysicalType, column.ClrTypeName, column.TypeLength, column.IsValueType)));
         var schemaMemberName = GetAvailableGeneratedMemberName(schemaType, "Schema");
         var writerTypeName = GetAvailableGeneratedMemberName(schemaType, "Writer");
         var readerTypeName = GetAvailableGeneratedMemberName(schemaType, "Reader");
@@ -422,6 +424,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("    public sealed class PipelineWriter : global::Plank.RowApi.PipelineRowWriterBase<BufferSlot>");
         builder.AppendLine("    {");
+        if (rowSizePlan.IsFixed)
+        {
+            builder.AppendLine("        readonly int _rowsPerGroup;");
+            builder.AppendLine();
+        }
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, options.RowApiMaxParallelism, null, options)");
         builder.AppendLine("        {");
@@ -433,6 +440,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             .Append(Escape(schemaType.Name))
             .AppendLine("RowApiWorker\")");
         builder.AppendLine("        {");
+        if (rowSizePlan.IsFixed)
+            builder.Append("            _rowsPerGroup = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
@@ -451,6 +460,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             .Append(Escape(schemaType.Name))
             .AppendLine("RowApiWorker\")");
         builder.AppendLine("        {");
+        if (rowSizePlan.IsFixed)
+            builder.Append("            _rowsPerGroup = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        protected override BufferSlot CreateSlot(global::Plank.Writing.ParquetWriter writer)");
@@ -462,7 +473,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
         builder.AppendLine("        public void Next()");
-        builder.AppendLine("            => NextRow();");
+        if (rowSizePlan.IsFixed)
+            builder.AppendLine("            => NextFixedRow(_rowsPerGroup);");
+        else
+            builder.Append("            => NextVariableRow(GetSlotForRow().GetRowSize(")
+                .Append(rowSizePlan.FixedSizeExpression).AppendLine("));");
         builder.AppendLine();
         builder.AppendLine("        public void Complete()");
         builder.AppendLine("            => CompleteWriter();");
@@ -542,6 +557,24 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            EnsureRowAvailable();");
         builder.AppendLine("            return new Row(Index, this);");
         builder.AppendLine("        }");
+        if (!rowSizePlan.IsFixed)
+        {
+            builder.AppendLine();
+            builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+            builder.AppendLine("        internal ulong GetRowSize(ulong fixedSizeBytes)");
+            builder.AppendLine("        {");
+            builder.AppendLine("            EnsureRowAvailable();");
+            builder.AppendLine("            var size = fixedSizeBytes;");
+            foreach (var columnIndex in rowSizePlan.VariableColumnIndices)
+            {
+                var column = schemaColumns[columnIndex];
+                builder.Append("            size = checked(size + EstimateValueSize(_column")
+                    .Append(columnIndex).Append("[Index], global::Plank.Schema.ParquetPhysicalType.")
+                    .Append(column.PhysicalType).Append(", ").Append(column.TypeLength).AppendLine("U));");
+            }
+            builder.AppendLine("            return size;");
+            builder.AppendLine("        }");
+        }
         builder.AppendLine();
         builder.AppendLine("        protected override void OnBuffersResized()");
         builder.AppendLine("            => RefreshBuffers();");
@@ -1149,7 +1182,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
 
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
-        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, logicalType, property.Name, encodings,
+        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, property.Type.IsValueType,
+            logicalType, property.Name, encodings,
             GetTypeLength(physicalType, converter?.PhysicalClrTypeName ?? clrTypeName, logicalType), converter?.TypeName,
             fieldId, compression, compressionLevel, bloomFilter, bloomFilterFalsePositiveProbability,
             bloomFilterExpectedDistinctValueCount, bloomFilterMaximumBytes);
@@ -2014,9 +2048,75 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return builder.ToString();
     }
 
+    internal static RowSizePlan CreateRowSizePlan(IEnumerable<RowSizeColumn> columns)
+    {
+        var fixedSizes = new List<string>();
+        var variableColumns = ImmutableArray.CreateBuilder<int>();
+        var index = 0;
+        foreach (var column in columns)
+        {
+            if (TryGetFixedSizeExpression(column, out var sizeExpression))
+                fixedSizes.Add(sizeExpression);
+            else
+                variableColumns.Add(index);
+            index++;
+        }
+
+        return new RowSizePlan(
+            fixedSizes.Count == 0 ? "0UL" : $"checked({string.Join(" + ", fixedSizes)})",
+            variableColumns.ToImmutable());
+    }
+
+    static bool TryGetFixedSizeExpression(RowSizeColumn column, out string expression)
+    {
+        if (column.PhysicalType == "FixedLenByteArray" && IsBinaryBufferType(column.ClrTypeName))
+        {
+            expression = $"{column.TypeLength}UL";
+            return true;
+        }
+
+        if (IsBinaryBufferType(column.ClrTypeName) || !column.IsValueType)
+        {
+            expression = string.Empty;
+            return false;
+        }
+
+        expression = column.PhysicalType switch
+        {
+            "Boolean" => "1UL",
+            "Int32" or "Float" => "4UL",
+            "Int64" or "Double" => "8UL",
+            "Int96" => "12UL",
+            "FixedLenByteArray" => $"{column.TypeLength}UL",
+            "ByteArray" => $"checked((ulong)global::System.Runtime.CompilerServices.Unsafe.SizeOf<{column.ClrTypeName}>())",
+            _ => throw new InvalidOperationException($"Unknown Parquet physical type '{column.PhysicalType}'.")
+        };
+        return true;
+    }
+
+    static bool IsBinaryBufferType(string clrTypeName)
+        => clrTypeName is "byte[]" or "byte[]?" or "global::System.Byte[]" or "global::System.Byte[]?" or
+            "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?" or
+            "global::System.Memory<byte>" or "global::System.Memory<byte>?";
+
+    internal readonly struct RowSizeColumn(string physicalType, string clrTypeName, uint typeLength, bool isValueType)
+    {
+        internal string PhysicalType { get; } = physicalType;
+        internal string ClrTypeName { get; } = clrTypeName;
+        internal uint TypeLength { get; } = typeLength;
+        internal bool IsValueType { get; } = isValueType;
+    }
+
+    internal readonly struct RowSizePlan(string fixedSizeExpression, ImmutableArray<int> variableColumnIndices)
+    {
+        internal string FixedSizeExpression { get; } = fixedSizeExpression;
+        internal ImmutableArray<int> VariableColumnIndices { get; } = variableColumnIndices;
+        internal bool IsFixed => VariableColumnIndices.IsEmpty;
+    }
+
     readonly struct SchemaColumn
     {
-        public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName,
+        public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName, bool isValueType,
             LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings, uint typeLength,
             string? converterTypeName, int? fieldId, string? compression, int? compressionLevel,
             bool bloomFilter, double bloomFilterFalsePositiveProbability, uint bloomFilterExpectedDistinctValueCount,
@@ -2026,6 +2126,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             PhysicalType = physicalType;
             Repetition = repetition;
             ClrTypeName = clrTypeName;
+            IsValueType = isValueType;
             LogicalType = logicalType;
             RowPropertyName = rowPropertyName;
             Encodings = encodings;
@@ -2047,6 +2148,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public string Repetition { get; }
 
         public string ClrTypeName { get; }
+
+        public bool IsValueType { get; }
 
         public LogicalTypeSpec? LogicalType { get; }
 

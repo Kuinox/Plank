@@ -27,7 +27,7 @@ static class RowValueSizeEstimator
             return false;
         }
 
-        size = GetScalarSize<T>(column);
+        size = GetScalarSize<T>(column.PhysicalType, column.Options.TypeLength);
         return true;
     }
 
@@ -39,6 +39,9 @@ static class RowValueSizeEstimator
            typeof(T) == typeof(Memory<byte>?);
 
     internal static ulong Estimate<T>(T value, Column column)
+        => Estimate(value, column.PhysicalType, column.Options.TypeLength);
+
+    internal static ulong Estimate<T>(T value, ParquetPhysicalType physicalType, uint typeLength)
     {
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
             return AtLeastOne(Unsafe.As<T, ReadOnlyMemory<byte>>(ref value).Length);
@@ -56,11 +59,11 @@ static class RowValueSizeEstimator
             return text is null ? 1UL : AtLeastOne(Encoding.UTF8.GetByteCount(text));
         }
         if (typeof(T).IsArray)
-            return EstimateArray(Unsafe.As<T, Array?>(ref value), column);
+            return EstimateArray(Unsafe.As<T, Array?>(ref value), physicalType, typeLength);
         if (!typeof(T).IsValueType)
-            return Unsafe.As<T, object?>(ref value) is null ? 1UL : GetScalarSize<T>(column);
+            return Unsafe.As<T, object?>(ref value) is null ? 1UL : GetScalarSize<T>(physicalType, typeLength);
 
-        return GetScalarSize<T>(column);
+        return GetScalarSize<T>(physicalType, typeLength);
     }
 
     static ulong Estimate(ReadOnlyMemory<byte>? value)
@@ -69,7 +72,7 @@ static class RowValueSizeEstimator
     static ulong Estimate(Memory<byte>? value)
         => AtLeastOne(value?.Length ?? 0);
 
-    static ulong EstimateArray(Array? values, Column column)
+    static ulong EstimateArray(Array? values, ParquetPhysicalType physicalType, uint typeLength)
     {
         if (values is null)
             return 1;
@@ -79,15 +82,15 @@ static class RowValueSizeEstimator
         var elementType = values.GetType().GetElementType()!;
         if (elementType.IsValueType && elementType != typeof(ReadOnlyMemory<byte>) &&
             elementType != typeof(Memory<byte>))
-            return checked((ulong)values.Length * (GetPhysicalScalarSize(column) + 1));
+            return checked((ulong)values.Length * (GetPhysicalScalarSize(physicalType, typeLength) + 1));
 
         ulong size = checked((ulong)values.Length);
         for (var i = 0; i < values.Length; i++)
-            size = checked(size + EstimateObject(values.GetValue(i), column));
+            size = checked(size + EstimateObject(values.GetValue(i), physicalType, typeLength));
         return size;
     }
 
-    static ulong EstimateObject(object? value, Column column)
+    static ulong EstimateObject(object? value, ParquetPhysicalType physicalType, uint typeLength)
         => value switch
         {
             null => 1,
@@ -95,14 +98,14 @@ static class RowValueSizeEstimator
             byte[] bytes => AtLeastOne(bytes.Length),
             ReadOnlyMemory<byte> memory => AtLeastOne(memory.Length),
             Memory<byte> memory => AtLeastOne(memory.Length),
-            Array array => EstimateArray(array, column),
-            _ => GetPhysicalScalarSize(column)
+            Array array => EstimateArray(array, physicalType, typeLength),
+            _ => GetPhysicalScalarSize(physicalType, typeLength)
         };
 
-    static ulong GetScalarSize<T>(Column column)
+    static ulong GetScalarSize<T>(ParquetPhysicalType physicalType, uint typeLength)
     {
-        var physicalSize = GetPhysicalScalarSize(column);
-        if (column.PhysicalType is ParquetPhysicalType.ByteArray && typeof(T).IsValueType)
+        var physicalSize = GetPhysicalScalarSize(physicalType, typeLength);
+        if (physicalType is ParquetPhysicalType.ByteArray && typeof(T).IsValueType)
             return checked((ulong)Unsafe.SizeOf<T>());
         return physicalSize;
     }
@@ -110,8 +113,8 @@ static class RowValueSizeEstimator
     static ulong AtLeastOne(int size)
         => checked((ulong)Math.Max(size, 1));
 
-    static ulong GetPhysicalScalarSize(Column column)
-        => column.PhysicalType switch
+    static ulong GetPhysicalScalarSize(ParquetPhysicalType physicalType, uint typeLength)
+        => physicalType switch
         {
             ParquetPhysicalType.Boolean => 1,
             ParquetPhysicalType.Int32 => 4,
@@ -119,8 +122,8 @@ static class RowValueSizeEstimator
             ParquetPhysicalType.Int96 => 12,
             ParquetPhysicalType.Float => 4,
             ParquetPhysicalType.Double => 8,
-            ParquetPhysicalType.FixedLenByteArray => column.Options.TypeLength,
+            ParquetPhysicalType.FixedLenByteArray => typeLength,
             ParquetPhysicalType.ByteArray => 1,
-            _ => throw new InvalidOperationException($"Unknown Parquet physical type '{column.PhysicalType}'.")
+            _ => throw new InvalidOperationException($"Unknown Parquet physical type '{physicalType}'.")
         };
 }

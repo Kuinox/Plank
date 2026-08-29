@@ -99,6 +99,28 @@ internal sealed class RowWriterSizeTests
     }
 
     [Test]
+    public async Task FixedWidthGeneratedRowWriterTargetsRowGroupsByPrecomputedRowCount()
+    {
+        using var stream = new MemoryStream();
+        var flushedRowCounts = new List<int>();
+        using var writer = WideRowSchema.CreateRowWriter(stream, 1, flushedRowCounts.Add,
+            new ParquetWriterOptions
+            {
+                RowApiInitialRowCapacity = 1,
+                TargetRowGroupSizeBytes = 521
+            });
+
+        for (var i = 0; i < 7; i++)
+        {
+            writer.GetRow();
+            writer.Next();
+        }
+        writer.Complete();
+
+        await Assert.That(flushedRowCounts.SequenceEqual([3, 3, 1])).IsTrue();
+    }
+
+    [Test]
     public async Task GeneratedPipelineWriterCanBeResetToANewStream()
     {
         using var first = new MemoryStream();

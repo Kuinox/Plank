@@ -561,6 +561,10 @@ static class NestedParquetRowEmitter
 
     static void AppendWriters(StringBuilder builder, Model model, INamedTypeSymbol schemaType)
     {
+        var rowSizePlan = ParquetRowGenerator.CreateRowSizePlan(model.Leaves.Select(static leaf =>
+            new ParquetRowGenerator.RowSizeColumn(leaf.Node.Scalar!.PhysicalType, leaf.StorageShapeType,
+                leaf.Node.Scalar.TypeLength,
+                leaf.CollectionLevels.IsEmpty && leaf.Node.Scalar.StorageType != "byte[]")));
         var rowTypeName = EscapeIdentifier(schemaType.Name);
         builder.AppendLine("    public struct Writer");
         builder.AppendLine("    {");
@@ -578,19 +582,36 @@ static class NestedParquetRowEmitter
         builder.AppendLine();
         builder.AppendLine("    public sealed class PipelineWriter : global::Plank.RowApi.PipelineRowWriterBase<BufferSlot>");
         builder.AppendLine("    {");
+        if (rowSizePlan.IsFixed)
+        {
+            builder.AppendLine("        readonly int _rowsPerGroup;");
+            builder.AppendLine();
+        }
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, options.RowApiMaxParallelism, null, options) { }");
         builder.AppendLine("        internal PipelineWriter(global::Plank.Writing.IParquetWriteSource file, global::Plank.Writing.ParquetFilePath filePath, global::Plank.Writing.ParquetWriterOptions options)");
-        builder.AppendLine("            : base(file, filePath, Schema, options.RowApiMaxParallelism, null, options, options.RowApiInitialRowCapacity, \"PlankNestedRowApiWorker\") { }");
+        builder.AppendLine("            : base(file, filePath, Schema, options.RowApiMaxParallelism, null, options, options.RowApiInitialRowCapacity, \"PlankNestedRowApiWorker\")");
+        builder.AppendLine("        {");
+        if (rowSizePlan.IsFixed)
+            builder.Append("            _rowsPerGroup = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
+        builder.AppendLine("        }");
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, options.RowApiMaxParallelism, onFlush, options) { }");
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, uint maxParallelism, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, maxParallelism, null, options) { }");
         builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, uint maxParallelism, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
-        builder.AppendLine("            : base(stream, Schema, maxParallelism, onFlush, options, options.RowApiInitialRowCapacity, \"PlankNestedRowApiWorker\") { }");
+        builder.AppendLine("            : base(stream, Schema, maxParallelism, onFlush, options, options.RowApiInitialRowCapacity, \"PlankNestedRowApiWorker\")");
+        builder.AppendLine("        {");
+        if (rowSizePlan.IsFixed)
+            builder.Append("            _rowsPerGroup = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
+        builder.AppendLine("        }");
         builder.AppendLine("        protected override BufferSlot CreateSlot(global::Plank.Writing.ParquetWriter writer) => new(writer, RowBatchSize);");
         builder.AppendLine("        public Row GetRow() => GetSlotForRow().GetRow();");
-        builder.AppendLine("        public void Next() => NextRow();");
+        if (rowSizePlan.IsFixed)
+            builder.AppendLine("        public void Next() => NextFixedRow(_rowsPerGroup);");
+        else
+            builder.Append("        public void Next() => NextVariableRow(GetSlotForRow().GetRowSize(")
+                .Append(rowSizePlan.FixedSizeExpression).AppendLine("));");
         builder.AppendLine("        public void Complete() => CompleteWriter();");
         builder.AppendLine("        public void Reset(global::System.IO.Stream stream) => ResetWriter(stream);");
         builder.AppendLine("    }");
@@ -668,6 +689,24 @@ static class NestedParquetRowEmitter
         builder.AppendLine("            EnsureRowAvailable();");
         builder.AppendLine("            return new Row(Index, this);");
         builder.AppendLine("        }");
+        if (!rowSizePlan.IsFixed)
+        {
+            builder.AppendLine();
+            builder.AppendLine("        internal ulong GetRowSize(ulong fixedSizeBytes)");
+            builder.AppendLine("        {");
+            builder.AppendLine("            EnsureRowAvailable();");
+            builder.AppendLine("            var size = fixedSizeBytes;");
+            foreach (var columnIndex in rowSizePlan.VariableColumnIndices)
+            {
+                var leaf = model.Leaves[columnIndex];
+                builder.Append("            size = checked(size + EstimateValueSize(_column")
+                    .Append(columnIndex).Append("[Index], global::Plank.Schema.ParquetPhysicalType.")
+                    .Append(leaf.Node.Scalar!.PhysicalType).Append(", ").Append(leaf.Node.Scalar.TypeLength)
+                    .AppendLine("U));");
+            }
+            builder.AppendLine("            return size;");
+            builder.AppendLine("        }");
+        }
         builder.AppendLine();
         builder.AppendLine("        protected override void OnBuffersResized()");
         builder.AppendLine("            => RefreshBuffers();");

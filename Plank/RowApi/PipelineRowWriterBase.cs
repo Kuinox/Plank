@@ -14,6 +14,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
 {
     readonly Action<int>? _onFlush;
     readonly ulong _targetRowGroupSizeBytes;
+    ulong _bufferedSizeBytes;
     TSlot _active;
     bool _completed;
 
@@ -39,6 +40,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         WorkerThreadNamePrefix = workerThreadNamePrefix;
         InitializeSlots();
         _active = TakeInitialSlot();
+        _bufferedSizeBytes = 0;
         _completed = false;
     }
 
@@ -66,6 +68,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         WorkerThreadNamePrefix = workerThreadNamePrefix;
         InitializeSlots();
         _active = TakeInitialSlot();
+        _bufferedSizeBytes = 0;
         _completed = false;
     }
 
@@ -109,12 +112,62 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         ThrowIfFaulted();
         if (_completed)
             throw new InvalidOperationException("Pipeline writer is already completed.");
+        NextVariableRowCore(_active.GetRowSize());
+    }
+
+    /// <summary>Advances a generated fixed-width writer to its next row.</summary>
+    /// <param name="rowsPerGroup">The generated row-count cutoff for one row group.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    protected void NextFixedRow(int rowsPerGroup)
+    {
+        ThrowIfFaulted();
+        if (_completed)
+            throw new InvalidOperationException("Pipeline writer is already completed.");
 
         _active.Next();
-        if (_active.BufferedSizeBytes < _targetRowGroupSizeBytes && (!_active.IsFull || _active.Grow()))
+        if (_active.Count < rowsPerGroup && (!_active.IsFull || _active.Grow()))
             return;
 
         _active = EnqueueAndTakeFree(_active);
+    }
+
+    /// <summary>Advances a generated variable-width writer to its next row.</summary>
+    /// <param name="rowSizeBytes">The generated estimate of the current row's buffered size.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    protected void NextVariableRow(ulong rowSizeBytes)
+    {
+        ThrowIfFaulted();
+        if (_completed)
+            throw new InvalidOperationException("Pipeline writer is already completed.");
+
+        NextVariableRowCore(rowSizeBytes);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    void NextVariableRowCore(ulong rowSizeBytes)
+    {
+        _bufferedSizeBytes = checked(_bufferedSizeBytes + rowSizeBytes);
+        _active.Next();
+        if (_bufferedSizeBytes < _targetRowGroupSizeBytes && (!_active.IsFull || _active.Grow()))
+            return;
+
+        _active = EnqueueAndTakeFree(_active);
+        _bufferedSizeBytes = 0;
+    }
+
+    /// <summary>Calculates the generated row-count cutoff for a fixed-width schema.</summary>
+    /// <param name="fixedRowSizeBytes">The generated fixed size of one row.</param>
+    /// <returns>The number of rows to buffer before flushing.</returns>
+    protected int GetFixedRowsPerGroup(ulong fixedRowSizeBytes)
+    {
+        if (fixedRowSizeBytes == 0)
+            throw new ArgumentOutOfRangeException(nameof(fixedRowSizeBytes), fixedRowSizeBytes,
+                "Fixed row size must be greater than zero.");
+
+        var rowCount = _targetRowGroupSizeBytes / fixedRowSizeBytes;
+        if (_targetRowGroupSizeBytes % fixedRowSizeBytes != 0)
+            rowCount++;
+        return checked((int)Math.Min(rowCount, (ulong)int.MaxValue));
     }
 
     /// <summary>Flushes pending rows and completes the generated writer.</summary>
@@ -137,6 +190,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
 
         ResetPipeline(stream);
         _active = TakeInitialSlot();
+        _bufferedSizeBytes = 0;
         _completed = false;
     }
 }
