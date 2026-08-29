@@ -568,8 +568,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             foreach (var columnIndex in rowSizePlan.VariableColumnIndices)
             {
                 var column = schemaColumns[columnIndex];
-                builder.Append("            size = checked(size + EstimateValueSize(_column")
-                    .Append(columnIndex).Append("[Index], global::Plank.Schema.ParquetPhysicalType.")
+                builder.Append("            size = checked(size + EstimateValueSize(")
+                    .Append(UncheckedBufferElement($"_column{columnIndex}", "Index"))
+                    .Append(", global::Plank.Schema.ParquetPhysicalType.")
                     .Append(column.PhysicalType).Append(", ").Append(column.TypeLength).AppendLine("U));");
             }
             builder.AppendLine("            return size;");
@@ -600,9 +601,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         for (var i = 0; i < columns.Length; i++)
         {
+            var bufferElement = UncheckedBufferElement($"_ownerSlot._column{i}", "_index");
             builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ')
-                .Append(EscapeIdentifier(columns[i].PropertyName)).Append(" => ref _ownerSlot._column")
-                .Append(i).AppendLine("[_index];");
+                .Append(EscapeIdentifier(columns[i].PropertyName)).Append(" => ref ")
+                .Append(bufferElement).AppendLine(";");
             if (SupportsOwnerSetter(columns[i].ClrTypeName))
             {
                 builder.AppendLine();
@@ -611,7 +613,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     builder.Append("        public void Set").Append(columns[i].PropertyName)
                         .Append("(global::System.Buffers.IMemoryOwner<byte>? owner)").AppendLine();
                     builder.AppendLine("        {");
-                    builder.Append("            _ownerSlot._column").Append(i).Append("[_index] = owner is null ? default(")
+                    builder.Append("            ").Append(bufferElement).Append(" = owner is null ? default(")
                         .Append(columns[i].ClrTypeName).Append(") : owner.Memory;").AppendLine();
                     builder.AppendLine("            if (owner is not null)");
                     builder.AppendLine("            {");
@@ -625,7 +627,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                         .Append("(global::System.Buffers.IMemoryOwner<byte> owner)").AppendLine();
                     builder.AppendLine("        {");
                     builder.AppendLine("            global::System.ArgumentNullException.ThrowIfNull(owner);");
-                    builder.Append("            _ownerSlot._column").Append(i).AppendLine("[_index] = owner.Memory;");
+                    builder.Append("            ").Append(bufferElement).AppendLine(" = owner.Memory;");
                     builder.AppendLine("            _ownerSlot.RegisterOwner(owner);");
                     builder.AppendLine("        }");
                 }
@@ -638,6 +640,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         return builder.ToString();
     }
+
+    static string UncheckedBufferElement(string bufferExpression, string indexExpression)
+        => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference({bufferExpression}), {indexExpression})";
 
     static bool TryMapColumn(SchemaColumn column, out MappedColumn mapped)
     {

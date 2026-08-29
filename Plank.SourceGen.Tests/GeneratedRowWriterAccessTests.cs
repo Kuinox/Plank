@@ -23,7 +23,9 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated).Contains("internal int[] _column0 = null!;");
         await Assert.That(generated).Contains("_column0 = GetValues<int>(0);");
         await Assert.That(generated).Contains("return new Row(Index, this);");
-        await Assert.That(generated).Contains("public ref int Value => ref _ownerSlot._column0[_index];");
+        await Assert.That(generated).Contains(
+            "public ref int Value => ref global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_ownerSlot._column0), _index);");
+        await Assert.That(generated.Contains("_ownerSlot._column0[_index]", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("return new Row(Index, this, GetValues", StringComparison.Ordinal))
             .IsFalse();
     }
@@ -47,7 +49,9 @@ internal sealed class GeneratedRowWriterAccessTests
 
         await Assert.That(generated).Contains("_column0 = GetValues<");
         await Assert.That(generated).Contains("return new Row(Index, this);");
-        await Assert.That(generated).Contains("_ownerSlot._column0[_index]");
+        await Assert.That(generated).Contains(
+            "Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_ownerSlot._column0), _index)");
+        await Assert.That(generated.Contains("_ownerSlot._column0[_index]", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("return new Row(Index, this, GetValues", StringComparison.Ordinal))
             .IsFalse();
     }
@@ -99,8 +103,8 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated.Contains("readonly int _rowsPerGroup;", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated).Contains("NextVariableRow(GetSlotForRow().GetRowSize(checked(4UL)))");
         await Assert.That(generated).Contains(
-            "EstimateValueSize(_column1[Index], global::Plank.Schema.ParquetPhysicalType.ByteArray, 0U)");
-        await Assert.That(generated.Contains("EstimateValueSize(_column0[Index]", StringComparison.Ordinal)).IsFalse();
+            "EstimateValueSize(global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_column1), Index), global::Plank.Schema.ParquetPhysicalType.ByteArray, 0U)");
+        await Assert.That(generated.Contains("GetArrayDataReference(_column0)", StringComparison.Ordinal)).IsFalse();
     }
 
     static string Generate(string source)

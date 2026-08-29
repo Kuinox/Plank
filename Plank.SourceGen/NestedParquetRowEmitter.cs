@@ -699,8 +699,9 @@ static class NestedParquetRowEmitter
             foreach (var columnIndex in rowSizePlan.VariableColumnIndices)
             {
                 var leaf = model.Leaves[columnIndex];
-                builder.Append("            size = checked(size + EstimateValueSize(_column")
-                    .Append(columnIndex).Append("[Index], global::Plank.Schema.ParquetPhysicalType.")
+                builder.Append("            size = checked(size + EstimateValueSize(")
+                    .Append(UncheckedBufferElement($"_column{columnIndex}", "Index"))
+                    .Append(", global::Plank.Schema.ParquetPhysicalType.")
                     .Append(leaf.Node.Scalar!.PhysicalType).Append(", ").Append(leaf.Node.Scalar.TypeLength)
                     .AppendLine("U));");
             }
@@ -742,8 +743,9 @@ static class NestedParquetRowEmitter
         {
             var leaf = root.Leaves[0];
             builder.Append("        public ref ").Append(root.UserType).Append(' ')
-                .Append(EscapeIdentifier(root.PropertyName)).Append(" => ref _ownerSlot._column")
-                .Append(leaf.Ordinal).AppendLine("[_index];");
+                .Append(EscapeIdentifier(root.PropertyName)).Append(" => ref ")
+                .Append(UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"))
+                .AppendLine(";");
             return;
         }
 
@@ -751,19 +753,25 @@ static class NestedParquetRowEmitter
             .Append(EscapeIdentifier(root.PropertyName)).AppendLine();
         builder.AppendLine("        {");
         builder.Append("            get => Read").Append(ToIdentifier(root.PropertyName)).Append('(');
-        AppendLeafArguments(builder, root, static leaf => $"_ownerSlot._column{leaf.Ordinal}[_index]");
+        AppendLeafArguments(builder, root,
+            static leaf => UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"));
         builder.AppendLine(");");
         builder.AppendLine("            set");
         builder.AppendLine("            {");
         for (var i = 0; i < root.Leaves.Count; i++)
         {
             var leaf = root.Leaves[i];
-            builder.Append("                _ownerSlot._column").Append(leaf.Ordinal).Append("[_index] = Project")
+            builder.Append("                ")
+                .Append(UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"))
+                .Append(" = Project")
                 .Append(leaf.UniqueName).AppendLine("(value);");
         }
         builder.AppendLine("            }");
         builder.AppendLine("        }");
     }
+
+    static string UncheckedBufferElement(string bufferExpression, string indexExpression)
+        => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference({bufferExpression}), {indexExpression})";
 
     static void AppendRowReader(StringBuilder builder, Model model)
     {
