@@ -647,15 +647,36 @@ static class NestedParquetRowEmitter
         builder.AppendLine();
         builder.AppendLine("    public sealed class BufferSlot : global::Plank.RowApi.RowBufferSlot");
         builder.AppendLine("    {");
-        builder.AppendLine("        internal BufferSlot(global::Plank.Writing.RowGroupWriter rowGroupWriter, int rowCount) : base(rowGroupWriter, s_rowApiColumns, rowCount) { }");
-        builder.AppendLine("        internal BufferSlot(global::Plank.Writing.ParquetWriter writer, int rowCount) : base(writer, s_rowApiColumns, rowCount) { }");
+        for (var i = 0; i < model.Leaves.Length; i++)
+            builder.Append("        internal ").Append(model.Leaves[i].StorageShapeType).Append("[] _column")
+                .Append(i).AppendLine(" = null!;");
+        builder.AppendLine();
+        builder.AppendLine("        internal BufferSlot(global::Plank.Writing.RowGroupWriter rowGroupWriter, int rowCount)");
+        builder.AppendLine("            : base(rowGroupWriter, s_rowApiColumns, rowCount)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            RefreshBuffers();");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        internal BufferSlot(global::Plank.Writing.ParquetWriter writer, int rowCount)");
+        builder.AppendLine("            : base(writer, s_rowApiColumns, rowCount)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            RefreshBuffers();");
+        builder.AppendLine("        }");
+        builder.AppendLine();
         builder.AppendLine("        internal Row GetRow()");
         builder.AppendLine("        {");
         builder.AppendLine("            EnsureRowAvailable();");
-        builder.Append("            return new Row(Index, this");
+        builder.AppendLine("            return new Row(Index, this);");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        protected override void OnBuffersResized()");
+        builder.AppendLine("            => RefreshBuffers();");
+        builder.AppendLine();
+        builder.AppendLine("        void RefreshBuffers()");
+        builder.AppendLine("        {");
         for (var i = 0; i < model.Leaves.Length; i++)
-            builder.Append(", GetValues<").Append(model.Leaves[i].StorageShapeType).Append(">(").Append(i).Append(')');
-        builder.AppendLine(");");
+            builder.Append("            _column").Append(i).Append(" = GetValues<")
+                .Append(model.Leaves[i].StorageShapeType).Append(">(").Append(i).AppendLine(");");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -663,20 +684,10 @@ static class NestedParquetRowEmitter
         builder.AppendLine("    {");
         builder.AppendLine("        readonly int _index;");
         builder.AppendLine("        readonly BufferSlot _ownerSlot;");
-        for (var i = 0; i < model.Leaves.Length; i++)
-            builder.Append("        readonly global::System.Span<").Append(model.Leaves[i].StorageShapeType)
-                .Append("> _").Append(model.Leaves[i].UniqueName).AppendLine(";");
-        builder.Append("        internal Row(int index, BufferSlot ownerSlot");
-        for (var i = 0; i < model.Leaves.Length; i++)
-            builder.Append(", global::System.Span<").Append(model.Leaves[i].StorageShapeType).Append("> p")
-                .Append(model.Leaves[i].UniqueName);
-        builder.AppendLine(")");
+        builder.AppendLine("        internal Row(int index, BufferSlot ownerSlot)");
         builder.AppendLine("        {");
         builder.AppendLine("            _index = index;");
         builder.AppendLine("            _ownerSlot = ownerSlot;");
-        for (var i = 0; i < model.Leaves.Length; i++)
-            builder.Append("            _").Append(model.Leaves[i].UniqueName).Append(" = p")
-                .Append(model.Leaves[i].UniqueName).AppendLine(";");
         builder.AppendLine("        }");
         for (var i = 0; i < model.Roots.Length; i++)
         {
@@ -692,8 +703,8 @@ static class NestedParquetRowEmitter
         {
             var leaf = root.Leaves[0];
             builder.Append("        public ref ").Append(root.UserType).Append(' ')
-                .Append(EscapeIdentifier(root.PropertyName)).Append(" => ref _")
-                .Append(leaf.UniqueName).AppendLine("[_index];");
+                .Append(EscapeIdentifier(root.PropertyName)).Append(" => ref _ownerSlot._column")
+                .Append(leaf.Ordinal).AppendLine("[_index];");
             return;
         }
 
@@ -701,14 +712,14 @@ static class NestedParquetRowEmitter
             .Append(EscapeIdentifier(root.PropertyName)).AppendLine();
         builder.AppendLine("        {");
         builder.Append("            get => Read").Append(ToIdentifier(root.PropertyName)).Append('(');
-        AppendLeafArguments(builder, root, static leaf => $"_{leaf.UniqueName}[_index]");
+        AppendLeafArguments(builder, root, static leaf => $"_ownerSlot._column{leaf.Ordinal}[_index]");
         builder.AppendLine(");");
         builder.AppendLine("            set");
         builder.AppendLine("            {");
         for (var i = 0; i < root.Leaves.Count; i++)
         {
             var leaf = root.Leaves[i];
-            builder.Append("                _").Append(leaf.UniqueName).Append("[_index] = Project")
+            builder.Append("                _ownerSlot._column").Append(leaf.Ordinal).Append("[_index] = Project")
                 .Append(leaf.UniqueName).AppendLine("(value);");
         }
         builder.AppendLine("            }");

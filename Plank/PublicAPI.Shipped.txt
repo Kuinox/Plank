@@ -83,6 +83,7 @@ Plank.RowApi.RowBufferSlot.RowBufferSlot(Plank.Writing.RowGroupWriter! rowGroupW
 Plank.RowApi.RowBufferSlot.GetValues<T>(int columnIndex) -> T[]!
 Plank.RowApi.RowBufferSlot.Index.get -> int
 Plank.RowApi.RowBufferSlot.RegisterOwner(System.IDisposable! owner) -> void
+virtual Plank.RowApi.RowBufferSlot.OnBuffersResized() -> void
 Plank.RowApi.PipelineRowWriterBase<TSlot>
 Plank.RowApi.PipelineRowWriterBase<TSlot>.CompleteWriter() -> void
 Plank.RowApi.PipelineRowWriterBase<TSlot>.PipelineRowWriterBase(System.IO.Stream! stream, Plank.Schema.ParquetSchema! schema, uint maxParallelism, System.Action<int>? onFlush, Plank.Writing.ParquetWriterOptions! options, int rowBatchSize, string! workerThreadNamePrefix) -> void

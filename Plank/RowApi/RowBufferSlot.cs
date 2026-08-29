@@ -128,7 +128,13 @@ public abstract class RowBufferSlot
         for (var i = 0; i < _columns.Length; i++)
             _columns[i].Resize(rowCount);
         _rowCount = rowCount;
+        OnBuffersResized();
         return true;
+    }
+
+    /// <summary>Refreshes generated typed buffer references after the slot grows.</summary>
+    protected virtual void OnBuffersResized()
+    {
     }
 
     /// <summary>Registers a resource to dispose when this slot is reused.</summary>
