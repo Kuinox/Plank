@@ -77,8 +77,8 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated).Contains("readonly int _rowsPerGroup;");
         await Assert.That(generated).Contains("GetFixedRowsPerGroup(checked(4UL + 8UL))");
         await Assert.That(generated).Contains("slot = CommitFixedRow(slot, _rowsPerGroup);");
-        await Assert.That(generated).Contains("CommitFixedRow(slot, _rowsPerGroup);");
         await Assert.That(generated).Contains("bool _rowPending;");
+        await Assert.That(generated.Contains("public void Next()", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("GetRowSize(ulong", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("EstimateValueSize(", StringComparison.Ordinal)).IsFalse();
     }
@@ -105,9 +105,8 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated.Contains("readonly int _rowsPerGroup;", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated).Contains(
             "slot = CommitVariableRow(slot, slot.GetRowSize(checked(4UL)));");
-        await Assert.That(generated).Contains(
-            "CommitVariableRow(slot, slot.GetRowSize(checked(4UL)));");
         await Assert.That(generated).Contains("bool _rowPending;");
+        await Assert.That(generated.Contains("public void Next()", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated).Contains(
             "EstimateValueSize(global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_column1), Index), global::Plank.Schema.ParquetPhysicalType.ByteArray, 0U)");
         await Assert.That(generated.Contains("GetArrayDataReference(_column0)", StringComparison.Ordinal)).IsFalse();

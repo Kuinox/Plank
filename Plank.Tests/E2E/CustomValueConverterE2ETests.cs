@@ -97,7 +97,6 @@ internal sealed class CustomValueConverterE2ETests
                     var row = writer.GetRow();
                     row.Id = Ids[i];
                     row.ParentId = ParentIds[i];
-                    writer.Next();
                 }
                 writer.Complete();
             }

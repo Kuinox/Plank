@@ -92,9 +92,6 @@ Plank.RowApi.PipelineRowWriterBase<TSlot>.CompleteWriter() -> void
 Plank.RowApi.PipelineRowWriterBase<TSlot>.PipelineRowWriterBase(System.IO.Stream! stream, Plank.Schema.ParquetSchema! schema, uint maxParallelism, System.Action<int>? onFlush, Plank.Writing.ParquetWriterOptions! options, int rowBatchSize, string! workerThreadNamePrefix) -> void
 Plank.RowApi.PipelineRowWriterBase<TSlot>.GetSlotForRow() -> TSlot!
 Plank.RowApi.PipelineRowWriterBase<TSlot>.GetFixedRowsPerGroup(ulong fixedRowSizeBytes) -> int
-Plank.RowApi.PipelineRowWriterBase<TSlot>.NextFixedRow(int rowsPerGroup) -> void
-Plank.RowApi.PipelineRowWriterBase<TSlot>.NextRow() -> void
-Plank.RowApi.PipelineRowWriterBase<TSlot>.NextVariableRow(ulong rowSizeBytes) -> void
 Plank.RowApi.PipelineRowWriterBase<TSlot>.RowBatchSize.get -> int
 override Plank.RowApi.PipelineRowWriterBase<TSlot>.WorkerThreadNamePrefix.get -> string!
 override Plank.RowApi.PipelineRowWriterBase<TSlot>.OnSlotWritten(TSlot! slot) -> void
@@ -104,7 +101,6 @@ override Plank.RowApi.PipelineRowWriterBase<TSlot>.WriteSerializedSlot(TSlot! sl
 Plank.RowApi.RowGroupWriterCore<TSlot>
 Plank.RowApi.RowGroupWriterCore<TSlot>.RowGroupWriterCore(Plank.Writing.RowGroupWriter! rowGroupWriter, TSlot! slot) -> void
 Plank.RowApi.RowGroupWriterCore<TSlot>.GetSlotForRow() -> TSlot!
-Plank.RowApi.RowGroupWriterCore<TSlot>.Next() -> void
 Plank.RowApi.RowGroupWriterCore<TSlot>.Write() -> void
 Plank.RowApi.RowReaderBinaryValue
 Plank.RowApi.RowReaderBinaryValue.IsNull.get -> bool

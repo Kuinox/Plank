@@ -55,13 +55,11 @@ internal sealed class RowWriterSizeTests
         var row = writer.GetRow();
         row.Value = 42;
         row.Path = ReadOnlyMemory<byte>.Empty;
-        writer.Next();
 
         writer.Dispose();
         writer.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => writer.GetRow());
-        Assert.Throws<ObjectDisposedException>(() => writer.Next());
         Assert.Throws<ObjectDisposedException>(() => writer.Complete());
         if (!stream.ToArray().AsSpan().SequenceEqual("PAR1"u8))
             throw new InvalidOperationException("Disposing an incomplete pipeline writer wrote a Parquet footer.");
@@ -111,10 +109,7 @@ internal sealed class RowWriterSizeTests
             });
 
         for (var i = 0; i < 7; i++)
-        {
             writer.GetRow();
-            writer.Next();
-        }
         writer.Complete();
 
         await Assert.That(flushedRowCounts.SequenceEqual([3, 3, 1])).IsTrue();
@@ -196,7 +191,6 @@ internal sealed class RowWriterSizeTests
             var row = writer.GetRow();
             row.Value = i;
             row.Path = ReadOnlyMemory<byte>.Empty;
-            writer.Next();
         }
     }
 

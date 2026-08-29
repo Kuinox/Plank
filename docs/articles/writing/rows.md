@@ -26,7 +26,7 @@ writer.Complete();
 ```
 
 `GetRow()` commits the previously returned row and returns the next reusable row buffer. `Complete()` commits the
-last row. `Next()` remains available for existing code that explicitly advances after every row.
+last row.
 
 The row writer handles row-group construction, encoding, and file finalization. `Complete()` commits the file. If
 writing fails first, `Dispose()` stops the workers and releases resources without committing the incomplete file.

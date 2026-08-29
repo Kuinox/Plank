@@ -44,7 +44,6 @@ internal sealed class OptionalOwnedBufferNullsTests
                 {
                     var row = writer.GetRow();
                     row.Payload = null;
-                    writer.Next();
                 }
 
                 writer.Complete();

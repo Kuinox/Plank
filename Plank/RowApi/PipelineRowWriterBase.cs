@@ -105,40 +105,6 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         return _active;
     }
 
-    /// <summary>Advances the generated writer to its next row.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    protected void NextRow()
-    {
-        ThrowIfFaulted();
-        if (_completed)
-            throw new InvalidOperationException("Pipeline writer is already completed.");
-        CommitVariableRow(_active, _active.GetRowSize());
-    }
-
-    /// <summary>Advances a generated fixed-width writer to its next row.</summary>
-    /// <param name="rowsPerGroup">The generated row-count cutoff for one row group.</param>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    protected void NextFixedRow(int rowsPerGroup)
-    {
-        ThrowIfFaulted();
-        if (_completed)
-            throw new InvalidOperationException("Pipeline writer is already completed.");
-
-        CommitFixedRow(_active, rowsPerGroup);
-    }
-
-    /// <summary>Advances a generated variable-width writer to its next row.</summary>
-    /// <param name="rowSizeBytes">The generated estimate of the current row's buffered size.</param>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    protected void NextVariableRow(ulong rowSizeBytes)
-    {
-        ThrowIfFaulted();
-        if (_completed)
-            throw new InvalidOperationException("Pipeline writer is already completed.");
-
-        CommitVariableRow(_active, rowSizeBytes);
-    }
-
     /// <summary>Commits an already validated fixed-width row and returns the slot prepared for the next row.</summary>
     /// <param name="slot">The current active slot.</param>
     /// <param name="rowsPerGroup">The generated row-count cutoff for one row group.</param>

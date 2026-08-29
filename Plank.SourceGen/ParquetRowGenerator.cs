@@ -415,9 +415,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        public Row GetRow()");
         builder.AppendLine("            => _core.GetSlotForRow().GetRow();");
         builder.AppendLine();
-        builder.AppendLine("        public void Next()");
-        builder.AppendLine("            => _core.Next();");
-        builder.AppendLine();
         builder.AppendLine("        public void Write()");
         builder.AppendLine("            => _core.Write();");
         builder.AppendLine("    }");
@@ -479,18 +476,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            else");
         builder.AppendLine("                _rowPending = true;");
         builder.AppendLine("            return slot.GetRow();");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-        builder.AppendLine("        public void Next()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            var slot = GetSlotForRow();");
-        if (rowSizePlan.IsFixed)
-            builder.AppendLine("            CommitFixedRow(slot, _rowsPerGroup);");
-        else
-            builder.Append("            CommitVariableRow(slot, slot.GetRowSize(")
-                .Append(rowSizePlan.FixedSizeExpression).AppendLine("));");
-        builder.AppendLine("            _rowPending = false;");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        public void Complete()");

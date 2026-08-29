@@ -38,14 +38,6 @@ public sealed class RowGroupWriterCore<TSlot>
         return _slot;
     }
 
-    /// <summary>Advances the generated writer to its next row.</summary>
-    public void Next()
-    {
-        ThrowIfWritten("Rows are already written for this row group.");
-        _slot.Next();
-        _rowPending = false;
-    }
-
     /// <summary>Serializes and writes the generated row buffer.</summary>
     public void Write()
     {

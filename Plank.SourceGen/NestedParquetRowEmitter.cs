@@ -576,7 +576,6 @@ static class NestedParquetRowEmitter
         builder.AppendLine("            _core = new global::Plank.RowApi.RowGroupWriterCore<BufferSlot>(rowGroupWriter, slot);");
         builder.AppendLine("        }");
         builder.AppendLine("        public Row GetRow() => _core.GetSlotForRow().GetRow();");
-        builder.AppendLine("        public void Next() => _core.Next();");
         builder.AppendLine("        public void Write() => _core.Write();");
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -617,16 +616,6 @@ static class NestedParquetRowEmitter
         builder.AppendLine("            else");
         builder.AppendLine("                _rowPending = true;");
         builder.AppendLine("            return slot.GetRow();");
-        builder.AppendLine("        }");
-        builder.AppendLine("        public void Next()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            var slot = GetSlotForRow();");
-        if (rowSizePlan.IsFixed)
-            builder.AppendLine("            CommitFixedRow(slot, _rowsPerGroup);");
-        else
-            builder.Append("            CommitVariableRow(slot, slot.GetRowSize(")
-                .Append(rowSizePlan.FixedSizeExpression).AppendLine("));");
-        builder.AppendLine("            _rowPending = false;");
         builder.AppendLine("        }");
         builder.AppendLine("        public void Complete()");
         builder.AppendLine("        {");
