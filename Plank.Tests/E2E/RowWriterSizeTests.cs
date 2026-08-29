@@ -1,12 +1,34 @@
 using System.Text;
 using Plank.Reading;
 using Plank.Reading.Physical;
+using Plank.RowApi;
 using Plank.Writing;
 
 namespace Plank.Tests.E2E;
 
 internal sealed class RowWriterSizeTests
 {
+    [Test]
+    public async Task RowValueSizesAreClassifiedAtInitialization()
+    {
+        var valueColumn = DatasetRowSchema.Schema.LeafColumns[0].Column;
+        var pathColumn = DatasetRowSchema.Schema.LeafColumns[1].Column;
+        var fixedBinaryColumn = AdditionalLogicalAnnotationRowSchema.Schema.LeafColumns[2].Column;
+
+        await Assert.That(RowValueSizeEstimator.TryGetFixedSize<int>(valueColumn, out var valueSize)).IsTrue();
+        await Assert.That(valueSize).IsEqualTo(4UL);
+        await Assert.That(RowValueSizeEstimator.TryGetFixedSize<ReadOnlyMemory<byte>>(pathColumn, out _)).IsFalse();
+        await Assert.That(RowValueSizeEstimator.TryGetFixedSize<byte[]>(fixedBinaryColumn, out var byteArraySize)).IsTrue();
+        await Assert.That(byteArraySize).IsEqualTo(2UL);
+        await Assert.That(RowValueSizeEstimator.TryGetFixedSize<ReadOnlyMemory<byte>>(fixedBinaryColumn,
+            out var memorySize)).IsTrue();
+        await Assert.That(memorySize).IsEqualTo(2UL);
+        await Assert.That(RowValueSizeEstimator.TryGetFixedSize<ReadOnlyMemory<byte>?>(fixedBinaryColumn,
+            out var optionalMemorySize)).IsTrue();
+        await Assert.That(optionalMemorySize).IsEqualTo(2UL);
+        await Assert.That(RowValueSizeEstimator.TryGetFixedSize<byte[][]>(fixedBinaryColumn, out _)).IsFalse();
+    }
+
     [Test]
     public void GeneratedSchemaWriterDisposalAbortsAndRejectsReuse()
     {
