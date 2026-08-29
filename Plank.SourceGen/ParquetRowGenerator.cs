@@ -520,94 +520,56 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("    public sealed class BufferSlot : global::Plank.RowApi.RowBufferSlot");
         builder.AppendLine("    {");
+        for (var i = 0; i < columns.Length; i++)
+            builder.Append("        internal ").Append(columns[i].ClrTypeName).Append("[] _column")
+                .Append(i).AppendLine(" = null!;");
+        builder.AppendLine();
         builder.AppendLine("        internal BufferSlot(global::Plank.Writing.RowGroupWriter rowGroupWriter, int rowCount)");
         builder.AppendLine("            : base(rowGroupWriter, s_rowApiColumns, rowCount)");
         builder.AppendLine("        {");
+        builder.AppendLine("            RefreshBuffers();");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        internal BufferSlot(global::Plank.Writing.ParquetWriter writer, int rowCount)");
         builder.AppendLine("            : base(writer, s_rowApiColumns, rowCount)");
         builder.AppendLine("        {");
+        builder.AppendLine("            RefreshBuffers();");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
         builder.AppendLine("        internal Row GetRow()");
         builder.AppendLine("        {");
         builder.AppendLine("            EnsureRowAvailable();");
+        builder.AppendLine("            return new Row(Index, this);");
+        builder.AppendLine("        }");
         builder.AppendLine();
-        builder.Append("            return new Row(Index, this");
+        builder.AppendLine("        protected override void OnBuffersResized()");
+        builder.AppendLine("            => RefreshBuffers();");
+        builder.AppendLine();
+        builder.AppendLine("        void RefreshBuffers()");
+        builder.AppendLine("        {");
         for (var i = 0; i < columns.Length; i++)
-            builder.Append(", GetValues<").Append(columns[i].ClrTypeName).Append(">(").Append(i).Append(')');
-        builder.AppendLine(");");
+            builder.Append("            _column").Append(i).Append(" = GetValues<")
+                .Append(columns[i].ClrTypeName).Append(">(").Append(i).AppendLine(");");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    public readonly ref struct Row");
         builder.AppendLine("    {");
         builder.AppendLine("        readonly int _index;");
-        builder.AppendLine("        readonly BufferSlot? _ownerSlot;");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("        readonly ").Append(GetBufferType(columns[i].ClrTypeName)).Append(" _").Append(columns[i].PropertyName).AppendLine(";");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("        readonly int _").Append(columns[i].PropertyName).AppendLine("Index;");
+        builder.AppendLine("        readonly BufferSlot _ownerSlot;");
         builder.AppendLine();
-        builder.Append("        internal Row(int index");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append(", ").Append(GetBufferType(columns[i].ClrTypeName)).Append(' ').Append(ToParameterName(columns[i].PropertyName));
-        builder.AppendLine(")");
-        builder.Append("            : this(index, null");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append(", ").Append(ToParameterName(columns[i].PropertyName));
-        builder.AppendLine(")");
-        builder.AppendLine("        {");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.Append("        internal Row(");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            if (i > 0)
-                builder.Append(", ");
-            builder.Append(GetBufferType(columns[i].ClrTypeName)).Append(' ').Append(ToParameterName(columns[i].PropertyName))
-                .Append(", int ").Append(ToParameterName(columns[i].PropertyName)).Append("Index");
-        }
-        builder.AppendLine(")");
-        builder.AppendLine("        {");
-        builder.AppendLine("            _index = -1;");
-        builder.AppendLine("            _ownerSlot = null;");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("            _").Append(columns[i].PropertyName).Append(" = ").Append(ToParameterName(columns[i].PropertyName)).AppendLine(";");
-            builder.Append("            _").Append(columns[i].PropertyName).Append("Index = ").Append(ToParameterName(columns[i].PropertyName)).AppendLine("Index;");
-        }
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.Append("        internal Row(int index, BufferSlot? ownerSlot");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append(", ").Append(GetBufferType(columns[i].ClrTypeName)).Append(' ').Append(ToParameterName(columns[i].PropertyName));
-        builder.AppendLine(")");
+        builder.AppendLine("        internal Row(int index, BufferSlot ownerSlot)");
         builder.AppendLine("        {");
         builder.AppendLine("            _index = index;");
         builder.AppendLine("            _ownerSlot = ownerSlot;");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.Append("            _").Append(columns[i].PropertyName).Append(" = ").Append(ToParameterName(columns[i].PropertyName)).AppendLine(";");
-            builder.Append("            _").Append(columns[i].PropertyName).AppendLine("Index = index;");
-        }
         builder.AppendLine("        }");
         builder.AppendLine();
         for (var i = 0; i < columns.Length; i++)
         {
             builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ')
-                .Append(EscapeIdentifier(columns[i].PropertyName)).AppendLine();
-            builder.AppendLine("        {");
-            builder.AppendLine("            get");
-            builder.AppendLine("            {");
-            builder.Append("                if (_").Append(columns[i].PropertyName).AppendLine(".Length == 0)");
-            builder.Append("                    throw new global::System.InvalidOperationException(\"Column '")
-                .Append(Escape(columns[i].PropertyName)).AppendLine("' was not selected.\");");
-            builder.Append("                return ref _").Append(columns[i].PropertyName).Append("[_").Append(columns[i].PropertyName).AppendLine("Index];");
-            builder.AppendLine("            }");
-            builder.AppendLine("        }");
+                .Append(EscapeIdentifier(columns[i].PropertyName)).Append(" => ref _ownerSlot._column")
+                .Append(i).AppendLine("[_index];");
             if (SupportsOwnerSetter(columns[i].ClrTypeName))
             {
                 builder.AppendLine();
@@ -616,12 +578,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     builder.Append("        public void Set").Append(columns[i].PropertyName)
                         .Append("(global::System.Buffers.IMemoryOwner<byte>? owner)").AppendLine();
                     builder.AppendLine("        {");
-                    builder.Append("            _").Append(columns[i].PropertyName).Append("[_").Append(columns[i].PropertyName).Append("Index] = owner is null ? default(")
+                    builder.Append("            _ownerSlot._column").Append(i).Append("[_index] = owner is null ? default(")
                         .Append(columns[i].ClrTypeName).Append(") : owner.Memory;").AppendLine();
                     builder.AppendLine("            if (owner is not null)");
                     builder.AppendLine("            {");
-                    builder.AppendLine("                if (_ownerSlot is null)");
-                    builder.AppendLine("                    throw new global::System.InvalidOperationException(\"Owned buffer setters are only available while writing rows.\");");
                     builder.AppendLine("                _ownerSlot.RegisterOwner(owner);");
                     builder.AppendLine("            }");
                     builder.AppendLine("        }");
@@ -632,9 +592,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                         .Append("(global::System.Buffers.IMemoryOwner<byte> owner)").AppendLine();
                     builder.AppendLine("        {");
                     builder.AppendLine("            global::System.ArgumentNullException.ThrowIfNull(owner);");
-                    builder.Append("            _").Append(columns[i].PropertyName).Append("[_").Append(columns[i].PropertyName).AppendLine("Index] = owner.Memory;");
-                    builder.AppendLine("            if (_ownerSlot is null)");
-                    builder.AppendLine("                throw new global::System.InvalidOperationException(\"Owned buffer setters are only available while writing rows.\");");
+                    builder.Append("            _ownerSlot._column").Append(i).AppendLine("[_index] = owner.Memory;");
                     builder.AppendLine("            _ownerSlot.RegisterOwner(owner);");
                     builder.AppendLine("        }");
                 }
@@ -1047,9 +1005,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return builder.ToString();
     }
 
-    static string ToParameterName(string propertyName)
-        => $"p{propertyName}";
-
     static string GetRowApiColumnFieldName(string propertyName)
         => $"s_{propertyName}RowApiColumn";
 
@@ -1077,9 +1032,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             Accessibility.ProtectedAndInternal => "private protected",
             _ => "internal"
         };
-
-    static string GetBufferType(string clrTypeName)
-        => $"global::System.Span<{clrTypeName}>";
 
     static bool SupportsOwnerSetter(string clrTypeName)
         => clrTypeName is "global::System.ReadOnlyMemory<byte>" or "global::System.ReadOnlyMemory<byte>?";
