@@ -3,7 +3,7 @@ namespace Plank.SourceGen.Tests;
 internal sealed class GeneratedRowWriterAccessTests
 {
     [Test]
-    public async Task FlatRowsReferenceCachedTypedBuffers()
+    public async Task FlatRowsReferencePinnedTypedBuffers()
     {
         const string source = """
             using Plank.Schema;
@@ -21,10 +21,11 @@ internal sealed class GeneratedRowWriterAccessTests
         var generated = Generate(source);
 
         await Assert.That(generated).Contains("internal int[] _column0 = null!;");
-        await Assert.That(generated).Contains("_column0 = GetValues<int>(0);");
+        await Assert.That(generated).Contains("PinnedColumn<int> _column0Pinned;");
+        await Assert.That(generated).Contains("_column0 = GetPinnedValues<int>(0, out _column0Pinned);");
+        await Assert.That(generated).Contains("=> ref _column0Pinned[index];");
         await Assert.That(generated).Contains("return new Row(Index, this);");
-        await Assert.That(generated).Contains(
-            "public ref int Value => ref global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_ownerSlot._column0), _index);");
+        await Assert.That(generated).Contains("public ref int Value => ref _ownerSlot.GetColumn0(_index);");
         await Assert.That(generated.Contains("_ownerSlot._column0[_index]", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("return new Row(Index, this, GetValues", StringComparison.Ordinal))
             .IsFalse();
@@ -51,6 +52,7 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated).Contains("return new Row(Index, this);");
         await Assert.That(generated).Contains(
             "Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_ownerSlot._column0), _index)");
+        await Assert.That(generated.Contains("_column0Pinned", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("_ownerSlot._column0[_index]", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("return new Row(Index, this, GetValues", StringComparison.Ordinal))
             .IsFalse();
