@@ -1,0 +1,252 @@
+name: PR benchmarks
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Plank base branch, tag, or SHA
+        default: master
+        type: string
+      head_ref:
+        description: Plank head branch, tag, or SHA
+        default: master
+        type: string
+      warmups:
+        description: BenchmarkDotNet warm-up iterations
+        default: 8
+        type: number
+      iterations:
+        description: BenchmarkDotNet measured iterations
+        default: 15
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+  BASE_REF: ${{ github.event.pull_request.base.sha || inputs.base_ref || 'master' }}
+  HEAD_REF: ${{ github.event.pull_request.head.sha || inputs.head_ref || github.sha }}
+  BENCHMARK_WARMUPS: ${{ inputs.warmups || 8 }}
+  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 15 }}
+
+jobs:
+  resolve-plank-lab:
+    name: Resolve latest Plank-Lab
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.revision.outputs.sha }}
+
+    steps:
+      - name: Check out latest Plank-Lab
+        uses: actions/checkout@v7
+        with:
+          repository: Kuinox/Plank-Lab
+          ref: master
+          path: plank-lab
+
+      - name: Record Plank-Lab revision
+        id: revision
+        shell: bash
+        run: echo "sha=$(git -C plank-lab rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  benchmark:
+    name: ${{ matrix.suite_label }} · ${{ matrix.operation }}
+    needs: resolve-plank-lab
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        operation: [Read, Write]
+        suite: [Synthetic, Real]
+        include:
+          - suite: Synthetic
+            suite_label: Synthetic
+          - suite: Real
+            suite_label: Real-world
+
+    steps:
+      - name: Check out Plank-Lab for base
+        uses: actions/checkout@v7
+        with:
+          repository: Kuinox/Plank-Lab
+          ref: ${{ needs.resolve-plank-lab.outputs.sha }}
+          path: lab-base
+
+      - name: Check out Plank-Lab for head
+        uses: actions/checkout@v7
+        with:
+          repository: Kuinox/Plank-Lab
+          ref: ${{ needs.resolve-plank-lab.outputs.sha }}
+          path: lab-head
+
+      - name: Check out Plank base into Plank-Lab
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.BASE_REF }}
+          path: lab-base/library/Plank
+
+      - name: Check out Plank head into Plank-Lab
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ env.HEAD_REF }}
+          path: lab-head/library/Plank
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore and build both Plank-Lab copies
+        shell: bash
+        run: |
+          dotnet restore lab-base/Plank.Benchmarks/Plank.Benchmarks.csproj \
+            --configfile lab-base/library/Plank/NuGet.config
+          dotnet build lab-base/Plank.Benchmarks/Plank.Benchmarks.csproj \
+            --configuration Release --no-restore
+          dotnet restore lab-head/Plank.Benchmarks/Plank.Benchmarks.csproj \
+            --configfile lab-head/library/Plank/NuGet.config
+          dotnet build lab-head/Plank.Benchmarks/Plank.Benchmarks.csproj \
+            --configuration Release --no-restore
+
+      - name: Download Plank-Lab's real-world input
+        if: matrix.suite == 'Real'
+        shell: bash
+        run: |
+          curl --fail --location --retry 5 \
+            --output "$RUNNER_TEMP/yellow_tripdata_2024-01.parquet" \
+            https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet
+          echo "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510  $RUNNER_TEMP/yellow_tripdata_2024-01.parquet" \
+            | sha256sum --check
+
+      - name: Run Plank-Lab matrix for base and head
+        shell: bash
+        env:
+          OPERATION: ${{ matrix.operation }}
+          SUITE: ${{ matrix.suite }}
+        run: |
+          results="$RUNNER_TEMP/plank-lab-results"
+          mkdir -p "$results"
+
+          run_benchmark() {
+            local variant="$1"
+            local pass="$2"
+            local lab="$GITHUB_WORKSPACE/lab-$variant"
+            local harness="$lab/Plank.Benchmarks/bin/Release/net10.0/Plank.Benchmarks.dll"
+            (
+              cd "$lab"
+              dotnet "$harness" --published \
+                --filter "*$SUITE*PlankBenchmarks.$OPERATION" \
+                --warmupCount "$BENCHMARK_WARMUPS" \
+                --iterationCount "$BENCHMARK_ITERATIONS" \
+                --data-file "$RUNNER_TEMP/yellow_tripdata_2024-01.parquet"
+            ) | tee "$results/$SUITE-$OPERATION-$variant-$pass.log"
+          }
+
+          run_benchmark base 1
+          run_benchmark head 1
+          run_benchmark head 2
+          run_benchmark base 2
+
+      - name: Upload Plank-Lab logs
+        uses: actions/upload-artifact@v7
+        with:
+          name: plank-lab-${{ matrix.suite }}-${{ matrix.operation }}
+          path: ${{ runner.temp }}/plank-lab-results/*.log
+          if-no-files-found: error
+
+  report:
+    name: Publish comparison
+    needs: [resolve-plank-lab, benchmark]
+    if: ${{ !cancelled() && needs.benchmark.result == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out reporting code
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ env.HEAD_REF }}
+
+      - name: Check out Plank-Lab matrix
+        uses: actions/checkout@v7
+        with:
+          repository: Kuinox/Plank-Lab
+          ref: ${{ needs.resolve-plank-lab.outputs.sha }}
+          path: plank-lab
+
+      - name: Download benchmark logs
+        uses: actions/download-artifact@v8
+        with:
+          pattern: plank-lab-*
+          path: benchmark-results
+          merge-multiple: true
+
+      - name: Test and build report
+        shell: bash
+        run: |
+          python -m unittest discover \
+            --start-directory .github/scripts/tests \
+            --pattern 'test_*.py' \
+            --verbose
+          python .github/scripts/plank_lab_benchmark_report.py \
+            --results benchmark-results \
+            --matrix plank-lab/Plank.Benchmarks/Published/Cases/matrix.json \
+            --output benchmark-comment.md \
+            --summary benchmark-summary.md \
+            --base-sha "$BASE_REF" \
+            --head-sha "$HEAD_REF" \
+            --plank-lab-sha "${{ needs.resolve-plank-lab.outputs.sha }}" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          cat benchmark-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload comparison report
+        uses: actions/upload-artifact@v7
+        with:
+          name: plank-benchmark-report
+          path: |
+            benchmark-comment.md
+            benchmark-summary.md
+
+      - name: Create or update PR comment
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- plank-pr-benchmark-comparison -->';
+            const body = fs.readFileSync('benchmark-comment.md', 'utf8');
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const previous = comments.find(comment =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker));
+
+            if (previous) {
+              await github.rest.issues.updateComment({
+                ...context.repo,
+                comment_id: previous.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
