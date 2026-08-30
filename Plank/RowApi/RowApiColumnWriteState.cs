@@ -4,7 +4,11 @@ namespace Plank.RowApi;
 
 abstract class RowApiColumnWriteState
 {
+    internal abstract Type ValueType { get; }
+
     internal abstract ulong? FixedValueSizeBytes { get; }
+
+    internal abstract void ShareBuffer(RowApiColumnWriteState[] states);
 
     internal abstract void Bind(ParquetWriter writer);
 

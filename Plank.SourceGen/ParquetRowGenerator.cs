@@ -240,6 +240,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     {
         var rowSizePlan = CreateRowSizePlan(schemaColumns.Select(static column =>
             new RowSizeColumn(column.PhysicalType, column.ClrTypeName, column.TypeLength, column.IsValueType)));
+        var repeatedTypeGroups = GetRepeatedTypeGroups(columns.Select(static column => column.ClrTypeName));
+        var repeatedTypeGroupCount = repeatedTypeGroups.Length == 0 ? 0 : repeatedTypeGroups.Max() + 1;
         var schemaMemberName = GetAvailableGeneratedMemberName(schemaType, "Schema");
         var writerTypeName = GetAvailableGeneratedMemberName(schemaType, "Writer");
         var readerTypeName = GetAvailableGeneratedMemberName(schemaType, "Reader");
@@ -550,8 +552,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("    public sealed class BufferSlot : global::Plank.RowApi.RowBufferSlot");
         builder.AppendLine("    {");
         for (var i = 0; i < columns.Length; i++)
+        {
             builder.Append("        internal ").Append(columns[i].ClrTypeName).Append("[] _column")
                 .Append(i).AppendLine(" = null!;");
+            if (GetRepeatedTypeGroupPosition(repeatedTypeGroups, i) > 0)
+                builder.Append("        internal int _column").Append(i).AppendLine("Offset;");
+        }
         builder.AppendLine();
         builder.AppendLine("        internal BufferSlot(global::Plank.Writing.RowGroupWriter rowGroupWriter, int rowCount)");
         builder.AppendLine("            : base(rowGroupWriter, s_rowApiColumns, rowCount)");
@@ -580,8 +586,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             foreach (var columnIndex in rowSizePlan.VariableColumnIndices)
             {
                 var column = schemaColumns[columnIndex];
+                var indexExpression = GetRepeatedTypeGroupPosition(repeatedTypeGroups, columnIndex) > 0
+                    ? $"_column{columnIndex}Offset + Index"
+                    : "Index";
                 builder.Append("            size = checked(size + EstimateValueSize(")
-                    .Append(UncheckedBufferElement($"_column{columnIndex}", "Index"))
+                    .Append(UncheckedBufferElement($"_column{columnIndex}", indexExpression))
                     .Append(", global::Plank.Schema.ParquetPhysicalType.")
                     .Append(column.PhysicalType).Append(", ").Append(column.TypeLength).AppendLine("U));");
             }
@@ -597,6 +606,23 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         for (var i = 0; i < columns.Length; i++)
             builder.Append("            _column").Append(i).Append(" = GetValues<")
                 .Append(columns[i].ClrTypeName).Append(">(").Append(i).AppendLine(");");
+        for (var groupIndex = 0; groupIndex < repeatedTypeGroupCount; groupIndex++)
+        {
+            var groupColumns = Enumerable.Range(0, repeatedTypeGroups.Length)
+                .Where(columnIndex => repeatedTypeGroups[columnIndex] == groupIndex)
+                .ToArray();
+            builder.Append("            var group").Append(groupIndex).Append("Stride = _column")
+                .Append(groupColumns[0]).Append(".Length / ").Append(groupColumns.Length).AppendLine(";");
+            for (var position = 1; position < groupColumns.Length; position++)
+            {
+                builder.Append("            _column").Append(groupColumns[position]).Append("Offset = ");
+                if (position == 1)
+                    builder.Append("group").Append(groupIndex).AppendLine("Stride;");
+                else
+                    builder.Append("checked(").Append(position).Append(" * group")
+                        .Append(groupIndex).AppendLine("Stride);");
+            }
+        }
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -604,16 +630,36 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("    {");
         builder.AppendLine("        readonly int _index;");
         builder.AppendLine("        readonly BufferSlot _ownerSlot;");
+        if (repeatedTypeGroupCount > 0)
+            builder.AppendLine("        // One managed reference per repeated storage type avoids redundant array probes.");
+        for (var groupIndex = 0; groupIndex < repeatedTypeGroupCount; groupIndex++)
+        {
+            var firstColumn = Array.IndexOf(repeatedTypeGroups, groupIndex);
+            builder.Append("        readonly ").Append(columns[firstColumn].ClrTypeName).Append("[] _group")
+                .Append(groupIndex).AppendLine(";");
+        }
         builder.AppendLine();
         builder.AppendLine("        internal Row(int index, BufferSlot ownerSlot)");
         builder.AppendLine("        {");
         builder.AppendLine("            _index = index;");
         builder.AppendLine("            _ownerSlot = ownerSlot;");
+        for (var groupIndex = 0; groupIndex < repeatedTypeGroupCount; groupIndex++)
+        {
+            var firstColumn = Array.IndexOf(repeatedTypeGroups, groupIndex);
+            builder.Append("            _group").Append(groupIndex).Append(" = ownerSlot._column")
+                .Append(firstColumn).AppendLine(";");
+        }
         builder.AppendLine("        }");
         builder.AppendLine();
         for (var i = 0; i < columns.Length; i++)
         {
-            var bufferElement = UncheckedBufferElement($"_ownerSlot._column{i}", "_index");
+            var bufferExpression = repeatedTypeGroups[i] >= 0
+                ? $"_group{repeatedTypeGroups[i]}"
+                : $"_ownerSlot._column{i}";
+            var indexExpression = GetRepeatedTypeGroupPosition(repeatedTypeGroups, i) > 0
+                ? $"_ownerSlot._column{i}Offset + _index"
+                : "_index";
+            var bufferElement = UncheckedBufferElement(bufferExpression, indexExpression);
             builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ')
                 .Append(EscapeIdentifier(columns[i].PropertyName)).Append(" => ref ")
                 .Append(bufferElement).AppendLine(";");
@@ -655,6 +701,47 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     static string UncheckedBufferElement(string bufferExpression, string indexExpression)
         => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference({bufferExpression}), {indexExpression})";
+
+    internal static int[] GetRepeatedTypeGroups(IEnumerable<string> types)
+    {
+        var typeArray = types.ToArray();
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < typeArray.Length; i++)
+            counts[typeArray[i]] = counts.TryGetValue(typeArray[i], out var count) ? count + 1 : 1;
+
+        var groupIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
+        var result = new int[typeArray.Length];
+        for (var i = 0; i < result.Length; i++)
+            result[i] = -1;
+        for (var i = 0; i < typeArray.Length; i++)
+        {
+            var type = typeArray[i];
+            if (counts[type] < 2)
+                continue;
+            if (!groupIndexes.TryGetValue(type, out var groupIndex))
+            {
+                groupIndex = groupIndexes.Count;
+                groupIndexes.Add(type, groupIndex);
+            }
+            result[i] = groupIndex;
+        }
+        return result;
+    }
+
+    internal static int GetRepeatedTypeGroupPosition(int[] groups, int columnIndex)
+    {
+        var group = groups[columnIndex];
+        if (group < 0)
+            return -1;
+
+        var position = 0;
+        for (var i = 0; i < columnIndex; i++)
+        {
+            if (groups[i] == group)
+                position++;
+        }
+        return position;
+    }
 
     static bool TryMapColumn(SchemaColumn column, out MappedColumn mapped)
     {

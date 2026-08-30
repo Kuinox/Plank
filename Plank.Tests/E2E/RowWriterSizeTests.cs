@@ -116,6 +116,51 @@ internal sealed class RowWriterSizeTests
     }
 
     [Test]
+    public void RepeatedTypeBuffersSurviveGrowthAndCompactingGc()
+    {
+        using var stream = new MemoryStream();
+        using (var writer = WideRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
+               {
+                   RowApiMaxParallelism = 1,
+                   RowApiInitialRowCapacity = 1,
+                   TargetRowGroupSizeBytes = 65 * sizeof(int) * 32
+               }))
+        {
+            for (var i = 0; i < 16; i++)
+            {
+                var row = writer.GetRow();
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                row.Column0 = i;
+                row.Column1 = 1_000 + i;
+                row.Column32 = 32_000 + i;
+                row.Column63 = 63_000 + i;
+                row.Column64 = 64_000 + i;
+            }
+            writer.Complete();
+        }
+
+        using var source = new MemoryReadSource(stream.ToArray());
+        using var reader = WideRowSchema.CreateRowReader(source);
+        var index = 0;
+        while (reader.MoveNext())
+        {
+            var row = reader.Current;
+            if (row.Column0 != index ||
+                row.Column1 != 1_000 + index ||
+                row.Column32 != 32_000 + index ||
+                row.Column63 != 63_000 + index ||
+                row.Column64 != 64_000 + index)
+            {
+                throw new InvalidOperationException($"Repeated-type row {index} was corrupted.");
+            }
+            index++;
+        }
+
+        if (index != 16)
+            throw new InvalidOperationException($"Expected 16 rows, read {index}.");
+    }
+
+    [Test]
     public async Task GeneratedPipelineWriterCanBeResetToANewStream()
     {
         using var first = new MemoryStream();

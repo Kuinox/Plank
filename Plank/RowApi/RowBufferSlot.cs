@@ -22,6 +22,7 @@ public abstract class RowBufferSlot
 
         _rowCount = rowCount;
         _columns = CreateColumnStates(columns, rowCount);
+        GroupRepeatedColumnTypes(_columns);
         Index = 0;
     }
 
@@ -38,6 +39,7 @@ public abstract class RowBufferSlot
 
         _rowCount = rowCount;
         _columns = CreateColumnStates(rowGroupWriter, columns, rowCount);
+        GroupRepeatedColumnTypes(_columns);
         Index = 0;
     }
 
@@ -54,6 +56,7 @@ public abstract class RowBufferSlot
 
         _rowCount = rowCount;
         _columns = CreateColumnStates(writer, columns, rowCount);
+        GroupRepeatedColumnTypes(_columns);
         Index = 0;
     }
 
@@ -189,7 +192,7 @@ public abstract class RowBufferSlot
                 "Column index is outside the row API schema.");
         if (_columns[columnIndex] is not RowApiColumnWriteState<T> state)
             throw new InvalidOperationException($"Row API column at index {columnIndex} cannot be written as {typeof(T)}.");
-        state.Values[rowIndex] = value;
+        state.Values[state.Offset + rowIndex] = value;
     }
 
     internal void CopyRowTo(int sourceIndex, RowBufferSlot destination, int destinationIndex)
@@ -252,6 +255,33 @@ public abstract class RowBufferSlot
         }
 
         return states;
+    }
+
+    static void GroupRepeatedColumnTypes(RowApiColumnWriteState[] columns)
+    {
+        // The generated Row caches one movable array per repeated CLR type. Each
+        // column remains a contiguous segment, so serialization stays columnar.
+        Dictionary<Type, List<RowApiColumnWriteState>>? groups = null;
+        for (var i = 0; i < columns.Length; i++)
+        {
+            groups ??= [];
+            if (!groups.TryGetValue(columns[i].ValueType, out var group))
+            {
+                group = [];
+                groups.Add(columns[i].ValueType, group);
+            }
+            group.Add(columns[i]);
+        }
+
+        if (groups is null)
+            return;
+        foreach (var group in groups.Values)
+        {
+            if (group.Count < 2)
+                continue;
+            var states = group.ToArray();
+            states[0].ShareBuffer(states);
+        }
     }
 
     static RowApiColumnWriteState[] CreateColumnStates(ParquetWriter writer, RowApiColumnDescriptor[] columns,

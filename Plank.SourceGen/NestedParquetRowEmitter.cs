@@ -565,6 +565,9 @@ static class NestedParquetRowEmitter
             new ParquetRowGenerator.RowSizeColumn(leaf.Node.Scalar!.PhysicalType, leaf.StorageShapeType,
                 leaf.Node.Scalar.TypeLength,
                 leaf.CollectionLevels.IsEmpty && leaf.Node.Scalar.StorageType != "byte[]")));
+        var repeatedTypeGroups = ParquetRowGenerator.GetRepeatedTypeGroups(
+            model.Leaves.Select(static leaf => leaf.StorageShapeType));
+        var repeatedTypeGroupCount = repeatedTypeGroups.Length == 0 ? 0 : repeatedTypeGroups.Max() + 1;
         var rowTypeName = EscapeIdentifier(schemaType.Name);
         builder.AppendLine("    public struct Writer");
         builder.AppendLine("    {");
@@ -691,8 +694,12 @@ static class NestedParquetRowEmitter
         builder.AppendLine("    public sealed class BufferSlot : global::Plank.RowApi.RowBufferSlot");
         builder.AppendLine("    {");
         for (var i = 0; i < model.Leaves.Length; i++)
+        {
             builder.Append("        internal ").Append(model.Leaves[i].StorageShapeType).Append("[] _column")
                 .Append(i).AppendLine(" = null!;");
+            if (ParquetRowGenerator.GetRepeatedTypeGroupPosition(repeatedTypeGroups, i) > 0)
+                builder.Append("        internal int _column").Append(i).AppendLine("Offset;");
+        }
         builder.AppendLine();
         builder.AppendLine("        internal BufferSlot(global::Plank.Writing.RowGroupWriter rowGroupWriter, int rowCount)");
         builder.AppendLine("            : base(rowGroupWriter, s_rowApiColumns, rowCount)");
@@ -719,8 +726,12 @@ static class NestedParquetRowEmitter
             foreach (var columnIndex in rowSizePlan.VariableColumnIndices)
             {
                 var leaf = model.Leaves[columnIndex];
+                var indexExpression = ParquetRowGenerator.GetRepeatedTypeGroupPosition(
+                    repeatedTypeGroups, columnIndex) > 0
+                    ? $"_column{columnIndex}Offset + Index"
+                    : "Index";
                 builder.Append("            size = checked(size + EstimateValueSize(")
-                    .Append(UncheckedBufferElement($"_column{columnIndex}", "Index"))
+                    .Append(UncheckedBufferElement($"_column{columnIndex}", indexExpression))
                     .Append(", global::Plank.Schema.ParquetPhysicalType.")
                     .Append(leaf.Node.Scalar!.PhysicalType).Append(", ").Append(leaf.Node.Scalar.TypeLength)
                     .AppendLine("U));");
@@ -737,6 +748,23 @@ static class NestedParquetRowEmitter
         for (var i = 0; i < model.Leaves.Length; i++)
             builder.Append("            _column").Append(i).Append(" = GetValues<")
                 .Append(model.Leaves[i].StorageShapeType).Append(">(").Append(i).AppendLine(");");
+        for (var groupIndex = 0; groupIndex < repeatedTypeGroupCount; groupIndex++)
+        {
+            var groupColumns = Enumerable.Range(0, repeatedTypeGroups.Length)
+                .Where(columnIndex => repeatedTypeGroups[columnIndex] == groupIndex)
+                .ToArray();
+            builder.Append("            var group").Append(groupIndex).Append("Stride = _column")
+                .Append(groupColumns[0]).Append(".Length / ").Append(groupColumns.Length).AppendLine(";");
+            for (var position = 1; position < groupColumns.Length; position++)
+            {
+                builder.Append("            _column").Append(groupColumns[position]).Append("Offset = ");
+                if (position == 1)
+                    builder.Append("group").Append(groupIndex).AppendLine("Stride;");
+                else
+                    builder.Append("checked(").Append(position).Append(" * group")
+                        .Append(groupIndex).AppendLine("Stride);");
+            }
+        }
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -744,27 +772,48 @@ static class NestedParquetRowEmitter
         builder.AppendLine("    {");
         builder.AppendLine("        readonly int _index;");
         builder.AppendLine("        readonly BufferSlot _ownerSlot;");
+        if (repeatedTypeGroupCount > 0)
+            builder.AppendLine("        // One managed reference per repeated storage type avoids redundant array probes.");
+        for (var groupIndex = 0; groupIndex < repeatedTypeGroupCount; groupIndex++)
+        {
+            var firstColumn = Array.IndexOf(repeatedTypeGroups, groupIndex);
+            builder.Append("        readonly ").Append(model.Leaves[firstColumn].StorageShapeType)
+                .Append("[] _group").Append(groupIndex).AppendLine(";");
+        }
         builder.AppendLine("        internal Row(int index, BufferSlot ownerSlot)");
         builder.AppendLine("        {");
         builder.AppendLine("            _index = index;");
         builder.AppendLine("            _ownerSlot = ownerSlot;");
+        for (var groupIndex = 0; groupIndex < repeatedTypeGroupCount; groupIndex++)
+        {
+            var firstColumn = Array.IndexOf(repeatedTypeGroups, groupIndex);
+            builder.Append("            _group").Append(groupIndex).Append(" = ownerSlot._column")
+                .Append(firstColumn).AppendLine(";");
+        }
         builder.AppendLine("        }");
         for (var i = 0; i < model.Roots.Length; i++)
         {
             builder.AppendLine();
-            AppendWriteRowProperty(builder, model.Roots[i]);
+            AppendWriteRowProperty(builder, model.Roots[i], repeatedTypeGroups);
         }
         builder.AppendLine("    }");
     }
 
-    static void AppendWriteRowProperty(StringBuilder builder, Node root)
+    static void AppendWriteRowProperty(StringBuilder builder, Node root, int[] repeatedTypeGroups)
     {
         if (root.Kind == NodeKind.Leaf)
         {
             var leaf = root.Leaves[0];
+            var bufferExpression = repeatedTypeGroups[leaf.Ordinal] >= 0
+                ? $"_group{repeatedTypeGroups[leaf.Ordinal]}"
+                : $"_ownerSlot._column{leaf.Ordinal}";
+            var indexExpression = ParquetRowGenerator.GetRepeatedTypeGroupPosition(
+                repeatedTypeGroups, leaf.Ordinal) > 0
+                ? $"_ownerSlot._column{leaf.Ordinal}Offset + _index"
+                : "_index";
             builder.Append("        public ref ").Append(root.UserType).Append(' ')
                 .Append(EscapeIdentifier(root.PropertyName)).Append(" => ref ")
-                .Append(UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"))
+                .Append(UncheckedBufferElement(bufferExpression, indexExpression))
                 .AppendLine(";");
             return;
         }
@@ -774,7 +823,13 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        {");
         builder.Append("            get => Read").Append(ToIdentifier(root.PropertyName)).Append('(');
         AppendLeafArguments(builder, root,
-            static leaf => UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"));
+            leaf => UncheckedBufferElement(
+                repeatedTypeGroups[leaf.Ordinal] >= 0
+                    ? $"_group{repeatedTypeGroups[leaf.Ordinal]}"
+                    : $"_ownerSlot._column{leaf.Ordinal}",
+                ParquetRowGenerator.GetRepeatedTypeGroupPosition(repeatedTypeGroups, leaf.Ordinal) > 0
+                    ? $"_ownerSlot._column{leaf.Ordinal}Offset + _index"
+                    : "_index"));
         builder.AppendLine(");");
         builder.AppendLine("            set");
         builder.AppendLine("            {");
@@ -782,7 +837,13 @@ static class NestedParquetRowEmitter
         {
             var leaf = root.Leaves[i];
             builder.Append("                ")
-                .Append(UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"))
+                .Append(UncheckedBufferElement(
+                    repeatedTypeGroups[leaf.Ordinal] >= 0
+                        ? $"_group{repeatedTypeGroups[leaf.Ordinal]}"
+                        : $"_ownerSlot._column{leaf.Ordinal}",
+                    ParquetRowGenerator.GetRepeatedTypeGroupPosition(repeatedTypeGroups, leaf.Ordinal) > 0
+                        ? $"_ownerSlot._column{leaf.Ordinal}Offset + _index"
+                        : "_index"))
                 .Append(" = Project")
                 .Append(leaf.UniqueName).AppendLine("(value);");
         }

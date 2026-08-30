@@ -57,6 +57,34 @@ internal sealed class GeneratedRowWriterAccessTests
     }
 
     [Test]
+    public async Task RepeatedStorageTypesShareOneCompactRowBufferReference()
+    {
+        const string source = """
+            using Plank.Schema;
+
+            namespace Regression;
+
+            [ParquetSchema]
+            partial class RowSchema
+            {
+                public int First { get; set; }
+                public int Second { get; set; }
+                public long Different { get; set; }
+            }
+            """;
+
+        var generated = Generate(source);
+
+        await Assert.That(generated).Contains("readonly int[] _group0;");
+        await Assert.That(generated).Contains("_group0 = ownerSlot._column0;");
+        await Assert.That(generated).Contains("GetArrayDataReference(_group0), _index");
+        await Assert.That(generated).Contains("GetArrayDataReference(_group0), _ownerSlot._column1Offset + _index");
+        await Assert.That(generated).Contains("var group0Stride = _column0.Length / 2;");
+        await Assert.That(generated).Contains("_column1Offset = group0Stride;");
+        await Assert.That(generated.Contains("_group1", StringComparison.Ordinal)).IsFalse();
+    }
+
+    [Test]
     public async Task FixedRowsGenerateOnlyTheRowCountCutoff()
     {
         const string source = """
