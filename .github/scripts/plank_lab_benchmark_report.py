@@ -14,6 +14,7 @@ from pathlib import Path
 
 MARKER = "<!-- plank-pr-benchmark-comparison -->"
 PLANK_CLASS_SUFFIX = "PlankBenchmarks"
+NOISE_STANDARD_DEVIATIONS = 3.0
 ENCODING_ORDER = [
     "plain",
     "rle",
@@ -52,29 +53,29 @@ class Comparison:
     column_count: int
     base_ms: float
     head_ms: float
-    base_p25_ms: float
-    base_p75_ms: float
-    head_p25_ms: float
-    head_p75_ms: float
+    base_stddev_ms: float
+    head_stddev_ms: float
     delta_percent: float
 
     @property
+    def noise_window_ms(self) -> float:
+        return NOISE_STANDARD_DEVIATIONS * (self.base_stddev_ms + self.head_stddev_ms)
+
+    @property
+    def noise_window_percent(self) -> float:
+        return self.noise_window_ms / self.base_ms * 100.0
+
+    @property
     def status(self) -> str:
-        if self.delta_percent < -2.0 and self.head_p75_ms < self.base_p25_ms:
+        base_low = self.base_ms - NOISE_STANDARD_DEVIATIONS * self.base_stddev_ms
+        base_high = self.base_ms + NOISE_STANDARD_DEVIATIONS * self.base_stddev_ms
+        head_low = self.head_ms - NOISE_STANDARD_DEVIATIONS * self.head_stddev_ms
+        head_high = self.head_ms + NOISE_STANDARD_DEVIATIONS * self.head_stddev_ms
+        if head_high < base_low:
             return "faster"
-        if self.delta_percent > 2.0 and self.head_p25_ms > self.base_p75_ms:
+        if head_low > base_high:
             return "slower"
         return "noise"
-
-
-def percentile(values: list[float], fraction: float) -> float:
-    ordered = sorted(values)
-    position = fraction * (len(ordered) - 1)
-    lower = math.floor(position)
-    upper = math.ceil(position)
-    if lower == upper:
-        return ordered[lower]
-    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 
 def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[Comparison], list[str]]:
@@ -158,10 +159,8 @@ def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[C
                 column_count=int(item["columnCount"]),
                 base_ms=base_ms,
                 head_ms=head_ms,
-                base_p25_ms=percentile(base, 0.25),
-                base_p75_ms=percentile(base, 0.75),
-                head_p25_ms=percentile(head, 0.25),
-                head_p75_ms=percentile(head, 0.75),
+                base_stddev_ms=statistics.stdev(base),
+                head_stddev_ms=statistics.stdev(head),
                 delta_percent=(head_ms / base_ms - 1.0) * 100.0,
             ))
     return comparisons, sorted(processors)
@@ -219,19 +218,29 @@ def render_chart(comparisons: list[Comparison], suite: str, operation: str) -> s
     selected = [item for item in comparisons
                 if item.suite == suite and item.operation == operation]
     ratios = [round(item.head_ms / item.base_ms * 100.0, 1) for item in selected]
-    movement = max(abs(value - 100.0) for value in ratios)
+    lower_noise = [round(max(0.0, 100.0 - item.noise_window_percent), 1)
+                   for item in selected]
+    upper_noise = [round(100.0 + item.noise_window_percent, 1) for item in selected]
+    movement = max(
+        max(abs(value - 100.0) for value in ratios),
+        max(item.noise_window_percent for item in selected),
+    )
     span = max(5, int(math.ceil((movement + 1) / 5.0) * 5))
     labels = ", ".join(f'"{chart_label(item)}"' for item in selected)
     values = ", ".join(f"{value:g}" for value in ratios)
     baseline = ", ".join("100" for _ in selected)
+    lower_bound = ", ".join(f"{value:g}" for value in lower_noise)
+    upper_bound = ", ".join(f"{value:g}" for value in upper_noise)
     return "\n".join([
         "```mermaid",
         "xychart-beta horizontal",
-        '    title "Runtime index — base = 100, lower is faster"',
+        '    title "Runtime index with measured 3σ noise window"',
         f"    x-axis [{labels}]",
         f'    y-axis "Base = 100" {100 - span} --> {100 + span}',
         f"    bar [{values}]",
+        f"    line [{lower_bound}]",
         f"    line [{baseline}]",
+        f"    line [{upper_bound}]",
         "```",
     ])
 
@@ -259,11 +268,13 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         "",
         f"**{faster} faster · {noise} within noise · {slower} slower**",
         "",
-        "> Chart guide: the vertical 100 line is base latency. A bar endpoint left of 100 is "
-        "faster; an endpoint right of 100 is slower.",
+        "> Chart guide: the lines around the 100 baseline show each case's measured 3σ noise "
+        "window. A bar endpoint below the lower line is faster; one above the upper line is slower.",
         "",
-        "> A colored result requires a change beyond ±2% and non-overlapping interquartile ranges. "
-        "Every percentage remains visible; hosted-runner results are advisory.",
+        "> Each noise window is derived from the standard deviation of all measured iterations "
+        "across both same-runner passes. A result is colored only when the base and PR median ±3σ "
+        "intervals do not overlap. Every percentage remains visible; hosted-runner results are "
+        "advisory.",
         "",
     ]
     for suite, operation in configurations:
@@ -278,15 +289,16 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         "<details>",
         "<summary>Exact median latency</summary>",
         "",
-        "| Suite | Operation | Case | Encoding | Shape | Base | PR | Change |",
-        "|---|---|---|---|---|---:|---:|---:|",
+        "| Suite | Operation | Case | Encoding | Shape | Base | PR | Noise window | Change |",
+        "|---|---|---|---|---|---:|---:|---:|---:|",
     ]
     for item in comparisons:
         shape = f"{item.row_count:,} rows × {item.column_count} columns"
         details.append(
             f"| {SUITE_LABELS[item.suite]} | {item.operation.title()} | {item.label} | "
             f"{ENCODING_LABELS[item.encoding]} | {shape} | "
-            f"{item.base_ms:.3f} ms | {item.head_ms:.3f} ms | {result_badge(item)} |")
+            f"{item.base_ms:.3f} ms | {item.head_ms:.3f} ms | "
+            f"±{item.noise_window_percent:.1f}% | {result_badge(item)} |")
     details.extend(["", "</details>", ""])
     sections.extend(details)
 
@@ -295,7 +307,7 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         f"Runners: {processor_text}.",
         f"[Workflow run, BenchmarkDotNet logs, and report artifact]({run_url})",
         "",
-        "<sub>🟢 faster · ⚪ distributions overlap / movement ≤2% · 🔴 slower.</sub>",
+        "<sub>🟢 faster · ⚪ measured 3σ noise windows overlap · 🔴 slower.</sub>",
     ])
     return "\n".join(sections)
 

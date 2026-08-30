@@ -30,10 +30,29 @@ class PlankLabBenchmarkReportTests(unittest.TestCase):
             self.assertIn("int32 · plain", body)
             self.assertIn("xychart-beta horizontal", body)
             self.assertIn('y-axis "Base = 100" 75 --> 125', body)
+            self.assertIn("measured 3σ noise window", body)
             self.assertIn("line [100, 100]", body)
-            self.assertIn("bar endpoint left of 100 is faster", body)
+            self.assertIn("below the lower line is faster", body)
             self.assertIn("| Encoding |", body)
+            self.assertIn("| Noise window |", body)
             self.assertNotIn("PR latency as % of base", body)
+
+    def test_measured_variance_defines_noise_window(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            matrix = self.write_matrix(root)
+            self.write_passes(root, "base", [10.0, 12.0], [20.0, 20.1])
+            self.write_passes(root, "head", [14.0, 16.0], [22.0, 22.1])
+
+            comparisons, _ = report.load_comparisons(root, matrix)
+            by_case = {item.case_id: item for item in comparisons}
+
+            noisy = by_case["int32-plain"]
+            stable = by_case["int32-dictionary"]
+            self.assertGreater(noisy.delta_percent, stable.delta_percent)
+            self.assertEqual("noise", noisy.status)
+            self.assertEqual("slower", stable.status)
+            self.assertGreater(noisy.noise_window_percent, stable.noise_window_percent)
 
     def test_non_plank_benchmark_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
