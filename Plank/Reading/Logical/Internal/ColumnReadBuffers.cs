@@ -10,6 +10,7 @@ struct ColumnReadBuffers<T>
     internal ParquetBuffer Levels;
     internal ParquetBuffer CompactDefinitions;
     internal ParquetBuffer ExpandedDefinitions;
+    internal ParquetBuffer PreviousBinaryValue;
     internal int DictionaryCount;
     internal bool HasDictionary;
     internal ReadOnlyMemory<byte> BorrowedBinaryDictionaryPayload;
@@ -25,6 +26,10 @@ struct ColumnReadBuffers<T>
 
     internal ColumnBuffer<T> CreateNativeBuffer(int valueCount)
         => new(Values, valueCount);
+
+    internal ColumnBuffer<T> CreateNativeBinaryBuffer(int valueCount, int descriptorCapacity)
+        => new(Values, valueCount, checked(descriptorCapacity *
+            Unsafe.SizeOf<BinaryValueDescriptor>()));
 
     internal ColumnBuffer<T> CreateBorrowedBinaryBuffer(int valueCount,
         ReadOnlyMemory<byte> payload)
@@ -113,6 +118,22 @@ struct ColumnReadBuffers<T>
         return valueCount == 0 ? [] : ParquetBuffer.AsSpan<int>(ExpandedDefinitions, valueCount);
     }
 
+    internal Span<byte> GetPreviousBinaryValue(int byteLength, IParquetBufferPool bufferPool)
+    {
+        if (byteLength < 0)
+            throw new CorruptParquetException(
+                $"Previous binary value buffer of {byteLength} bytes is not a valid size.");
+        if (PreviousBinaryValue.Length < byteLength)
+        {
+            PreviousBinaryValue.Dispose();
+            PreviousBinaryValue = byteLength == 0 ? default : bufferPool.Rent((uint)byteLength);
+        }
+        return byteLength == 0 ? [] : PreviousBinaryValue.Span[..byteLength];
+    }
+
+    internal ReadOnlySpan<byte> GetPreviousBinaryValue(int byteLength)
+        => byteLength == 0 ? [] : PreviousBinaryValue.Span[..byteLength];
+
     internal void GetLevels(int levelCount, IParquetBufferPool bufferPool,
         out Span<int> repetitionLevels, out Span<int> definitionLevels)
     {
@@ -132,6 +153,7 @@ struct ColumnReadBuffers<T>
         Levels.Dispose();
         CompactDefinitions.Dispose();
         ExpandedDefinitions.Dispose();
+        PreviousBinaryValue.Dispose();
         this = default;
     }
 

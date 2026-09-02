@@ -100,7 +100,7 @@ internal sealed class Dictionary11BitDecodingTests
     }
 
     [Test]
-    public void RequiredDoublePagesStreamRepeatedDictionaryCyclesAndFallbackForDifferentCycles()
+    public void RequiredDoublePagesStreamRepeatedDictionaryCyclesAndBatchDifferentCycles()
     {
         var dictionary = CreateDoubleDictionary(2_048, includeSpecialValues: false);
         var repeated = Enumerable.Range(0, dictionary.Length * 5 + 16)
@@ -121,7 +121,7 @@ internal sealed class Dictionary11BitDecodingTests
             AssertDoubleBits(differentActual, different, $"different page/{pageVersion}");
             if (!differentCounts.SequenceEqual([different.Length]))
                 throw new InvalidOperationException(
-                    $"Non-repeating {pageVersion} page did not use the required dictionary fallback.");
+                    $"Non-repeating {pageVersion} page buffers were [{string.Join(", ", differentCounts)}].");
         }
     }
 

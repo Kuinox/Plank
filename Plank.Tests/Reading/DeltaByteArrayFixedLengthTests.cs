@@ -86,6 +86,53 @@ internal sealed class DeltaByteArrayFixedLengthTests
             await Assert.That(read[i]).IsEquivalentTo(values[i].ToByteArray(bigEndian: true));
     }
 
+    [Test]
+    public async Task LargeFixedLengthDeltaByteArrayPagesBatchBothReadPaths()
+    {
+        var decimals = new decimal[40_003];
+        for (var i = 0; i < decimals.Length; i++)
+            decimals[i] = Decimals[i % Decimals.Length];
+        var decimalBytes = Write(new ParquetSharp.Column<decimal>("value",
+                ParquetSharp.LogicalType.Decimal(precision: 29, scale: 3)),
+            column => column.LogicalWriter<decimal>().WriteBatch(decimals));
+
+        using (var reader = new ParquetReader())
+        {
+            reader.Reset(new MemoryStream(decimalBytes, writable: false));
+            var read = new List<decimal>(decimals.Length);
+            var bufferCount = 0;
+            foreach (var buffer in reader.RowGroups[0].Column<decimal>(reader.Schema.LeafColumns[0]))
+            {
+                bufferCount++;
+                read.AddRange(buffer.Values);
+            }
+            await Assert.That(bufferCount).IsGreaterThan(1);
+            await Assert.That(read).IsEquivalentTo(decimals);
+        }
+
+        var guids = new Guid[40_003];
+        for (var i = 0; i < guids.Length; i++)
+            guids[i] = new Guid(i, 0, 0, new byte[8]);
+        var guidBytes = Write(new ParquetSharp.Column<Guid>("value"),
+            column => column.LogicalWriter<Guid>().WriteBatch(guids));
+
+        using (var reader = new ParquetReader())
+        {
+            reader.Reset(new MemoryStream(guidBytes, writable: false));
+            var valueIndex = 0;
+            var bufferCount = 0;
+            foreach (var buffer in reader.RowGroups[0].Column<byte>(reader.Schema.LeafColumns[0]))
+            {
+                bufferCount++;
+                for (var i = 0; i < buffer.Count; i++, valueIndex++)
+                    await Assert.That(buffer.GetValue(i).SequenceEqual(
+                        guids[valueIndex].ToByteArray(bigEndian: true))).IsTrue();
+            }
+            await Assert.That(bufferCount).IsGreaterThan(1);
+            await Assert.That(valueIndex).IsEqualTo(guids.Length);
+        }
+    }
+
     static byte[] Write(ParquetSharp.Column column, Action<ParquetSharp.ColumnWriter> write)
     {
         using var stream = new MemoryStream();

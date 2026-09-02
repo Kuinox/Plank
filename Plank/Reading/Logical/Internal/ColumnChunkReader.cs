@@ -7,7 +7,7 @@ using Plank.Schema;
 
 namespace Plank.Reading.Logical.Internal;
 
-static class ColumnChunkReader
+static partial class ColumnChunkReader
 {
     internal const int DecodeBatchSizeBytes = 256 * 1024;
 
@@ -429,8 +429,10 @@ static class ColumnChunkReader
                     return false;
             }
             else
-                MaterializeFixedWidthDictionaryValues(dataPayload, physicalType, physicalCount,
-                    ref buffers, bufferPool);
+                // Optional and converted dictionary pages fall through to the streaming RLE
+                // decoder. Materializing all physical values here would recreate the page-sized
+                // working set this batching path exists to avoid.
+                return false;
         }
 
         // An array-backed MemoryReadSource already keeps uncompressed page bytes alive. Required plain

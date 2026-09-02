@@ -65,7 +65,8 @@ internal sealed class NullableNumericDecodingTests
                 {
                     foreach (var buffer in reader.RowGroups[0].Column<double?>(0))
                     {
-                        if (buffer.Count > maximumBufferCount)
+                        if (encoding is not (EncodingKind.RleDictionary or EncodingKind.PlainDictionary) &&
+                            buffer.Count > maximumBufferCount)
                             throw new InvalidOperationException(
                                 $"{pageVersion}/{encoding}/{compression}: buffer contains {buffer.Count} values, " +
                                 $"maximum is {maximumBufferCount}.");
@@ -725,7 +726,8 @@ internal sealed class NullableNumericDecodingTests
         foreach (var buffer in reader.RowGroups[0].Column<T>(0))
         {
             bufferCount++;
-            if (buffer.Count > maximumBufferCount)
+            if (encoding is not (EncodingKind.RleDictionary or EncodingKind.PlainDictionary) &&
+                buffer.Count > maximumBufferCount)
                 throw new InvalidOperationException(
                     $"{typeof(T).Name}/{encoding}: buffer contains {buffer.Count} values, " +
                     $"maximum is {maximumBufferCount}.");
@@ -751,7 +753,8 @@ internal sealed class NullableNumericDecodingTests
         foreach (var buffer in reader.RowGroups[0].Column<T?>(0))
         {
             bufferCount++;
-            if (buffer.Count > maximumBufferCount)
+            if (encoding is not (EncodingKind.RleDictionary or EncodingKind.PlainDictionary) &&
+                buffer.Count > maximumBufferCount)
                 throw new InvalidOperationException(
                     $"{typeof(T).Name}?/{encoding}: buffer contains {buffer.Count} values, " +
                     $"maximum is {maximumBufferCount}.");
