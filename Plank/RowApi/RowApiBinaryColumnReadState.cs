@@ -28,9 +28,6 @@ sealed class RowApiBinaryColumnReadState : RowApiColumnReadState
     internal bool CurrentIsNull
         => _usingMissing ? _missingIsNull : CurrentIndex >= 0 && _buffer.IsNull(CurrentIndex);
 
-    internal ParquetBuffer RetainCurrentValue()
-        => _usingMissing || CurrentIndex < 0 ? default : _buffer.RetainValue(CurrentIndex);
-
     internal override void ResetBufferState()
     {
         DisposeBuffers();
@@ -83,4 +80,5 @@ sealed class RowApiBinaryColumnReadState : RowApiColumnReadState
         _buffers.Dispose();
         _buffersOpen = false;
     }
+
 }
