@@ -911,7 +911,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     .AppendLine(");");
                 builder.AppendLine("                if (value.IsNull)");
                 builder.AppendLine("                    return null!;");
-                builder.AppendLine("                return global::System.Text.Encoding.UTF8.GetString(value.Span);");
+                builder.AppendLine("                return global::System.Text.Encoding.UTF8.GetString(value.Value);");
                 builder.AppendLine("            }");
                 builder.AppendLine("        }");
             }
@@ -925,9 +925,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 builder.Append("                var value = _core.GetCurrentBinary(").Append(descriptorName)
                     .AppendLine(");");
                 if (columns[i].ClrTypeName.EndsWith("?", StringComparison.Ordinal))
-                    builder.AppendLine("                return value.IsNull ? null : new global::System.Guid(value.Span, bigEndian: true);");
+                    builder.AppendLine("                return value.IsNull ? null : new global::System.Guid(value.Value, bigEndian: true);");
                 else
-                    builder.AppendLine("                return new global::System.Guid(value.Span, bigEndian: true);");
+                    builder.AppendLine("                return new global::System.Guid(value.Value, bigEndian: true);");
                 builder.AppendLine("            }");
                 builder.AppendLine("        }");
             }

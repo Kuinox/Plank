@@ -136,7 +136,7 @@ internal sealed class MemoryBackedPageBorrowingTests
                 throw new InvalidOperationException(
                     $"{encoding} returned the wrong null state at row {index}.");
             if (expectedValue.HasValue &&
-                !actualValue.Span.SequenceEqual(expectedValue.Value.Span))
+                !actualValue.Value.SequenceEqual(expectedValue.Value.Span))
                 throw new InvalidOperationException(
                     $"{encoding} returned the wrong bytes at row {index}.");
 

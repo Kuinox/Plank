@@ -23,7 +23,7 @@ public readonly ref struct RowReaderBinaryValue
         => new ReadOnlySpan<byte>(s_nonNullEmpty, 0, 0);
 
     /// <summary>Gets the current byte value.</summary>
-    public ReadOnlySpan<byte> Span
+    public ReadOnlySpan<byte> Value
         => _value;
 
     /// <summary>Gets the number of bytes in the current value.</summary>

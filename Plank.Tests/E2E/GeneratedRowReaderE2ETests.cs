@@ -32,7 +32,7 @@ internal sealed class GeneratedRowReaderE2ETests
                 var row = reader.Current;
                 ids.Add(row.Id);
                 var tag = row.Tag;
-                tags.Add(tag.IsNull ? null : tag.Span.ToArray());
+                tags.Add(tag.IsNull ? null : tag.Value.ToArray());
                 AssertUnprojectedDefaultValueThrows(row);
                 AssertUnprojectedPayloadThrows(row);
             }
@@ -236,7 +236,7 @@ internal sealed class GeneratedRowReaderE2ETests
             while (reader.MoveNext())
             {
                 var row = reader.Current;
-                payloads.Add(row.Payload.Span.ToArray());
+                payloads.Add(row.Payload.Value.ToArray());
                 defaultValues.Add(row.DefaultValue);
             }
 
@@ -268,11 +268,11 @@ internal sealed class GeneratedRowReaderE2ETests
             if (row.Id != 42UL)
                 throw new InvalidOperationException($"Expected id 42, got {row.Id}.");
             var tag = row.Tag;
-            if (tag.IsNull || !tag.Span.SequenceEqual("tag"u8))
+            if (tag.IsNull || !tag.Value.SequenceEqual("tag"u8))
                 throw new InvalidOperationException("Expected tag 'tag'.");
             if (row.DefaultValue != 9U)
                 throw new InvalidOperationException($"Expected default value 9, got {row.DefaultValue}.");
-            if (!row.Payload.Span.SequenceEqual(new byte[] { 8, 7 }))
+            if (!row.Payload.Value.SequenceEqual(new byte[] { 8, 7 }))
                 throw new InvalidOperationException("Payload was not read from the reordered file column.");
         }
         finally

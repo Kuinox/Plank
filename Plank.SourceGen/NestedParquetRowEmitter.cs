@@ -854,7 +854,7 @@ static class NestedParquetRowEmitter
                     builder.Append("                var value = _core.GetCurrentBinary(").Append(leaf.DescriptorName)
                         .AppendLine(");");
                     builder.AppendLine("                if (value.IsNull) return default!;");
-                    builder.Append("                return ").Append(ConvertBinaryFromSpan(leaf.Node.Scalar, "value.Span"))
+                    builder.Append("                return ").Append(ConvertBinaryFromSpan(leaf.Node.Scalar, "value.Value"))
                         .AppendLine(";");
                     builder.AppendLine("            }");
                     builder.AppendLine("        }");
@@ -916,7 +916,7 @@ static class NestedParquetRowEmitter
                 .Append(leaf.UniqueName).AppendLine("Binary(global::Plank.RowApi.RowReaderBinaryValue value)");
             builder.AppendLine("    {");
             builder.AppendLine("        if (value.IsNull) return default!;");
-            builder.Append("        return ").Append(ConvertBinaryFromSpan(leaf.Node.Scalar, "value.Span"))
+            builder.Append("        return ").Append(ConvertBinaryFromSpan(leaf.Node.Scalar, "value.Value"))
                 .AppendLine(";");
             builder.AppendLine("    }");
         }
