@@ -12,6 +12,7 @@ struct ColumnReadBuffers<T>
     internal ParquetBuffer ExpandedDefinitions;
     internal int DictionaryCount;
     internal bool HasDictionary;
+    internal ReadOnlyMemory<byte> BorrowedBinaryDictionaryPayload;
 
     internal Span<TValue> GetValues<TValue>(int valueCount, IParquetBufferPool bufferPool)
     {
@@ -24,6 +25,10 @@ struct ColumnReadBuffers<T>
 
     internal ColumnBuffer<T> CreateNativeBuffer(int valueCount)
         => new(Values, valueCount);
+
+    internal ColumnBuffer<T> CreateBorrowedBinaryBuffer(int valueCount,
+        ReadOnlyMemory<byte> payload, IParquetBufferPool bufferPool)
+        => new(Values, valueCount, payload, bufferPool);
 
     internal Span<BinaryValueDescriptor> GetBinaryValues(int valueCount, int payloadByteLength,
         IParquetBufferPool bufferPool, out Span<byte> payload)
@@ -38,6 +43,7 @@ struct ColumnReadBuffers<T>
     internal Span<TValue> GetDictionary<TValue>(int valueCount, IParquetBufferPool bufferPool)
     {
         Dictionary.Dispose();
+        BorrowedBinaryDictionaryPayload = default;
         var byteLength = ByteLength(valueCount, Unsafe.SizeOf<TValue>(), "Dictionary");
         Dictionary = byteLength == 0 ? default : bufferPool.Rent((uint)byteLength);
         DictionaryCount = valueCount;
@@ -52,6 +58,7 @@ struct ColumnReadBuffers<T>
         IParquetBufferPool bufferPool, out Span<byte> payload)
     {
         Dictionary.Dispose();
+        BorrowedBinaryDictionaryPayload = default;
         var descriptorByteLength = ByteLength(valueCount, Unsafe.SizeOf<BinaryValueDescriptor>(),
             "Binary dictionary");
         var byteLength = Sum(descriptorByteLength, payloadByteLength, "Binary dictionary");
@@ -61,6 +68,9 @@ struct ColumnReadBuffers<T>
         payload = Dictionary.Span.Slice(descriptorByteLength, payloadByteLength);
         return valueCount == 0 ? [] : ParquetBuffer.AsSpan<BinaryValueDescriptor>(Dictionary, valueCount);
     }
+
+    internal void SetBorrowedBinaryDictionaryPayload(ReadOnlyMemory<byte> payload)
+        => BorrowedBinaryDictionaryPayload = payload;
 
     internal Span<byte> GetScratch(int byteLength, IParquetBufferPool bufferPool)
     {

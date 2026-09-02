@@ -19,12 +19,18 @@ static class ColumnChunkReader
     static readonly bool NullableInt64HasCanonicalLayout = HasCanonicalNullableInt64Layout();
     internal static bool TryDecodeDictionaryPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
+        => TryDecodeDictionaryPageIntoNative(header, payload, default, column, ref state, bufferPool);
+
+    internal static bool TryDecodeDictionaryPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> borrowedPayload, Column column, ref ColumnReadBuffers<T> state,
+        IParquetBufferPool bufferPool)
     {
         if (header.Type != PageHeaderType.DictionaryPage)
             return false;
 
         if (typeof(T) == typeof(BinaryValueDescriptor))
-            return TryDecodeBinaryDictionaryPage(header, payload, column, ref state, bufferPool);
+            return TryDecodeBinaryDictionaryPage(header, payload, borrowedPayload, column,
+                ref state, bufferPool);
         if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
             return false;
 
@@ -1229,12 +1235,18 @@ static class ColumnChunkReader
     internal static bool TryDecodeNullablePageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ulong rowCount, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool,
         out ColumnBuffer<T> buffer)
+        => TryDecodeNullablePageIntoNative(header, payload, default, column, rowCount,
+            ref state, bufferPool, out buffer);
+
+    internal static bool TryDecodeNullablePageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> borrowedPayload, Column column, ulong rowCount,
+        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool, out ColumnBuffer<T> buffer)
     {
         buffer = default;
         if (typeof(T) == typeof(BinaryValueDescriptor) &&
             column.Options.Repetition == ParquetRepetition.Optional)
-            return TryDecodeBinaryDataPage(header, payload, column, rowCount, ref state, bufferPool,
-                optional: true, out buffer);
+            return TryDecodeBinaryDataPage(header, payload, borrowedPayload, column, rowCount,
+                ref state, bufferPool, optional: true, out buffer);
 
         var physicalType = GetPhysicalDecodeType<T>(column);
         var converter = column.Converter;
@@ -1855,12 +1867,18 @@ static class ColumnChunkReader
     internal static bool TryDecodeRequiredPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ulong rowCount, ref ColumnReadBuffers<T> state,
         IParquetBufferPool bufferPool, out ColumnBuffer<T> buffer)
+        => TryDecodeRequiredPageIntoNative(header, payload, default, column, rowCount,
+            ref state, bufferPool, out buffer);
+
+    internal static bool TryDecodeRequiredPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> borrowedPayload, Column column, ulong rowCount,
+        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool, out ColumnBuffer<T> buffer)
     {
         buffer = default;
         if (typeof(T) == typeof(BinaryValueDescriptor) &&
             column.Options.Repetition == ParquetRepetition.Required)
-            return TryDecodeBinaryDataPage(header, payload, column, rowCount, ref state, bufferPool,
-                optional: false, out buffer);
+            return TryDecodeBinaryDataPage(header, payload, borrowedPayload, column, rowCount,
+                ref state, bufferPool, optional: false, out buffer);
 
         var converter = column.Converter;
         if (header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2) ||
@@ -2063,7 +2081,8 @@ static class ColumnChunkReader
     const int MaximumPageValueCount = (int.MaxValue - 1024) / (2 * sizeof(int));
 
     static bool TryDecodeBinaryDictionaryPage<T>(PageHeader header, ReadOnlySpan<byte> payload,
-        Column column, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
+        ReadOnlyMemory<byte> borrowedPayload, Column column, ref ColumnReadBuffers<T> state,
+        IParquetBufferPool bufferPool)
     {
         if (!IsBinaryPhysicalType(column.PhysicalType) || header.Encoding != EncodingKind.Plain)
             return false;
@@ -2084,6 +2103,15 @@ static class ColumnChunkReader
                 $"Dictionary page declares {header.ValueCount} values, but its {payload.Length}-byte payload holds at most {maximumValueCount}.");
 
         var valueCount = (int)header.ValueCount;
+        if (!borrowedPayload.IsEmpty && column.PhysicalType == ParquetPhysicalType.ByteArray)
+        {
+            var borrowedDestination = state.GetBinaryDictionary(valueCount, 0, bufferPool, out _);
+            FillBorrowedPlainByteArrayDescriptors(payload, [], valueCount,
+                borrowedDestination);
+            state.SetBorrowedBinaryDictionaryPayload(borrowedPayload);
+            return true;
+        }
+
         var scratchByteLength = (long)valueCount * sizeof(int);
         if (scratchByteLength > int.MaxValue)
             throw new CorruptParquetException(
@@ -2100,8 +2128,9 @@ static class ColumnChunkReader
     }
 
     static bool TryDecodeBinaryDataPage<T>(PageHeader header, ReadOnlySpan<byte> payload,
-        Column column, ulong rowCount, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool,
-        bool optional, out ColumnBuffer<T> buffer)
+        ReadOnlyMemory<byte> borrowedPayload, Column column, ulong rowCount,
+        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool, bool optional,
+        out ColumnBuffer<T> buffer)
     {
         buffer = default;
         if (header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2) ||
@@ -2114,6 +2143,7 @@ static class ColumnChunkReader
 
         ReadOnlySpan<byte> definitionPayload;
         ReadOnlySpan<byte> dataPayload;
+        var dataOffset = 0;
         var expectedPhysicalCount = header.ValueCount;
         if (header.Type == PageHeaderType.DataPageV2)
         {
@@ -2132,6 +2162,7 @@ static class ColumnChunkReader
                     checked((int)header.DefinitionLevelsByteLength))
                 : [];
             dataPayload = payload[levelBytes..];
+            dataOffset = levelBytes;
             expectedPhysicalCount -= header.NullCount;
         }
         else if (optional)
@@ -2140,6 +2171,7 @@ static class ColumnChunkReader
                 header.DefinitionLevelEncoding, bitWidth: 1, "definition", out var definitionOffset);
             definitionPayload = payload.Slice(definitionOffset, definitionLength);
             dataPayload = payload[(definitionOffset + definitionLength)..];
+            dataOffset = definitionOffset + definitionLength;
         }
         else
         {
@@ -2168,40 +2200,58 @@ static class ColumnChunkReader
                     $"Page declares {header.NullCount} null values but has no definition levels.");
         }
 
-        if (!TryDecodeBinaryValues(dataPayload, definitions, valueCount, physicalCount, column,
-                header.Encoding, scratch[valueCount..], ref state, bufferPool))
+        var borrowedDataPayload = borrowedPayload.IsEmpty
+            ? default
+            : borrowedPayload[dataOffset..];
+        if (!TryDecodeBinaryValues(dataPayload, borrowedDataPayload, definitions, valueCount,
+                physicalCount, column, header.Encoding, scratch[valueCount..], ref state,
+                bufferPool, out var borrowedValuePayload))
             return false;
 
-        buffer = state.CreateNativeBuffer(valueCount);
+        buffer = borrowedValuePayload.IsEmpty
+            ? state.CreateNativeBuffer(valueCount)
+            : state.CreateBorrowedBinaryBuffer(valueCount, borrowedValuePayload, bufferPool);
         return true;
     }
 
-    static bool TryDecodeBinaryValues<T>(ReadOnlySpan<byte> payload, ReadOnlySpan<int> definitions,
-        int valueCount, int physicalCount, Column column, EncodingKind encoding, Span<int> scratch,
-        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
+    static bool TryDecodeBinaryValues<T>(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<int> definitions, int valueCount, int physicalCount, Column column,
+        EncodingKind encoding, Span<int> scratch, ref ColumnReadBuffers<T> state,
+        IParquetBufferPool bufferPool)
+        => TryDecodeBinaryValues(payload, default, definitions, valueCount, physicalCount,
+            column, encoding, scratch, ref state, bufferPool, out _);
+
+    static bool TryDecodeBinaryValues<T>(ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> borrowedPayload, ReadOnlySpan<int> definitions, int valueCount,
+        int physicalCount, Column column, EncodingKind encoding, Span<int> scratch,
+        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool,
+        out ReadOnlyMemory<byte> borrowedValuePayload)
     {
+        borrowedValuePayload = default;
         if (encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
         {
             if (!state.HasDictionary)
                 return false;
             DecodeBinaryDictionaryValues(payload, definitions, valueCount, physicalCount,
-                scratch[..physicalCount], ref state, bufferPool);
+                scratch[..physicalCount], ref state, bufferPool, out borrowedValuePayload);
             return true;
         }
 
         switch (encoding)
         {
             case EncodingKind.Plain:
-                DecodePlainBinaryValues(payload, definitions, valueCount, physicalCount, column,
-                    scratch[..physicalCount], ref state, bufferPool);
+                DecodePlainBinaryValues(payload, borrowedPayload, definitions, valueCount,
+                    physicalCount, column, scratch[..physicalCount], ref state, bufferPool,
+                    out borrowedValuePayload);
                 return true;
             case EncodingKind.ByteStreamSplit when column.PhysicalType == ParquetPhysicalType.FixedLenByteArray:
                 DecodeByteStreamSplitBinaryValues(payload, definitions, valueCount, physicalCount, column,
                     ref state, bufferPool);
                 return true;
             case EncodingKind.DeltaLengthByteArray when column.PhysicalType == ParquetPhysicalType.ByteArray:
-                DecodeDeltaLengthBinaryValues(payload, definitions, valueCount, physicalCount,
-                    scratch[..physicalCount], ref state, bufferPool);
+                DecodeDeltaLengthBinaryValues(payload, borrowedPayload, definitions, valueCount,
+                    physicalCount, scratch[..physicalCount], ref state, bufferPool,
+                    out borrowedValuePayload);
                 return true;
             // DELTA_BYTE_ARRAY is defined for FIXED_LEN_BYTE_ARRAY as well as
             // BYTE_ARRAY, and parquet-mr's v2 writer uses it for both. The
@@ -2218,12 +2268,21 @@ static class ColumnChunkReader
         }
     }
 
-    static void DecodePlainBinaryValues<T>(ReadOnlySpan<byte> payload, ReadOnlySpan<int> definitions,
-        int valueCount, int physicalCount, Column column, Span<int> lengths,
-        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
+    static void DecodePlainBinaryValues<T>(ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> borrowedPayload, ReadOnlySpan<int> definitions, int valueCount,
+        int physicalCount, Column column, Span<int> lengths, ref ColumnReadBuffers<T> state,
+        IParquetBufferPool bufferPool, out ReadOnlyMemory<byte> borrowedValuePayload)
     {
+        borrowedValuePayload = default;
         if (column.PhysicalType == ParquetPhysicalType.ByteArray)
         {
+            if (!borrowedPayload.IsEmpty)
+            {
+                DecodeBorrowedPlainBinaryValues(payload, definitions, valueCount, physicalCount,
+                    ref state, bufferPool);
+                borrowedValuePayload = borrowedPayload;
+                return;
+            }
             var prefixByteLength = checked(physicalCount * sizeof(int));
             if (prefixByteLength > payload.Length)
                 throw new CorruptParquetException(
@@ -2278,6 +2337,45 @@ static class ColumnChunkReader
             destinationPayload);
     }
 
+    static void DecodeBorrowedPlainBinaryValues<T>(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<int> definitions, int valueCount, int physicalCount,
+        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
+    {
+        var destination = state.GetBinaryValues(valueCount, 0, bufferPool, out _);
+        ClearMissingBinaryDescriptors(destination, physicalCount);
+        FillBorrowedPlainByteArrayDescriptors(payload, definitions, physicalCount,
+            destination);
+    }
+
+    static void FillBorrowedPlainByteArrayDescriptors(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<int> definitions, int physicalCount,
+        Span<BinaryValueDescriptor> destination)
+    {
+        var logicalIndex = 0;
+        var sourceOffset = 0;
+        for (var physicalIndex = 0; physicalIndex < physicalCount; physicalIndex++)
+        {
+            if (payload.Length - sourceOffset < sizeof(int))
+                throw new CorruptParquetException("Payload too short to read byte array length prefix.");
+            var unsignedLength = BinaryPrimitives.ReadUInt32LittleEndian(payload[sourceOffset..]);
+            if (unsignedLength > int.MaxValue)
+                throw new CorruptParquetException(
+                    $"Byte array length {unsignedLength} exceeds the supported maximum of {int.MaxValue}.");
+            var length = (int)unsignedLength;
+            sourceOffset += sizeof(int);
+            if (length > payload.Length - sourceOffset)
+                throw new CorruptParquetException(
+                    $"Byte array length {length} exceeds remaining payload ({payload.Length - sourceOffset} bytes).");
+
+            var targetIndex = GetBinaryLogicalIndex(definitions, ref logicalIndex, physicalIndex);
+            destination[targetIndex] = new BinaryValueDescriptor(sourceOffset, length);
+            sourceOffset += length;
+        }
+        if (sourceOffset != payload.Length)
+            throw new CorruptParquetException(
+                $"Plain byte array payload contains {payload.Length - sourceOffset} trailing bytes.");
+    }
+
     static void DecodeByteStreamSplitBinaryValues<T>(ReadOnlySpan<byte> payload,
         ReadOnlySpan<int> definitions, int valueCount, int physicalCount, Column column,
         ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
@@ -2301,14 +2399,32 @@ static class ColumnChunkReader
     }
 
     static void DecodeDeltaLengthBinaryValues<T>(ReadOnlySpan<byte> payload,
-        ReadOnlySpan<int> definitions, int valueCount, int physicalCount, Span<int> lengths,
-        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
+        ReadOnlyMemory<byte> borrowedPayload, ReadOnlySpan<int> definitions, int valueCount,
+        int physicalCount, Span<int> lengths, ref ColumnReadBuffers<T> state,
+        IParquetBufferPool bufferPool, out ReadOnlyMemory<byte> borrowedValuePayload)
     {
+        borrowedValuePayload = default;
         var consumedLengthBytes = physicalCount == 0
             ? 0
             : DeltaBinaryPackedDecoder.ReadNonNegativeInt32WithConsumedBytes(payload, lengths);
         var remaining = payload[consumedLengthBytes..];
         var payloadByteLength = SumBinaryLengths(lengths, remaining.Length, "Delta length byte array");
+        if (!borrowedPayload.IsEmpty && payloadByteLength != 0)
+        {
+            var borrowedDestination = state.GetBinaryValues(valueCount, 0, bufferPool, out _);
+            ClearMissingBinaryDescriptors(borrowedDestination, physicalCount);
+            var borrowedLogicalIndex = 0;
+            var sourceOffset = 0;
+            for (var physicalIndex = 0; physicalIndex < physicalCount; physicalIndex++)
+            {
+                var length = lengths[physicalIndex];
+                var targetIndex = GetBinaryLogicalIndex(definitions, ref borrowedLogicalIndex, physicalIndex);
+                borrowedDestination[targetIndex] = new BinaryValueDescriptor(sourceOffset, length);
+                sourceOffset += length;
+            }
+            borrowedValuePayload = borrowedPayload[consumedLengthBytes..];
+            return;
+        }
         var destination = state.GetBinaryValues(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
         ClearMissingBinaryDescriptors(destination, physicalCount);
@@ -2395,11 +2511,27 @@ static class ColumnChunkReader
 
     static void DecodeBinaryDictionaryValues<T>(ReadOnlySpan<byte> payload,
         ReadOnlySpan<int> definitions, int valueCount, int physicalCount, Span<int> indexes,
-        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
+        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool,
+        out ReadOnlyMemory<byte> borrowedValuePayload)
     {
+        borrowedValuePayload = default;
         var dictionary = state.GetDictionary<BinaryValueDescriptor>();
-        var dictionaryPayloadAddress = GetBinaryPayloadAddress(state.Dictionary, dictionary.Length);
         DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount), dictionary.Length, indexes);
+        if (!state.BorrowedBinaryDictionaryPayload.IsEmpty)
+        {
+            var borrowedDestination = state.GetBinaryValues(valueCount, 0, bufferPool, out _);
+            ClearMissingBinaryDescriptors(borrowedDestination, physicalCount);
+            var borrowedLogicalIndex = 0;
+            for (var physicalIndex = 0; physicalIndex < physicalCount; physicalIndex++)
+            {
+                var targetIndex = GetBinaryLogicalIndex(definitions, ref borrowedLogicalIndex, physicalIndex);
+                borrowedDestination[targetIndex] = dictionary[indexes[physicalIndex]];
+            }
+            borrowedValuePayload = state.BorrowedBinaryDictionaryPayload;
+            return;
+        }
+
+        var dictionaryPayloadAddress = GetBinaryPayloadAddress(state.Dictionary, dictionary.Length);
         var payloadByteLength = 0;
         for (var i = 0; i < indexes.Length; i++)
             payloadByteLength = AddBinaryLength(payloadByteLength, dictionary[indexes[i]].Length);

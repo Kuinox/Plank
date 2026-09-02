@@ -108,8 +108,13 @@ readonly struct ColumnBufferEnumerable<T>
 
             while (_cursor.MoveNext())
             {
+                var borrowedBinaryPayload = typeof(T) == typeof(BinaryValueDescriptor) &&
+                    !_borrowRequiredPlainValues
+                        ? _cursor.CurrentBorrowedPayloadUnchecked
+                        : default;
                 if (ColumnChunkReader.TryDecodeDictionaryPageIntoNative<T>(_cursor.CurrentHeader,
-                        _cursor.CurrentPayload, _column, ref _buffers, _bufferPool))
+                        _cursor.CurrentPayload, borrowedBinaryPayload, _column,
+                        ref _buffers, _bufferPool))
                     continue;
 
                 if (ColumnChunkReader.TryStartFixedWidthPageBatches(_cursor.CurrentHeader,
@@ -123,16 +128,16 @@ readonly struct ColumnBufferEnumerable<T>
                 }
 
                 if (ColumnChunkReader.TryDecodeNullablePageIntoNative<T>(_cursor.CurrentHeader,
-                        _cursor.CurrentPayload, _column, _rowCount, ref _buffers, _bufferPool,
-                        out var nullableBuffer))
+                        _cursor.CurrentPayload, borrowedBinaryPayload, _column, _rowCount,
+                        ref _buffers, _bufferPool, out var nullableBuffer))
                 {
                     Current = nullableBuffer;
                     return true;
                 }
 
                 if (ColumnChunkReader.TryDecodeRequiredPageIntoNative<T>(_cursor.CurrentHeader,
-                        _cursor.CurrentPayload, _column, _rowCount, ref _buffers, _bufferPool,
-                        out var nativeBuffer))
+                        _cursor.CurrentPayload, borrowedBinaryPayload, _column, _rowCount,
+                        ref _buffers, _bufferPool, out var nativeBuffer))
                 {
                     Current = nativeBuffer;
                     return true;

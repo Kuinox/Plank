@@ -30,4 +30,9 @@ readonly unsafe struct BinaryValueDescriptor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<byte> GetSpan(nint payloadAddress)
         => IsNull ? [] : new ReadOnlySpan<byte>((void*)(payloadAddress + _offsetPlusOne - 1), _length);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ReadOnlySpan<byte> GetSpan(byte[] payload, int payloadOffset)
+        => IsNull ? [] : new ReadOnlySpan<byte>(payload,
+            checked(payloadOffset + _offsetPlusOne - 1), _length);
 }

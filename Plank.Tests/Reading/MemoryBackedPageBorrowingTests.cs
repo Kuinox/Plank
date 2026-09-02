@@ -4,10 +4,31 @@ using System.Runtime.InteropServices;
 using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Reading.Physical;
+using Plank.RowApi;
 using Plank.Schema;
 using Plank.Writing;
 
 namespace Plank.Tests.Reading;
+
+[ParquetSchema]
+public sealed partial class BorrowedUtf8RowSchema
+{
+    [ParquetColumn("Plain", LogicalType = LogicalTypeKind.String,
+        Encodings = [EncodingKind.Plain])]
+    public ReadOnlyMemory<byte>? Plain { get; set; }
+
+    [ParquetColumn("Dictionary", LogicalType = LogicalTypeKind.String,
+        Encodings = [EncodingKind.RleDictionary])]
+    public ReadOnlyMemory<byte>? Dictionary { get; set; }
+
+    [ParquetColumn("DeltaLength", LogicalType = LogicalTypeKind.String,
+        Encodings = [EncodingKind.DeltaLengthByteArray])]
+    public ReadOnlyMemory<byte>? DeltaLength { get; set; }
+
+    [ParquetColumn("DeltaByte", LogicalType = LogicalTypeKind.String,
+        Encodings = [EncodingKind.DeltaByteArray])]
+    public ReadOnlyMemory<byte>? DeltaByte { get; set; }
+}
 
 internal sealed class MemoryBackedPageBorrowingTests
 {
@@ -68,6 +89,113 @@ internal sealed class MemoryBackedPageBorrowingTests
 
         if (actualOffset != expected.Length)
             throw new InvalidOperationException($"Decoded {actualOffset} values instead of {expected.Length}.");
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void GeneratedUtf8RowsBorrowByteArrayPayloadsAndRetainExactValues(
+        ParquetDataPageVersion pageVersion)
+    {
+        const int valueLength = 4_099;
+        var value = Enumerable.Range(0, valueLength)
+            .Select(static index => (byte)(index * 17))
+            .ToArray();
+        var values = Enumerable.Repeat<ReadOnlyMemory<byte>?>(value, 257).ToArray();
+        values[7] = null;
+        values[19] = ReadOnlyMemory<byte>.Empty;
+
+        var file = CreateUtf8File(values, pageVersion);
+        AssertBorrowedUtf8Column(file, values, BorrowedUtf8RowSchema.Projection.Plain,
+            EncodingKind.Plain, static row => row.Plain, static row => row.PlainIsNull,
+            static row => row.RetainPlain());
+        AssertBorrowedUtf8Column(file, values, BorrowedUtf8RowSchema.Projection.Dictionary,
+            EncodingKind.RleDictionary, static row => row.Dictionary,
+            static row => row.DictionaryIsNull, static row => row.RetainDictionary());
+        AssertBorrowedUtf8Column(file, values, BorrowedUtf8RowSchema.Projection.DeltaLength,
+            EncodingKind.DeltaLengthByteArray, static row => row.DeltaLength,
+            static row => row.DeltaLengthIsNull, static row => row.RetainDeltaLength());
+        AssertBorrowedUtf8Column(file, values, BorrowedUtf8RowSchema.Projection.DeltaByte,
+            EncodingKind.DeltaByteArray, static row => row.DeltaByte,
+            static row => row.DeltaByteIsNull, static row => row.RetainDeltaByte());
+    }
+
+    delegate ReadOnlySpan<byte> GetUtf8Value(BorrowedUtf8RowSchema.ReadRow row);
+    delegate bool GetUtf8Null(BorrowedUtf8RowSchema.ReadRow row);
+    delegate ParquetBuffer RetainUtf8Value(BorrowedUtf8RowSchema.ReadRow row);
+
+    static void AssertBorrowedUtf8Column(byte[] file, ReadOnlyMemory<byte>?[] expected,
+        BorrowedUtf8RowSchema.Projection projection, EncodingKind encoding, GetUtf8Value getValue,
+        GetUtf8Null getIsNull, RetainUtf8Value retainValue)
+    {
+        var pool = new TrackingBufferPool();
+        ParquetBuffer retained = default;
+        try
+        {
+            using (var source = new MemoryReadSource(file))
+            using (var reader = BorrowedUtf8RowSchema.CreateRowReader(source, projection,
+                       new RowReaderOptions { BufferPool = pool }))
+            {
+                pool.Reset();
+                var index = 0;
+                while (reader.MoveNext())
+                {
+                    var row = reader.Current;
+                    var expectedValue = expected[index];
+                    if (getIsNull(row) != !expectedValue.HasValue)
+                        throw new InvalidOperationException(
+                            $"{encoding} returned the wrong null state at row {index}.");
+                    if (expectedValue.HasValue && !getValue(row).SequenceEqual(expectedValue.Value.Span))
+                        throw new InvalidOperationException(
+                            $"{encoding} returned the wrong bytes at row {index}.");
+
+                    if (index == 0)
+                    {
+                        if (encoding != EncodingKind.DeltaByteArray &&
+                            pool.LargestRent >= expectedValue!.Value.Length)
+                            throw new InvalidOperationException(
+                                $"{encoding} rented a {pool.LargestRent}-byte decoded payload copy.");
+                        retained = retainValue(row);
+                    }
+                    index++;
+                }
+                if (index != expected.Length)
+                    throw new InvalidOperationException(
+                        $"{encoding} returned {index} rows instead of {expected.Length}.");
+            }
+
+            if (!retained.Span.SequenceEqual(expected[0]!.Value.Span))
+                throw new InvalidOperationException(
+                    $"The retained {encoding} value changed after disposing the reader.");
+        }
+        finally
+        {
+            retained.Dispose();
+        }
+    }
+
+    static byte[] CreateUtf8File(ReadOnlyMemory<byte>?[] values,
+        ParquetDataPageVersion pageVersion)
+    {
+        using var stream = new MemoryStream();
+        using var writer = BorrowedUtf8RowSchema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = pageVersion,
+            TargetDataPageSizeBytes = 1024 * 1024,
+            WritePageIndexes = false
+        });
+        var rowGroup = writer.StartRowGroup();
+        rowGroup.Plain.Serialize(values);
+        rowGroup.Write(rowGroup.Plain);
+        rowGroup.Dictionary.Serialize(values);
+        rowGroup.Write(rowGroup.Dictionary);
+        rowGroup.DeltaLength.Serialize(values);
+        rowGroup.Write(rowGroup.DeltaLength);
+        rowGroup.DeltaByte.Serialize(values);
+        rowGroup.Write(rowGroup.DeltaByte);
+        writer.CloseFile();
+        return stream.ToArray();
     }
 
     [Test]
@@ -352,15 +480,20 @@ internal sealed class MemoryBackedPageBorrowingTests
     sealed class TrackingBufferPool : IParquetBufferPool
     {
         internal int RentCount { get; private set; }
+        internal uint LargestRent { get; private set; }
 
         public ParquetBuffer Rent(uint minimumByteLength)
         {
             RentCount++;
+            LargestRent = Math.Max(LargestRent, minimumByteLength);
             return DefaultParquetBufferPool.Shared.Rent(minimumByteLength);
         }
 
         internal void Reset()
-            => RentCount = 0;
+        {
+            RentCount = 0;
+            LargestRent = 0;
+        }
     }
 
     sealed class NonArrayMemoryManager(byte[] bytes) : MemoryManager<byte>
