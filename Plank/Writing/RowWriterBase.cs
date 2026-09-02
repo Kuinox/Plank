@@ -35,7 +35,6 @@ public abstract class RowWriterBase<TSlot> : IDisposable
     ulong _nextQueuedSequence;
     ulong _nextWriteSequence;
     bool _writerActive;
-    bool _addingCompleted;
     bool _completed;
     ulong _fileIndex;
     bool _rolloverPending;
@@ -81,7 +80,6 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         _nextQueuedSequence = 0;
         _nextWriteSequence = 0;
         _writerActive = false;
-        _addingCompleted = false;
         _completed = false;
         _fileIndex = 0;
         _rolloverPending = false;
@@ -142,7 +140,6 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         _nextQueuedSequence = 0;
         _nextWriteSequence = 0;
         _writerActive = false;
-        _addingCompleted = false;
         _completed = false;
         _fileIndex = 0;
         _rolloverPending = false;
@@ -222,11 +219,9 @@ public abstract class RowWriterBase<TSlot> : IDisposable
             _nextQueuedSequence = 0;
             _nextWriteSequence = 0;
             _writerActive = false;
-            _addingCompleted = false;
             _completed = false;
             _fileIndex = 0;
             _rolloverPending = false;
-            StartWorkersNoLock();
         }
     }
 
@@ -271,7 +266,7 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         return TakeFreeSlot();
     }
 
-    /// <summary>Completes the serialization pipeline and closes the Parquet file.</summary>
+    /// <summary>Completes the current serialization cycle and closes the Parquet file.</summary>
     /// <param name="activeSlot">The generated writer's active slot.</param>
     /// <param name="hasRows">Whether the active slot contains rows to write.</param>
     protected void Complete(TSlot activeSlot, bool hasRows)
@@ -279,6 +274,7 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(activeSlot);
 
+        var returnActiveSlot = false;
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -287,22 +283,28 @@ public abstract class RowWriterBase<TSlot> : IDisposable
             {
                 if (hasRows && _fault is null)
                     EnqueueReadySlotNoLock(activeSlot);
+                else if (_fault is null)
+                    returnActiveSlot = true;
 
                 _completed = true;
-                _addingCompleted = true;
             }
         }
 
-        SignalWorkers();
+        if (returnActiveSlot)
+            ReturnSlot(activeSlot);
 
-        for (var i = 0; i < _workers.Length; i++)
-            _workers[i].Join();
+        lock (_gate)
+        {
+            while (_fault is null && _freeSlots.Count != _slots.Length)
+                Monitor.Wait(_gate);
 
-        ThrowIfFaulted();
-        _writer.CloseFile();
+            RethrowFault();
+        }
+
+        _writer.FinishFile();
     }
 
-    /// <summary>Aborts the pipeline and releases its workers, pooled buffers, and destination.</summary>
+    /// <summary>Aborts the pipeline and releases its persistent workers, pooled buffers, and destination.</summary>
     /// <remarks>
     /// Disposing does not complete the Parquet file. Call the generated writer's <c>Complete()</c> method before
     /// disposal to commit a valid file. Once disposed, the writer cannot be reused.
@@ -319,7 +321,6 @@ public abstract class RowWriterBase<TSlot> : IDisposable
                 return;
 
             _disposed = true;
-            _addingCompleted = true;
             for (var i = 0; i < _workerReadySlots.Length; i++)
                 _workerReadySlots[i].Clear();
         }
@@ -448,7 +449,7 @@ public abstract class RowWriterBase<TSlot> : IDisposable
             QueuedSlot queuedSlot;
             lock (_gate)
             {
-                if (_disposed || _fault is not null || readySlots.Count == 0 && _addingCompleted)
+                if (_disposed || _fault is not null)
                     return;
                 if (readySlots.Count == 0)
                     continue;
@@ -548,6 +549,8 @@ public abstract class RowWriterBase<TSlot> : IDisposable
             if (_disposed)
                 return;
             _freeSlots.Enqueue(slot);
+            if (_completed)
+                Monitor.PulseAll(_gate);
         }
         _freeSignal.Release();
     }
@@ -560,7 +563,7 @@ public abstract class RowWriterBase<TSlot> : IDisposable
 
         lock (_gate)
         {
-            _addingCompleted = true;
+            Monitor.PulseAll(_gate);
         }
 
         SignalWorkers();

@@ -22,7 +22,7 @@ internal sealed class RowApiE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = new TestIntPipelineWriter(stream, rowBatchSize: expected.Length, maxParallelism: 2, new ParquetWriterOptions
+                using var writer = new TestIntPipelineWriter(stream, rowBatchSize: expected.Length, maxParallelism: 2, new ParquetWriterOptions
                 {
                     Compression = CompressionKind.Snappy
                 });
@@ -56,7 +56,7 @@ internal sealed class RowApiE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = new TestIntPipelineWriter(stream, rowBatchSize: 8, maxParallelism: 2, new ParquetWriterOptions());
+                using var writer = new TestIntPipelineWriter(stream, rowBatchSize: 8, maxParallelism: 2, new ParquetWriterOptions());
                 for (var i = 0; i < expected.Length; i++)
                 {
                     ref var value = ref writer.GetValue();
@@ -87,7 +87,7 @@ internal sealed class RowApiE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = new TestIntPipelineWriter(stream, rowBatchSize: 4, maxParallelism: 2, new ParquetWriterOptions
+                using var writer = new TestIntPipelineWriter(stream, rowBatchSize: 4, maxParallelism: 2, new ParquetWriterOptions
                 {
                     Compression = CompressionKind.Snappy
                 });
@@ -123,7 +123,7 @@ internal sealed class RowApiE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = new BlockingTestIntPipelineWriter(stream, rowBatchSize: 1, maxParallelism: 1,
+                using var writer = new BlockingTestIntPipelineWriter(stream, rowBatchSize: 1, maxParallelism: 1,
                     new ParquetWriterOptions(), serializeStarted, releaseSerialize);
 
                 ref var value = ref writer.GetValue();
@@ -171,7 +171,7 @@ internal sealed class RowApiE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = new BlockingFiveColumnPipelineWriter(stream, rowBatchSize: 1, maxParallelism: 2,
+                using var writer = new BlockingFiveColumnPipelineWriter(stream, rowBatchSize: 1, maxParallelism: 2,
                     new ParquetWriterOptions(), serializeStarted, releaseSerialize);
 
                 writer.SetCurrentRow(expected[0][0]);

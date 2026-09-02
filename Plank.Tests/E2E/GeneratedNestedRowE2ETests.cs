@@ -18,7 +18,7 @@ internal sealed class GeneratedNestedRowE2ETests
         {
             using (var writeStream = File.Create(path))
             {
-                var writer = GeneratedNestedRowSchema.CreateRowWriter(writeStream, maxParallelism: 1,
+                using var writer = GeneratedNestedRowSchema.CreateRowWriter(writeStream, maxParallelism: 1,
                     new ParquetWriterOptions
                     {
                         Compression = CompressionKind.None,

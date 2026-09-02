@@ -1,4 +1,5 @@
 using Plank.Schema;
+using Plank.Tests.E2E;
 using Plank.Writing;
 
 namespace Plank.Tests.Writer;
@@ -6,6 +7,9 @@ namespace Plank.Tests.Writer;
 [NotInParallel]
 internal sealed class WriterAllocationTests
 {
+    [ThreadStatic]
+    static WorkerAllocationTracker? _currentWorkerAllocationTracker;
+
     // Snappier 1.3.1 creates per-operation compressor state. Remove this budget when its reusable API ships.
     const long ManagedSnappyAllocationBudget = 48;
 
@@ -23,6 +27,48 @@ internal sealed class WriterAllocationTests
         ParquetDataPageVersion.V1,
         ParquetDataPageVersion.V2
     ];
+
+    [Test]
+    public void GeneratedWriterReuseDoesNotAllocateAfterWarmup()
+    {
+        const int rowCount = 4096;
+        var tracker = new WorkerAllocationTracker();
+        using var stream = new WorkerAllocationTrackingStream(capacity: 4 * 1024 * 1024);
+        using var writer = WideRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
+        {
+            RowApiMaxParallelism = 1,
+            RowApiInitialRowCapacity = rowCount,
+            TargetRowGroupSizeBytes = 128UL * 1024 * 1024,
+            Compression = CompressionKind.None,
+            Execution = new ParquetExecutionOptions
+            {
+                WorkerCount = 1,
+                OnWorkerStarted = _ => tracker.StartCurrentThread()
+            }
+        });
+
+        WriteGeneratedFile(writer, rowCount);
+        for (var i = 0; i < 8; i++)
+        {
+            writer.Reset(stream);
+            WriteGeneratedFile(writer, rowCount);
+        }
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var workerBefore = tracker.LastAllocatedBytes;
+        var producerBefore = GC.GetAllocatedBytesForCurrentThread();
+        writer.Reset(stream);
+        WriteGeneratedFile(writer, rowCount);
+        var producerAllocated = GC.GetAllocatedBytesForCurrentThread() - producerBefore;
+        var workerAllocated = tracker.LastAllocatedBytes - workerBefore;
+
+        if (producerAllocated != 0 || workerAllocated != 0 || tracker.StartCount != 1)
+            throw new InvalidOperationException(
+                $"Expected zero allocations and one persistent worker while reusing a generated writer but saw {producerAllocated} producer bytes, {workerAllocated} worker bytes, and {tracker.StartCount} worker starts.");
+    }
 
     [Test]
     public void NonDictionaryWriteChainDoesNotAllocateAfterWarmup()
@@ -324,6 +370,83 @@ internal sealed class WriterAllocationTests
         for (var i = 0; i < result.Length; i++)
             result[i] = i;
         return result;
+    }
+
+    static void WriteGeneratedFile(WideRowSchema.PipelineWriter writer, int rowCount)
+    {
+        for (var i = 0; i < rowCount; i++)
+            writer.GetRow();
+        writer.Complete();
+    }
+
+    sealed class WorkerAllocationTracker
+    {
+        long _lastAllocatedBytes;
+        int _startCount;
+
+        internal long LastAllocatedBytes
+            => Volatile.Read(ref _lastAllocatedBytes);
+
+        internal int StartCount
+            => Volatile.Read(ref _startCount);
+
+        internal void StartCurrentThread()
+        {
+            Interlocked.Increment(ref _startCount);
+            _currentWorkerAllocationTracker = this;
+        }
+
+        internal void RecordCurrentThread()
+            => Volatile.Write(ref _lastAllocatedBytes, GC.GetAllocatedBytesForCurrentThread());
+    }
+
+    sealed class WorkerAllocationTrackingStream : Stream
+    {
+        readonly MemoryStream _stream;
+
+        internal WorkerAllocationTrackingStream(int capacity)
+            => _stream = new MemoryStream(capacity);
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => true;
+
+        public override bool CanWrite => true;
+
+        public override long Length => _stream.Length;
+
+        public override long Position
+        {
+            get => _stream.Position;
+            set => _stream.Position = value;
+        }
+
+        public override void Flush()
+            => _stream.Flush();
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => _stream.Seek(offset, origin);
+
+        public override void SetLength(long value)
+            => _stream.SetLength(value);
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => Write(buffer.AsSpan(offset, count));
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            _stream.Write(buffer);
+            _currentWorkerAllocationTracker?.RecordCurrentThread();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            // Completion closes each logical file; keep the preallocated test stream reusable across cycles.
+            base.Dispose(disposing);
+        }
     }
 
     static int?[] CreateOptionalValues(int count)

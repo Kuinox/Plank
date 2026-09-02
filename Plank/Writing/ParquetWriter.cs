@@ -162,9 +162,17 @@ public sealed class ParquetWriter : IDisposable
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(stream);
-        if (_destination is StreamParquetSource streamSource && ReferenceEquals(stream, streamSource.Stream))
+        if (_destination is StreamParquetSource streamSource)
         {
-            Reset(_destination);
+            if (ReferenceEquals(stream, streamSource.Stream))
+            {
+                Reset(_destination);
+                return;
+            }
+
+            CloseCurrentFile();
+            streamSource.Reset(stream);
+            OpenFile(_destination);
             return;
         }
 
