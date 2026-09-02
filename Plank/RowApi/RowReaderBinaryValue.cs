@@ -8,18 +8,19 @@ namespace Plank.RowApi;
 public readonly ref struct RowReaderBinaryValue
 {
     readonly RowApiBinaryColumnReadState? _state;
-    readonly int _index;
+    readonly ReadOnlySpan<byte> _value;
 
-    internal RowReaderBinaryValue(RowApiBinaryColumnReadState state, int index, bool isNull)
+    internal RowReaderBinaryValue(RowApiBinaryColumnReadState state, ReadOnlySpan<byte> value,
+        bool isNull)
     {
         _state = state;
-        _index = index;
+        _value = value;
         IsNull = isNull;
     }
 
     /// <summary>Gets the current byte value.</summary>
     public ReadOnlySpan<byte> Value
-        => _state is null || _index < 0 || IsNull ? [] : _state.GetValue(_index);
+        => _value;
 
     /// <summary>Gets the current byte value.</summary>
     public ReadOnlySpan<byte> Span
@@ -42,5 +43,5 @@ public readonly ref struct RowReaderBinaryValue
     /// is null or empty. Dispose the returned buffer when it is no longer needed.
     /// </returns>
     public ParquetBuffer Retain()
-        => _state is null || _index < 0 || IsNull ? default : _state.RetainValue(_index);
+        => _state is null || IsNull ? default : _state.RetainCurrentValue();
 }
