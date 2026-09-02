@@ -26,14 +26,6 @@ public readonly ref struct RowReaderBinaryValue
     public ReadOnlySpan<byte> Value
         => _value;
 
-    /// <summary>Gets the number of bytes in the current value.</summary>
-    public int Length
-        => _value.Length;
-
-    /// <summary>Gets whether the current value contains no bytes.</summary>
-    public bool IsEmpty
-        => _value.IsEmpty;
-
     /// <summary>Gets whether the current value is null.</summary>
     public bool IsNull
         => Unsafe.IsNullRef(ref MemoryMarshal.GetReference(_value));
