@@ -13,6 +13,9 @@ public sealed class ParquetReaderOptions
     // RowReaderCore exposes writable refs to its current values and therefore opts out of read-only views.
     internal bool BorrowRequiredPlainValues { get; init; } = true;
 
+    // Generated binary properties are read-only spans, so the row API can point them at array-backed pages.
+    internal bool BorrowBinaryValues { get; init; }
+
     internal void Validate()
     {
         ArgumentNullException.ThrowIfNull(BufferPool);

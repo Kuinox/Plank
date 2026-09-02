@@ -837,18 +837,28 @@ static class NestedParquetRowEmitter
             var leaf = root.Leaves[0];
             if (leaf.Node.Scalar!.IsBinary)
             {
-                builder.Append("        public ").Append(root.UserType).Append(' ')
-                    .Append(EscapeIdentifier(root.PropertyName)).AppendLine();
-                builder.AppendLine("        {");
-                builder.AppendLine("            get");
-                builder.AppendLine("            {");
-                builder.Append("                var value = _core.GetCurrentBinary(").Append(leaf.DescriptorName)
-                    .AppendLine(");");
-                builder.AppendLine("                if (value.IsNull) return default!;");
-                builder.Append("                return ").Append(ConvertBinaryFromSpan(leaf.Node.Scalar, "value.Value"))
-                    .AppendLine(";");
-                builder.AppendLine("            }");
-                builder.AppendLine("        }");
+                if (IsRetainableBinary(leaf.Node.Scalar))
+                {
+                    builder.Append("        public global::Plank.RowApi.RowReaderBinaryValue ")
+                        .Append(EscapeIdentifier(root.PropertyName)).AppendLine();
+                    builder.Append("            => _core.GetCurrentBinary(").Append(leaf.DescriptorName)
+                        .AppendLine(");");
+                }
+                else
+                {
+                    builder.Append("        public ").Append(root.UserType).Append(' ')
+                        .Append(EscapeIdentifier(root.PropertyName)).AppendLine();
+                    builder.AppendLine("        {");
+                    builder.AppendLine("            get");
+                    builder.AppendLine("            {");
+                    builder.Append("                var value = _core.GetCurrentBinary(").Append(leaf.DescriptorName)
+                        .AppendLine(");");
+                    builder.AppendLine("                if (value.IsNull) return default!;");
+                    builder.Append("                return ").Append(ConvertBinaryFromSpan(leaf.Node.Scalar, "value.Value"))
+                        .AppendLine(";");
+                    builder.AppendLine("            }");
+                    builder.AppendLine("        }");
+                }
             }
             else
             {
@@ -898,7 +908,7 @@ static class NestedParquetRowEmitter
         for (var i = 0; i < model.Leaves.Length; i++)
         {
             var leaf = model.Leaves[i];
-            if (leaf.UsesNestedDescriptor || !leaf.Node.Scalar!.IsBinary)
+            if (leaf.Root.Kind == NodeKind.Leaf || leaf.UsesNestedDescriptor || !leaf.Node.Scalar!.IsBinary)
                 continue;
 
             builder.AppendLine();
@@ -1500,6 +1510,9 @@ static class NestedParquetRowEmitter
             "global::System.Guid" => $"new global::System.Guid({expression}, bigEndian: true)",
             _ => $"{expression}.ToArray()"
         };
+
+    static bool IsRetainableBinary(Scalar scalar)
+        => scalar.NonNullableUserType is "byte[]" or "global::System.ReadOnlyMemory<byte>";
 
     static Leaf? FindPresenceLeaf(Node node)
         => node.Leaves.FirstOrDefault(leaf => leaf.Node.Kind == NodeKind.Leaf && !leaf.Node.Optional);

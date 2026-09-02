@@ -23,7 +23,7 @@ readonly struct VariableLengthColumnBufferEnumerable<T>
             {
                 var current = _inner.Current;
                 return new ColumnBuffer<T>(current.NativeValues, current.ValueCount,
-                    isVariableLength: true);
+                    isVariableLength: true, current.VariableLengthBorrowedPayload);
             }
         }
 

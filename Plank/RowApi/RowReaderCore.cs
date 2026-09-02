@@ -169,7 +169,12 @@ public sealed class RowReaderCore : IDisposable
     {
         ThrowIfNotPositioned();
         var state = GetBinaryState(column);
-        return new RowReaderBinaryValue(state.CurrentValue, state.CurrentIsNull);
+        var value = state.CurrentValue;
+        if (!value.IsEmpty)
+            return new RowReaderBinaryValue(value);
+        return new RowReaderBinaryValue(state.CurrentIsNull
+            ? default
+            : RowReaderBinaryValue.NonNullEmpty);
     }
 
     /// <summary>Gets an allocating generated nested property's current leaf shape.</summary>
@@ -227,7 +232,8 @@ public sealed class RowReaderCore : IDisposable
             BufferPool = options.BufferPool,
             Strict = false,
             VerifyPageCrc = options.VerifyPageCrc,
-            BorrowRequiredPlainValues = false
+            BorrowRequiredPlainValues = false,
+            BorrowBinaryValues = true
         };
 
     void ApplyProjection(RowApiColumnDescriptor[]? projection)

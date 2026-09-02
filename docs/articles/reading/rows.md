@@ -31,7 +31,23 @@ while (reader.MoveNext())
 ```
 
 > [!NOTE]
-> A row is a temporary view over the reader's current buffers. Read its properties before advancing the reader. Copy any reference-backed value that must outlive the current iteration.
+> A row is a temporary view over the reader's current buffers. Read its properties before advancing the reader. Binary properties return a scoped value whose bytes must be consumed before the reader advances.
+
+For example, a schema property named `Payload` exposes its current bytes through `Value`, along with its null state. Process the span in the reading loop:
+
+```csharp
+while (reader.MoveNext())
+{
+    EventSchema.ReadRow row = reader.Current;
+    RowReaderBinaryValue value = row.Payload;
+    if (value.IsNull)
+        continue;
+
+    ConsumeNow(value.Value);
+}
+```
+
+When the bytes must outlive the current iteration, copy the span into caller-owned storage before advancing the reader.
 
 ## Read selected properties
 
