@@ -3,7 +3,7 @@ namespace Plank.SourceGen.Tests;
 internal sealed class BinaryRowReaderGenerationTests
 {
     [Test]
-    public async Task FlatBinaryRowsExposeRetainableValues()
+    public async Task FlatBinaryRowsExposeScopedValues()
     {
         const string source = """
             using Plank.Schema;

@@ -106,7 +106,6 @@ Plank.RowApi.RowReaderBinaryValue
 Plank.RowApi.RowReaderBinaryValue.IsEmpty.get -> bool
 Plank.RowApi.RowReaderBinaryValue.IsNull.get -> bool
 Plank.RowApi.RowReaderBinaryValue.Length.get -> int
-Plank.RowApi.RowReaderBinaryValue.Retain() -> Plank.ParquetBuffer
 Plank.RowApi.RowReaderBinaryValue.RowReaderBinaryValue() -> void
 Plank.RowApi.RowReaderBinaryValue.Span.get -> System.ReadOnlySpan<byte>
 Plank.RowApi.RowReaderBinaryValue.Value.get -> System.ReadOnlySpan<byte>

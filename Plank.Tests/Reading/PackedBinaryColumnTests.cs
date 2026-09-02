@@ -135,7 +135,6 @@ internal sealed class PackedBinaryColumnTests
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-binary-value-{Guid.NewGuid():N}.parquet");
         ParquetBuffer retained = default;
-        var retainedValues = new ParquetBuffer[expected.Length];
         ColumnBuffer<byte> actual = default;
         try
         {
@@ -158,8 +157,6 @@ internal sealed class PackedBinaryColumnTests
                         throw new InvalidOperationException("Expected a binary value buffer.");
                     actual = buffers.Current;
                     retained = actual.Retain();
-                    for (var i = 0; i < retainedValues.Length; i++)
-                        retainedValues[i] = actual.RetainValue(i);
                 }
                 finally
                 {
@@ -191,23 +188,15 @@ internal sealed class PackedBinaryColumnTests
                 {
                     if (!actual.IsNull(i))
                         throw new InvalidOperationException($"Binary value {i} should be null.");
-                    if (!retainedValues[i].IsEmpty)
-                        throw new InvalidOperationException($"Retaining null binary value {i} should return an empty buffer.");
                     continue;
                 }
 
                 if (actual.IsNull(i) || !actual.GetValue(i).SequenceEqual(expected[i]))
                     throw new InvalidOperationException($"Binary value {i} did not round-trip.");
-
-                if (retainedValues[i].Length != expected[i]!.Length ||
-                    !retainedValues[i].Span.SequenceEqual(expected[i]))
-                    throw new InvalidOperationException($"Retained binary value {i} was not an exact value slice.");
             }
         }
         finally
         {
-            for (var i = 0; i < retainedValues.Length; i++)
-                retainedValues[i].Dispose();
             retained.Dispose();
             File.Delete(path);
         }

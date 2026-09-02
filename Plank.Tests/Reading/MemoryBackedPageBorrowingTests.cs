@@ -94,7 +94,7 @@ internal sealed class MemoryBackedPageBorrowingTests
     [Test]
     [Arguments(ParquetDataPageVersion.V1)]
     [Arguments(ParquetDataPageVersion.V2)]
-    public void GeneratedUtf8RowsBorrowByteArrayPayloadsAndRetainExactValues(
+    public void GeneratedUtf8RowsBorrowByteArrayPayloads(
         ParquetDataPageVersion pageVersion)
     {
         const int valueLength = 4_099;
@@ -122,51 +122,35 @@ internal sealed class MemoryBackedPageBorrowingTests
         BorrowedUtf8RowSchema.Projection projection, EncodingKind encoding, GetUtf8Value getValue)
     {
         var pool = new TrackingBufferPool();
-        ParquetBuffer retained = default;
-        try
+        using var source = new MemoryReadSource(file);
+        using var reader = BorrowedUtf8RowSchema.CreateRowReader(source, projection,
+            new RowReaderOptions { BufferPool = pool });
+        pool.Reset();
+        var index = 0;
+        while (reader.MoveNext())
         {
-            using (var source = new MemoryReadSource(file))
-            using (var reader = BorrowedUtf8RowSchema.CreateRowReader(source, projection,
-                       new RowReaderOptions { BufferPool = pool }))
-            {
-                pool.Reset();
-                var index = 0;
-                while (reader.MoveNext())
-                {
-                    var row = reader.Current;
-                    var expectedValue = expected[index];
-                    var actualValue = getValue(row);
-                    if (actualValue.IsNull != !expectedValue.HasValue)
-                        throw new InvalidOperationException(
-                            $"{encoding} returned the wrong null state at row {index}.");
-                    if (expectedValue.HasValue &&
-                        !actualValue.Span.SequenceEqual(expectedValue.Value.Span))
-                        throw new InvalidOperationException(
-                            $"{encoding} returned the wrong bytes at row {index}.");
-
-                    if (index == 0)
-                    {
-                        if (encoding != EncodingKind.DeltaByteArray &&
-                            pool.LargestRent >= expectedValue!.Value.Length)
-                            throw new InvalidOperationException(
-                                $"{encoding} rented a {pool.LargestRent}-byte decoded payload copy.");
-                        retained = actualValue.Retain();
-                    }
-                    index++;
-                }
-                if (index != expected.Length)
-                    throw new InvalidOperationException(
-                        $"{encoding} returned {index} rows instead of {expected.Length}.");
-            }
-
-            if (!retained.Span.SequenceEqual(expected[0]!.Value.Span))
+            var row = reader.Current;
+            var expectedValue = expected[index];
+            var actualValue = getValue(row);
+            if (actualValue.IsNull != !expectedValue.HasValue)
                 throw new InvalidOperationException(
-                    $"The retained {encoding} value changed after disposing the reader.");
+                    $"{encoding} returned the wrong null state at row {index}.");
+            if (expectedValue.HasValue &&
+                !actualValue.Span.SequenceEqual(expectedValue.Value.Span))
+                throw new InvalidOperationException(
+                    $"{encoding} returned the wrong bytes at row {index}.");
+
+            if (index == 0 && encoding != EncodingKind.DeltaByteArray &&
+                pool.LargestRent >= expectedValue!.Value.Length)
+            {
+                throw new InvalidOperationException(
+                    $"{encoding} rented a {pool.LargestRent}-byte decoded payload copy.");
+            }
+            index++;
         }
-        finally
-        {
-            retained.Dispose();
-        }
+        if (index != expected.Length)
+            throw new InvalidOperationException(
+                $"{encoding} returned {index} rows instead of {expected.Length}.");
     }
 
     static byte[] CreateUtf8File(ReadOnlyMemory<byte>?[] values,

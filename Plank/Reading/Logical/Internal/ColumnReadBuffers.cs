@@ -27,8 +27,8 @@ struct ColumnReadBuffers<T>
         => new(Values, valueCount);
 
     internal ColumnBuffer<T> CreateBorrowedBinaryBuffer(int valueCount,
-        ReadOnlyMemory<byte> payload, IParquetBufferPool bufferPool)
-        => new(Values, valueCount, payload, bufferPool);
+        ReadOnlyMemory<byte> payload)
+        => new(Values, valueCount, payload);
 
     internal Span<BinaryValueDescriptor> GetBinaryValues(int valueCount, int payloadByteLength,
         IParquetBufferPool bufferPool, out Span<byte> payload)

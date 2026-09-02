@@ -32,10 +32,10 @@ while (reader.MoveNext())
 
 > [!NOTE]
 > A row is a temporary view over the reader's current buffers. Read its properties before advancing the reader.
-> Binary properties return a scoped value whose bytes can be retained when they must outlive the current iteration.
+> Binary properties return a scoped value whose bytes must be consumed before the reader advances.
 
 For example, a schema property named `Payload` exposes its current bytes through `Span`, along with
-its null state and a `Retain()` operation. Retain the current value only when ownership is required:
+its null state. Process the span in the reading loop:
 
 ```csharp
 while (reader.MoveNext())
@@ -46,13 +46,11 @@ while (reader.MoveNext())
         continue;
 
     ConsumeNow(value.Span);
-    using ParquetBuffer payload = value.Retain();
-    ConsumeLater(payload.Span);
 }
 ```
 
-The retained buffer is an exact slice of the current value and remains valid after the reader
-advances. Dispose it when it is no longer needed.
+When the bytes must outlive the current iteration, copy the span into caller-owned storage before
+advancing the reader.
 
 ## Read selected properties
 

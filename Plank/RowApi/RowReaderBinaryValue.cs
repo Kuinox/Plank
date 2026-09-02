@@ -3,10 +3,10 @@ using System.Runtime.InteropServices;
 
 namespace Plank.RowApi;
 
-/// <summary>Provides a generated binary property's current zero-copy value and ownership operation.</summary>
+/// <summary>Provides a generated binary property's current zero-copy value.</summary>
 /// <remarks>
-/// The value is a temporary view over the row reader's current buffers. Call <see cref="Retain"/>
-/// before advancing the reader when the bytes must remain available independently.
+/// The value is a temporary view over the row reader's current buffers and must be consumed before
+/// advancing the reader. Copy the span into caller-owned storage when the bytes must remain available.
 /// </remarks>
 public readonly ref struct RowReaderBinaryValue
 {
@@ -42,18 +42,4 @@ public readonly ref struct RowReaderBinaryValue
     public bool IsNull
         => Unsafe.IsNullRef(ref MemoryMarshal.GetReference(_value));
 
-    /// <summary>Retains the current value independently of the row reader's position.</summary>
-    /// <returns>
-    /// A reference-counted buffer containing the current value, or an empty buffer when the value
-    /// is null or empty. Dispose the returned buffer when it is no longer needed.
-    /// </returns>
-    public ParquetBuffer Retain()
-    {
-        if (IsNull || _value.IsEmpty)
-            return default;
-
-        using var rented = DefaultParquetBufferPool.Shared.Rent(checked((uint)_value.Length));
-        _value.CopyTo(rented.Span);
-        return rented.RetainSlice(0, _value.Length);
-    }
 }

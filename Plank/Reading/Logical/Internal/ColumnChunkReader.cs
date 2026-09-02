@@ -2210,7 +2210,7 @@ static class ColumnChunkReader
 
         buffer = borrowedValuePayload.IsEmpty
             ? state.CreateNativeBuffer(valueCount)
-            : state.CreateBorrowedBinaryBuffer(valueCount, borrowedValuePayload, bufferPool);
+            : state.CreateBorrowedBinaryBuffer(valueCount, borrowedValuePayload);
         return true;
     }
 
