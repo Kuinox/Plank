@@ -99,6 +99,42 @@ public readonly struct ColumnBuffer<T>
         return _nativeValues.RetainSlice(0, byteLength);
     }
 
+    /// <summary>Retains the storage for one value independently of this buffer's enumerator.</summary>
+    /// <param name="index">The zero-based value index.</param>
+    /// <returns>
+    /// A reference-counted buffer containing the selected value, or an empty buffer when the value is null.
+    /// </returns>
+    /// <remarks>
+    /// For variable-length byte columns, the returned span is exactly the selected byte value rather than the
+    /// page's descriptor table and combined payload. Dispose the returned buffer when it is no longer needed.
+    /// </remarks>
+    public ParquetBuffer RetainValue(int index)
+    {
+        ValidateIndex(index);
+        if (_isVariableLength)
+        {
+            var descriptor = GetVariableLengthDescriptor(index);
+            if (descriptor.IsNull)
+                return default;
+            var descriptorByteLength = checked(_valueCount * Unsafe.SizeOf<BinaryValueDescriptor>());
+            return _nativeValues.RetainSlice(
+                checked(descriptorByteLength + descriptor.Offset), descriptor.Length);
+        }
+
+        if (Values[index] is null)
+            return default;
+
+        var elementByteLength = Unsafe.SizeOf<T>();
+        var byteOffset = checked(index * elementByteLength);
+        if (!_borrowedValues.IsEmpty)
+        {
+            using var rented = _borrowedBufferPool!.Rent(checked((uint)elementByteLength));
+            _borrowedValues.Span.Slice(byteOffset, elementByteLength).CopyTo(rented.Span);
+            return rented.RetainSlice(0, elementByteLength);
+        }
+        return _nativeValues.RetainSlice(byteOffset, elementByteLength);
+    }
+
     internal int ValueCount
         => _valueCount;
 

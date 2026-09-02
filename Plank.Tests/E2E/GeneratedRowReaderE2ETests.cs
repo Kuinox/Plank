@@ -250,6 +250,43 @@ internal sealed class GeneratedRowReaderE2ETests
     }
 
     [Test]
+    public void GeneratedRowReaderCanRetainBinaryValueWithoutCopying()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"plank-generated-row-reader-retain-{Guid.NewGuid():N}.parquet");
+        ParquetBuffer retained = default;
+
+        try
+        {
+            WriteEncodedRows(path);
+
+            using (var stream = File.OpenRead(path))
+            using (var reader = EncodedRowSchema.CreateRowReader(stream))
+            {
+                if (!reader.MoveNext())
+                    throw new InvalidOperationException("Expected a generated row.");
+
+                var row = reader.Current;
+                retained = row.RetainPayload();
+                if (retained.Length != row.Payload.Length || !retained.Span.SequenceEqual(row.Payload))
+                    throw new InvalidOperationException("The retained payload was not the exact current value.");
+
+                while (reader.MoveNext())
+                {
+                }
+            }
+
+            if (!retained.Span.SequenceEqual(new byte[] { 1, 2 }))
+                throw new InvalidOperationException("The retained payload changed after disposing the reader.");
+        }
+        finally
+        {
+            retained.Dispose();
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
     public void GeneratedRowReaderResolvesReorderedFileColumns()
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-generated-row-reader-reordered-{Guid.NewGuid():N}.parquet");

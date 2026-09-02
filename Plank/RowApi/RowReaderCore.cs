@@ -169,7 +169,7 @@ public sealed class RowReaderCore : IDisposable
     {
         ThrowIfNotPositioned();
         var state = GetBinaryState(column);
-        return new RowReaderBinaryValue(state.CurrentValue, state.CurrentIsNull);
+        return state.CurrentValue;
     }
 
     /// <summary>Gets an allocating generated nested property's current leaf shape.</summary>

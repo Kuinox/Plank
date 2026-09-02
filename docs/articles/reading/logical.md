@@ -117,11 +117,10 @@ foreach (ColumnBuffer<int> buffer in rowGroup.IdColumn)
 [`Retain`](xref:Plank.Reading.Logical.ColumnBuffer`1.Retain) returns a reference-counted
 [`ParquetBuffer`](xref:Plank.Writing.ParquetBuffer); dispose it when it is no longer needed.
 
-Keep a binary `ColumnBuffer<byte>` value and its retained lease
-together while accessing values:
+Retain one binary value directly when only that value must outlive the enumeration step:
 
 ```csharp
 ColumnBuffer<byte> buffer = binaryBuffers.Current;
-using ParquetBuffer retained = buffer.Retain();
-Consume(buffer.GetValue(0));
+using ParquetBuffer retained = buffer.RetainValue(0);
+Consume(retained.Span);
 ```
