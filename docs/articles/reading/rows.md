@@ -32,16 +32,21 @@ while (reader.MoveNext())
 
 > [!NOTE]
 > A row is a temporary view over the reader's current buffers. Read its properties before advancing the reader.
-> Binary properties expose a `Retain<Property>()` method when their bytes must outlive the current iteration.
+> Binary properties return a scoped value whose bytes can be retained when they must outlive the current iteration.
 
-For example, a schema property named `Payload` exposes its current bytes as a zero-copy
-`ReadOnlySpan<byte>`. Retain the current value only when ownership is required:
+For example, a schema property named `Payload` exposes its current bytes through `Span`, along with
+its null state and a `Retain()` operation. Retain the current value only when ownership is required:
 
 ```csharp
 while (reader.MoveNext())
 {
     EventSchema.ReadRow row = reader.Current;
-    using ParquetBuffer payload = row.RetainPayload();
+    RowReaderBinaryValue value = row.Payload;
+    if (value.IsNull)
+        continue;
+
+    ConsumeNow(value.Span);
+    using ParquetBuffer payload = value.Retain();
     ConsumeLater(payload.Span);
 }
 ```

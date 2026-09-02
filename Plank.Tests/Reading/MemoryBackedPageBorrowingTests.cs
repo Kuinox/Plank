@@ -107,26 +107,19 @@ internal sealed class MemoryBackedPageBorrowingTests
 
         var file = CreateUtf8File(values, pageVersion);
         AssertBorrowedUtf8Column(file, values, BorrowedUtf8RowSchema.Projection.Plain,
-            EncodingKind.Plain, static row => row.Plain, static row => row.PlainIsNull,
-            static row => row.RetainPlain());
+            EncodingKind.Plain, static row => row.Plain);
         AssertBorrowedUtf8Column(file, values, BorrowedUtf8RowSchema.Projection.Dictionary,
-            EncodingKind.RleDictionary, static row => row.Dictionary,
-            static row => row.DictionaryIsNull, static row => row.RetainDictionary());
+            EncodingKind.RleDictionary, static row => row.Dictionary);
         AssertBorrowedUtf8Column(file, values, BorrowedUtf8RowSchema.Projection.DeltaLength,
-            EncodingKind.DeltaLengthByteArray, static row => row.DeltaLength,
-            static row => row.DeltaLengthIsNull, static row => row.RetainDeltaLength());
+            EncodingKind.DeltaLengthByteArray, static row => row.DeltaLength);
         AssertBorrowedUtf8Column(file, values, BorrowedUtf8RowSchema.Projection.DeltaByte,
-            EncodingKind.DeltaByteArray, static row => row.DeltaByte,
-            static row => row.DeltaByteIsNull, static row => row.RetainDeltaByte());
+            EncodingKind.DeltaByteArray, static row => row.DeltaByte);
     }
 
-    delegate ReadOnlySpan<byte> GetUtf8Value(BorrowedUtf8RowSchema.ReadRow row);
-    delegate bool GetUtf8Null(BorrowedUtf8RowSchema.ReadRow row);
-    delegate ParquetBuffer RetainUtf8Value(BorrowedUtf8RowSchema.ReadRow row);
+    delegate RowReaderBinaryValue GetUtf8Value(BorrowedUtf8RowSchema.ReadRow row);
 
     static void AssertBorrowedUtf8Column(byte[] file, ReadOnlyMemory<byte>?[] expected,
-        BorrowedUtf8RowSchema.Projection projection, EncodingKind encoding, GetUtf8Value getValue,
-        GetUtf8Null getIsNull, RetainUtf8Value retainValue)
+        BorrowedUtf8RowSchema.Projection projection, EncodingKind encoding, GetUtf8Value getValue)
     {
         var pool = new TrackingBufferPool();
         ParquetBuffer retained = default;
@@ -142,10 +135,12 @@ internal sealed class MemoryBackedPageBorrowingTests
                 {
                     var row = reader.Current;
                     var expectedValue = expected[index];
-                    if (getIsNull(row) != !expectedValue.HasValue)
+                    var actualValue = getValue(row);
+                    if (actualValue.IsNull != !expectedValue.HasValue)
                         throw new InvalidOperationException(
                             $"{encoding} returned the wrong null state at row {index}.");
-                    if (expectedValue.HasValue && !getValue(row).SequenceEqual(expectedValue.Value.Span))
+                    if (expectedValue.HasValue &&
+                        !actualValue.Span.SequenceEqual(expectedValue.Value.Span))
                         throw new InvalidOperationException(
                             $"{encoding} returned the wrong bytes at row {index}.");
 
@@ -155,7 +150,7 @@ internal sealed class MemoryBackedPageBorrowingTests
                             pool.LargestRent >= expectedValue!.Value.Length)
                             throw new InvalidOperationException(
                                 $"{encoding} rented a {pool.LargestRent}-byte decoded payload copy.");
-                        retained = retainValue(row);
+                        retained = actualValue.Retain();
                     }
                     index++;
                 }

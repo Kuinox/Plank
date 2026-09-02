@@ -933,18 +933,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             }
             else if (IsUtf8ByteArrayClr(columns[i].ClrTypeName))
             {
-                builder.Append("        public global::System.ReadOnlySpan<byte> ")
+                builder.Append("        public global::Plank.RowApi.RowReaderBinaryValue ")
                     .Append(EscapeIdentifier(propertyName)).AppendLine();
                 builder.Append("            => _core.GetCurrentBinary(").Append(descriptorName)
-                    .AppendLine(").Value;");
-                builder.AppendLine();
-                builder.Append("        public bool ").Append(propertyName).AppendLine("IsNull");
-                builder.Append("            => _core.GetCurrentBinary(").Append(descriptorName)
-                    .AppendLine(").IsNull;");
-                builder.AppendLine();
-                builder.Append("        public global::Plank.ParquetBuffer Retain").Append(propertyName)
-                    .AppendLine("()");
-                builder.Append("            => _core.RetainCurrentBinary(").Append(descriptorName)
                     .AppendLine(");");
             }
             else

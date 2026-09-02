@@ -726,8 +726,9 @@ internal sealed class ReaderAllocationTests
         while (reader.MoveNext())
         {
             var row = reader.Current;
-            if (!row.ValueIsNull)
-                sum += row.Value.Length;
+            var value = row.Value;
+            if (!value.IsNull)
+                sum += value.Length;
         }
         return sum;
     }

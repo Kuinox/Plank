@@ -103,8 +103,12 @@ Plank.RowApi.RowGroupWriterCore<TSlot>.RowGroupWriterCore(Plank.Writing.RowGroup
 Plank.RowApi.RowGroupWriterCore<TSlot>.GetSlotForRow() -> TSlot!
 Plank.RowApi.RowGroupWriterCore<TSlot>.Write() -> void
 Plank.RowApi.RowReaderBinaryValue
+Plank.RowApi.RowReaderBinaryValue.IsEmpty.get -> bool
 Plank.RowApi.RowReaderBinaryValue.IsNull.get -> bool
+Plank.RowApi.RowReaderBinaryValue.Length.get -> int
+Plank.RowApi.RowReaderBinaryValue.Retain() -> Plank.ParquetBuffer
 Plank.RowApi.RowReaderBinaryValue.RowReaderBinaryValue() -> void
+Plank.RowApi.RowReaderBinaryValue.Span.get -> System.ReadOnlySpan<byte>
 Plank.RowApi.RowReaderBinaryValue.Value.get -> System.ReadOnlySpan<byte>
 Plank.RowApi.RowReaderCore
 Plank.RowApi.RowReaderCore.Dispose() -> void
@@ -112,7 +116,6 @@ Plank.RowApi.RowReaderCore.GetCurrent<T>(Plank.RowApi.RowApiColumnDescriptor<T>!
 Plank.RowApi.RowReaderCore.GetCurrent<T>(int columnIndex) -> T
 Plank.RowApi.RowReaderCore.GetCurrentBinary<T>(Plank.RowApi.RowApiColumnDescriptor<T>! column) -> Plank.RowApi.RowReaderBinaryValue
 Plank.RowApi.RowReaderCore.MoveNext() -> bool
-Plank.RowApi.RowReaderCore.RetainCurrentBinary<T>(Plank.RowApi.RowApiColumnDescriptor<T>! column) -> Plank.ParquetBuffer
 Plank.RowApi.RowReaderCore.Reset(Plank.Reading.IParquetReadSource! source, Plank.RowApi.RowApiColumnDescriptor![]? projection, Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null) -> void
 Plank.RowApi.RowReaderCore.Reset(System.IO.Stream! stream, Plank.RowApi.RowApiColumnDescriptor![]? projection, Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution = null) -> void
 Plank.RowApi.RowReaderCore.RowReaderCore(Plank.Reading.IParquetReadSource! source, Plank.Schema.ParquetSchema! schema, Plank.RowApi.RowApiColumnDescriptor![]! columns, Plank.RowApi.RowApiColumnDescriptor![]? projection, Plank.RowApi.RowReaderOptions! options, Plank.Reading.ParquetSchemaEvolutionOptions? schemaEvolution) -> void
@@ -370,7 +373,6 @@ Plank.Reading.Logical.ColumnBuffer<T>.ColumnBuffer() -> void
 Plank.Reading.Logical.ColumnBuffer<T>.GetValue(int index) -> System.ReadOnlySpan<T>
 Plank.Reading.Logical.ColumnBuffer<T>.IsNull(int index) -> bool
 Plank.Reading.Logical.ColumnBuffer<T>.Retain() -> Plank.ParquetBuffer
-Plank.Reading.Logical.ColumnBuffer<T>.RetainValue(int index) -> Plank.ParquetBuffer
 Plank.Reading.Logical.ColumnBuffer<T>.Values.get -> System.ReadOnlySpan<T>
 Plank.Reading.Logical.RowGroup
 Plank.Reading.Logical.RowGroup.ColumnChunkOffset.get -> ulong

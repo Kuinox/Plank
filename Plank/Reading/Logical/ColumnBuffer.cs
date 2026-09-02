@@ -161,7 +161,7 @@ public readonly struct ColumnBuffer<T>
     /// For variable-length byte columns, the returned span is exactly the selected byte value rather than the
     /// page's descriptor table and combined payload. Dispose the returned buffer when it is no longer needed.
     /// </remarks>
-    public ParquetBuffer RetainValue(int index)
+    internal ParquetBuffer RetainValue(int index)
     {
         ValidateIndex(index);
         if (_isVariableLength)

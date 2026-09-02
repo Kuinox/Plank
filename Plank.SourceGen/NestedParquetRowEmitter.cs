@@ -839,18 +839,9 @@ static class NestedParquetRowEmitter
             {
                 if (IsRetainableBinary(leaf.Node.Scalar))
                 {
-                    builder.Append("        public global::System.ReadOnlySpan<byte> ")
+                    builder.Append("        public global::Plank.RowApi.RowReaderBinaryValue ")
                         .Append(EscapeIdentifier(root.PropertyName)).AppendLine();
                     builder.Append("            => _core.GetCurrentBinary(").Append(leaf.DescriptorName)
-                        .AppendLine(").Value;");
-                    builder.AppendLine();
-                    builder.Append("        public bool ").Append(root.PropertyName).AppendLine("IsNull");
-                    builder.Append("            => _core.GetCurrentBinary(").Append(leaf.DescriptorName)
-                        .AppendLine(").IsNull;");
-                    builder.AppendLine();
-                    builder.Append("        public global::Plank.ParquetBuffer Retain").Append(root.PropertyName)
-                        .AppendLine("()");
-                    builder.Append("            => _core.RetainCurrentBinary(").Append(leaf.DescriptorName)
                         .AppendLine(");");
                 }
                 else

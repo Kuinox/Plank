@@ -3,7 +3,7 @@ namespace Plank.SourceGen.Tests;
 internal sealed class BinaryRowReaderGenerationTests
 {
     [Test]
-    public async Task FlatBinaryRowsExposeRetainedBuffers()
+    public async Task FlatBinaryRowsExposeRetainableValues()
     {
         const string source = """
             using Plank.Schema;
@@ -21,9 +21,12 @@ internal sealed class BinaryRowReaderGenerationTests
         await Assert.That(result.CompilationDiagnostics.Where(static diagnostic =>
             diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)).IsEmpty();
         var generated = result.GeneratedSources.Single().Text;
-        await Assert.That(generated).Contains("public global::System.ReadOnlySpan<byte> Payload");
-        await Assert.That(generated).Contains("public global::Plank.ParquetBuffer RetainPayload()");
-        await Assert.That(generated).Contains("=> _core.RetainCurrentBinary(s_PayloadRowApiColumn);");
+        await Assert.That(generated).Contains(
+            "public global::Plank.RowApi.RowReaderBinaryValue Payload");
+        await Assert.That(generated).Contains(
+            "=> _core.GetCurrentBinary(s_PayloadRowApiColumn);");
+        await Assert.That(generated).DoesNotContain("RetainPayload()");
+        await Assert.That(generated).DoesNotContain("PayloadIsNull");
     }
 
     [Test]
@@ -46,9 +49,12 @@ internal sealed class BinaryRowReaderGenerationTests
         await Assert.That(result.CompilationDiagnostics.Where(static diagnostic =>
             diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)).IsEmpty();
         var generated = result.GeneratedSources.Single().Text;
-        await Assert.That(generated).Contains("public global::System.ReadOnlySpan<byte> Payload");
-        await Assert.That(generated).Contains("public global::Plank.ParquetBuffer RetainPayload()");
-        await Assert.That(generated).Contains("=> _core.RetainCurrentBinary(s_PayloadRowApiColumn);");
+        await Assert.That(generated).Contains(
+            "public global::Plank.RowApi.RowReaderBinaryValue Payload");
+        await Assert.That(generated).Contains(
+            "=> _core.GetCurrentBinary(s_PayloadRowApiColumn);");
+        await Assert.That(generated).DoesNotContain("RetainPayload()");
+        await Assert.That(generated).DoesNotContain("PayloadIsNull");
         await Assert.That(generated).DoesNotContain("return value.Value.ToArray();");
     }
 }

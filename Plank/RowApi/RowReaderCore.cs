@@ -168,18 +168,7 @@ public sealed class RowReaderCore : IDisposable
     public RowReaderBinaryValue GetCurrentBinary<T>(RowApiColumnDescriptor<T> column)
     {
         ThrowIfNotPositioned();
-        var state = GetBinaryState(column);
-        return new RowReaderBinaryValue(state.CurrentValue, state.CurrentIsNull);
-    }
-
-    /// <summary>Retains the current value for a generated variable-length byte column.</summary>
-    /// <typeparam name="T">The column's generated CLR binary type.</typeparam>
-    /// <param name="column">The generated property column.</param>
-    /// <returns>A reference-counted buffer containing the current value, or an empty buffer for a null value.</returns>
-    public ParquetBuffer RetainCurrentBinary<T>(RowApiColumnDescriptor<T> column)
-    {
-        ThrowIfNotPositioned();
-        return GetBinaryState(column).RetainCurrentValue();
+        return GetBinaryState(column).CurrentValue;
     }
 
     /// <summary>Gets an allocating generated nested property's current leaf shape.</summary>
