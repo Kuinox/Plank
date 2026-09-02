@@ -55,6 +55,6 @@ internal sealed class BinaryRowReaderGenerationTests
             "=> _core.GetCurrentBinary(s_PayloadRowApiColumn);");
         await Assert.That(generated).DoesNotContain("RetainPayload()");
         await Assert.That(generated).DoesNotContain("PayloadIsNull");
-        await Assert.That(generated).DoesNotContain("return value.Value.ToArray();");
+        await Assert.That(generated).DoesNotContain("return value.Span.ToArray();");
     }
 }

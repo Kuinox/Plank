@@ -108,7 +108,6 @@ Plank.RowApi.RowReaderBinaryValue.IsNull.get -> bool
 Plank.RowApi.RowReaderBinaryValue.Length.get -> int
 Plank.RowApi.RowReaderBinaryValue.RowReaderBinaryValue() -> void
 Plank.RowApi.RowReaderBinaryValue.Span.get -> System.ReadOnlySpan<byte>
-Plank.RowApi.RowReaderBinaryValue.Value.get -> System.ReadOnlySpan<byte>
 Plank.RowApi.RowReaderCore
 Plank.RowApi.RowReaderCore.Dispose() -> void
 Plank.RowApi.RowReaderCore.GetCurrent<T>(Plank.RowApi.RowApiColumnDescriptor<T>! column) -> T
