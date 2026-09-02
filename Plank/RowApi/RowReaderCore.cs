@@ -237,7 +237,8 @@ public sealed class RowReaderCore : IDisposable
             BufferPool = options.BufferPool,
             Strict = false,
             VerifyPageCrc = options.VerifyPageCrc,
-            BorrowRequiredPlainValues = false
+            BorrowRequiredPlainValues = false,
+            BorrowBinaryValues = true
         };
 
     void ApplyProjection(RowApiColumnDescriptor[]? projection)

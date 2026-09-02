@@ -14,10 +14,11 @@ readonly struct ColumnBufferEnumerable<T>
     readonly ulong _rowCount;
     readonly ParquetPagePruner? _pruner;
     readonly bool _borrowRequiredPlainValues;
+    readonly bool _borrowBinaryValues;
 
     internal ColumnBufferEnumerable(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
         LeafColumn definition, IParquetBufferPool bufferPool, ulong rowCount, ParquetPagePruner? pruner,
-        bool borrowRequiredPlainValues)
+        bool borrowRequiredPlainValues, bool borrowBinaryValues)
     {
         ArgumentNullException.ThrowIfNull(physicalReader);
         ArgumentNullException.ThrowIfNull(definition);
@@ -32,11 +33,12 @@ readonly struct ColumnBufferEnumerable<T>
         _rowCount = rowCount;
         _pruner = pruner;
         _borrowRequiredPlainValues = borrowRequiredPlainValues;
+        _borrowBinaryValues = borrowBinaryValues;
     }
 
     internal Enumerator GetEnumerator()
         => new(_physicalReader, _rowGroupOrdinal, _columnOrdinal, _definition, _bufferPool, _rowCount, _pruner,
-            _borrowRequiredPlainValues);
+            _borrowRequiredPlainValues, _borrowBinaryValues);
 
     internal struct Enumerator : IDisposable
     {
@@ -49,6 +51,7 @@ readonly struct ColumnBufferEnumerable<T>
         readonly ulong _rowCount;
         readonly ParquetPagePruner? _pruner;
         readonly bool _borrowRequiredPlainValues;
+        readonly bool _borrowBinaryValues;
         ParquetPageCursor _cursor;
         PageMetadataHandle _pageMetadata;
         ColumnReadBuffers<T> _buffers;
@@ -58,7 +61,7 @@ readonly struct ColumnBufferEnumerable<T>
         internal Enumerator(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
             LeafColumn definition,
             IParquetBufferPool bufferPool, ulong rowCount, ParquetPagePruner? pruner,
-            bool borrowRequiredPlainValues)
+            bool borrowRequiredPlainValues, bool borrowBinaryValues)
         {
             ArgumentNullException.ThrowIfNull(physicalReader);
             ArgumentNullException.ThrowIfNull(definition);
@@ -73,6 +76,7 @@ readonly struct ColumnBufferEnumerable<T>
             _rowCount = rowCount;
             _pruner = pruner;
             _borrowRequiredPlainValues = borrowRequiredPlainValues;
+            _borrowBinaryValues = borrowBinaryValues;
             _cursor = default;
             _pageMetadata = default;
             _buffers = default;
@@ -109,7 +113,7 @@ readonly struct ColumnBufferEnumerable<T>
             while (_cursor.MoveNext())
             {
                 var borrowedBinaryPayload = typeof(T) == typeof(BinaryValueDescriptor) &&
-                    !_borrowRequiredPlainValues
+                    _borrowBinaryValues
                         ? _cursor.CurrentBorrowedPayloadUnchecked
                         : default;
                 if (ColumnChunkReader.TryDecodeDictionaryPageIntoNative<T>(_cursor.CurrentHeader,
