@@ -22,10 +22,14 @@ sealed class RowApiBinaryColumnReadState : RowApiColumnReadState
         _buffersOpen = false;
     }
 
-    internal RowReaderBinaryValue CurrentValue
-        => _usingMissing || CurrentIndex < 0
-            ? new RowReaderBinaryValue(default, -1, _missingIsNull)
-            : new RowReaderBinaryValue(_buffer, CurrentIndex, _buffer.IsNull(CurrentIndex));
+    internal ReadOnlySpan<byte> CurrentValue
+        => _usingMissing || CurrentIndex < 0 ? [] : _buffer.GetValue(CurrentIndex);
+
+    internal bool CurrentIsNull
+        => _usingMissing ? _missingIsNull : CurrentIndex >= 0 && _buffer.IsNull(CurrentIndex);
+
+    internal ParquetBuffer RetainCurrentValue()
+        => _usingMissing || CurrentIndex < 0 ? default : _buffer.RetainValue(CurrentIndex);
 
     internal override void ResetBufferState()
     {

@@ -944,8 +944,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 builder.AppendLine();
                 builder.Append("        public global::Plank.ParquetBuffer Retain").Append(propertyName)
                     .AppendLine("()");
-                builder.Append("            => _core.GetCurrentBinary(").Append(descriptorName)
-                    .AppendLine(").Retain();");
+                builder.Append("            => _core.RetainCurrentBinary(").Append(descriptorName)
+                    .AppendLine(");");
             }
             else
             {

@@ -23,6 +23,7 @@ internal sealed class BinaryRowReaderGenerationTests
         var generated = result.GeneratedSources.Single().Text;
         await Assert.That(generated).Contains("public global::System.ReadOnlySpan<byte> Payload");
         await Assert.That(generated).Contains("public global::Plank.ParquetBuffer RetainPayload()");
+        await Assert.That(generated).Contains("=> _core.RetainCurrentBinary(s_PayloadRowApiColumn);");
     }
 
     [Test]
@@ -47,6 +48,7 @@ internal sealed class BinaryRowReaderGenerationTests
         var generated = result.GeneratedSources.Single().Text;
         await Assert.That(generated).Contains("public global::System.ReadOnlySpan<byte> Payload");
         await Assert.That(generated).Contains("public global::Plank.ParquetBuffer RetainPayload()");
+        await Assert.That(generated).Contains("=> _core.RetainCurrentBinary(s_PayloadRowApiColumn);");
         await Assert.That(generated).DoesNotContain("return value.Value.ToArray();");
     }
 }

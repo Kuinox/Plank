@@ -850,8 +850,8 @@ static class NestedParquetRowEmitter
                     builder.AppendLine();
                     builder.Append("        public global::Plank.ParquetBuffer Retain").Append(root.PropertyName)
                         .AppendLine("()");
-                    builder.Append("            => _core.GetCurrentBinary(").Append(leaf.DescriptorName)
-                        .AppendLine(").Retain();");
+                    builder.Append("            => _core.RetainCurrentBinary(").Append(leaf.DescriptorName)
+                        .AppendLine(");");
                 }
                 else
                 {
