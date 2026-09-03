@@ -576,6 +576,7 @@ static class NestedParquetRowEmitter
         builder.AppendLine("            _core = new global::Plank.RowApi.RowGroupWriterCore<BufferSlot>(rowGroupWriter, slot);");
         builder.AppendLine("        }");
         builder.AppendLine("        public Row GetRow() => _core.GetSlotForRow().GetRow();");
+        builder.AppendLine("        public CachedRow GetRow(ref RowCache cache) => _core.GetSlotForRow().GetRow(ref cache);");
         builder.AppendLine("        public void Write() => _core.Write();");
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -616,6 +617,19 @@ static class NestedParquetRowEmitter
         builder.AppendLine("            else");
         builder.AppendLine("                _rowPending = true;");
         builder.AppendLine("            return slot.GetRow();");
+        builder.AppendLine("        }");
+        builder.AppendLine("        public CachedRow GetRow(ref RowCache cache)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            var slot = GetSlotForRow();");
+        builder.AppendLine("            if (_rowPending)");
+        if (rowSizePlan.IsFixed)
+            builder.AppendLine("                slot = CommitFixedRow(slot, _rowsPerGroup);");
+        else
+            builder.Append("                slot = CommitVariableRow(slot, slot.GetRowSize(")
+                .Append(rowSizePlan.FixedSizeExpression).AppendLine(", ref cache));");
+        builder.AppendLine("            else");
+        builder.AppendLine("                _rowPending = true;");
+        builder.AppendLine("            return slot.GetRow(ref cache);");
         builder.AppendLine("        }");
         builder.AppendLine("        public void Complete()");
         builder.AppendLine("        {");
@@ -710,18 +724,12 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        {");
         builder.AppendLine("            return new Row(Index, this);");
         builder.AppendLine("        }");
-        for (var i = 0; i < model.Leaves.Length; i++)
-        {
-            var leaf = model.Leaves[i];
-            builder.AppendLine();
-            builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-            builder.Append("        internal ref ").Append(leaf.StorageShapeType).Append(" GetColumn")
-                .Append(i).AppendLine("(int index)");
-            builder.Append("            => ref global::System.Runtime.CompilerServices.Unsafe.Add(ref GetArrayDataReferenceUnchecked(ref _column")
-                .Append(i).AppendLine("), index);");
-        }
         builder.AppendLine();
-        AppendUncheckedArrayDataReference(builder);
+        builder.AppendLine("        internal CachedRow GetRow(ref RowCache cache)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            cache.Refresh(this);");
+        builder.AppendLine("            return new CachedRow(Index, ref cache);");
+        builder.AppendLine("        }");
         if (!rowSizePlan.IsFixed)
         {
             builder.AppendLine();
@@ -733,6 +741,22 @@ static class NestedParquetRowEmitter
                 var leaf = model.Leaves[columnIndex];
                 builder.Append("            size = checked(size + EstimateValueSize(")
                     .Append(BufferElement(leaf, null, "Index"))
+                    .Append(", global::Plank.Schema.ParquetPhysicalType.")
+                    .Append(leaf.Node.Scalar!.PhysicalType).Append(", ").Append(leaf.Node.Scalar.TypeLength)
+                    .AppendLine("U));");
+            }
+            builder.AppendLine("            return size;");
+            builder.AppendLine("        }");
+            builder.AppendLine();
+            builder.AppendLine("        internal ulong GetRowSize(ulong fixedSizeBytes, ref RowCache cache)");
+            builder.AppendLine("        {");
+            builder.AppendLine("            cache.Refresh(this);");
+            builder.AppendLine("            var size = fixedSizeBytes;");
+            foreach (var columnIndex in rowSizePlan.VariableColumnIndices)
+            {
+                var leaf = model.Leaves[columnIndex];
+                builder.Append("            size = checked(size + EstimateValueSize(")
+                    .Append($"global::System.Runtime.CompilerServices.Unsafe.Add(ref cache._column{columnIndex}, Index)")
                     .Append(", global::Plank.Schema.ParquetPhysicalType.")
                     .Append(leaf.Node.Scalar!.PhysicalType).Append(", ").Append(leaf.Node.Scalar.TypeLength)
                     .AppendLine("U));");
@@ -752,31 +776,95 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
-        builder.AppendLine("    public readonly ref struct Row");
+        AppendRowCache(builder, model);
+        builder.AppendLine();
+        AppendWriteRow(builder, model, cached: false);
+        builder.AppendLine();
+        AppendWriteRow(builder, model, cached: true);
+    }
+
+    static void AppendRowCache(StringBuilder builder, Model model)
+    {
+        builder.AppendLine("    /// <summary>Caches GC-tracked references to the current movable column buffers.</summary>");
+        builder.AppendLine("    /// <remarks>Create one as a local and pass it by reference to GetRow for a write loop.</remarks>");
+        builder.AppendLine("    public ref struct RowCache");
+        builder.AppendLine("    {");
+        builder.AppendLine("        object? _bufferIdentity;");
+        builder.AppendLine("        BufferSlot? _ownerSlot;");
+        for (var i = 0; i < model.Leaves.Length; i++)
+            builder.Append("        internal ref ").Append(model.Leaves[i].StorageShapeType).Append(" _column")
+                .Append(i).AppendLine(";");
+        builder.AppendLine();
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+        builder.AppendLine("        internal void Refresh(BufferSlot ownerSlot)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            if (global::System.Object.ReferenceEquals(_ownerSlot, ownerSlot) &&");
+        builder.AppendLine("                global::System.Object.ReferenceEquals(_bufferIdentity, ownerSlot._column0))");
+        builder.AppendLine("                return;");
+        builder.AppendLine("            RefreshSlow(ownerSlot);");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]");
+        builder.AppendLine("        void RefreshSlow(BufferSlot ownerSlot)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            _bufferIdentity = ownerSlot._column0;");
+        builder.AppendLine("            _ownerSlot = ownerSlot;");
+        for (var i = 0; i < model.Leaves.Length; i++)
+            builder.Append("            _column").Append(i)
+                .Append(" = ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(ownerSlot._column")
+                .Append(i).AppendLine(");");
+        builder.AppendLine("        }");
+        builder.AppendLine("    }");
+    }
+
+    static void AppendWriteRow(StringBuilder builder, Model model, bool cached)
+    {
+        var typeName = cached ? "CachedRow" : "Row";
+        if (cached)
+        {
+            builder.AppendLine("    /// <summary>A row that accesses columns through a stack-owned managed-reference cache.</summary>");
+            builder.AppendLine("    /// <remarks>Use only until the writer advances, and do not share one cache between in-flight rows.</remarks>");
+        }
+        builder.Append("    public readonly ref struct ").AppendLine(typeName);
         builder.AppendLine("    {");
         builder.AppendLine("        readonly int _index;");
-        builder.AppendLine("        readonly BufferSlot _ownerSlot;");
-        builder.AppendLine("        internal Row(int index, BufferSlot ownerSlot)");
+        if (cached)
+            builder.AppendLine("        readonly ref byte _cache;");
+        else
+            builder.AppendLine("        readonly BufferSlot _ownerSlot;");
+        builder.Append("        internal ").Append(typeName).Append("(int index, ");
+        if (cached)
+            builder.AppendLine("ref RowCache cache)");
+        else
+            builder.AppendLine("BufferSlot ownerSlot)");
         builder.AppendLine("        {");
         builder.AppendLine("            _index = index;");
-        builder.AppendLine("            _ownerSlot = ownerSlot;");
+        if (cached)
+            builder.AppendLine("            _cache = ref global::System.Runtime.CompilerServices.Unsafe.As<RowCache, byte>(ref cache);");
+        else
+            builder.AppendLine("            _ownerSlot = ownerSlot;");
         builder.AppendLine("        }");
+        if (cached)
+        {
+            builder.AppendLine("        ref RowCache Cache");
+            builder.AppendLine("            => ref global::System.Runtime.CompilerServices.Unsafe.As<byte, RowCache>(ref _cache);");
+        }
         for (var i = 0; i < model.Roots.Length; i++)
         {
             builder.AppendLine();
-            AppendWriteRowProperty(builder, model.Roots[i]);
+            AppendWriteRowProperty(builder, model.Roots[i], cached);
         }
         builder.AppendLine("    }");
     }
 
-    static void AppendWriteRowProperty(StringBuilder builder, Node root)
+    static void AppendWriteRowProperty(StringBuilder builder, Node root, bool cached)
     {
         if (root.Kind == NodeKind.Leaf)
         {
             var leaf = root.Leaves[0];
             builder.Append("        public ref ").Append(root.UserType).Append(' ')
                 .Append(EscapeIdentifier(root.PropertyName)).Append(" => ref ")
-                .Append(BufferElement(leaf, "_ownerSlot", "_index"))
+                .Append(BufferElement(leaf, "_ownerSlot", "_index", cached))
                 .AppendLine(";");
             return;
         }
@@ -786,7 +874,7 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        {");
         builder.Append("            get => Read").Append(ToIdentifier(root.PropertyName)).Append('(');
         AppendLeafArguments(builder, root,
-            static leaf => BufferElement(leaf, "_ownerSlot", "_index"));
+            leaf => BufferElement(leaf, "_ownerSlot", "_index", cached));
         builder.AppendLine(");");
         builder.AppendLine("            set");
         builder.AppendLine("            {");
@@ -794,7 +882,7 @@ static class NestedParquetRowEmitter
         {
             var leaf = root.Leaves[i];
             builder.Append("                ")
-                .Append(BufferElement(leaf, "_ownerSlot", "_index"))
+                .Append(BufferElement(leaf, "_ownerSlot", "_index", cached))
                 .Append(" = Project")
                 .Append(leaf.UniqueName).AppendLine("(value);");
         }
@@ -802,24 +890,12 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        }");
     }
 
-    static string BufferElement(Leaf leaf, string? ownerExpression, string indexExpression)
+    static string BufferElement(Leaf leaf, string? ownerExpression, string indexExpression, bool cached = false)
     {
+        if (cached)
+            return $"global::System.Runtime.CompilerServices.Unsafe.Add(ref Cache._column{leaf.Ordinal}, {indexExpression})";
         var prefix = ownerExpression is null ? string.Empty : ownerExpression + ".";
-        return $"{prefix}GetColumn{leaf.Ordinal}({indexExpression})";
-    }
-
-    static void AppendUncheckedArrayDataReference(StringBuilder builder)
-    {
-        builder.AppendLine("        // Generated buffers are non-null. Access the SZ-array payload directly so the JIT does not");
-        builder.AppendLine("        // preserve MemoryMarshal.GetArrayDataReference's redundant null-throwing semantics here.");
-        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-        builder.AppendLine("        static ref T GetArrayDataReferenceUnchecked<T>(ref T[] values)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            var dataAddress = global::System.Runtime.CompilerServices.Unsafe.As<T[], nuint>(ref values)");
-        builder.AppendLine("                + (nuint)(2 * global::System.IntPtr.Size);");
-        builder.AppendLine("            return ref global::System.Runtime.CompilerServices.Unsafe.AddByteOffset(");
-        builder.AppendLine("                ref global::System.Runtime.CompilerServices.Unsafe.NullRef<T>(), dataAddress);");
-        builder.AppendLine("        }");
+        return $"global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference({prefix}_column{leaf.Ordinal}), {indexExpression})";
     }
 
     static void AppendRowReader(StringBuilder builder, Model model)

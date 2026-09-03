@@ -415,6 +415,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        public Row GetRow()");
         builder.AppendLine("            => _core.GetSlotForRow().GetRow();");
         builder.AppendLine();
+        builder.AppendLine("        public CachedRow GetRow(ref RowCache cache)");
+        builder.AppendLine("            => _core.GetSlotForRow().GetRow(ref cache);");
+        builder.AppendLine();
         builder.AppendLine("        public void Write()");
         builder.AppendLine("            => _core.Write();");
         builder.AppendLine("    }");
@@ -476,6 +479,21 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            else");
         builder.AppendLine("                _rowPending = true;");
         builder.AppendLine("            return slot.GetRow();");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+        builder.AppendLine("        public CachedRow GetRow(ref RowCache cache)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            var slot = GetSlotForRow();");
+        builder.AppendLine("            if (_rowPending)");
+        if (rowSizePlan.IsFixed)
+            builder.AppendLine("                slot = CommitFixedRow(slot, _rowsPerGroup);");
+        else
+            builder.Append("                slot = CommitVariableRow(slot, slot.GetRowSize(")
+                .Append(rowSizePlan.FixedSizeExpression).AppendLine(", ref cache));");
+        builder.AppendLine("            else");
+        builder.AppendLine("                _rowPending = true;");
+        builder.AppendLine("            return slot.GetRow(ref cache);");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        public void Complete()");
@@ -570,17 +588,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        {");
         builder.AppendLine("            return new Row(Index, this);");
         builder.AppendLine("        }");
-        for (var i = 0; i < columns.Length; i++)
-        {
-            builder.AppendLine();
-            builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-            builder.Append("        internal ref ").Append(columns[i].ClrTypeName).Append(" GetColumn")
-                .Append(i).AppendLine("(int index)");
-            builder.Append("            => ref global::System.Runtime.CompilerServices.Unsafe.Add(ref GetArrayDataReferenceUnchecked(ref _column")
-                .Append(i).AppendLine("), index);");
-        }
         builder.AppendLine();
-        AppendUncheckedArrayDataReference(builder);
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+        builder.AppendLine("        internal CachedRow GetRow(ref RowCache cache)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            cache.Refresh(this);");
+        builder.AppendLine("            return new CachedRow(Index, ref cache);");
+        builder.AppendLine("        }");
         if (!rowSizePlan.IsFixed)
         {
             builder.AppendLine();
@@ -592,7 +606,23 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             {
                 var column = schemaColumns[columnIndex];
                 builder.Append("            size = checked(size + EstimateValueSize(")
-                    .Append("GetColumn").Append(columnIndex).Append("(Index)")
+                    .Append(ArrayElement($"_column{columnIndex}", "Index"))
+                    .Append(", global::Plank.Schema.ParquetPhysicalType.")
+                    .Append(column.PhysicalType).Append(", ").Append(column.TypeLength).AppendLine("U));");
+            }
+            builder.AppendLine("            return size;");
+            builder.AppendLine("        }");
+            builder.AppendLine();
+            builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+            builder.AppendLine("        internal ulong GetRowSize(ulong fixedSizeBytes, ref RowCache cache)");
+            builder.AppendLine("        {");
+            builder.AppendLine("            cache.Refresh(this);");
+            builder.AppendLine("            var size = fixedSizeBytes;");
+            foreach (var columnIndex in rowSizePlan.VariableColumnIndices)
+            {
+                var column = schemaColumns[columnIndex];
+                builder.Append("            size = checked(size + EstimateValueSize(")
+                    .Append($"global::System.Runtime.CompilerServices.Unsafe.Add(ref cache._column{columnIndex}, Index)")
                     .Append(", global::Plank.Schema.ParquetPhysicalType.")
                     .Append(column.PhysicalType).Append(", ").Append(column.TypeLength).AppendLine("U));");
             }
@@ -611,20 +641,91 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
-        builder.AppendLine("    public readonly ref struct Row");
+        AppendRowCache(builder, columns);
+        builder.AppendLine();
+        AppendWriteRow(builder, columns, cached: false);
+        builder.AppendLine();
+        AppendWriteRow(builder, columns, cached: true);
+        builder.AppendLine("}");
+
+        return builder.ToString();
+    }
+
+    static void AppendRowCache(StringBuilder builder, ImmutableArray<MappedColumn> columns)
+    {
+        builder.AppendLine("    /// <summary>Caches GC-tracked references to the current movable column buffers.</summary>");
+        builder.AppendLine("    /// <remarks>Create one as a local and pass it by reference to GetRow for a write loop.</remarks>");
+        builder.AppendLine("    public ref struct RowCache");
+        builder.AppendLine("    {");
+        builder.AppendLine("        object? _bufferIdentity;");
+        builder.AppendLine("        internal BufferSlot? _ownerSlot;");
+        for (var i = 0; i < columns.Length; i++)
+            builder.Append("        internal ref ").Append(columns[i].ClrTypeName).Append(" _column")
+                .Append(i).AppendLine(";");
+        builder.AppendLine();
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+        builder.AppendLine("        internal void Refresh(BufferSlot ownerSlot)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            if (global::System.Object.ReferenceEquals(_ownerSlot, ownerSlot) &&");
+        builder.AppendLine("                global::System.Object.ReferenceEquals(_bufferIdentity, ownerSlot._column0))");
+        builder.AppendLine("                return;");
+        builder.AppendLine("            RefreshSlow(ownerSlot);");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]");
+        builder.AppendLine("        void RefreshSlow(BufferSlot ownerSlot)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            _bufferIdentity = ownerSlot._column0;");
+        builder.AppendLine("            _ownerSlot = ownerSlot;");
+        for (var i = 0; i < columns.Length; i++)
+            builder.Append("            _column").Append(i)
+                .Append(" = ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(ownerSlot._column")
+                .Append(i).AppendLine(");");
+        builder.AppendLine("        }");
+        builder.AppendLine("    }");
+    }
+
+    static void AppendWriteRow(StringBuilder builder, ImmutableArray<MappedColumn> columns, bool cached)
+    {
+        var typeName = cached ? "CachedRow" : "Row";
+        if (cached)
+        {
+            builder.AppendLine("    /// <summary>A row that accesses columns through a stack-owned managed-reference cache.</summary>");
+            builder.AppendLine("    /// <remarks>Use only until the writer advances, and do not share one cache between in-flight rows.</remarks>");
+        }
+        builder.Append("    public readonly ref struct ").AppendLine(typeName);
         builder.AppendLine("    {");
         builder.AppendLine("        readonly int _index;");
-        builder.AppendLine("        readonly BufferSlot _ownerSlot;");
+        if (cached)
+            builder.AppendLine("        readonly ref byte _cache;");
+        else
+            builder.AppendLine("        readonly BufferSlot _ownerSlot;");
         builder.AppendLine();
-        builder.AppendLine("        internal Row(int index, BufferSlot ownerSlot)");
+        builder.Append("        internal ").Append(typeName).Append("(int index, ");
+        if (cached)
+            builder.AppendLine("ref RowCache cache)");
+        else
+            builder.AppendLine("BufferSlot ownerSlot)");
         builder.AppendLine("        {");
         builder.AppendLine("            _index = index;");
-        builder.AppendLine("            _ownerSlot = ownerSlot;");
+        if (cached)
+            builder.AppendLine("            _cache = ref global::System.Runtime.CompilerServices.Unsafe.As<RowCache, byte>(ref cache);");
+        else
+            builder.AppendLine("            _ownerSlot = ownerSlot;");
         builder.AppendLine("        }");
+        if (cached)
+        {
+            builder.AppendLine();
+            builder.AppendLine("        ref RowCache Cache");
+            builder.AppendLine("            => ref global::System.Runtime.CompilerServices.Unsafe.As<byte, RowCache>(ref _cache);");
+        }
         builder.AppendLine();
         for (var i = 0; i < columns.Length; i++)
         {
-            var bufferElement = $"_ownerSlot.GetColumn{i}(_index)";
+            var bufferElement = cached
+                ? $"global::System.Runtime.CompilerServices.Unsafe.Add(ref Cache._column{i}, _index)"
+                : ArrayElement($"_ownerSlot._column{i}", "_index");
+            var ownerSlot = cached ? "Cache._ownerSlot!" : "_ownerSlot";
             builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ')
                 .Append(EscapeIdentifier(columns[i].PropertyName)).Append(" => ref ")
                 .Append(bufferElement).AppendLine(";");
@@ -640,7 +741,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                         .Append(columns[i].ClrTypeName).Append(") : owner.Memory;").AppendLine();
                     builder.AppendLine("            if (owner is not null)");
                     builder.AppendLine("            {");
-                    builder.AppendLine("                _ownerSlot.RegisterOwner(owner);");
+                    builder.Append("                ").Append(ownerSlot).AppendLine(".RegisterOwner(owner);");
                     builder.AppendLine("            }");
                     builder.AppendLine("        }");
                 }
@@ -651,7 +752,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     builder.AppendLine("        {");
                     builder.AppendLine("            global::System.ArgumentNullException.ThrowIfNull(owner);");
                     builder.Append("            ").Append(bufferElement).AppendLine(" = owner.Memory;");
-                    builder.AppendLine("            _ownerSlot.RegisterOwner(owner);");
+                    builder.Append("            ").Append(ownerSlot).AppendLine(".RegisterOwner(owner);");
                     builder.AppendLine("        }");
                 }
             }
@@ -659,24 +760,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 builder.AppendLine();
         }
         builder.AppendLine("    }");
-        builder.AppendLine("}");
-
-        return builder.ToString();
     }
 
-    static void AppendUncheckedArrayDataReference(StringBuilder builder)
-    {
-        builder.AppendLine("        // Generated buffers are non-null. Access the SZ-array payload directly so the JIT does not");
-        builder.AppendLine("        // preserve MemoryMarshal.GetArrayDataReference's redundant null-throwing semantics here.");
-        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-        builder.AppendLine("        static ref T GetArrayDataReferenceUnchecked<T>(ref T[] values)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            var dataAddress = global::System.Runtime.CompilerServices.Unsafe.As<T[], nuint>(ref values)");
-        builder.AppendLine("                + (nuint)(2 * global::System.IntPtr.Size);");
-        builder.AppendLine("            return ref global::System.Runtime.CompilerServices.Unsafe.AddByteOffset(");
-        builder.AppendLine("                ref global::System.Runtime.CompilerServices.Unsafe.NullRef<T>(), dataAddress);");
-        builder.AppendLine("        }");
-    }
+    static string ArrayElement(string bufferExpression, string indexExpression)
+        => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference({bufferExpression}), {indexExpression})";
 
     static bool TryMapColumn(SchemaColumn column, out MappedColumn mapped)
     {

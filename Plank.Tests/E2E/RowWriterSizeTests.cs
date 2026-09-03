@@ -116,19 +116,20 @@ internal sealed class RowWriterSizeTests
     }
 
     [Test]
-    public void UncheckedGeneratedReferencesSurviveGrowthAndCompactingGc()
+    public void ManagedReferenceCacheSurvivesGrowthSlotRolloverAndCompactingGc()
     {
         using var stream = new MemoryStream();
         using (var writer = WideRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
         {
             RowApiMaxParallelism = 1,
             RowApiInitialRowCapacity = 1,
-            TargetRowGroupSizeBytes = 65 * sizeof(int) * 32
+            TargetRowGroupSizeBytes = 65 * sizeof(int) * 3
         }))
         {
+            WideRowSchema.RowCache cache = default;
             for (var i = 0; i < 16; i++)
             {
-                var row = writer.GetRow();
+                var row = writer.GetRow(ref cache);
                 row.Column0 = CompactAndReturn(i);
                 row.Column1 = 1_000 + i;
                 row.Column32 = 32_000 + i;
@@ -150,7 +151,7 @@ internal sealed class RowWriterSizeTests
                 row.Column63 != 63_000 + index ||
                 row.Column64 != 64_000 + index)
             {
-                throw new InvalidOperationException($"Unchecked generated row {index} was corrupted.");
+                throw new InvalidOperationException($"Managed cached row {index} was corrupted.");
             }
             index++;
         }
@@ -166,9 +167,10 @@ internal sealed class RowWriterSizeTests
             TargetRowGroupSizeBytes = 1024 * 1024
         }))
         {
+            CommonClrRowSchema.RowCache cache = default;
             for (var i = 0; i < 16; i++)
             {
-                var row = writer.GetRow();
+                var row = writer.GetRow(ref cache);
                 row.Name = CompactAndReturn($"row-{i}");
                 row.Id = Guid.Empty;
             }
@@ -181,7 +183,7 @@ internal sealed class RowWriterSizeTests
         while (referenceReader.MoveNext())
         {
             if (referenceReader.Current.Name != $"row-{index}")
-                throw new InvalidOperationException($"Unchecked generated reference row {index} was corrupted.");
+                throw new InvalidOperationException($"Managed cached reference row {index} was corrupted.");
             index++;
         }
 

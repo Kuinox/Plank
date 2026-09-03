@@ -13,10 +13,11 @@ It can also roll over to a new file around the [512 MiB](https://iceberg.apache.
 ```csharp
 using var stream = File.Create("events.parquet");
 using var writer = EventSchema.CreateRowWriter(stream);
+EventSchema.RowCache cache = default;
 
 for (var id = 0; id < 100; id++)
 {
-    var row = writer.GetRow();
+    var row = writer.GetRow(ref cache);
     row.Id = id;
     row.Name = "event"u8.ToArray();
     row.OccurredAt = DateTimeOffset.UtcNow;
@@ -25,8 +26,10 @@ for (var id = 0; id < 100; id++)
 writer.Complete();
 ```
 
-`GetRow()` commits the previously returned row and returns the next reusable row buffer. `Complete()` commits the
-last row.
+`GetRow(ref cache)` commits the previously returned row and returns the next reusable row buffer. The stack-owned
+cache keeps managed references to the current column arrays and refreshes them when a buffer grows or the writer
+switches slots. `Complete()` commits the last row. The parameterless `GetRow()` overload remains available when a
+cache is inconvenient.
 
 The row writer handles row-group construction, encoding, and file finalization. `Complete()` commits the file. If
 writing fails first, `Dispose()` stops the workers and releases resources without committing the incomplete file.
