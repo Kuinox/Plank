@@ -22,6 +22,32 @@ static class DeltaBinaryPackedDecoder
     /// <summary>How a page divides its values into blocks and mini-blocks.</summary>
     readonly record struct BlockLayout(int MiniBlockCount, int MiniBlockSize);
 
+    internal struct BatchState
+    {
+        internal int Offset;
+        internal int ValueCount;
+        internal int ValuesRead;
+        internal int BlockSize;
+        internal int MiniBlockCount;
+        internal int MiniBlockSize;
+        internal long Previous;
+
+        internal readonly bool Active
+            => ValuesRead < ValueCount;
+
+        internal readonly int NextBatchCount(int targetCount)
+        {
+            var remaining = ValueCount - ValuesRead;
+            if (remaining <= targetCount)
+                return remaining;
+
+            var first = ValuesRead == 0 ? 1 : 0;
+            var blockValues = Math.Max(0, targetCount - first);
+            var blockCount = Math.Max(1L, ((long)blockValues + BlockSize - 1) / BlockSize);
+            return (int)Math.Min(remaining, first + blockCount * BlockSize);
+        }
+    }
+
     /// <summary>Reads the block size and mini-block count a page declares.</summary>
     /// <remarks>
     /// This used to require exactly 128 and 4. Nothing in the format fixes them:
@@ -64,6 +90,193 @@ static class DeltaBinaryPackedDecoder
         var blockSize = layout.MiniBlockCount * layout.MiniBlockSize;
         var perByte = (blockSize + layout.MiniBlockCount) / (1 + layout.MiniBlockCount);
         return (uint)remainingBytes * (uint)perByte + 2U;
+    }
+
+    internal static BatchState StartBatch(ReadOnlySpan<byte> payload, int expectedValueCount)
+    {
+        var reader = new DeltaBinaryPackedReader(payload);
+        var layout = ReadBlockLayout(ref reader);
+        var valueCount = ReadHeaderVarUInt32(ref reader, "value count");
+        if (valueCount != (uint)expectedValueCount)
+            throw new CorruptParquetException(
+                $"DeltaBinaryPacked encoded value count {valueCount} does not match expected {expectedValueCount}.");
+
+        var maxPossibleValues = MaxPossibleValues(layout, payload.Length - reader.Offset);
+        if (valueCount > maxPossibleValues)
+            throw new CorruptParquetException(
+                $"Delta binary packed value count {valueCount} exceeds what {payload.Length - reader.Offset} bytes could encode.");
+
+        var previous = reader.ReadZigZagInt64();
+        return new BatchState
+        {
+            Offset = reader.Offset,
+            ValueCount = expectedValueCount,
+            BlockSize = checked(layout.MiniBlockCount * layout.MiniBlockSize),
+            MiniBlockCount = layout.MiniBlockCount,
+            MiniBlockSize = layout.MiniBlockSize,
+            Previous = previous
+        };
+    }
+
+    internal static int GetEncodedLength(ReadOnlySpan<byte> payload, int expectedValueCount)
+    {
+        // DELTA_LENGTH_BYTE_ARRAY and DELTA_BYTE_ARRAY concatenate streams without recording their
+        // byte lengths. Locate the next stream structurally, skipping packed bytes without decoding
+        // or retaining the values from this stream.
+        var reader = new DeltaBinaryPackedReader(payload);
+        var layout = ReadBlockLayout(ref reader);
+        var valueCount = ReadHeaderVarUInt32(ref reader, "value count");
+        if (valueCount != (uint)expectedValueCount)
+            throw new CorruptParquetException(
+                $"DeltaBinaryPacked encoded value count {valueCount} does not match expected {expectedValueCount}.");
+
+        var maxPossibleValues = MaxPossibleValues(layout, payload.Length - reader.Offset);
+        if (valueCount > maxPossibleValues)
+            throw new CorruptParquetException(
+                $"Delta binary packed value count {valueCount} exceeds what {payload.Length - reader.Offset} bytes could encode.");
+
+        _ = reader.ReadZigZagInt64();
+        var offset = reader.Offset;
+        var remaining = Math.Max(0, expectedValueCount - 1);
+        while (remaining > 0)
+        {
+            SkipUnsignedVarInt(payload, ref offset);
+            if (payload.Length - offset < layout.MiniBlockCount)
+                throw new CorruptParquetException(
+                    "Unexpected end of delta-binary-packed bit widths.");
+            int encodedByteCount;
+            if (layout.MiniBlockCount == 4)
+            {
+                var width0 = payload[offset];
+                var width1 = payload[offset + 1];
+                var width2 = payload[offset + 2];
+                var width3 = payload[offset + 3];
+                if (Math.Max(Math.Max(width0, width1), Math.Max(width2, width3)) > 64)
+                    throw new CorruptParquetException(
+                        "Delta binary packed mini-block bit width exceeds 64.");
+                encodedByteCount = checked(layout.MiniBlockSize / 8 *
+                    (width0 + width1 + width2 + width3));
+            }
+            else
+            {
+                encodedByteCount = 0;
+                for (var i = 0; i < layout.MiniBlockCount; i++)
+                {
+                    var bitWidth = payload[offset + i];
+                    if (bitWidth > 64)
+                        throw new CorruptParquetException(
+                            $"Delta binary packed mini-block bit width {bitWidth} exceeds 64.");
+                    encodedByteCount = checked(encodedByteCount +
+                        layout.MiniBlockSize * bitWidth / 8);
+                }
+            }
+            offset += layout.MiniBlockCount;
+            if (encodedByteCount > payload.Length - offset)
+                throw new CorruptParquetException(
+                    "Unexpected end of delta-binary-packed mini-block.");
+            offset += encodedByteCount;
+            remaining -= Math.Min(remaining, checked(layout.MiniBlockCount * layout.MiniBlockSize));
+        }
+        return offset;
+    }
+
+    static void SkipUnsignedVarInt(ReadOnlySpan<byte> payload, ref int offset)
+    {
+        if ((uint)offset >= (uint)payload.Length)
+            throw new CorruptParquetException(
+                "Unexpected end of delta-binary-packed payload.");
+        if ((payload[offset++] & 0x80) == 0)
+            return;
+        for (var byteIndex = 1; byteIndex < 10; byteIndex++)
+            if ((uint)offset >= (uint)payload.Length)
+                throw new CorruptParquetException(
+                    "Unexpected end of delta-binary-packed payload.");
+            else if ((payload[offset++] & 0x80) == 0)
+                return;
+        throw new CorruptParquetException("Invalid delta-binary-packed UInt64 varint.");
+    }
+
+    internal static void ReadInt32Batch(ReadOnlySpan<byte> payload, Span<int> destination,
+        ref BatchState state)
+    {
+        if (destination.IsEmpty || destination.Length > state.ValueCount - state.ValuesRead)
+            throw new ArgumentOutOfRangeException(nameof(destination));
+
+        var destinationOffset = 0;
+        if (state.ValuesRead == 0)
+            destination[destinationOffset++] = NarrowInt32(state.Previous);
+
+        var reader = new DeltaBinaryPackedReader(payload[state.Offset..]);
+        var previous = state.Previous;
+        ReadInt32Blocks(ref reader, destination[destinationOffset..],
+            new BlockLayout(state.MiniBlockCount, state.MiniBlockSize), ref previous);
+        state.Offset += reader.Offset;
+        state.Previous = previous;
+        state.ValuesRead += destination.Length;
+    }
+
+    internal static void ReadInt64Batch(ReadOnlySpan<byte> payload, Span<long> destination,
+        ref BatchState state)
+    {
+        if (destination.IsEmpty || destination.Length > state.ValueCount - state.ValuesRead)
+            throw new ArgumentOutOfRangeException(nameof(destination));
+
+        var destinationOffset = 0;
+        if (state.ValuesRead == 0)
+            destination[destinationOffset++] = state.Previous;
+
+        var reader = new DeltaBinaryPackedReader(payload[state.Offset..]);
+        var previous = state.Previous;
+        ReadInt64Blocks(ref reader, destination[destinationOffset..],
+            new BlockLayout(state.MiniBlockCount, state.MiniBlockSize), ref previous);
+        state.Offset += reader.Offset;
+        state.Previous = previous;
+        state.ValuesRead += destination.Length;
+    }
+
+    internal static void ReadNullableInt32Batch(ReadOnlySpan<byte> payload,
+        Span<int?> destination, ref BatchState state, bool canonicalLayout)
+    {
+        if (destination.IsEmpty || destination.Length > state.ValueCount - state.ValuesRead)
+            throw new ArgumentOutOfRangeException(nameof(destination));
+
+        var destinationOffset = 0;
+        if (state.ValuesRead == 0)
+            destination[destinationOffset++] = NarrowInt32(state.Previous);
+
+        var reader = new DeltaBinaryPackedReader(payload[state.Offset..]);
+        var previous = state.Previous;
+        ReadNullableInt32Blocks(ref reader, destination[destinationOffset..],
+            new BlockLayout(state.MiniBlockCount, state.MiniBlockSize), ref previous,
+            canonicalLayout);
+        state.Offset += reader.Offset;
+        state.Previous = previous;
+        state.ValuesRead += destination.Length;
+    }
+
+    internal static void ReadNonNegativeInt32Batch(ReadOnlySpan<byte> payload,
+        Span<int> destination, ref BatchState state)
+    {
+        ReadInt32Batch(payload, destination, ref state);
+        for (var i = 0; i < destination.Length; i++)
+            if (destination[i] < 0)
+                throw new CorruptParquetException(
+                    $"Delta encoded length {destination[i]} is negative.");
+    }
+
+    internal static long ReadNonNegativeInt32BatchWithTotal(ReadOnlySpan<byte> payload,
+        Span<int> destination, ref BatchState state)
+    {
+        ReadInt32Batch(payload, destination, ref state);
+        long total = 0;
+        for (var i = 0; i < destination.Length; i++)
+        {
+            var value = destination[i];
+            if (value < 0)
+                throw new CorruptParquetException($"Delta encoded length {value} is negative.");
+            total += value;
+        }
+        return total;
     }
 
     internal static int[] ReadInt32(ReadOnlySpan<byte> payload)
@@ -187,7 +400,13 @@ static class DeltaBinaryPackedDecoder
         // the encoder's deltas wrap in 32 bits. See NarrowInt32.
         var previous = reader.ReadZigZagInt64();
         destination[0] = NarrowInt32(previous);
-        var index = 1;
+        ReadInt32Blocks(ref reader, destination[1..], layout, ref previous);
+    }
+
+    static void ReadInt32Blocks(ref DeltaBinaryPackedReader reader, Span<int> destination,
+        BlockLayout layout, ref long previous)
+    {
+        var index = 0;
         Span<byte> bitWidthStorage = stackalloc byte[MaxMiniBlockCount];
         var bitWidths = bitWidthStorage[..layout.MiniBlockCount];
         Span<long> adjustedDeltas = Avx2.IsSupported ? stackalloc long[MiniBlockChunk] : default;
@@ -212,6 +431,12 @@ static class DeltaBinaryPackedDecoder
                 for (var chunk = 0; chunk < layout.MiniBlockSize; chunk += MiniBlockChunk)
                 {
                     var count = Math.Min(MiniBlockChunk, destination.Length - index);
+                    if (bitWidth == 0 && minDelta == 0)
+                    {
+                        destination.Slice(index, count).Fill(NarrowInt32(previous));
+                        index += count;
+                        continue;
+                    }
                     if (bitWidth <= 56)
                     {
                         var packed = reader.ReadBytesWithLookahead(
@@ -249,7 +474,15 @@ static class DeltaBinaryPackedDecoder
     {
         var previous = reader.ReadZigZagInt64();
         destination[0] = NarrowInt32(previous);
-        var index = 1;
+        ReadNullableInt32Blocks(ref reader, destination[1..], layout, ref previous,
+            canonicalLayout);
+    }
+
+    static void ReadNullableInt32Blocks(ref DeltaBinaryPackedReader reader,
+        Span<int?> destination, BlockLayout layout, ref long previous,
+        bool canonicalLayout)
+    {
+        var index = 0;
         Span<byte> bitWidthStorage = stackalloc byte[MaxMiniBlockCount];
         var bitWidths = bitWidthStorage[..layout.MiniBlockCount];
         Span<long> adjustedDeltas = canonicalLayout && Avx2.IsSupported
@@ -796,7 +1029,13 @@ static class DeltaBinaryPackedDecoder
     {
         var previous = reader.ReadZigZagInt64();
         destination[0] = previous;
-        var index = 1;
+        ReadInt64Blocks(ref reader, destination[1..], layout, ref previous);
+    }
+
+    static void ReadInt64Blocks(ref DeltaBinaryPackedReader reader, Span<long> destination,
+        BlockLayout layout, ref long previous)
+    {
+        var index = 0;
         Span<byte> bitWidthStorage = stackalloc byte[MaxMiniBlockCount];
         var bitWidths = bitWidthStorage[..layout.MiniBlockCount];
         Span<long> adjustedDeltas = Avx2.IsSupported ? stackalloc long[MiniBlockChunk] : default;

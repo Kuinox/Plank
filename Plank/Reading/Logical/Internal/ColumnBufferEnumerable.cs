@@ -55,6 +55,7 @@ readonly struct ColumnBufferEnumerable<T>
         ParquetPageCursor _cursor;
         PageMetadataHandle _pageMetadata;
         ColumnReadBuffers<T> _buffers;
+        ColumnChunkReader.EncodedPageState _encodedPage;
         ColumnChunkReader.FixedWidthPageState _fixedWidthPage;
         bool _openedCursor;
 
@@ -80,6 +81,7 @@ readonly struct ColumnBufferEnumerable<T>
             _cursor = default;
             _pageMetadata = default;
             _buffers = default;
+            _encodedPage = default;
             _fixedWidthPage = default;
             _openedCursor = false;
             Current = default;
@@ -100,6 +102,14 @@ readonly struct ColumnBufferEnumerable<T>
                     _cursor = _physicalReader.OpenPages(_rowGroupOrdinal, _columnOrdinal, _pageMetadata, _pruner);
                 }
                 _openedCursor = true;
+            }
+
+            if (_encodedPage.Active)
+            {
+                Current = ColumnChunkReader.DecodeNextEncodedBatch(
+                    _cursor.CurrentPayloadUnchecked, _column, ref _buffers, _bufferPool,
+                    ref _encodedPage);
+                return true;
             }
 
             if (_fixedWidthPage.Active)
@@ -128,6 +138,15 @@ readonly struct ColumnBufferEnumerable<T>
                         ref _fixedWidthPage, out var batchedFixedWidthBuffer))
                 {
                     Current = batchedFixedWidthBuffer;
+                    return true;
+                }
+
+                if (ColumnChunkReader.TryStartEncodedPageBatches(_cursor.CurrentHeader,
+                        _cursor.CurrentPayload, borrowedBinaryPayload, _column, _rowCount,
+                        ref _buffers, _bufferPool, ref _encodedPage,
+                        out var encodedBuffer))
+                {
+                    Current = encodedBuffer;
                     return true;
                 }
 
@@ -162,6 +181,7 @@ readonly struct ColumnBufferEnumerable<T>
             _pageMetadata.Dispose();
             _pageMetadata = default;
             _buffers.Dispose();
+            _encodedPage = default;
             _fixedWidthPage = default;
             _openedCursor = false;
             Current = default;
