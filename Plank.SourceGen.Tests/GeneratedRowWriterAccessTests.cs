@@ -3,7 +3,7 @@ namespace Plank.SourceGen.Tests;
 internal sealed class GeneratedRowWriterAccessTests
 {
     [Test]
-    public async Task FlatRowsReferencePinnedTypedBuffers()
+    public async Task FlatRowsUseUncheckedArrayDataReferences()
     {
         const string source = """
             using Plank.Schema;
@@ -20,9 +20,9 @@ internal sealed class GeneratedRowWriterAccessTests
 
         var generated = Generate(source);
 
-        await Assert.That(generated).Contains("PinnedColumn<int> _column0Pinned;");
-        await Assert.That(generated).Contains("_column0Pinned = GetPinnedColumn<int>(0);");
-        await Assert.That(generated).Contains("=> ref _column0Pinned[index];");
+        await Assert.That(generated).Contains("internal int[] _column0 = null!;");
+        await Assert.That(generated).Contains(
+            "=> ref global::System.Runtime.CompilerServices.Unsafe.Add(ref GetArrayDataReferenceUnchecked(ref _column0), index);");
         await Assert.That(generated).Contains("return new Row(Index, this);");
         await Assert.That(generated).Contains("public ref int Value => ref _ownerSlot.GetColumn0(_index);");
         await Assert.That(generated.Contains("_ownerSlot._column0[_index]", StringComparison.Ordinal)).IsFalse();
@@ -31,7 +31,7 @@ internal sealed class GeneratedRowWriterAccessTests
     }
 
     [Test]
-    public async Task NullableFlatRowsReferencePinnedTypedBuffers()
+    public async Task NullableFlatRowsUseUncheckedArrayDataReferences()
     {
         const string source = """
             using Plank.Schema;
@@ -47,14 +47,14 @@ internal sealed class GeneratedRowWriterAccessTests
 
         var generated = Generate(source);
 
-        await Assert.That(generated).Contains("PinnedColumn<int?> _column0Pinned;");
-        await Assert.That(generated).Contains("_column0Pinned = GetPinnedColumn<int?>(0);");
+        await Assert.That(generated).Contains("internal int?[] _column0 = null!;");
+        await Assert.That(generated).Contains("GetArrayDataReferenceUnchecked(ref _column0)");
         await Assert.That(generated).Contains("public ref int? Value => ref _ownerSlot.GetColumn0(_index);");
-        await Assert.That(generated.Contains("internal int?[] _column0", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(generated.Contains("PinnedColumn", StringComparison.Ordinal)).IsFalse();
     }
 
     [Test]
-    public async Task NestedScalarLeavesReferencePinnedTypedBuffers()
+    public async Task NestedScalarLeavesUseUncheckedArrayDataReferences()
     {
         const string source = """
             using Plank.Schema;
@@ -76,11 +76,12 @@ internal sealed class GeneratedRowWriterAccessTests
 
         var generated = Generate(source);
 
-        await Assert.That(generated).Contains("PinnedColumn<int> _column0Pinned;");
-        await Assert.That(generated).Contains("_column0Pinned = GetPinnedColumn<int>(0);");
+        await Assert.That(generated).Contains("internal int[] _column0 = null!;");
+        await Assert.That(generated).Contains("GetArrayDataReferenceUnchecked(ref _column0)");
         await Assert.That(generated).Contains("_ownerSlot.GetColumn0(_index)");
         await Assert.That(generated).Contains("_column1 = GetValues<string>(1);");
-        await Assert.That(generated.Contains("_column1Pinned", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(generated).Contains("GetArrayDataReferenceUnchecked(ref _column1)");
+        await Assert.That(generated.Contains("PinnedColumn", StringComparison.Ordinal)).IsFalse();
     }
 
     [Test]
@@ -102,9 +103,9 @@ internal sealed class GeneratedRowWriterAccessTests
 
         await Assert.That(generated).Contains("_column0 = GetValues<");
         await Assert.That(generated).Contains("return new Row(Index, this);");
-        await Assert.That(generated).Contains(
-            "Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_ownerSlot._column0), _index)");
-        await Assert.That(generated.Contains("_column0Pinned", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(generated).Contains("GetArrayDataReferenceUnchecked(ref _column0)");
+        await Assert.That(generated).Contains("_ownerSlot.GetColumn0(_index)");
+        await Assert.That(generated.Contains("PinnedColumn", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("_ownerSlot._column0[_index]", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("return new Row(Index, this, GetValues", StringComparison.Ordinal))
             .IsFalse();
@@ -162,8 +163,10 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated).Contains("bool _rowPending;");
         await Assert.That(generated.Contains("public void Next()", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated).Contains(
-            "EstimateValueSize(global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_column1), Index), global::Plank.Schema.ParquetPhysicalType.ByteArray, 0U)");
-        await Assert.That(generated.Contains("GetArrayDataReference(_column0)", StringComparison.Ordinal)).IsFalse();
+            "EstimateValueSize(GetColumn1(Index), global::Plank.Schema.ParquetPhysicalType.ByteArray, 0U)");
+        await Assert.That(generated.Contains(
+            "global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(",
+            StringComparison.Ordinal)).IsFalse();
     }
 
     static string Generate(string source)

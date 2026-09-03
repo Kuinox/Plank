@@ -16,7 +16,7 @@ sealed class RowApiColumnWriteState<T> : RowApiColumnWriteState
         FixedValueSizeBytes = RowValueSizeEstimator.TryGetFixedSize<T>(descriptor.Column.Column, out var size)
             ? size
             : null;
-        Values = AllocateValues(rowCount);
+        Values = rowCount == 0 ? [] : new T[rowCount];
     }
 
     internal RowApiColumnWriteState(RowApiColumnDescriptor descriptor, RowGroupWriter rowGroupWriter, int rowCount)
@@ -66,11 +66,7 @@ sealed class RowApiColumnWriteState<T> : RowApiColumnWriteState
         => RowValueSizeEstimator.Estimate(Values[index], _descriptor.Column.Column);
 
     internal override void Resize(int rowCount)
-    {
-        var values = AllocateValues(rowCount);
-        Values.CopyTo(values, 0);
-        Values = values;
-    }
+        => Array.Resize(ref Values, rowCount);
 
     internal override void CopyValueTo(int sourceIndex, RowApiColumnWriteState destination, int destinationIndex)
     {
@@ -81,13 +77,4 @@ sealed class RowApiColumnWriteState<T> : RowApiColumnWriteState
 
     SerializedColumn<T> GetSerialized()
         => _serialized ?? throw new InvalidOperationException("The row API column is not bound to a writer.");
-
-    static T[] AllocateValues(int rowCount)
-    {
-        if (rowCount == 0)
-            return [];
-        return RuntimeHelpers.IsReferenceOrContainsReferences<T>()
-            ? new T[rowCount]
-            : GC.AllocateArray<T>(rowCount, pinned: true);
-    }
 }

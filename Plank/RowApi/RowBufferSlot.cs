@@ -98,30 +98,6 @@ public abstract class RowBufferSlot
         throw new InvalidOperationException($"Row API column at index {columnIndex} cannot be written as {typeof(T)}.");
     }
 
-    /// <summary>Gets a stable generated-row accessor for a pinned column array.</summary>
-    protected PinnedColumn<T> GetPinnedColumn<T>(int columnIndex)
-    {
-        if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
-            throw new InvalidOperationException($"Generated column values of type {typeof(T)} cannot be pinned.");
-        return new PinnedColumn<T>(GetValues<T>(columnIndex));
-    }
-
-    /// <summary>Provides generated unchecked access to a permanently pinned column array.</summary>
-    protected readonly struct PinnedColumn<T>
-    {
-        readonly nint _address;
-
-        unsafe internal PinnedColumn(T[] values)
-            => _address = (nint)Unsafe.AsPointer(ref System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(values));
-
-        /// <summary>Gets the value at an already validated row index.</summary>
-        public unsafe ref T this[int index]
-        {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => ref Unsafe.Add(ref Unsafe.AsRef<T>((void*)_address), index);
-        }
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Next()
     {

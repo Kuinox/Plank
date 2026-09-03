@@ -78,11 +78,7 @@ Plank.RowApi.RowApiColumnDescriptor<T>
 Plank.RowApi.RowApiColumnDescriptor<T>.RowApiColumnDescriptor(string! propertyName, Plank.Schema.LeafColumn! column) -> void
 Plank.RowApi.RowBufferSlot
 Plank.RowApi.RowBufferSlot.EnsureRowAvailable() -> void
-Plank.RowApi.RowBufferSlot.GetPinnedColumn<T>(int columnIndex) -> Plank.RowApi.RowBufferSlot.PinnedColumn<T>
 static Plank.RowApi.RowBufferSlot.EstimateValueSize<T>(T value, Plank.Schema.ParquetPhysicalType physicalType, uint typeLength) -> ulong
-Plank.RowApi.RowBufferSlot.PinnedColumn<T>
-Plank.RowApi.RowBufferSlot.PinnedColumn<T>.PinnedColumn() -> void
-Plank.RowApi.RowBufferSlot.PinnedColumn<T>.this[int index].get -> T
 Plank.RowApi.RowBufferSlot.RowBufferSlot(Plank.Writing.ParquetWriter! writer, Plank.RowApi.RowApiColumnDescriptor![]! columns, int rowCount) -> void
 Plank.RowApi.RowBufferSlot.RowBufferSlot(Plank.Writing.RowGroupWriter! rowGroupWriter, Plank.RowApi.RowApiColumnDescriptor![]! columns, int rowCount) -> void
 Plank.RowApi.RowBufferSlot.GetValues<T>(int columnIndex) -> T[]!

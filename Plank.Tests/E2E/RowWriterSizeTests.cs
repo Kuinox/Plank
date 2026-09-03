@@ -116,7 +116,7 @@ internal sealed class RowWriterSizeTests
     }
 
     [Test]
-    public void PinnedGeneratedBuffersSurviveGrowthAndCompactingGc()
+    public void UncheckedGeneratedReferencesSurviveGrowthAndCompactingGc()
     {
         using var stream = new MemoryStream();
         using (var writer = WideRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
@@ -129,8 +129,7 @@ internal sealed class RowWriterSizeTests
             for (var i = 0; i < 16; i++)
             {
                 var row = writer.GetRow();
-                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
-                row.Column0 = i;
+                row.Column0 = CompactAndReturn(i);
                 row.Column1 = 1_000 + i;
                 row.Column32 = 32_000 + i;
                 row.Column63 = 63_000 + i;
@@ -151,13 +150,49 @@ internal sealed class RowWriterSizeTests
                 row.Column63 != 63_000 + index ||
                 row.Column64 != 64_000 + index)
             {
-                throw new InvalidOperationException($"Pinned generated row {index} was corrupted.");
+                throw new InvalidOperationException($"Unchecked generated row {index} was corrupted.");
             }
             index++;
         }
 
         if (index != 16)
             throw new InvalidOperationException($"Expected 16 rows, read {index}.");
+
+        using var referenceStream = new MemoryStream();
+        using (var writer = CommonClrRowSchema.CreateRowWriter(referenceStream, new ParquetWriterOptions
+        {
+            RowApiMaxParallelism = 1,
+            RowApiInitialRowCapacity = 1,
+            TargetRowGroupSizeBytes = 1024 * 1024
+        }))
+        {
+            for (var i = 0; i < 16; i++)
+            {
+                var row = writer.GetRow();
+                row.Name = CompactAndReturn($"row-{i}");
+                row.Id = Guid.Empty;
+            }
+            writer.Complete();
+        }
+
+        using var referenceSource = new MemoryReadSource(referenceStream.ToArray());
+        using var referenceReader = CommonClrRowSchema.CreateRowReader(referenceSource);
+        index = 0;
+        while (referenceReader.MoveNext())
+        {
+            if (referenceReader.Current.Name != $"row-{index}")
+                throw new InvalidOperationException($"Unchecked generated reference row {index} was corrupted.");
+            index++;
+        }
+
+        if (index != 16)
+            throw new InvalidOperationException($"Expected 16 reference rows, read {index}.");
+    }
+
+    static T CompactAndReturn<T>(T value)
+    {
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        return value;
     }
 
     [Test]
