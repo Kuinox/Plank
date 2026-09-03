@@ -38,7 +38,7 @@ internal sealed class OptionalOwnedBufferNullsTests
         {
             using (var stream = File.Create(path))
             {
-                var writer = OptionalOwnedBufferRowSchema.CreateRowWriter(stream);
+                using var writer = OptionalOwnedBufferRowSchema.CreateRowWriter(stream);
 
                 for (var i = 0; i < 32; i++)
                 {

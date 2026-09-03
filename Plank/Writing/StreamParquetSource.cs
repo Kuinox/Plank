@@ -7,6 +7,11 @@ sealed class StreamParquetSource : IParquetReadWriteSource
 
     internal StreamParquetSource(Stream stream)
     {
+        Reset(stream);
+    }
+
+    internal void Reset(Stream stream)
+    {
         ArgumentNullException.ThrowIfNull(stream);
         Stream = stream;
         _position = stream.CanSeek ? checked((ulong)stream.Position) : 0;

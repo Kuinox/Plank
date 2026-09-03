@@ -158,19 +158,39 @@ public sealed class ParquetWriter : IDisposable
         return serialized;
     }
 
+    /// <summary>Starts a new file on a stream while retaining the writer's reusable buffers.</summary>
+    /// <remarks>
+    /// The writer takes ownership of <paramref name="stream"/>. It closes the current stream before switching to a
+    /// different one, and closes the active stream when the file is finished or the writer is disposed.
+    /// </remarks>
     public void Reset(Stream stream)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(stream);
-        if (_destination is StreamParquetSource streamSource && ReferenceEquals(stream, streamSource.Stream))
+        if (_destination is StreamParquetSource streamSource)
         {
-            Reset(_destination);
+            if (ReferenceEquals(stream, streamSource.Stream))
+            {
+                Reset(_destination);
+                return;
+            }
+
+            CloseCurrentFile();
+            streamSource.Reset(stream);
+            if (stream.CanSeek)
+                streamSource.SetLength(0);
+            OpenFile(_destination);
             return;
         }
 
         Reset(new StreamParquetSource(stream));
     }
 
+    /// <summary>Starts a new file on a caller-owned destination while retaining the writer's reusable buffers.</summary>
+    /// <remarks>
+    /// The writer calls <see cref="IParquetWriteSource.Close"/> when it finishes with a destination, but never calls
+    /// <see cref="IDisposable.Dispose"/> on a caller-provided destination.
+    /// </remarks>
     public void Reset(IParquetWriteSource destination)
     {
         ThrowIfDisposed();

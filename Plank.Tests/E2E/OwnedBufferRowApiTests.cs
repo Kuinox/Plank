@@ -31,7 +31,7 @@ internal sealed class OwnedBufferRowApiTests
         {
             using (var stream = File.Create(path))
             {
-                var writer = OwnedBufferRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
+                using var writer = OwnedBufferRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
                 {
                     RowApiMaxParallelism = 1,
                     TargetRowGroupSizeBytes = 1024
@@ -85,7 +85,7 @@ internal sealed class OwnedBufferRowApiTests
         {
             using (var stream = File.Create(path))
             {
-                var writer = OwnedUtf8StringRowSchema.CreateRowWriter(stream);
+                using var writer = OwnedUtf8StringRowSchema.CreateRowWriter(stream);
 
                 foreach (var value in new[] { "hello", "perf", "world" })
                 {
@@ -124,7 +124,7 @@ internal sealed class OwnedBufferRowApiTests
         {
             using (var stream = File.Create(path))
             {
-                var writer = OwnedBufferRowSchema.CreateRowWriter(stream,
+                using var writer = OwnedBufferRowSchema.CreateRowWriter(stream,
                     _ => threadName = Thread.CurrentThread.Name ?? string.Empty,
                     new ParquetWriterOptions
                     {

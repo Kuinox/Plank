@@ -91,7 +91,7 @@ internal sealed class CustomValueConverterE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = CustomMappedRowSchema.CreateRowWriter(stream);
+                using var writer = CustomMappedRowSchema.CreateRowWriter(stream);
                 for (var i = 0; i < Ids.Length; i++)
                 {
                     var row = writer.GetRow();
