@@ -22,7 +22,7 @@ internal sealed class RowApiE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = new TestIntPipelineWriter(stream, rowBatchSize: expected.Length, maxParallelism: 2, new ParquetWriterOptions
+                using var writer = new TestIntPipelineWriter(stream, rowBatchSize: expected.Length, maxParallelism: 2, new ParquetWriterOptions
                 {
                     Compression = CompressionKind.Snappy
                 });
@@ -56,7 +56,7 @@ internal sealed class RowApiE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = new TestIntPipelineWriter(stream, rowBatchSize: 8, maxParallelism: 2, new ParquetWriterOptions());
+                using var writer = new TestIntPipelineWriter(stream, rowBatchSize: 8, maxParallelism: 2, new ParquetWriterOptions());
                 for (var i = 0; i < expected.Length; i++)
                 {
                     ref var value = ref writer.GetValue();
@@ -87,7 +87,7 @@ internal sealed class RowApiE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = new TestIntPipelineWriter(stream, rowBatchSize: 4, maxParallelism: 2, new ParquetWriterOptions
+                using var writer = new TestIntPipelineWriter(stream, rowBatchSize: 4, maxParallelism: 2, new ParquetWriterOptions
                 {
                     Compression = CompressionKind.Snappy
                 });
@@ -123,7 +123,7 @@ internal sealed class RowApiE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = new BlockingTestIntPipelineWriter(stream, rowBatchSize: 1, maxParallelism: 1,
+                using var writer = new BlockingTestIntPipelineWriter(stream, rowBatchSize: 1, maxParallelism: 1,
                     new ParquetWriterOptions(), serializeStarted, releaseSerialize);
 
                 ref var value = ref writer.GetValue();
@@ -171,7 +171,7 @@ internal sealed class RowApiE2ETests
         {
             using (var stream = File.Create(path))
             {
-                var writer = new BlockingFiveColumnPipelineWriter(stream, rowBatchSize: 1, maxParallelism: 2,
+                using var writer = new BlockingFiveColumnPipelineWriter(stream, rowBatchSize: 1, maxParallelism: 2,
                     new ParquetWriterOptions(), serializeStarted, releaseSerialize);
 
                 writer.SetCurrentRow(expected[0][0]);
@@ -252,6 +252,101 @@ internal sealed class RowApiE2ETests
         {
             releaseWorker1.Set();
         }
+    }
+
+    [Test]
+    public void ResetReusesPhysicalWorkersAndProducesIndependentFiles()
+    {
+        var workerStartCount = 0;
+        var stream = new MemoryStream();
+        using var writer = new TestIntPipelineWriter(stream, rowBatchSize: 7, maxParallelism: 4,
+            new ParquetWriterOptions
+            {
+                Execution = new ParquetExecutionOptions
+                {
+                    WorkerCount = 4,
+                    OnWorkerStarted = _ => Interlocked.Increment(ref workerStartCount)
+                }
+            });
+
+        byte[] previousFile = [];
+        for (var cycle = 0; cycle < 64; cycle++)
+        {
+            if (cycle != 0)
+            {
+                stream = new MemoryStream(previousFile.Length + 1024);
+                stream.Write(previousFile);
+                writer.ResetWriting(stream);
+            }
+
+            var rowCount = cycle == 0 ? 257 : cycle % 11 == 0 ? 0 : cycle * 17 % 94;
+            var expected = new int[rowCount];
+            for (var rowIndex = 0; rowIndex < expected.Length; rowIndex++)
+            {
+                expected[rowIndex] = cycle * 1_000 + rowIndex;
+                writer.GetValue() = expected[rowIndex];
+                writer.Next();
+            }
+
+            writer.CompleteWriting();
+            var file = stream.ToArray();
+            stream.Dispose();
+            var actual = ReadIntValues(file);
+            if (!actual.AsSpan().SequenceEqual(expected))
+                throw new InvalidOperationException($"Reset cycle {cycle} produced different rows.");
+
+            if (cycle == 1 && file.Length >= previousFile.Length)
+                throw new InvalidOperationException("Reset did not truncate the longer previous file.");
+            previousFile = file;
+        }
+
+        if (Volatile.Read(ref workerStartCount) != 4)
+            throw new InvalidOperationException(
+                $"Expected four physical worker starts across all reset cycles, got {workerStartCount}.");
+    }
+
+    [Test]
+    public async Task DisposeWaitsForCompletionAlreadyInProgress()
+    {
+        using var serializeStarted = new ManualResetEventSlim(false);
+        using var releaseSerialize = new ManualResetEventSlim(false);
+        using var stream = new MemoryStream();
+        var writer = new BlockingTestIntPipelineWriter(stream, rowBatchSize: 2, maxParallelism: 1,
+            new ParquetWriterOptions(), serializeStarted, releaseSerialize);
+
+        try
+        {
+            writer.GetValue() = 42;
+            writer.Next();
+
+            var completeTask = Task.Run(writer.CompleteWriting);
+            if (!serializeStarted.Wait(TimeSpan.FromSeconds(2)))
+                throw new InvalidOperationException("Timed out waiting for completion to start serialization.");
+
+            var disposeTask = Task.Run(writer.Dispose);
+            await Task.Delay(100).ConfigureAwait(false);
+            if (completeTask.IsCompleted || disposeTask.IsCompleted)
+                throw new InvalidOperationException("Completion and disposal should both wait for serialization.");
+
+            releaseSerialize.Set();
+            await Task.WhenAll(completeTask, disposeTask).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+        }
+        finally
+        {
+            releaseSerialize.Set();
+            writer.Dispose();
+        }
+    }
+
+    static int[] ReadIntValues(byte[] file)
+    {
+        using var source = new Plank.Reading.MemoryReadSource(file);
+        using var reader = TestIntPipelineWriter.Schema.CreateReader(source);
+        var values = new List<int>();
+        for (var rowGroupIndex = 0; rowGroupIndex < reader.RowGroups.Count; rowGroupIndex++)
+            foreach (var buffer in reader.RowGroups[rowGroupIndex].Column<int>(0))
+                values.AddRange(buffer.Values);
+        return values.ToArray();
     }
 
     static async Task AssertParquetNetAsync(string path, int[] expected)
@@ -446,6 +541,16 @@ internal sealed class RowApiE2ETests
 
             Complete(_active, !_active.IsEmpty);
             _completed = true;
+        }
+
+        internal void ResetWriting(Stream stream)
+        {
+            if (!_completed)
+                throw new InvalidOperationException("Pipeline writer must be completed before it can be reset.");
+
+            ResetPipeline(stream);
+            _active = TakeInitialSlot();
+            _completed = false;
         }
     }
 

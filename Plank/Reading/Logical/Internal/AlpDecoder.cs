@@ -8,6 +8,27 @@ static class AlpDecoder
 {
     const int HeaderSize = 7;
 
+    internal struct BatchState
+    {
+        internal int ValueCount;
+        internal int ValuesRead;
+        internal int VectorSize;
+        internal int VectorCount;
+        internal int VectorIndex;
+
+        internal readonly bool Active
+            => ValuesRead < ValueCount;
+
+        internal readonly int NextBatchCount(int targetCount)
+        {
+            var remaining = ValueCount - ValuesRead;
+            if (remaining <= targetCount)
+                return remaining;
+            var vectors = Math.Max(1, (targetCount + VectorSize - 1) / VectorSize);
+            return Math.Min(remaining, checked(vectors * VectorSize));
+        }
+    }
+
     internal static bool TryDecode<T>(ReadOnlySpan<byte> payload, Column column, uint valueCount,
         Span<T> destination)
     {
@@ -24,30 +45,73 @@ static class AlpDecoder
         return false;
     }
 
+    internal static BatchState StartBatch(ReadOnlySpan<byte> payload, int expectedValueCount)
+    {
+        var header = ReadPageHeader(payload, checked((uint)expectedValueCount), expectedValueCount);
+        return new BatchState
+        {
+            ValueCount = expectedValueCount,
+            VectorSize = header.VectorSize,
+            VectorCount = header.VectorCount
+        };
+    }
+
+    internal static bool TryDecodeBatch<T>(ReadOnlySpan<byte> payload, Column column,
+        Span<T> destination, ref BatchState state)
+    {
+        if (destination.IsEmpty || destination.Length > state.ValueCount - state.ValuesRead)
+            throw new ArgumentOutOfRangeException(nameof(destination));
+        if (column.PhysicalType == ParquetPhysicalType.Float && typeof(T) == typeof(float))
+        {
+            DecodeFloatBatch(payload, Unsafe.As<Span<T>, Span<float>>(ref destination), ref state);
+            return true;
+        }
+        if (column.PhysicalType == ParquetPhysicalType.Double && typeof(T) == typeof(double))
+        {
+            DecodeDoubleBatch(payload, Unsafe.As<Span<T>, Span<double>>(ref destination), ref state);
+            return true;
+        }
+        return false;
+    }
+
     static void DecodeFloatPage(ReadOnlySpan<byte> payload, uint valueCount, Span<float> destination)
     {
-        var header = ReadPageHeader(payload, valueCount, destination.Length);
-        var destinationOffset = 0;
-        for (var vectorIndex = 0; vectorIndex < header.VectorCount; vectorIndex++)
-        {
-            var vector = GetVector(payload, header.VectorCount, vectorIndex);
-            var vectorCount = Math.Min(header.VectorSize, destination.Length - destinationOffset);
-            DecodeFloatVector(vector, destination.Slice(destinationOffset, vectorCount));
-            destinationOffset += vectorCount;
-        }
+        var state = StartBatch(payload, checked((int)valueCount));
+        DecodeFloatBatch(payload, destination, ref state);
     }
 
     static void DecodeDoublePage(ReadOnlySpan<byte> payload, uint valueCount, Span<double> destination)
     {
-        var header = ReadPageHeader(payload, valueCount, destination.Length);
+        var state = StartBatch(payload, checked((int)valueCount));
+        DecodeDoubleBatch(payload, destination, ref state);
+    }
+
+    static void DecodeFloatBatch(ReadOnlySpan<byte> payload, Span<float> destination,
+        ref BatchState state)
+    {
         var destinationOffset = 0;
-        for (var vectorIndex = 0; vectorIndex < header.VectorCount; vectorIndex++)
+        while (destinationOffset < destination.Length)
         {
-            var vector = GetVector(payload, header.VectorCount, vectorIndex);
-            var vectorCount = Math.Min(header.VectorSize, destination.Length - destinationOffset);
+            var vector = GetVector(payload, state.VectorCount, state.VectorIndex++);
+            var vectorCount = Math.Min(state.VectorSize, destination.Length - destinationOffset);
+            DecodeFloatVector(vector, destination.Slice(destinationOffset, vectorCount));
+            destinationOffset += vectorCount;
+        }
+        state.ValuesRead += destination.Length;
+    }
+
+    static void DecodeDoubleBatch(ReadOnlySpan<byte> payload, Span<double> destination,
+        ref BatchState state)
+    {
+        var destinationOffset = 0;
+        while (destinationOffset < destination.Length)
+        {
+            var vector = GetVector(payload, state.VectorCount, state.VectorIndex++);
+            var vectorCount = Math.Min(state.VectorSize, destination.Length - destinationOffset);
             DecodeDoubleVector(vector, destination.Slice(destinationOffset, vectorCount));
             destinationOffset += vectorCount;
         }
+        state.ValuesRead += destination.Length;
     }
 
     static PageInfo ReadPageHeader(ReadOnlySpan<byte> payload, uint valueCount, int destinationLength)

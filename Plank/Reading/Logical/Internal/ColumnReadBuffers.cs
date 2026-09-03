@@ -10,8 +10,10 @@ struct ColumnReadBuffers<T>
     internal ParquetBuffer Levels;
     internal ParquetBuffer CompactDefinitions;
     internal ParquetBuffer ExpandedDefinitions;
+    internal ParquetBuffer PreviousBinaryValue;
     internal int DictionaryCount;
     internal bool HasDictionary;
+    internal ReadOnlyMemory<byte> BorrowedBinaryDictionaryPayload;
 
     internal Span<TValue> GetValues<TValue>(int valueCount, IParquetBufferPool bufferPool)
     {
@@ -24,6 +26,14 @@ struct ColumnReadBuffers<T>
 
     internal ColumnBuffer<T> CreateNativeBuffer(int valueCount)
         => new(Values, valueCount);
+
+    internal ColumnBuffer<T> CreateNativeBinaryBuffer(int valueCount, int descriptorCapacity)
+        => new(Values, valueCount, checked(descriptorCapacity *
+            Unsafe.SizeOf<BinaryValueDescriptor>()));
+
+    internal ColumnBuffer<T> CreateBorrowedBinaryBuffer(int valueCount,
+        ReadOnlyMemory<byte> payload)
+        => new(Values, valueCount, payload);
 
     internal Span<BinaryValueDescriptor> GetBinaryValues(int valueCount, int payloadByteLength,
         IParquetBufferPool bufferPool, out Span<byte> payload)
@@ -38,6 +48,7 @@ struct ColumnReadBuffers<T>
     internal Span<TValue> GetDictionary<TValue>(int valueCount, IParquetBufferPool bufferPool)
     {
         Dictionary.Dispose();
+        BorrowedBinaryDictionaryPayload = default;
         var byteLength = ByteLength(valueCount, Unsafe.SizeOf<TValue>(), "Dictionary");
         Dictionary = byteLength == 0 ? default : bufferPool.Rent((uint)byteLength);
         DictionaryCount = valueCount;
@@ -52,6 +63,7 @@ struct ColumnReadBuffers<T>
         IParquetBufferPool bufferPool, out Span<byte> payload)
     {
         Dictionary.Dispose();
+        BorrowedBinaryDictionaryPayload = default;
         var descriptorByteLength = ByteLength(valueCount, Unsafe.SizeOf<BinaryValueDescriptor>(),
             "Binary dictionary");
         var byteLength = Sum(descriptorByteLength, payloadByteLength, "Binary dictionary");
@@ -61,6 +73,9 @@ struct ColumnReadBuffers<T>
         payload = Dictionary.Span.Slice(descriptorByteLength, payloadByteLength);
         return valueCount == 0 ? [] : ParquetBuffer.AsSpan<BinaryValueDescriptor>(Dictionary, valueCount);
     }
+
+    internal void SetBorrowedBinaryDictionaryPayload(ReadOnlyMemory<byte> payload)
+        => BorrowedBinaryDictionaryPayload = payload;
 
     internal Span<byte> GetScratch(int byteLength, IParquetBufferPool bufferPool)
     {
@@ -103,6 +118,22 @@ struct ColumnReadBuffers<T>
         return valueCount == 0 ? [] : ParquetBuffer.AsSpan<int>(ExpandedDefinitions, valueCount);
     }
 
+    internal Span<byte> GetPreviousBinaryValue(int byteLength, IParquetBufferPool bufferPool)
+    {
+        if (byteLength < 0)
+            throw new CorruptParquetException(
+                $"Previous binary value buffer of {byteLength} bytes is not a valid size.");
+        if (PreviousBinaryValue.Length < byteLength)
+        {
+            PreviousBinaryValue.Dispose();
+            PreviousBinaryValue = byteLength == 0 ? default : bufferPool.Rent((uint)byteLength);
+        }
+        return byteLength == 0 ? [] : PreviousBinaryValue.Span[..byteLength];
+    }
+
+    internal ReadOnlySpan<byte> GetPreviousBinaryValue(int byteLength)
+        => byteLength == 0 ? [] : PreviousBinaryValue.Span[..byteLength];
+
     internal void GetLevels(int levelCount, IParquetBufferPool bufferPool,
         out Span<int> repetitionLevels, out Span<int> definitionLevels)
     {
@@ -122,6 +153,7 @@ struct ColumnReadBuffers<T>
         Levels.Dispose();
         CompactDefinitions.Dispose();
         ExpandedDefinitions.Dispose();
+        PreviousBinaryValue.Dispose();
         this = default;
     }
 

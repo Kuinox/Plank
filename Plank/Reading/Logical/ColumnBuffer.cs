@@ -10,6 +10,9 @@ public readonly struct ColumnBuffer<T>
     readonly ReadOnlyMemory<byte> _borrowedValues;
     readonly IParquetBufferPool? _borrowedBufferPool;
     readonly nint _variableLengthPayloadAddress;
+    readonly byte[]? _variableLengthBorrowedArray;
+    readonly int _variableLengthPayloadOffset;
+    readonly int _variableLengthBorrowedLength;
     readonly int _valueCount;
     readonly bool _isVariableLength;
 
@@ -19,24 +22,86 @@ public readonly struct ColumnBuffer<T>
         _borrowedValues = default;
         _borrowedBufferPool = null;
         _variableLengthPayloadAddress = 0;
+        _variableLengthBorrowedArray = null;
+        _variableLengthPayloadOffset = 0;
+        _variableLengthBorrowedLength = 0;
         _valueCount = valueCount;
         _isVariableLength = false;
     }
 
-    internal ColumnBuffer(ParquetBuffer values, int valueCount, bool isVariableLength)
+    internal ColumnBuffer(ParquetBuffer values, int valueCount,
+        int variableLengthNativePayloadOffset)
+        : this(values, valueCount)
+    {
+        if (typeof(T) != typeof(BinaryValueDescriptor))
+            throw new ArgumentException(
+                "Only binary descriptor buffers can carry a native payload offset.", nameof(values));
+        var descriptorByteLength = checked(valueCount * Unsafe.SizeOf<BinaryValueDescriptor>());
+        if (variableLengthNativePayloadOffset < descriptorByteLength ||
+            variableLengthNativePayloadOffset > values.Length)
+            throw new ArgumentOutOfRangeException(nameof(variableLengthNativePayloadOffset));
+        _variableLengthPayloadOffset = variableLengthNativePayloadOffset;
+    }
+
+    internal ColumnBuffer(ParquetBuffer values, int valueCount, bool isVariableLength,
+        ReadOnlyMemory<byte> variableLengthBorrowedPayload = default,
+        int variableLengthNativePayloadOffset = 0)
     {
         if (!isVariableLength || typeof(T) != typeof(byte))
             throw new ArgumentException("Variable-length buffers must contain bytes.",
                 nameof(isVariableLength));
-
         _nativeValues = values;
         _borrowedValues = default;
         _borrowedBufferPool = null;
-        _variableLengthPayloadAddress = valueCount == 0
+        var descriptorByteLength = checked(valueCount * Unsafe.SizeOf<BinaryValueDescriptor>());
+        if (variableLengthNativePayloadOffset == 0)
+            variableLengthNativePayloadOffset = descriptorByteLength;
+        if (variableLengthNativePayloadOffset < descriptorByteLength ||
+            variableLengthNativePayloadOffset > values.Length)
+            throw new ArgumentOutOfRangeException(nameof(variableLengthNativePayloadOffset));
+        _variableLengthPayloadAddress = valueCount == 0 || !variableLengthBorrowedPayload.IsEmpty
             ? 0
-            : values.DangerousGetAddress() + checked(valueCount * Unsafe.SizeOf<BinaryValueDescriptor>());
+            : values.DangerousGetAddress() + variableLengthNativePayloadOffset;
+        if (!variableLengthBorrowedPayload.IsEmpty)
+        {
+            if (!MemoryMarshal.TryGetArray(variableLengthBorrowedPayload, out var segment) ||
+                segment.Array is null)
+                throw new ArgumentException("Borrowed payloads must be array-backed.",
+                    nameof(variableLengthBorrowedPayload));
+            _variableLengthBorrowedArray = segment.Array;
+            _variableLengthPayloadOffset = segment.Offset;
+            _variableLengthBorrowedLength = segment.Count;
+        }
+        else
+        {
+            _variableLengthBorrowedArray = null;
+            _variableLengthPayloadOffset = variableLengthNativePayloadOffset;
+            _variableLengthBorrowedLength = 0;
+        }
         _valueCount = valueCount;
         _isVariableLength = true;
+    }
+
+    internal ColumnBuffer(ParquetBuffer values, int valueCount,
+        ReadOnlyMemory<byte> variableLengthBorrowedPayload)
+    {
+        if (typeof(T) != typeof(BinaryValueDescriptor) || variableLengthBorrowedPayload.IsEmpty)
+            throw new ArgumentException(
+                "Borrowed variable-length buffers require binary descriptors and a page payload.",
+                nameof(variableLengthBorrowedPayload));
+        _nativeValues = values;
+        _borrowedValues = default;
+        _borrowedBufferPool = null;
+        _variableLengthPayloadAddress = 0;
+        if (!MemoryMarshal.TryGetArray(variableLengthBorrowedPayload, out var segment) ||
+            segment.Array is null)
+            throw new ArgumentException("Borrowed payloads must be array-backed.",
+                nameof(variableLengthBorrowedPayload));
+        _variableLengthBorrowedArray = segment.Array;
+        _variableLengthPayloadOffset = segment.Offset;
+        _variableLengthBorrowedLength = segment.Count;
+        _valueCount = valueCount;
+        _isVariableLength = false;
     }
 
     internal ColumnBuffer(ReadOnlyMemory<byte> borrowedValues, int valueCount,
@@ -53,6 +118,9 @@ public readonly struct ColumnBuffer<T>
         _borrowedValues = borrowedValues[..byteLength];
         _borrowedBufferPool = borrowedBufferPool;
         _variableLengthPayloadAddress = 0;
+        _variableLengthBorrowedArray = null;
+        _variableLengthPayloadOffset = 0;
+        _variableLengthBorrowedLength = 0;
         _valueCount = valueCount;
         _isVariableLength = false;
     }
@@ -102,8 +170,17 @@ public readonly struct ColumnBuffer<T>
     internal int ValueCount
         => _valueCount;
 
+    internal int VariableLengthNativePayloadOffset
+        => _variableLengthBorrowedArray is null ? _variableLengthPayloadOffset : 0;
+
     internal ParquetBuffer NativeValues
         => _nativeValues;
+
+    internal ReadOnlyMemory<byte> VariableLengthBorrowedPayload
+        => _variableLengthBorrowedArray is null
+            ? default
+            : new ReadOnlyMemory<byte>(_variableLengthBorrowedArray,
+                _variableLengthPayloadOffset, _variableLengthBorrowedLength);
 
     internal Span<T> WritableValues
     {
@@ -127,18 +204,22 @@ public readonly struct ColumnBuffer<T>
     ReadOnlySpan<byte> GetVariableLengthValue(int index)
     {
         var descriptor = GetVariableLengthDescriptor(index);
-        return descriptor.GetSpan(_variableLengthPayloadAddress);
+        return _variableLengthBorrowedArray is null
+            ? descriptor.GetSpan(_variableLengthPayloadAddress)
+            : descriptor.GetSpan(_variableLengthBorrowedArray, _variableLengthPayloadOffset);
     }
 
     ReadOnlySpan<byte> GetVariableLengthPayload()
     {
+        if (_variableLengthBorrowedArray is not null)
+            throw new NotSupportedException(
+                "A borrowed variable-length buffer does not have one contiguous payload span.");
         var descriptors = ParquetBuffer.AsReadOnlySpan<BinaryValueDescriptor>(_nativeValues, _valueCount);
         var payloadByteLength = 0;
         for (var i = 0; i < descriptors.Length; i++)
             payloadByteLength = checked(payloadByteLength + descriptors[i].Length);
 
-        var descriptorByteLength = checked(_valueCount * Unsafe.SizeOf<BinaryValueDescriptor>());
-        return _nativeValues.Span.Slice(descriptorByteLength, payloadByteLength);
+        return _nativeValues.Span.Slice(_variableLengthPayloadOffset, payloadByteLength);
     }
 
     static ReadOnlySpan<T> ProjectBytes(ReadOnlySpan<byte> bytes)

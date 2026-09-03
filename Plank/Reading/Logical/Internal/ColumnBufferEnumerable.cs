@@ -14,10 +14,11 @@ readonly struct ColumnBufferEnumerable<T>
     readonly ulong _rowCount;
     readonly ParquetPagePruner? _pruner;
     readonly bool _borrowRequiredPlainValues;
+    readonly bool _borrowBinaryValues;
 
     internal ColumnBufferEnumerable(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
         LeafColumn definition, IParquetBufferPool bufferPool, ulong rowCount, ParquetPagePruner? pruner,
-        bool borrowRequiredPlainValues)
+        bool borrowRequiredPlainValues, bool borrowBinaryValues)
     {
         ArgumentNullException.ThrowIfNull(physicalReader);
         ArgumentNullException.ThrowIfNull(definition);
@@ -32,11 +33,12 @@ readonly struct ColumnBufferEnumerable<T>
         _rowCount = rowCount;
         _pruner = pruner;
         _borrowRequiredPlainValues = borrowRequiredPlainValues;
+        _borrowBinaryValues = borrowBinaryValues;
     }
 
     internal Enumerator GetEnumerator()
         => new(_physicalReader, _rowGroupOrdinal, _columnOrdinal, _definition, _bufferPool, _rowCount, _pruner,
-            _borrowRequiredPlainValues);
+            _borrowRequiredPlainValues, _borrowBinaryValues);
 
     internal struct Enumerator : IDisposable
     {
@@ -49,16 +51,18 @@ readonly struct ColumnBufferEnumerable<T>
         readonly ulong _rowCount;
         readonly ParquetPagePruner? _pruner;
         readonly bool _borrowRequiredPlainValues;
+        readonly bool _borrowBinaryValues;
         ParquetPageCursor _cursor;
         PageMetadataHandle _pageMetadata;
         ColumnReadBuffers<T> _buffers;
+        ColumnChunkReader.EncodedPageState _encodedPage;
         ColumnChunkReader.FixedWidthPageState _fixedWidthPage;
         bool _openedCursor;
 
         internal Enumerator(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
             LeafColumn definition,
             IParquetBufferPool bufferPool, ulong rowCount, ParquetPagePruner? pruner,
-            bool borrowRequiredPlainValues)
+            bool borrowRequiredPlainValues, bool borrowBinaryValues)
         {
             ArgumentNullException.ThrowIfNull(physicalReader);
             ArgumentNullException.ThrowIfNull(definition);
@@ -73,9 +77,11 @@ readonly struct ColumnBufferEnumerable<T>
             _rowCount = rowCount;
             _pruner = pruner;
             _borrowRequiredPlainValues = borrowRequiredPlainValues;
+            _borrowBinaryValues = borrowBinaryValues;
             _cursor = default;
             _pageMetadata = default;
             _buffers = default;
+            _encodedPage = default;
             _fixedWidthPage = default;
             _openedCursor = false;
             Current = default;
@@ -98,6 +104,14 @@ readonly struct ColumnBufferEnumerable<T>
                 _openedCursor = true;
             }
 
+            if (_encodedPage.Active)
+            {
+                Current = ColumnChunkReader.DecodeNextEncodedBatch(
+                    _cursor.CurrentPayloadUnchecked, _column, ref _buffers, _bufferPool,
+                    ref _encodedPage);
+                return true;
+            }
+
             if (_fixedWidthPage.Active)
             {
                 Current = ColumnChunkReader.DecodeNextFixedWidthBatch(
@@ -108,8 +122,13 @@ readonly struct ColumnBufferEnumerable<T>
 
             while (_cursor.MoveNext())
             {
+                var borrowedBinaryPayload = typeof(T) == typeof(BinaryValueDescriptor) &&
+                    _borrowBinaryValues
+                        ? _cursor.CurrentBorrowedPayloadUnchecked
+                        : default;
                 if (ColumnChunkReader.TryDecodeDictionaryPageIntoNative<T>(_cursor.CurrentHeader,
-                        _cursor.CurrentPayload, _column, ref _buffers, _bufferPool))
+                        _cursor.CurrentPayload, borrowedBinaryPayload, _column,
+                        ref _buffers, _bufferPool))
                     continue;
 
                 if (ColumnChunkReader.TryStartFixedWidthPageBatches(_cursor.CurrentHeader,
@@ -122,17 +141,26 @@ readonly struct ColumnBufferEnumerable<T>
                     return true;
                 }
 
+                if (ColumnChunkReader.TryStartEncodedPageBatches(_cursor.CurrentHeader,
+                        _cursor.CurrentPayload, borrowedBinaryPayload, _column, _rowCount,
+                        ref _buffers, _bufferPool, ref _encodedPage,
+                        out var encodedBuffer))
+                {
+                    Current = encodedBuffer;
+                    return true;
+                }
+
                 if (ColumnChunkReader.TryDecodeNullablePageIntoNative<T>(_cursor.CurrentHeader,
-                        _cursor.CurrentPayload, _column, _rowCount, ref _buffers, _bufferPool,
-                        out var nullableBuffer))
+                        _cursor.CurrentPayload, borrowedBinaryPayload, _column, _rowCount,
+                        ref _buffers, _bufferPool, out var nullableBuffer))
                 {
                     Current = nullableBuffer;
                     return true;
                 }
 
                 if (ColumnChunkReader.TryDecodeRequiredPageIntoNative<T>(_cursor.CurrentHeader,
-                        _cursor.CurrentPayload, _column, _rowCount, ref _buffers, _bufferPool,
-                        out var nativeBuffer))
+                        _cursor.CurrentPayload, borrowedBinaryPayload, _column, _rowCount,
+                        ref _buffers, _bufferPool, out var nativeBuffer))
                 {
                     Current = nativeBuffer;
                     return true;
@@ -153,6 +181,7 @@ readonly struct ColumnBufferEnumerable<T>
             _pageMetadata.Dispose();
             _pageMetadata = default;
             _buffers.Dispose();
+            _encodedPage = default;
             _fixedWidthPage = default;
             _openedCursor = false;
             Current = default;

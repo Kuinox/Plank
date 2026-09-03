@@ -80,4 +80,5 @@ sealed class RowApiBinaryColumnReadState : RowApiColumnReadState
         _buffers.Dispose();
         _buffersOpen = false;
     }
+
 }
