@@ -25,10 +25,10 @@ internal sealed class GeneratedNestedRowE2ETests
                         DataPageVersion = Plank.Writing.ParquetDataPageVersion.V1,
                         TargetRowGroupSizeBytes = 32 * 1024
                     });
-                GeneratedNestedRowSchema.RowCache cache = default;
+                var columnWriter = writer.GetColumnWriter();
                 for (var i = 0; i < MultiRowGroupRowCount; i++)
                 {
-                    var row = writer.GetRow(ref cache);
+                    var row = columnWriter.GetRow();
                     row.Sequence = i;
                     row.CorrelationId = CreateGuid(i);
                     row.Label = $"row-{i}";

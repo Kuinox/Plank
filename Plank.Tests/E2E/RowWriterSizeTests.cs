@@ -116,7 +116,7 @@ internal sealed class RowWriterSizeTests
     }
 
     [Test]
-    public void ManagedReferenceCacheSurvivesGrowthSlotRolloverAndCompactingGc()
+    public void ManagedColumnReferencesSurviveGrowthSlotRolloverAndCompactingGc()
     {
         using var stream = new MemoryStream();
         using (var writer = WideRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
@@ -126,10 +126,10 @@ internal sealed class RowWriterSizeTests
             TargetRowGroupSizeBytes = 65 * sizeof(int) * 3
         }))
         {
-            WideRowSchema.RowCache cache = default;
+            var columnWriter = writer.GetColumnWriter();
             for (var i = 0; i < 16; i++)
             {
-                var row = writer.GetRow(ref cache);
+                var row = columnWriter.GetRow();
                 row.Column0 = CompactAndReturn(i);
                 row.Column1 = 1_000 + i;
                 row.Column32 = 32_000 + i;
@@ -151,7 +151,7 @@ internal sealed class RowWriterSizeTests
                 row.Column63 != 63_000 + index ||
                 row.Column64 != 64_000 + index)
             {
-                throw new InvalidOperationException($"Managed cached row {index} was corrupted.");
+                throw new InvalidOperationException($"Managed-reference row {index} was corrupted.");
             }
             index++;
         }
@@ -167,10 +167,10 @@ internal sealed class RowWriterSizeTests
             TargetRowGroupSizeBytes = 1024 * 1024
         }))
         {
-            CommonClrRowSchema.RowCache cache = default;
+            var columnWriter = writer.GetColumnWriter();
             for (var i = 0; i < 16; i++)
             {
-                var row = writer.GetRow(ref cache);
+                var row = columnWriter.GetRow();
                 row.Name = CompactAndReturn($"row-{i}");
                 row.Id = Guid.Empty;
             }

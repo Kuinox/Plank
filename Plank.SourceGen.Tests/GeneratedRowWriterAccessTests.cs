@@ -3,7 +3,7 @@ namespace Plank.SourceGen.Tests;
 internal sealed class GeneratedRowWriterAccessTests
 {
     [Test]
-    public async Task FlatRowsOfferManagedReferenceCache()
+    public async Task FlatRowsKeepDirectManagedColumnReferences()
     {
         const string source = """
             using Plank.Schema;
@@ -21,12 +21,19 @@ internal sealed class GeneratedRowWriterAccessTests
         var generated = Generate(source);
 
         await Assert.That(generated).Contains("internal int[] _column0 = null!;");
-        await Assert.That(generated).Contains("return new Row(Index, this);");
-        await Assert.That(generated).Contains("public CachedRow GetRow(ref RowCache cache)");
-        await Assert.That(generated).Contains("public ref struct RowCache");
+        await Assert.That(generated).Contains("return new BufferedRow(Index, this);");
         await Assert.That(generated).Contains("internal ref int _column0;");
         await Assert.That(generated).Contains(
-            "public ref int Value => ref global::System.Runtime.CompilerServices.Unsafe.Add(ref Cache._column0, _index);");
+            "_column0 = ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(ownerSlot._column0);");
+        await Assert.That(generated).Contains("public ref struct ColumnWriter");
+        await Assert.That(generated).Contains("public Row GetRow()");
+        await Assert.That(generated).Contains("_index = _writer.GetColumnRow(ref this);");
+        await Assert.That(generated).Contains("return new Row(_index, ref this);");
+        await Assert.That(generated).Contains("readonly ref byte _columnWriter;");
+        await Assert.That(generated).Contains(
+            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.CompilerServices.Unsafe.As<byte, ColumnWriter>(ref _columnWriter)._column0, _index) = value;");
+        await Assert.That(generated.Contains("RowCache", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(generated.Contains("CachedRow", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("GetArrayDataReferenceUnchecked", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("_ownerSlot._column0[_index]", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("return new Row(Index, this, GetValues", StringComparison.Ordinal))
@@ -34,7 +41,7 @@ internal sealed class GeneratedRowWriterAccessTests
     }
 
     [Test]
-    public async Task NullableFlatRowsUseManagedReferenceCache()
+    public async Task NullableFlatRowsKeepDirectManagedColumnReferences()
     {
         const string source = """
             using Plank.Schema;
@@ -53,13 +60,13 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated).Contains("internal int?[] _column0 = null!;");
         await Assert.That(generated).Contains("internal ref int? _column0;");
         await Assert.That(generated).Contains(
-            "public ref int? Value => ref global::System.Runtime.CompilerServices.Unsafe.Add(ref Cache._column0, _index);");
+            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.CompilerServices.Unsafe.As<byte, ColumnWriter>(ref _columnWriter)._column0, _index) = value;");
         await Assert.That(generated.Contains("GetArrayDataReferenceUnchecked", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("PinnedColumn", StringComparison.Ordinal)).IsFalse();
     }
 
     [Test]
-    public async Task NestedScalarLeavesUseManagedReferenceCache()
+    public async Task NestedScalarLeavesKeepDirectManagedColumnReferences()
     {
         const string source = """
             using Plank.Schema;
@@ -83,16 +90,16 @@ internal sealed class GeneratedRowWriterAccessTests
 
         await Assert.That(generated).Contains("internal int[] _column0 = null!;");
         await Assert.That(generated).Contains("internal ref int _column0;");
-        await Assert.That(generated).Contains("Unsafe.Add(ref Cache._column0, _index)");
+        await Assert.That(generated).Contains("Unsafe.As<byte, ColumnWriter>(ref _columnWriter)._column0");
         await Assert.That(generated).Contains("_column1 = GetValues<string>(1);");
         await Assert.That(generated).Contains("internal ref string _column1;");
-        await Assert.That(generated).Contains("Unsafe.Add(ref Cache._column1, _index)");
+        await Assert.That(generated).Contains("Unsafe.As<byte, ColumnWriter>(ref _columnWriter)._column1");
         await Assert.That(generated.Contains("GetArrayDataReferenceUnchecked", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("PinnedColumn", StringComparison.Ordinal)).IsFalse();
     }
 
     [Test]
-    public async Task NestedRowsReferenceCachedTypedBuffers()
+    public async Task NestedRowsKeepDirectManagedColumnReferences()
     {
         const string source = """
             using Plank.Schema;
@@ -109,10 +116,16 @@ internal sealed class GeneratedRowWriterAccessTests
         var generated = Generate(source);
 
         await Assert.That(generated).Contains("_column0 = GetValues<");
-        await Assert.That(generated).Contains("return new Row(Index, this);");
-        await Assert.That(generated).Contains("public CachedRow GetRow(ref RowCache cache)");
-        await Assert.That(generated).Contains("public ref struct RowCache");
-        await Assert.That(generated).Contains("Unsafe.Add(ref Cache._column0, _index)");
+        await Assert.That(generated).Contains("return new BufferedRow(Index, this);");
+        await Assert.That(generated).Contains("internal ref int[] _column0;");
+        await Assert.That(generated).Contains("Unsafe.As<byte, ColumnWriter>(ref _columnWriter)._column0");
+        await Assert.That(generated).Contains("public ref struct ColumnWriter");
+        await Assert.That(generated).Contains("public Row GetRow()");
+        await Assert.That(generated).Contains("return new Row(_index, ref this);");
+        await Assert.That(generated).Contains(
+            "slot = CommitVariableRow(slot, columnWriter.GetRowSize(0UL), out var buffersChanged);");
+        await Assert.That(generated.Contains("RowCache", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(generated.Contains("CachedRow", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("GetArrayDataReferenceUnchecked", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("PinnedColumn", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("_ownerSlot._column0[_index]", StringComparison.Ordinal)).IsFalse();
@@ -169,12 +182,14 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated.Contains("readonly int _rowsPerGroup;", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated).Contains(
             "slot = CommitVariableRow(slot, slot.GetRowSize(checked(4UL)));");
+        await Assert.That(generated).Contains(
+            "slot = CommitVariableRow(slot, columnWriter.GetRowSize(checked(4UL)), out var buffersChanged);");
         await Assert.That(generated).Contains("bool _rowPending;");
         await Assert.That(generated.Contains("public void Next()", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated).Contains(
-            "slot = CommitVariableRow(slot, slot.GetRowSize(checked(4UL), ref cache));");
+            "EstimateValueSize(global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_column1), Index), global::Plank.Schema.ParquetPhysicalType.ByteArray, 0U)");
         await Assert.That(generated).Contains(
-            "EstimateValueSize(global::System.Runtime.CompilerServices.Unsafe.Add(ref cache._column1, Index), global::Plank.Schema.ParquetPhysicalType.ByteArray, 0U)");
+            "BufferSlot.GetValueSize(global::System.Runtime.CompilerServices.Unsafe.Add(ref _column1, _index), global::Plank.Schema.ParquetPhysicalType.ByteArray, 0U)");
     }
 
     static string Generate(string source)
