@@ -10,10 +10,9 @@ static class RowApiSample
         using var rowWriter = EventSchema.CreateRowWriter(stream);
 
         var now = DateTimeOffset.UtcNow;
-        var columnWriter = rowWriter.GetColumnWriter();
         for (var i = 0; i < 3; i++)
         {
-            var row = columnWriter.GetRow();
+            var row = rowWriter.GetRow();
             row.Id = i + 1;
             row.Name = i switch
             {

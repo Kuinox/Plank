@@ -16,22 +16,39 @@ internal sealed class GeneratedRowWriterAccessTests
                 public int Value { get; set; }
                 public long Count { get; set; }
             }
+
+            static class Usage
+            {
+                public static void Write(System.IO.Stream output)
+                {
+                    using var writer = RowSchema.CreateRowWriter(output);
+                    for (var i = 0; i < 10; i++)
+                    {
+                        var row = writer.GetRow();
+                        row.Value = i;
+                        row.Count = i;
+                    }
+                    writer.Complete();
+                }
+            }
             """;
 
         var generated = Generate(source);
 
         await Assert.That(generated).Contains("internal int[] _column0 = null!;");
-        await Assert.That(generated).Contains("return new BufferedRow(Index, this);");
         await Assert.That(generated).Contains("internal ref int _column0;");
         await Assert.That(generated).Contains(
             "_column0 = ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(ownerSlot._column0);");
-        await Assert.That(generated).Contains("public ref struct ColumnWriter");
+        await Assert.That(generated).Contains("public ref struct PipelineWriter");
         await Assert.That(generated).Contains("public Row GetRow()");
-        await Assert.That(generated).Contains("_index = _writer.GetColumnRow(ref this);");
-        await Assert.That(generated).Contains("return new Row(_index, ref this);");
-        await Assert.That(generated).Contains("readonly ref byte _columnWriter;");
+        await Assert.That(generated).Contains("var index = _core.GetRow(ref _state);");
+        await Assert.That(generated).Contains("return new Row(index, ref _state);");
+        await Assert.That(generated).Contains("readonly ref byte _state;");
         await Assert.That(generated).Contains(
-            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.CompilerServices.Unsafe.As<byte, ColumnWriter>(ref _columnWriter)._column0, _index) = value;");
+            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.CompilerServices.Unsafe.As<byte, RowWriteState>(ref _state)._column0, _index) = value;");
+        await Assert.That(generated.Contains("GetColumnWriter", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(generated.Contains("ColumnWriter", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(generated.Contains("BufferedRow", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("RowCache", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("CachedRow", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("GetArrayDataReferenceUnchecked", StringComparison.Ordinal)).IsFalse();
@@ -60,7 +77,7 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated).Contains("internal int?[] _column0 = null!;");
         await Assert.That(generated).Contains("internal ref int? _column0;");
         await Assert.That(generated).Contains(
-            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.CompilerServices.Unsafe.As<byte, ColumnWriter>(ref _columnWriter)._column0, _index) = value;");
+            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.CompilerServices.Unsafe.As<byte, RowWriteState>(ref _state)._column0, _index) = value;");
         await Assert.That(generated.Contains("GetArrayDataReferenceUnchecked", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("PinnedColumn", StringComparison.Ordinal)).IsFalse();
     }
@@ -90,10 +107,10 @@ internal sealed class GeneratedRowWriterAccessTests
 
         await Assert.That(generated).Contains("internal int[] _column0 = null!;");
         await Assert.That(generated).Contains("internal ref int _column0;");
-        await Assert.That(generated).Contains("Unsafe.As<byte, ColumnWriter>(ref _columnWriter)._column0");
+        await Assert.That(generated).Contains("Unsafe.As<byte, RowWriteState>(ref _state)._column0");
         await Assert.That(generated).Contains("_column1 = GetValues<string>(1);");
         await Assert.That(generated).Contains("internal ref string _column1;");
-        await Assert.That(generated).Contains("Unsafe.As<byte, ColumnWriter>(ref _columnWriter)._column1");
+        await Assert.That(generated).Contains("Unsafe.As<byte, RowWriteState>(ref _state)._column1");
         await Assert.That(generated.Contains("GetArrayDataReferenceUnchecked", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("PinnedColumn", StringComparison.Ordinal)).IsFalse();
     }
@@ -116,14 +133,16 @@ internal sealed class GeneratedRowWriterAccessTests
         var generated = Generate(source);
 
         await Assert.That(generated).Contains("_column0 = GetValues<");
-        await Assert.That(generated).Contains("return new BufferedRow(Index, this);");
         await Assert.That(generated).Contains("internal ref int[] _column0;");
-        await Assert.That(generated).Contains("Unsafe.As<byte, ColumnWriter>(ref _columnWriter)._column0");
-        await Assert.That(generated).Contains("public ref struct ColumnWriter");
+        await Assert.That(generated).Contains("Unsafe.As<byte, RowWriteState>(ref _state)._column0");
+        await Assert.That(generated).Contains("public ref struct PipelineWriter");
         await Assert.That(generated).Contains("public Row GetRow()");
-        await Assert.That(generated).Contains("return new Row(_index, ref this);");
+        await Assert.That(generated).Contains("return new Row(index, ref _state);");
         await Assert.That(generated).Contains(
-            "slot = CommitVariableRow(slot, columnWriter.GetRowSize(0UL), out var buffersChanged);");
+            "slot = CommitVariableRow(slot, state.GetRowSize(0UL), out var buffersChanged);");
+        await Assert.That(generated.Contains("GetColumnWriter", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(generated.Contains("ColumnWriter", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(generated.Contains("BufferedRow", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("RowCache", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("CachedRow", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("GetArrayDataReferenceUnchecked", StringComparison.Ordinal)).IsFalse();
@@ -153,7 +172,8 @@ internal sealed class GeneratedRowWriterAccessTests
 
         await Assert.That(generated).Contains("readonly int _rowsPerGroup;");
         await Assert.That(generated).Contains("GetFixedRowsPerGroup(checked(4UL + 8UL))");
-        await Assert.That(generated).Contains("slot = CommitFixedRow(slot, _rowsPerGroup);");
+        await Assert.That(generated).Contains(
+            "slot = CommitFixedRow(slot, _rowsPerGroup, out var buffersChanged);");
         await Assert.That(generated).Contains("bool _rowPending;");
         await Assert.That(generated.Contains("public void Next()", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("GetRowSize(ulong", StringComparison.Ordinal)).IsFalse();
@@ -181,9 +201,9 @@ internal sealed class GeneratedRowWriterAccessTests
 
         await Assert.That(generated.Contains("readonly int _rowsPerGroup;", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated).Contains(
-            "slot = CommitVariableRow(slot, slot.GetRowSize(checked(4UL)));");
+            "CommitVariableRow(slot, slot.GetRowSize(checked(4UL)));");
         await Assert.That(generated).Contains(
-            "slot = CommitVariableRow(slot, columnWriter.GetRowSize(checked(4UL)), out var buffersChanged);");
+            "slot = CommitVariableRow(slot, state.GetRowSize(checked(4UL)), out var buffersChanged);");
         await Assert.That(generated).Contains("bool _rowPending;");
         await Assert.That(generated.Contains("public void Next()", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated).Contains(
