@@ -133,6 +133,105 @@ internal sealed class ParquetFileReaderTests
     }
 
     [Test]
+    [Arguments("byte 0")]
+    [Arguments("byte 1")]
+    [Arguments("byte 2")]
+    [Arguments("byte 3")]
+    [Arguments("missing header")]
+    [Arguments("PARE header")]
+    [Arguments("PARE footer")]
+    [Arguments("PARE both")]
+    public async Task InvalidFileMarkersRejectBothResetRoutesAndClearPreviousState(string scenario)
+    {
+        using var fixture = CreateFile(CompressionKind.None);
+        var valid = fixture.ToArray();
+        var invalid = valid.ToArray();
+        switch (scenario)
+        {
+            case "byte 0": invalid[0] ^= 0x20; break;
+            case "byte 1": invalid[1] ^= 0x20; break;
+            case "byte 2": invalid[2] ^= 0x20; break;
+            case "byte 3": invalid[3] ^= 0x20; break;
+            case "missing header": invalid = invalid[4..]; break;
+            case "PARE header": "PARE"u8.CopyTo(invalid); break;
+            case "PARE footer": "PARE"u8.CopyTo(invalid.AsSpan(invalid.Length - 4)); break;
+            case "PARE both":
+                "PARE"u8.CopyTo(invalid);
+                "PARE"u8.CopyTo(invalid.AsSpan(invalid.Length - 4));
+                break;
+            default: throw new ArgumentOutOfRangeException(nameof(scenario));
+        }
+
+        // PARE identifies encrypted-footer files; this reader supports only PAR1 footers.
+        using var validSource = new MemoryReadSource(valid);
+        foreach (var wrapStream in new[] { false, true })
+        {
+            using var reader = new ParquetFileReader();
+            reader.Reset(validSource);
+            using var oldPages = reader.OpenPages(0, 0);
+            using var rejectedStream = new DisposeTrackingMemoryStream(invalid);
+            using var callerOwnedSource = new StreamReadSource(rejectedStream);
+
+            if (wrapStream)
+                Assert.Throws<CorruptParquetException>(() => reader.Reset(rejectedStream));
+            else
+                Assert.Throws<CorruptParquetException>(() => reader.Reset(callerOwnedSource));
+
+            await Assert.That(rejectedStream.DisposeCount).IsEqualTo(wrapStream ? 1 : 0);
+            await Assert.That(reader.Metadata.FooterLength).IsEqualTo(0U);
+            await Assert.That(reader.Metadata.ColumnCount).IsEqualTo(0);
+            await Assert.That(reader.Metadata.RowGroupCount).IsEqualTo(0);
+            await Assert.That(reader.Metadata.SchemaNodes.Length).IsEqualTo(0);
+            Assert.Throws<InvalidOperationException>(() => oldPages.MoveNext());
+            Assert.Throws<ArgumentOutOfRangeException>(() => reader.OpenPages(0, 0));
+
+            // A failed reset must not poison a reusable reader.
+            reader.Reset(validSource);
+            await Assert.That(reader.Metadata.RowGroup(0).RowCount).IsEqualTo(3UL);
+        }
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(3)]
+    [Arguments(4)]
+    [Arguments(7)]
+    [Arguments(8)]
+    [Arguments(11)]
+    public void TruncatedFramingRejectsBothResetRoutes(int length)
+    {
+        using var reader = new ParquetFileReader();
+        var bytes = new byte[length];
+        if (length >= 4)
+            "PAR1"u8.CopyTo(bytes);
+        Assert.Throws<CorruptParquetException>(() => reader.Reset(new MemoryStream(bytes)));
+        using var source = new MemoryReadSource(bytes);
+        Assert.Throws<CorruptParquetException>(() => reader.Reset(source));
+    }
+
+    [Test]
+    public async Task ValidFileMarkersAcceptBothResetRoutesRegardlessOfStreamPosition()
+    {
+        using var fixture = CreateFile(CompressionKind.None);
+        var bytes = fixture.ToArray();
+        foreach (var wrapStream in new[] { false, true })
+        {
+            using var stream = new MemoryStream(bytes);
+            stream.Position = stream.Length;
+            using var source = new StreamReadSource(stream);
+            using var reader = new ParquetFileReader();
+            if (wrapStream)
+                reader.Reset(stream);
+            else
+                reader.Reset(source);
+            await Assert.That(reader.Metadata.RowGroup(0).RowCount).IsEqualTo(3UL);
+            using var pages = reader.OpenPages(0, 0);
+            await Assert.That(pages.MoveNext()).IsTrue();
+            await Assert.That(pages.CurrentPayload.Length).IsGreaterThan(0);
+        }
+    }
+
+    [Test]
     public async Task FailedFooterParseClearsPartialMetadata()
     {
         using var reader = new ParquetFileReader();

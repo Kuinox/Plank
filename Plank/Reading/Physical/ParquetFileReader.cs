@@ -38,7 +38,7 @@ public sealed class ParquetFileReader : IDisposable
     }
 
     /// <summary>
-    /// Reads the parquet footer from <paramref name="stream"/> and makes it the current source for page reads.
+    /// Validates the Parquet file markers and reads the footer from <paramref name="stream"/> for page reads.
     /// </summary>
     /// <param name="stream">The stream containing a parquet file.</param>
     /// <remarks>
@@ -87,7 +87,7 @@ public sealed class ParquetFileReader : IDisposable
     }
 
     /// <summary>
-    /// Reads the parquet footer from <paramref name="source"/> and makes it the current source for page reads.
+    /// Validates the Parquet file markers and reads the footer from <paramref name="source"/> for page reads.
     /// </summary>
     /// <param name="source">The random-access parquet source to read from.</param>
     /// <remarks>
@@ -175,6 +175,13 @@ public sealed class ParquetFileReader : IDisposable
             source.ReadExactly(source.Length - (ulong)trailer.Length, trailer);
             if (!trailer[4..].SequenceEqual(FileMagic))
                 throw new CorruptParquetException("Stream does not end with the PAR1 footer marker.");
+
+            // A valid footer alone does not establish a valid file: damaged or displaced data can
+            // leave the trailer intact. Both markers must identify the supported PAR1 format.
+            Span<byte> header = stackalloc byte[4];
+            source.ReadExactly(0, header);
+            if (!header.SequenceEqual(FileMagic))
+                throw new CorruptParquetException("Stream does not begin with the PAR1 header marker.");
 
             var footerLength = BinaryPrimitives.ReadUInt32LittleEndian(trailer);
             if (footerLength > source.Length - (ulong)trailer.Length)
