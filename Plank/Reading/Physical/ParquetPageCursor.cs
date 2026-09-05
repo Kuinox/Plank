@@ -6,7 +6,7 @@ using Plank.Schema;
 
 public struct ParquetPageCursor : IDisposable
 {
-    const int MaxPageHeaderLength = 64 * 1024;
+    const int InitialPageHeaderLength = 64 * 1024;
 
     ParquetFileReader? _owner;
     readonly int _generation;
@@ -167,27 +167,37 @@ public struct ParquetPageCursor : IDisposable
         _offset = pageOffset;
         var pageFileOffset = _chunk.ChunkOffset + (ulong)pageOffset;
         var remainingChunkLength = _chunkLength - _offset;
-        var headerProbeLength = Math.Min(remainingChunkLength, MaxPageHeaderLength);
+        var maxHeaderLength = remainingChunkLength;
         if (boundedPageLength.HasValue)
         {
             if (boundedPageLength.Value <= 0 || boundedPageLength.Value > remainingChunkLength)
                 throw new CorruptParquetException(
                     $"Indexed page size {boundedPageLength.Value} is outside its column chunk.");
-            headerProbeLength = Math.Min(headerProbeLength, boundedPageLength.Value);
+            maxHeaderLength = boundedPageLength.Value;
         }
-        ReadOnlySpan<byte> headerBytes;
-        if (owner.TryBorrowSource(_chunk.ChunkOffset + (ulong)_offset, headerProbeLength,
-                out var borrowedHeader))
-            headerBytes = borrowedHeader.Span;
-        else
-        {
-            EnsurePayloadBuffer(owner, headerProbeLength);
-            var headerDestination = _payloadBuffer.Span[..headerProbeLength];
-            owner.Source.ReadExactly(_chunk.ChunkOffset + (ulong)_offset, headerDestination);
-            headerBytes = headerDestination;
-        }
+        var headerProbeLength = Math.Min(maxHeaderLength, InitialPageHeaderLength);
         var maxUncompressedPageSize = (uint)Math.Min(_chunk.TotalUncompressedSize, uint.MaxValue);
-        var header = PageHeaderReader.Read(headerBytes, maxUncompressedPageSize);
+        PageHeader header;
+        while (true)
+        {
+            ReadOnlySpan<byte> headerBytes;
+            if (owner.TryBorrowSource(pageFileOffset, headerProbeLength, out var borrowedHeader))
+                headerBytes = borrowedHeader.Span;
+            else
+            {
+                EnsurePayloadBuffer(owner, headerProbeLength);
+                var headerDestination = _payloadBuffer.Span[..headerProbeLength];
+                owner.Source.ReadExactly(pageFileOffset, headerDestination);
+                headerBytes = headerDestination;
+            }
+            if (PageHeaderReader.TryRead(headerBytes, maxUncompressedPageSize, out header, out var missingBytes))
+                break;
+
+            var requiredLength = PageHeaderReader.GetRequiredBufferLength(headerProbeLength, missingBytes,
+                maxHeaderLength);
+            headerProbeLength = (int)Math.Min(maxHeaderLength,
+                Math.Max((long)headerProbeLength * 2, requiredLength));
+        }
         var totalPageLength = checked(header.HeaderLength + (int)header.CompressedPageSize);
         if (boundedPageLength.HasValue && totalPageLength > boundedPageLength.Value)
             throw new CorruptParquetException(
