@@ -371,6 +371,9 @@ public sealed class RowReaderCore : IDisposable
     int ResolveColumnOrdinal(ImmutableArray<Column> fileColumns, Column expected, string columnName, string propertyName,
         bool projected)
     {
+        if (!projected)
+            return -1;
+
         for (var i = 0; i < fileColumns.Length; i++)
         {
             var actual = fileColumns[i];
@@ -384,8 +387,6 @@ public sealed class RowReaderCore : IDisposable
             return i;
         }
 
-        if (!projected)
-            return -1;
         if (_schemaEvolution?.MissingColumns == MissingColumnEvolutionBehavior.MaterializeDefault)
             return -1;
 
