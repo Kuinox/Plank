@@ -24,6 +24,12 @@ Each property becomes a column. Non-nullable properties are required and nullabl
 
 Plank generates the readers and writers for `EventSchema`. See [Reading](reading/index.md) and [Writing](writing/index.md) for usage.
 
+Schema properties keep their declared names in generated row views and column selectors. If a generated
+API name conflicts with your class or one of its members, Plank adds the first available numeric suffix.
+For example, a property named `Row` is accessed as `writer.GetRow().Row`, and the generated row-view
+type becomes `Row1`. A property named `All` remains `Projection.All`; the all-columns selector becomes
+`Projection.All1`. This applies to both scalar and nested schemas, including generated factory methods.
+
 ## Customize a column
 
 Use [`[ParquetColumn]`](xref:Plank.Schema.ParquetColumnAttribute) to change a column's name, logical type, physical type, or encoding:
