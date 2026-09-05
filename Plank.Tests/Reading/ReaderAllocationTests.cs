@@ -755,7 +755,10 @@ internal sealed class ReaderAllocationTests
         try
         {
             using var stream = File.OpenRead(path);
-            using var reader = schema.CreateReader(stream);
+            // Keep prior tests' shared-pool retention from triggering a timed memory-pressure
+            // check (GC.GetGCMemoryInfo allocates) inside the codec measurement.
+            using var pool = new DefaultParquetBufferPool();
+            using var reader = schema.CreateReader(stream, new ParquetReaderOptions { BufferPool = pool });
             var rowGroup = reader.RowGroups[0];
             for (var i = 0; i < 8; i++)
                 _ = SumValues(rowGroup, schema.LeafColumns[0]);
