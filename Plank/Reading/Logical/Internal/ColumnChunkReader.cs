@@ -1583,15 +1583,26 @@ static partial class ColumnChunkReader
         ReadOnlySpan<byte> definitionPayload, int valueCount, EncodingKind definitionLevelEncoding,
         LogicalType? logicalType, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
-        if (logicalType is not LogicalType.Timestamp timestamp)
-            throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.");
-        var ticksPerUnit = timestamp.Unit switch
+        var unit = GetTimestampLogicalType(logicalType).Unit;
+        return unit switch
         {
-            TimeUnit.Millis => TimeSpan.TicksPerMillisecond,
-            TimeUnit.Micros => 10,
-            TimeUnit.Nanos => 0,
+            TimeUnit.Millis => DecodeNullablePlainDateTimes<T, MillisTimestamp>(payload,
+                definitionPayload, valueCount, definitionLevelEncoding, logicalType, ref state, bufferPool),
+            TimeUnit.Micros => DecodeNullablePlainDateTimes<T, MicrosTimestamp>(payload,
+                definitionPayload, valueCount, definitionLevelEncoding, logicalType, ref state, bufferPool),
+            TimeUnit.Nanos => DecodeNullablePlainDateTimes<T, NanosTimestamp>(payload,
+                definitionPayload, valueCount, definitionLevelEncoding, logicalType, ref state, bufferPool),
             _ => throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.")
         };
+    }
+
+    static int DecodeNullablePlainDateTimes<T, TUnit>(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<byte> definitionPayload, int valueCount, EncodingKind definitionLevelEncoding,
+        LogicalType? logicalType, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
+        where TUnit : struct, ITimestampUnit
+    {
+        if (logicalType is not LogicalType.Timestamp timestamp)
+            throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.");
         var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
 
         var values = state.GetValues<T>(valueCount, bufferPool);
@@ -1617,7 +1628,7 @@ static partial class ColumnChunkReader
                 throw new CorruptParquetException(
                     $"Payload ({payload.Length} bytes) is too short to decode {valueCount} timestamp values.");
             var raw = MemoryMarshal.Cast<byte, long>(payload[..byteLength]);
-            MaterializeAllPresentNullableDateTimes(raw, destination, timestamp.Unit, kind);
+            MaterializeAllPresentNullableDateTimes<TUnit>(raw, destination, kind);
             return valueCount;
         }
 
@@ -1638,8 +1649,8 @@ static partial class ColumnChunkReader
                     destination.Slice(valueIndex, copyLength).Clear();
                 else
                     for (var i = 0; i < copyLength; i++)
-                        destination[valueIndex + i] = DecodePlainDateTime(
-                            payload, physicalIndex++, ticksPerUnit, kind);
+                        destination[valueIndex + i] = DecodePlainDateTime<TUnit>(
+                            payload, physicalIndex++, kind);
                 valueIndex += copyLength;
                 continue;
             }
@@ -1656,7 +1667,7 @@ static partial class ColumnChunkReader
                 if (ReadBitPackedValue(ref definitionPayload, bitWidth: 1, checked((int)i)) == 0)
                     destination[valueIndex] = null;
                 else
-                    destination[valueIndex] = DecodePlainDateTime(payload, physicalIndex++, ticksPerUnit, kind);
+                    destination[valueIndex] = DecodePlainDateTime<TUnit>(payload, physicalIndex++, kind);
                 valueIndex++;
             }
 
@@ -1686,6 +1697,25 @@ static partial class ColumnChunkReader
         ReadOnlySpan<byte> definitionPayload, int valueCount, EncodingKind definitionLevelEncoding,
         LogicalType? logicalType, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
+        var unit = GetTimestampLogicalType(logicalType).Unit;
+        return unit switch
+        {
+            TimeUnit.Millis => DecodeNullableDeltaBinaryPackedDateTimes<T, MillisTimestamp>(payload,
+                definitionPayload, valueCount, definitionLevelEncoding, logicalType, ref state, bufferPool),
+            TimeUnit.Micros => DecodeNullableDeltaBinaryPackedDateTimes<T, MicrosTimestamp>(payload,
+                definitionPayload, valueCount, definitionLevelEncoding, logicalType, ref state, bufferPool),
+            TimeUnit.Nanos => DecodeNullableDeltaBinaryPackedDateTimes<T, NanosTimestamp>(payload,
+                definitionPayload, valueCount, definitionLevelEncoding, logicalType, ref state, bufferPool),
+            _ => throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.")
+        };
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static int DecodeNullableDeltaBinaryPackedDateTimes<T, TUnit>(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<byte> definitionPayload, int valueCount, EncodingKind definitionLevelEncoding,
+        LogicalType? logicalType, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
+        where TUnit : struct, ITimestampUnit
+    {
         var timestamp = GetTimestampLogicalType(logicalType);
         var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
         var values = state.GetValues<T>(valueCount, bufferPool);
@@ -1707,7 +1737,7 @@ static partial class ColumnChunkReader
         {
             var raw = MemoryMarshal.Cast<byte, long>(AsBytes(destination))[..physicalCount];
             DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
-            MaterializeAllPresentNullableDateTimes(raw, destination, timestamp.Unit, kind);
+            MaterializeAllPresentNullableDateTimes<TUnit>(raw, destination, kind);
             return physicalCount;
         }
 
@@ -1720,7 +1750,7 @@ static partial class ColumnChunkReader
         for (var i = definitions.Length - 1; i >= 0; i--)
             destination[i] = definitions[i] == 0
                 ? null
-                : new DateTime(TimestampTicks(physicalValues[--physicalIndex], timestamp.Unit), kind);
+                : new DateTime(TUnit.ToTicks(physicalValues[--physicalIndex]), kind);
         if (physicalIndex != 0)
             throw new CorruptParquetException(
                 $"Definition levels consumed {physicalCount - physicalIndex} physical values, " +
@@ -1729,22 +1759,21 @@ static partial class ColumnChunkReader
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    static void MaterializeAllPresentNullableDateTimes(ReadOnlySpan<long> raw, Span<DateTime?> destination,
-        TimeUnit unit, DateTimeKind kind)
+    static void MaterializeAllPresentNullableDateTimes<TUnit>(ReadOnlySpan<long> raw, Span<DateTime?> destination,
+        DateTimeKind kind)
+        where TUnit : struct, ITimestampUnit
     {
         var index = destination.Length;
-        if (unit == TimeUnit.Micros && NullableDateTimeHasCanonicalLayout && Avx2.IsSupported)
+        if (typeof(TUnit) == typeof(MicrosTimestamp) && NullableDateTimeHasCanonicalLayout && Avx2.IsSupported)
         {
             // These are the inclusive raw values whose scaled, epoch-adjusted ticks fit DateTime.
             // Validating before the shifts makes their unchecked vector arithmetic equivalent to
-            // TimestampTicks, while an invalid vector falls back to that method for its exception.
-            const long minimumMicroseconds = -62_135_596_800_000_000;
-            const long maximumMicroseconds = 253_402_300_799_999_999;
+            // MicrosTimestamp.ToTicks; invalid vectors use the same scalar corruption check.
             ref var rawStart = ref MemoryMarshal.GetReference(raw);
             ref var destinationStart = ref Unsafe.As<DateTime?, ulong>(
                 ref MemoryMarshal.GetReference(destination));
-            var minimum = Vector256.Create(minimumMicroseconds);
-            var maximum = Vector256.Create(maximumMicroseconds);
+            var minimum = Vector256.Create(MicrosTimestamp.Minimum);
+            var maximum = Vector256.Create(MicrosTimestamp.Maximum);
             var epoch = Vector256.Create(DateTime.UnixEpoch.Ticks);
             var present = Vector256.Create(1UL);
             var kindProbe = new DateTime(0, kind);
@@ -1753,7 +1782,7 @@ static partial class ColumnChunkReader
             while ((index & (Vector256<long>.Count - 1)) != 0)
             {
                 index--;
-                destination[index] = new DateTime(TimestampTicks(raw[index], unit), kind);
+                destination[index] = new DateTime(TUnit.ToTicks(raw[index]), kind);
             }
 
             while (index != 0)
@@ -1782,7 +1811,7 @@ static partial class ColumnChunkReader
         while (index != 0)
         {
             index--;
-            destination[index] = new DateTime(TimestampTicks(raw[index], unit), kind);
+            destination[index] = new DateTime(TUnit.ToTicks(raw[index]), kind);
         }
     }
 
@@ -1798,15 +1827,16 @@ static partial class ColumnChunkReader
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static DateTime DecodePlainDateTime(ReadOnlySpan<byte> payload, int physicalIndex,
-        long ticksPerUnit, DateTimeKind kind)
+    static DateTime DecodePlainDateTime<TUnit>(ReadOnlySpan<byte> payload, int physicalIndex,
+        DateTimeKind kind)
+        where TUnit : struct, ITimestampUnit
     {
         var offset = checked(physicalIndex * sizeof(long));
         if (payload.Length - offset < sizeof(long))
             throw new CorruptParquetException(
                 $"Payload ({payload.Length} bytes) is too short to decode timestamp value {physicalIndex}.");
         var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(offset, sizeof(long)));
-        return new DateTime(TimestampTicksScaled(raw, ticksPerUnit), kind);
+        return new DateTime(TUnit.ToTicks(raw), kind);
     }
 
     static bool TryDecodeNullableValues<T, TValue>(ReadOnlySpan<byte> payload,
@@ -1945,8 +1975,8 @@ static partial class ColumnChunkReader
         return true;
     }
 
-    static void DecodePlainDateTimes(ReadOnlySpan<byte> payload, Span<DateTime> destination,
-        LogicalType? logicalType)
+    static void DecodePlainDateTimes<T>(ReadOnlySpan<byte> payload, Span<T> destination,
+        LogicalType? logicalType) where T : struct
     {
         if (BitConverter.IsLittleEndian)
         {
@@ -1954,29 +1984,9 @@ static partial class ColumnChunkReader
                 destination, logicalType);
             return;
         }
-
-        var timestamp = GetTimestampLogicalType(logicalType);
-        var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
-        for (var i = 0; i < destination.Length; i++)
-        {
-            var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long)));
-            destination[i] = new DateTime(TimestampTicks(raw, timestamp.Unit), kind);
-        }
-    }
-
-    static void MaterializeDateTimes(ReadOnlySpan<long> raw, Span<DateTime> destination,
-        LogicalType? logicalType)
-    {
-        // This is the bulk twin of DecodeDateTime and has to reject the same
-        // values: building the DateTime inline threw ArgumentOutOfRangeException
-        // for a raw timestamp outside the representable range, and the checked
-        // arithmetic threw OverflowException before that. Both bypass the
-        // CorruptParquetException a reader is documented to throw, so the range
-        // checking lives in TimestampTicks and both paths go through it.
-        var timestamp = GetTimestampLogicalType(logicalType);
-        var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
-        for (var i = 0; i < destination.Length; i++)
-            destination[i] = new DateTime(TimestampTicks(raw[i], timestamp.Unit), kind);
+        var raw = MemoryMarshal.Cast<T, long>(destination)[..destination.Length];
+        CopyLittleEndianInt64(payload, raw);
+        MaterializeDateTimes(raw, destination, logicalType);
     }
 
     static LogicalType.Timestamp GetTimestampLogicalType(LogicalType? logicalType)
@@ -2883,11 +2893,7 @@ static partial class ColumnChunkReader
         {
             ValidatePlainPayload(payload, valueCount, sizeof(long));
             var typed = Unsafe.As<Span<T>, Span<DateTimeOffset>>(ref destination);
-            for (var i = 0; i < typed.Length; i++)
-            {
-                var raw = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
-                typed[i] = DecodeTimestamp(raw, column.LogicalType);
-            }
+            DecodePlainDateTimes(payload, typed, column.LogicalType);
             return true;
         }
         if (typeof(T) == typeof(DateTime) && column.PhysicalType == ParquetPhysicalType.Int64)
@@ -3032,8 +3038,7 @@ static partial class ColumnChunkReader
                 var typed = Unsafe.As<Span<T>, Span<DateTimeOffset>>(ref destination);
                 var raw = MemoryMarshal.Cast<DateTimeOffset, long>(typed)[..typed.Length];
                 DecodeByteStreamSplitInt64(payload, raw);
-                for (var i = typed.Length - 1; i >= 0; i--)
-                    typed[i] = DecodeTimestamp(raw[i], column.LogicalType);
+                MaterializeDateTimes(raw, typed, column.LogicalType);
                 return true;
             }
             case ParquetPhysicalType.FixedLenByteArray when typeof(T) == typeof(Guid):
@@ -3211,13 +3216,7 @@ static partial class ColumnChunkReader
             var raw = Unsafe.As<Span<T>, Span<long>>(ref destination);
             DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
             var typed = Unsafe.As<Span<T>, Span<DateTime>>(ref destination);
-            if (column.LogicalType is not LogicalType.Timestamp timestamp)
-                throw new CorruptParquetException(
-                    "Timestamp projection requires a timestamp logical type.");
-
-            var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
-            for (var i = 0; i < typed.Length; i++)
-                typed[i] = new DateTime(TimestampTicks(raw[i], timestamp.Unit), kind);
+            MaterializeDateTimes(raw, typed, column.LogicalType);
             return true;
         }
         if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTimeOffset))
@@ -3225,8 +3224,7 @@ static partial class ColumnChunkReader
             var typed = Unsafe.As<Span<T>, Span<DateTimeOffset>>(ref destination);
             var raw = MemoryMarshal.Cast<DateTimeOffset, long>(typed)[..typed.Length];
             DeltaBinaryPackedDecoder.ReadInt64(payload, raw);
-            for (var i = typed.Length - 1; i >= 0; i--)
-                typed[i] = DecodeTimestamp(raw[i], column.LogicalType);
+            MaterializeDateTimes(raw, typed, column.LogicalType);
             return true;
         }
         return false;
@@ -3283,53 +3281,6 @@ static partial class ColumnChunkReader
         if (raw > long.MaxValue / multiplier || raw < long.MinValue / multiplier)
             throw new CorruptParquetException($"{what} value {raw} overflows when scaled to ticks.");
         return raw * multiplier;
-    }
-
-    static DateTimeOffset DecodeTimestamp(long raw, LogicalType? logicalType)
-    {
-        if (logicalType is LogicalType.Timestamp { IsAdjustedToUtc: false })
-            throw new NotSupportedException(
-                "DateTimeOffset projection is not supported for timestamps with local semantics.");
-
-        return DecodeTimestampValue(raw, logicalType);
-    }
-
-    static DateTimeOffset DecodeTimestampValue(long raw, LogicalType? logicalType)
-    {
-        var unit = logicalType is LogicalType.Timestamp timestamp
-            ? timestamp.Unit
-            : throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.");
-        return new DateTimeOffset(TimestampTicks(raw, unit), TimeSpan.Zero);
-    }
-
-    // Some call sites precompute the multiplier, with 0 standing for nanos.
-    static long TimestampTicksScaled(long raw, long ticksPerUnit)
-        => TimestampTicks(raw, ticksPerUnit switch
-        {
-            0 => TimeUnit.Nanos,
-            10 => TimeUnit.Micros,
-            _ => TimeUnit.Millis
-        });
-
-    static long TimestampTicks(long raw, TimeUnit unit)
-    {
-        var offset = unit switch
-        {
-            TimeUnit.Millis => ScaleTicks(raw, TimeSpan.TicksPerMillisecond, "Timestamp"),
-            TimeUnit.Micros => ScaleTicks(raw, 10, "Timestamp"),
-            TimeUnit.Nanos => raw / 100,
-            _ => throw new CorruptParquetException("Timestamp projection requires a timestamp logical type.")
-        };
-
-        var epoch = DateTime.UnixEpoch.Ticks;
-        if (offset > long.MaxValue - epoch)
-            throw new CorruptParquetException($"Timestamp value {raw} overflows when offset from the epoch.");
-
-        var ticks = epoch + offset;
-        if (ticks < DateTime.MinValue.Ticks || ticks > DateTime.MaxValue.Ticks)
-            throw new CorruptParquetException(
-                $"Timestamp value {raw} is outside the range representable by a date and time.");
-        return ticks;
     }
 
     static int ReadLengthPrefixedLevelPayloadLength(ReadOnlySpan<byte> payload, string levelName)
@@ -3669,8 +3620,7 @@ static partial class ColumnChunkReader
                 var raw = MemoryMarshal.Cast<DateTimeOffset, long>(typed)[..typed.Length];
                 DecodeByteStreamSplitUInt64Slice(payload, totalCount, valueOffset,
                     MemoryMarshal.Cast<long, ulong>(raw));
-                for (var i = typed.Length - 1; i >= 0; i--)
-                    typed[i] = DecodeTimestamp(raw[i], column.LogicalType);
+                MaterializeDateTimes(raw, typed, column.LogicalType);
                 return true;
             }
             case ParquetPhysicalType.FixedLenByteArray when typeof(T) == typeof(Guid):

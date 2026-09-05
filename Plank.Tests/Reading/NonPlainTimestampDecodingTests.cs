@@ -35,11 +35,12 @@ internal sealed class NonPlainTimestampDecodingTests
     }
 
     [Test]
-    public void LargeRequiredPlainAndByteStreamSplitDateTimesPreserveUnitsKindsAndBatchBoundaries()
+    public void LargeRequiredDateTimesPreserveUnitsKindsAndBatchBoundaries()
     {
         ParquetDataPageVersion[] pageVersions =
             [ParquetDataPageVersion.V1, ParquetDataPageVersion.V2];
-        EncodingKind[] encodings = [EncodingKind.Plain, EncodingKind.ByteStreamSplit];
+        EncodingKind[] encodings =
+            [EncodingKind.Plain, EncodingKind.DeltaBinaryPacked, EncodingKind.ByteStreamSplit];
         foreach (var pageVersion in pageVersions)
         foreach (var encoding in encodings)
         foreach (var unit in Enum.GetValues<TimeUnit>())
