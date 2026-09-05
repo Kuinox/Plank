@@ -56,8 +56,16 @@ public sealed record ParquetSchema
     {
         ArgumentNullException.ThrowIfNull(stream);
         var reader = new ParquetReader(this, options);
-        reader.Reset(stream, pagePruner);
-        return reader;
+        try
+        {
+            reader.Reset(stream, pagePruner);
+            return reader;
+        }
+        catch
+        {
+            reader.Dispose();
+            throw;
+        }
     }
 
     public ParquetReader CreateReader(IParquetReadSource source, ParquetReaderOptions? options = null,
@@ -65,8 +73,16 @@ public sealed record ParquetSchema
     {
         ArgumentNullException.ThrowIfNull(source);
         var reader = new ParquetReader(this, options);
-        reader.Reset(source, pagePruner);
-        return reader;
+        try
+        {
+            reader.Reset(source, pagePruner);
+            return reader;
+        }
+        catch
+        {
+            reader.Dispose();
+            throw;
+        }
     }
 
     public ParquetWriter CreateWriter(Stream stream, ParquetWriterOptions? options = null)
