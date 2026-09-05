@@ -309,6 +309,12 @@ static class NestedParquetRowEmitter
         string parquetName, string propertyName, HashSet<INamedTypeSymbol> activeTypes, out Node node,
         out string error)
     {
+        if (!ParquetRowGenerator.ValidateDtoInheritance(groupType, out error))
+        {
+            node = default!;
+            return false;
+        }
+
         var childProperties = GetProperties(groupType);
         if (childProperties.IsDefaultOrEmpty)
         {
