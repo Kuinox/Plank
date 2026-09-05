@@ -158,18 +158,15 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     static void Emit(SourceProductionContext context, INamedTypeSymbol schemaType)
     {
-        if (schemaType.TypeKind != TypeKind.Class || schemaType.Arity != 0)
+        if (schemaType.TypeKind != TypeKind.Class || schemaType.Arity != 0 || schemaType.ContainingType is not null)
         {
-            context.ReportDiagnostic(Diagnostic.Create(InvalidTarget, schemaType.Locations.FirstOrDefault(), schemaType.Name));
-            return;
-        }
-
-        if (schemaType.ContainingType is not null)
-        {
-            context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
-                schemaType.Locations.FirstOrDefault(),
-                $"Schema type '{schemaType.ToDisplayString()}' is declared inside another type. " +
-                "Declare [ParquetSchema] classes directly in a namespace or the global namespace."));
+            if (schemaType.TypeKind != TypeKind.Class || schemaType.Arity != 0)
+                context.ReportDiagnostic(Diagnostic.Create(InvalidTarget, schemaType.Locations.FirstOrDefault(), schemaType.Name));
+            else
+                context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
+                    schemaType.Locations.FirstOrDefault(),
+                    $"Schema type '{schemaType.ToDisplayString()}' is declared inside another type. " +
+                    "Declare [ParquetSchema] classes directly in a namespace or the global namespace."));
             return;
         }
 
