@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using Plank.Reading.Logical;
 using Plank.Schema;
+using Plank.Writing;
 
 namespace Plank.Tests.Reading;
 
@@ -36,6 +37,25 @@ internal sealed class LegacyTwoLevelListDiscoveryTests
         using var strictReader = discovered.CreateReader(new MemoryStream(file));
         if (strictReader.Schema.LeafColumns.Length != 1)
             throw new InvalidOperationException("The discovered legacy LIST schema could not be reused.");
+    }
+
+    [Test]
+    public async Task DiscoveredLegacySchemaCannotRewriteThePhysicalLayoutOfExistingPages()
+    {
+        var file = CreatePrimitiveListFile();
+        var discovered = DiscoverSchema(file);
+        using var source = new MemoryStream();
+        source.Write(file);
+        Assert.Throws<InvalidOperationException>(() => discovered.CreateAppender(source));
+        await Assert.That(source.ToArray().AsSpan().SequenceEqual(file)).IsTrue();
+
+        using var destination = new MemoryStream();
+        destination.Write([1, 2, 3]);
+        var before = destination.ToArray();
+        using var readSource = new Plank.Reading.StreamReadSource(source);
+        using var writeSource = new StreamParquetSource(destination);
+        Assert.Throws<InvalidOperationException>(() => discovered.CreateMerger(readSource, writeSource));
+        await Assert.That(destination.ToArray().AsSpan().SequenceEqual(before)).IsTrue();
     }
 
     [Test]

@@ -332,7 +332,7 @@ static class PhysicalSchemaBinder
         return builder.ToString();
     }
 
-    static LogicalType? ConvertLogicalType(PhysicalFileMetadata metadata, ParquetSchemaNodeInfo node)
+    internal static LogicalType? ConvertLogicalType(PhysicalFileMetadata metadata, ParquetSchemaNodeInfo node)
         => node.LogicalType.Kind switch
         {
             LogicalTypeKind.None => null,
