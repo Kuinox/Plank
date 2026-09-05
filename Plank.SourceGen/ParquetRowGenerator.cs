@@ -694,7 +694,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             return false;
         }
 
-        mapped = new MappedColumn(column.Name, ToIdentifier(column.RowPropertyName), column.ClrTypeName);
+        // This is a source member name, already validated by the C# compiler. Sanitizing it
+        // changes legal Unicode identifiers and makes generated row access target another member.
+        mapped = new MappedColumn(column.Name, column.RowPropertyName, column.ClrTypeName);
         return true;
     }
 
@@ -1057,23 +1059,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static string EscapeIdentifier(string value)
         => Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(value) ==
             Microsoft.CodeAnalysis.CSharp.SyntaxKind.None ? value : $"@{value}";
-
-    static string ToIdentifier(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return "_";
-
-        var builder = new StringBuilder(value.Length);
-        for (var i = 0; i < value.Length; i++)
-        {
-            var c = value[i];
-            var isValid = i == 0 ? char.IsLetter(c) || c == '_' : char.IsLetterOrDigit(c) || c == '_';
-            builder.Append(isValid ? c : '_');
-        }
-        if (char.IsDigit(builder[0]))
-            builder.Insert(0, '_');
-        return builder.ToString();
-    }
 
     static string GetRowApiColumnFieldName(string propertyName)
         => $"s_{propertyName}RowApiColumn";
