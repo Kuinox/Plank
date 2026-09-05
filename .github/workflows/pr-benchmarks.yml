@@ -1,11 +1,13 @@
 name: PR benchmarks
 
 on:
-  pull_request:
-    branches: [master]
-    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
+      pr_number:
+        description: PR number (including forks; overrides base_ref and head_ref)
+        type: string
       base_ref:
         description: Plank base branch, tag, or SHA
         default: master
@@ -21,24 +23,91 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   DOTNET_NOLOGO: 1
-  BASE_REF: ${{ github.event.pull_request.base.sha || inputs.base_ref || 'master' }}
-  HEAD_REF: ${{ github.event.pull_request.head.sha || inputs.head_ref || github.sha }}
   # First-use protocol: one process per case, no operation before sample 1.
   BENCHMARK_WARMUPS: 0
   BENCHMARK_ITERATIONS: ${{ inputs.iterations || 100 }}
 
 jobs:
+  resolve-request:
+    name: Resolve benchmark request
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request && github.event.comment.body == '/benchmark')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      approved: ${{ steps.request.outputs.approved }}
+      pr_number: ${{ steps.request.outputs.pr_number }}
+      base_sha: ${{ steps.request.outputs.base_sha }}
+      head_sha: ${{ steps.request.outputs.head_sha }}
+      head_repo: ${{ steps.request.outputs.head_repo }}
+    steps:
+      - name: Authorize request and pin revisions
+        id: request
+        uses: actions/github-script@v9
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          BASE_REF: ${{ inputs.base_ref || 'master' }}
+          HEAD_REF: ${{ inputs.head_ref || github.sha }}
+        with:
+          script: |
+            const isComment = context.eventName === 'issue_comment';
+            const number = isComment ? String(context.issue.number) : process.env.PR_NUMBER;
+            if (isComment && (!context.payload.issue?.pull_request ||
+                context.payload.comment?.body !== '/benchmark')) return;
+
+            if (number && !/^[1-9][0-9]*$/.test(number)) {
+              throw new Error('PR number must be a positive integer.');
+            }
+            const pr = number ? (await github.rest.pulls.get({
+              ...context.repo, pull_number: Number(number),
+            })).data : null;
+            if (pr && (pr.state !== 'open' || pr.base.ref !== 'master' || !pr.head.repo)) {
+              core.notice('Benchmarks require an open PR targeting master with an available head repository.');
+              return;
+            }
+
+            if (isComment) {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                ...context.repo, username: context.actor,
+              });
+              if (!['admin', 'maintain', 'write'].includes(data.permission)) {
+                await github.rest.issues.createComment({
+                  ...context.repo, issue_number: pr.number,
+                  body: 'Benchmark requested. A maintainer with write access can review the current PR commit and post `/benchmark` to start it. New commits need a new request.',
+                });
+                return;
+              }
+            }
+
+            const resolve = async ref => (await github.rest.repos.getCommit({
+              ...context.repo, ref,
+            })).data.sha;
+            const base = pr ? pr.base.sha : await resolve(process.env.BASE_REF);
+            const head = pr ? pr.head.sha : await resolve(process.env.HEAD_REF);
+            core.setOutput('pr_number', pr?.number || '');
+            core.setOutput('base_sha', base);
+            core.setOutput('head_sha', head);
+            core.setOutput('head_repo', pr?.head.repo.full_name || `${context.repo.owner}/${context.repo.repo}`);
+            if (pr) {
+              const url = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: pr.number,
+                body: `Benchmark started for \`${head}\` against \`${base}\`. [Follow the run](${url}); the comparison will be posted here when it succeeds.`,
+              });
+            }
+            core.setOutput('approved', 'true');
+
   resolve-plank-lab:
     name: Resolve latest Plank-Lab
+    needs: resolve-request
+    if: needs.resolve-request.outputs.approved == 'true'
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.revision.outputs.sha }}
@@ -47,6 +116,7 @@ jobs:
       - name: Check out latest Plank-Lab
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: Kuinox/Plank-Lab
           ref: master
           path: plank-lab
@@ -58,9 +128,16 @@ jobs:
 
   benchmark:
     name: ${{ matrix.suite_label }} · ${{ matrix.operation }}
-    needs: resolve-plank-lab
+    needs: [resolve-request, resolve-plank-lab]
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # Only approved requests can cancel expensive jobs for the same PR.
+    concurrency:
+      group: ${{ github.workflow }}-${{ needs.resolve-request.outputs.pr_number || github.ref }}-${{ matrix.suite }}-${{ matrix.operation }}
+      cancel-in-progress: true
+    env:
+      BASE_REF: ${{ needs.resolve-request.outputs.base_sha }}
+      HEAD_REF: ${{ needs.resolve-request.outputs.head_sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -76,6 +153,7 @@ jobs:
       - name: Check out Plank-Lab for base
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: Kuinox/Plank-Lab
           ref: ${{ needs.resolve-plank-lab.outputs.sha }}
           path: lab-base
@@ -83,6 +161,7 @@ jobs:
       - name: Check out Plank-Lab for head
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: Kuinox/Plank-Lab
           ref: ${{ needs.resolve-plank-lab.outputs.sha }}
           path: lab-head
@@ -90,13 +169,15 @@ jobs:
       - name: Check out Plank base into Plank-Lab
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           ref: ${{ env.BASE_REF }}
           path: lab-base/library/Plank
 
       - name: Check out Plank head into Plank-Lab
         uses: actions/checkout@v7
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          persist-credentials: false
+          repository: ${{ needs.resolve-request.outputs.head_repo }}
           ref: ${{ env.HEAD_REF }}
           path: lab-head/library/Plank
 
@@ -165,20 +246,29 @@ jobs:
 
   report:
     name: Publish comparison
-    needs: [resolve-plank-lab, benchmark]
+    needs: [resolve-request, resolve-plank-lab, benchmark]
     if: ${{ !cancelled() && needs.benchmark.result == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      BASE_REF: ${{ needs.resolve-request.outputs.base_sha }}
+      HEAD_REF: ${{ needs.resolve-request.outputs.head_sha }}
+      PR_NUMBER: ${{ needs.resolve-request.outputs.pr_number }}
 
     steps:
       - name: Check out reporting code
         uses: actions/checkout@v7
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ env.HEAD_REF }}
+          persist-credentials: false
+          # Never execute PR-provided reporting code with a write token.
+          ref: ${{ github.sha }}
 
       - name: Check out Plank-Lab matrix
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: Kuinox/Plank-Lab
           ref: ${{ needs.resolve-plank-lab.outputs.sha }}
           path: plank-lab
@@ -217,18 +307,24 @@ jobs:
             benchmark-summary.md
 
       - name: Create or update PR comment
-        if: >-
-          github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository
+        if: needs.resolve-request.outputs.pr_number != ''
         uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
+            const issue_number = Number(process.env.PR_NUMBER);
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo, pull_number: issue_number,
+            });
+            if (pr.state !== 'open' || pr.head.sha !== process.env.HEAD_REF) {
+              core.notice('PR changed or closed; the comparison remains available in the run artifacts.');
+              return;
+            }
             const marker = '<!-- plank-pr-benchmark-comparison -->';
             const body = fs.readFileSync('benchmark-comment.md', 'utf8');
             const comments = await github.paginate(github.rest.issues.listComments, {
               ...context.repo,
-              issue_number: context.issue.number,
+              issue_number,
               per_page: 100,
             });
             const previous = comments.find(comment =>
@@ -243,7 +339,7 @@ jobs:
             } else {
               await github.rest.issues.createComment({
                 ...context.repo,
-                issue_number: context.issue.number,
+                issue_number,
                 body,
               });
             }

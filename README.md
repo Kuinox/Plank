@@ -37,6 +37,8 @@ dotnet test --solution Plank.sln --configuration Release
 
 ## Documentation
 
+For on-demand PR performance comparisons, see [Running PR benchmarks](CONTRIBUTING.md#running-pr-benchmarks).
+
 The documentation source is under `docs/`. Build it with:
 
 ```powershell
