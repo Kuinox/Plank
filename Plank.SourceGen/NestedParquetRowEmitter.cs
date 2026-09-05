@@ -10,7 +10,7 @@ static class NestedParquetRowEmitter
         .WithMiscellaneousOptions(SymbolDisplayFormat.FullyQualifiedFormat.MiscellaneousOptions |
             SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier);
 
-    internal static bool TryEmit(SourceProductionContext context, INamedTypeSymbol schemaType)
+    internal static bool TryEmit(SourceProductionContext context, INamedTypeSymbol schemaType, Compilation compilation)
     {
         if (!RequiresNestedEmitter(schemaType))
             return false;
@@ -31,6 +31,13 @@ static class NestedParquetRowEmitter
             return true;
         }
 
+        if (!ValidateNestedSetters(model.Roots, schemaType, compilation, out error))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(ParquetRowGenerator.UnsupportedSchemaDeclaration,
+                schemaType.Locations.FirstOrDefault(), error));
+            return true;
+        }
+
         var hasDiagnostics = false;
         foreach (var leaf in model.Leaves)
             foreach (var diagnostic in ParquetRowGenerator.ValidateSchemaColumns([leaf.Node.Scalar!.Column]))
@@ -41,6 +48,32 @@ static class NestedParquetRowEmitter
             }
         if (!hasDiagnostics)
             context.AddSource(GetHintName(schemaType), BuildSource(schemaType, model));
+        return true;
+    }
+
+    static bool ValidateNestedSetters(IEnumerable<Node> nodes, INamedTypeSymbol schemaType,
+        Compilation compilation, out string error)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Kind == NodeKind.Group)
+            {
+                var groupType = (INamedTypeSymbol)GetNonNullableType(node.TypeSymbol);
+                foreach (var property in GetProperties(groupType))
+                {
+                    if (property.SetMethod is not null &&
+                        compilation.IsSymbolAccessibleWithin(property.SetMethod, schemaType, groupType))
+                        continue;
+
+                    error = $"Nested group property '{groupType.Name}.{property.Name}' requires a setter or init accessor " +
+                        $"accessible from schema type '{schemaType.ToDisplayString()}'.";
+                    return false;
+                }
+            }
+            if (!ValidateNestedSetters(node.Children, schemaType, compilation, out error))
+                return false;
+        }
+        error = string.Empty;
         return true;
     }
 
@@ -1562,6 +1595,7 @@ static class NestedParquetRowEmitter
         internal NodeKind Kind { get; } = kind;
         internal string Name { get; } = name;
         internal string PropertyName { get; } = propertyName;
+        internal ITypeSymbol TypeSymbol { get; } = userType;
         internal string UserType { get; } = GetTypeName(userType);
         // Runtime type expressions omit reference annotations, but retain Nullable<T>.
         internal string RuntimeType { get; } = userType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
