@@ -11,7 +11,9 @@ internal sealed class GeneratedNestedRowE2ETests
     const int MultiRowGroupRowCount = 1031;
 
     [Test]
-    public async Task GeneratedRowsRoundTripCollectionsMapsAndRecordsAcrossRowGroups()
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task GeneratedRowsRoundTripCollectionsMapsAndRecordsAcrossRowGroups(bool useCursor)
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-generated-nested-{Guid.NewGuid():N}.parquet");
         try
@@ -25,8 +27,27 @@ internal sealed class GeneratedNestedRowE2ETests
                         DataPageVersion = Plank.Writing.ParquetDataPageVersion.V1,
                         TargetRowGroupSizeBytes = 32 * 1024
                     });
+                var cursor = writer.CreateCursor();
                 for (var i = 0; i < MultiRowGroupRowCount; i++)
                 {
+                    if (useCursor)
+                    {
+                        cursor.NextRow();
+                        cursor.Sequence = i;
+                        cursor.CorrelationId = CreateGuid(i);
+                        cursor.Label = $"row-{i}";
+                        cursor.Values = CreateValues(i);
+                        cursor.Scores = CreateScores(i);
+                        cursor.Location = CreateLocation(i);
+                        cursor.Items = CreateItems(i);
+                        cursor.Names = CreateNames(i);
+                        cursor.Identifiers = CreateIdentifiers(i);
+                        cursor.Dates = CreateDates(i);
+                        cursor.Times = CreateTimes(i);
+                        cursor.Timestamps = CreateTimestamps(i);
+                        cursor.Instants = CreateInstants(i);
+                        continue;
+                    }
                     var row = writer.GetRow();
                     row.Sequence = i;
                     row.CorrelationId = CreateGuid(i);

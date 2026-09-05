@@ -14,13 +14,9 @@ on:
         description: Plank head branch, tag, or SHA
         default: master
         type: string
-      warmups:
-        description: BenchmarkDotNet warm-up iterations
-        default: 8
-        type: number
       iterations:
         description: BenchmarkDotNet measured iterations
-        default: 15
+        default: 100
         type: number
 
 permissions:
@@ -36,8 +32,9 @@ env:
   DOTNET_NOLOGO: 1
   BASE_REF: ${{ github.event.pull_request.base.sha || inputs.base_ref || 'master' }}
   HEAD_REF: ${{ github.event.pull_request.head.sha || inputs.head_ref || github.sha }}
-  BENCHMARK_WARMUPS: ${{ inputs.warmups || 8 }}
-  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 15 }}
+  # First-use protocol: one process per case, no operation before sample 1.
+  BENCHMARK_WARMUPS: 0
+  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 100 }}
 
 jobs:
   resolve-plank-lab:

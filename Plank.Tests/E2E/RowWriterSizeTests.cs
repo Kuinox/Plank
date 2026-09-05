@@ -59,8 +59,24 @@ internal sealed class RowWriterSizeTests
         writer.Dispose();
         writer.Dispose();
 
-        Assert.Throws<ObjectDisposedException>(() => writer.GetRow());
-        Assert.Throws<ObjectDisposedException>(() => writer.Complete());
+        try
+        {
+            writer.GetRow();
+            throw new InvalidOperationException("A disposed pipeline writer accepted another row.");
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        try
+        {
+            writer.Complete();
+            throw new InvalidOperationException("A disposed pipeline writer completed.");
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
         if (!stream.ToArray().AsSpan().SequenceEqual("PAR1"u8))
             throw new InvalidOperationException("Disposing an incomplete pipeline writer wrote a Parquet footer.");
     }
@@ -101,18 +117,159 @@ internal sealed class RowWriterSizeTests
     {
         using var stream = new MemoryStream();
         var flushedRowCounts = new List<int>();
-        using var writer = WideRowSchema.CreateRowWriter(stream, 1, flushedRowCounts.Add,
+        using (var writer = WideRowSchema.CreateRowWriter(stream, 1, flushedRowCounts.Add,
             new ParquetWriterOptions
             {
                 RowApiInitialRowCapacity = 1,
                 TargetRowGroupSizeBytes = 521
-            });
-
-        for (var i = 0; i < 7; i++)
-            writer.GetRow();
-        writer.Complete();
+            }))
+        {
+            for (var i = 0; i < 7; i++)
+                writer.GetRow();
+            writer.Complete();
+        }
 
         await Assert.That(flushedRowCounts.SequenceEqual([3, 3, 1])).IsTrue();
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void GeneratedRowSettersSurviveGrowthSlotRolloverAndCompactingGc(bool useCursor)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = WideRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
+        {
+            RowApiMaxParallelism = 1,
+            RowApiInitialRowCapacity = 1,
+            TargetRowGroupSizeBytes = 65 * sizeof(int) * 3
+        }))
+        {
+            var cursor = writer.CreateCursor();
+            for (var i = 0; i < 16; i++)
+            {
+                if (useCursor)
+                {
+                    cursor.NextRow();
+                    FillWideCursor(ref cursor, i);
+                    continue;
+                }
+                var row = writer.GetRow();
+                row.Column0 = CompactAndReturn(i);
+                row.Column1 = 1_000 + i;
+                row.Column32 = 32_000 + i;
+                row.Column63 = 63_000 + i;
+                row.Column64 = 64_000 + i;
+            }
+            writer.Complete();
+        }
+
+        using var source = new MemoryReadSource(stream.ToArray());
+        using var reader = WideRowSchema.CreateRowReader(source);
+        var index = 0;
+        while (reader.MoveNext())
+        {
+            var row = reader.Current;
+            if (row.Column0 != index ||
+                row.Column1 != 1_000 + index ||
+                row.Column32 != 32_000 + index ||
+                row.Column63 != 63_000 + index ||
+                row.Column64 != 64_000 + index)
+            {
+                throw new InvalidOperationException($"Managed-reference row {index} was corrupted.");
+            }
+            index++;
+        }
+
+        if (index != 16)
+            throw new InvalidOperationException($"Expected 16 rows, read {index}.");
+
+        using var referenceStream = new MemoryStream();
+        using (var writer = CommonClrRowSchema.CreateRowWriter(referenceStream, new ParquetWriterOptions
+        {
+            RowApiMaxParallelism = 1,
+            RowApiInitialRowCapacity = 1,
+            TargetRowGroupSizeBytes = 1024 * 1024
+        }))
+        {
+            var cursor = writer.CreateCursor();
+            for (var i = 0; i < 16; i++)
+            {
+                if (useCursor)
+                {
+                    cursor.NextRow();
+                    cursor.Name = CompactAndReturn($"row-{i}");
+                    cursor.Id = Guid.Empty;
+                    continue;
+                }
+                var row = writer.GetRow();
+                row.Name = CompactAndReturn($"row-{i}");
+                row.Id = Guid.Empty;
+            }
+            writer.Complete();
+        }
+
+        using var referenceSource = new MemoryReadSource(referenceStream.ToArray());
+        using var referenceReader = CommonClrRowSchema.CreateRowReader(referenceSource);
+        index = 0;
+        while (referenceReader.MoveNext())
+        {
+            if (referenceReader.Current.Name != $"row-{index}")
+                throw new InvalidOperationException($"Reference row {index} was corrupted.");
+            index++;
+        }
+
+        if (index != 16)
+            throw new InvalidOperationException($"Expected 16 reference rows, read {index}.");
+    }
+
+    static void FillWideCursor(ref WideRowSchema.RowCursor row, int i)
+    {
+        row.Column0 = CompactAndReturn(i);
+        row.Column1 = 1_000 + i;
+        row.Column32 = 32_000 + i;
+        row.Column63 = 63_000 + i;
+        row.Column64 = 64_000 + i;
+    }
+
+    static T CompactAndReturn<T>(T value)
+    {
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        return value;
+    }
+
+    [Test]
+    public void AliasedGeneratedWritersShareStateAfterGrowth()
+    {
+        using var stream = new MemoryStream();
+        using (var writer = DatasetRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
+        {
+            RowApiMaxParallelism = 1,
+            RowApiInitialRowCapacity = 1,
+            TargetRowGroupSizeBytes = 16
+        }))
+        {
+            var copy = writer;
+            for (var i = 0; i < 12; i++)
+            {
+                if ((i & 1) == 0)
+                {
+                    var row = writer.GetRow();
+                    row.Value = i;
+                    row.Path = ReadOnlyMemory<byte>.Empty;
+                }
+                else
+                {
+                    var row = copy.GetRow();
+                    row.Value = i;
+                    row.Path = ReadOnlyMemory<byte>.Empty;
+                }
+            }
+            writer.Complete();
+        }
+
+        if (!ReadValues(stream).SequenceEqual(Enumerable.Range(0, 12)))
+            throw new InvalidOperationException("Writer aliases diverged after growth.");
     }
 
     [Test]
@@ -120,18 +277,19 @@ internal sealed class RowWriterSizeTests
     {
         using var first = new MemoryStream();
         using var second = new MemoryStream();
-        using var writer = DatasetRowSchema.CreateRowWriter(first, new ParquetWriterOptions
+        using (var writer = DatasetRowSchema.CreateRowWriter(first, new ParquetWriterOptions
         {
             RowApiMaxParallelism = 1,
             RowApiInitialRowCapacity = 1,
             TargetRowGroupSizeBytes = 16
-        });
-
-        WriteRows(writer, 10);
-        writer.Complete();
-        writer.Reset(second);
-        WriteRows(writer, 5);
-        writer.Complete();
+        }))
+        {
+            WriteRows(writer, 10);
+            writer.Complete();
+            writer.Reset(second);
+            WriteRows(writer, 5);
+            writer.Complete();
+        }
 
         await Assert.That(ReadValues(first).SequenceEqual(Enumerable.Range(0, 10))).IsTrue();
         await Assert.That(ReadValues(second).SequenceEqual(Enumerable.Range(0, 5))).IsTrue();
@@ -141,20 +299,21 @@ internal sealed class RowWriterSizeTests
     public async Task GeneratedPipelineWriterCommitsRowsOnGetRowAndComplete()
     {
         using var stream = new MemoryStream();
-        using var writer = DatasetRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
+        using (var writer = DatasetRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
         {
             RowApiMaxParallelism = 1,
             RowApiInitialRowCapacity = 1,
             TargetRowGroupSizeBytes = 16
-        });
-
-        for (var i = 0; i < 10; i++)
+        }))
         {
-            var row = writer.GetRow();
-            row.Value = i;
-            row.Path = ReadOnlyMemory<byte>.Empty;
+            for (var i = 0; i < 10; i++)
+            {
+                var row = writer.GetRow();
+                row.Value = i;
+                row.Path = ReadOnlyMemory<byte>.Empty;
+            }
+            writer.Complete();
         }
-        writer.Complete();
 
         await Assert.That(ReadValues(stream).SequenceEqual(Enumerable.Range(0, 10))).IsTrue();
     }
@@ -163,14 +322,16 @@ internal sealed class RowWriterSizeTests
     public async Task RollingRowWriterStartsANewFileAtTheTarget()
     {
         using var files = new RollingFileSet();
-        using var writer = DatasetRowSchema.CreateRowWriter(files.SelectPath, files, new ParquetWriterOptions
+        using (var writer = DatasetRowSchema.CreateRowWriter(files.SelectPath, files, new ParquetWriterOptions
         {
             RowApiMaxParallelism = 1,
             TargetRowGroupSizeBytes = 16,
             TargetFileSizeBytes = 1
-        });
-        WriteRows(writer, 10);
-        writer.Complete();
+        }))
+        {
+            WriteRows(writer, 10);
+            writer.Complete();
+        }
 
         await Assert.That(files.Paths.Count).IsEqualTo(3);
         var values = new List<int>();
