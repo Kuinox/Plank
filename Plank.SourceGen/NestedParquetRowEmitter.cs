@@ -565,6 +565,8 @@ static class NestedParquetRowEmitter
             new ParquetRowGenerator.RowSizeColumn(leaf.Node.Scalar!.PhysicalType, leaf.StorageShapeType,
                 leaf.Node.Scalar.TypeLength,
                 leaf.CollectionLevels.IsEmpty && leaf.Node.Scalar.StorageType != "byte[]")));
+        var cursorName = ParquetRowGenerator.GetAvailableGeneratedMemberName(schemaType, "RowCursor");
+        var nextRowName = ParquetRowGenerator.GetAvailableGeneratedMemberName(schemaType, "NextRow");
         var rowTypeName = EscapeIdentifier(schemaType.Name);
         builder.AppendLine("    public struct Writer");
         builder.AppendLine("    {");
@@ -605,7 +607,10 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        }");
         builder.AppendLine("        protected override BufferSlot CreateSlot(global::Plank.Writing.ParquetWriter writer) => new(writer, RowBatchSize);");
         builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-        builder.AppendLine("        public Row GetRow()");
+        builder.AppendLine("        public Row GetRow() => GetSlotForNextRow().GetRow();");
+        RowCursorEmitter.AppendFactory(builder, cursorName);
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+        builder.AppendLine("        internal BufferSlot GetSlotForNextRow()");
         builder.AppendLine("        {");
         builder.AppendLine("            var slot = GetSlotForRow();");
         builder.AppendLine("            if (_rowPending)");
@@ -616,7 +621,7 @@ static class NestedParquetRowEmitter
                 .Append(rowSizePlan.FixedSizeExpression).AppendLine("));");
         builder.AppendLine("            else");
         builder.AppendLine("                _rowPending = true;");
-        builder.AppendLine("            return slot.GetRow();");
+        builder.AppendLine("            return slot;");
         builder.AppendLine("        }");
         builder.AppendLine("        public void Complete()");
         builder.AppendLine("        {");
@@ -691,6 +696,7 @@ static class NestedParquetRowEmitter
         builder.AppendLine();
         builder.AppendLine("    public sealed class BufferSlot : global::Plank.RowApi.RowBufferSlot");
         builder.AppendLine("    {");
+        RowCursorEmitter.AppendSlotMembers(builder);
         for (var i = 0; i < model.Leaves.Length; i++)
             builder.Append("        internal ").Append(model.Leaves[i].StorageShapeType).Append("[] _column")
                 .Append(i).AppendLine(" = null!;");
@@ -736,6 +742,7 @@ static class NestedParquetRowEmitter
         builder.AppendLine();
         builder.AppendLine("        void RefreshBuffers()");
         builder.AppendLine("        {");
+        builder.AppendLine("            BufferVersion = unchecked(BufferVersion + 1);");
         for (var i = 0; i < model.Leaves.Length; i++)
             builder.Append("            _column").Append(i).Append(" = GetValues<")
                 .Append(model.Leaves[i].StorageShapeType).Append(">(").Append(i).AppendLine(");");
@@ -760,6 +767,14 @@ static class NestedParquetRowEmitter
                 leaf => UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"));
         }
         builder.AppendLine("    }");
+        RowCursorEmitter.AppendCursor(builder, cursorName, nextRowName,
+            ParquetRowGenerator.GetAvailableGeneratedMemberName(schemaType, "Refresh"),
+            model.Leaves.Select(static leaf => leaf.StorageShapeType).ToArray(), () =>
+            {
+                foreach (var root in model.Roots)
+                    AppendWriteRowProperty(builder, root,
+                        leaf => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref _column{leaf.Ordinal}, _index)");
+            });
     }
 
     static void AppendWriteRowProperty(StringBuilder builder, Node root, Func<Leaf, string> element)

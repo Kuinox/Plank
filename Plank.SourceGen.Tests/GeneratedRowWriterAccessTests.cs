@@ -26,11 +26,12 @@ internal sealed class GeneratedRowWriterAccessTests
                 public async System.Threading.Tasks.Task Write(System.IO.Stream nextOutput)
                 {
                     await System.Threading.Tasks.Task.Yield();
+                    var cursor = writer.CreateCursor();
                     for (var i = 0; i < 10; i++)
                     {
-                        var row = writer.GetRow();
-                        row.Value = i;
-                        row.Count = i;
+                        cursor.NextRow();
+                        cursor.Value = i;
+                        cursor.Count = i;
                     }
                     writer.Complete();
                     await System.Threading.Tasks.Task.Yield();
@@ -49,6 +50,10 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated).Contains("public sealed class PipelineWriter : global::Plank.RowApi.PipelineRowWriterBase<BufferSlot>");
         await Assert.That(generated).Contains("public Row GetRow()");
         await Assert.That(generated).Contains("public struct Writer");
+        await Assert.That(generated).Contains("public ref struct RowCursor");
+        await Assert.That(generated).Contains("ref int _column0;");
+        await Assert.That(generated).Contains(
+            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref _column0, _index) = value;");
         await Assert.That(generated).Contains("return new Row(Index, this);");
         await Assert.That(generated).Contains("readonly int _index;");
         await Assert.That(generated).Contains(

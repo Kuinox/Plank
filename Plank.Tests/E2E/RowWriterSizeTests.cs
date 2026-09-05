@@ -133,7 +133,9 @@ internal sealed class RowWriterSizeTests
     }
 
     [Test]
-    public void GeneratedRowSettersSurviveGrowthSlotRolloverAndCompactingGc()
+    [Arguments(false)]
+    [Arguments(true)]
+    public void GeneratedRowSettersSurviveGrowthSlotRolloverAndCompactingGc(bool useCursor)
     {
         using var stream = new MemoryStream();
         using (var writer = WideRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
@@ -143,8 +145,15 @@ internal sealed class RowWriterSizeTests
             TargetRowGroupSizeBytes = 65 * sizeof(int) * 3
         }))
         {
+            var cursor = writer.CreateCursor();
             for (var i = 0; i < 16; i++)
             {
+                if (useCursor)
+                {
+                    cursor.NextRow();
+                    FillWideCursor(ref cursor, i);
+                    continue;
+                }
                 var row = writer.GetRow();
                 row.Column0 = CompactAndReturn(i);
                 row.Column1 = 1_000 + i;
@@ -183,8 +192,16 @@ internal sealed class RowWriterSizeTests
             TargetRowGroupSizeBytes = 1024 * 1024
         }))
         {
+            var cursor = writer.CreateCursor();
             for (var i = 0; i < 16; i++)
             {
+                if (useCursor)
+                {
+                    cursor.NextRow();
+                    cursor.Name = CompactAndReturn($"row-{i}");
+                    cursor.Id = Guid.Empty;
+                    continue;
+                }
                 var row = writer.GetRow();
                 row.Name = CompactAndReturn($"row-{i}");
                 row.Id = Guid.Empty;
@@ -204,6 +221,15 @@ internal sealed class RowWriterSizeTests
 
         if (index != 16)
             throw new InvalidOperationException($"Expected 16 reference rows, read {index}.");
+    }
+
+    static void FillWideCursor(ref WideRowSchema.RowCursor row, int i)
+    {
+        row.Column0 = CompactAndReturn(i);
+        row.Column1 = 1_000 + i;
+        row.Column32 = 32_000 + i;
+        row.Column63 = 63_000 + i;
+        row.Column64 = 64_000 + i;
     }
 
     static T CompactAndReturn<T>(T value)
