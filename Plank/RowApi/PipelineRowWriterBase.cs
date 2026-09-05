@@ -111,33 +111,12 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
     /// <returns>The slot prepared for the next row.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected TSlot CommitFixedRow(TSlot slot, int rowsPerGroup)
-        => CommitFixedRow(slot, rowsPerGroup, out _);
-
-    /// <summary>Commits a fixed-width row and reports whether the writable column buffers changed.</summary>
-    /// <param name="slot">The current active slot.</param>
-    /// <param name="rowsPerGroup">The generated row-count cutoff for one row group.</param>
-    /// <param name="buffersChanged">Whether the returned slot uses different column buffers.</param>
-    /// <returns>The slot prepared for the next row.</returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    protected TSlot CommitFixedRow(TSlot slot, int rowsPerGroup, out bool buffersChanged)
     {
         slot.Next();
-        if (slot.Count < rowsPerGroup)
-        {
-            if (!slot.IsFull)
-            {
-                buffersChanged = false;
-                return slot;
-            }
-            if (slot.Grow())
-            {
-                buffersChanged = true;
-                return slot;
-            }
-        }
+        if (slot.Count < rowsPerGroup && (!slot.IsFull || slot.Grow()))
+            return slot;
 
         _active = EnqueueAndTakeFree(slot);
-        buffersChanged = true;
         return _active;
     }
 
@@ -147,35 +126,14 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
     /// <returns>The slot prepared for the next row.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected TSlot CommitVariableRow(TSlot slot, ulong rowSizeBytes)
-        => CommitVariableRow(slot, rowSizeBytes, out _);
-
-    /// <summary>Commits a variable-width row and reports whether the writable column buffers changed.</summary>
-    /// <param name="slot">The current active slot.</param>
-    /// <param name="rowSizeBytes">The generated estimate of the current row's buffered size.</param>
-    /// <param name="buffersChanged">Whether the returned slot uses different column buffers.</param>
-    /// <returns>The slot prepared for the next row.</returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    protected TSlot CommitVariableRow(TSlot slot, ulong rowSizeBytes, out bool buffersChanged)
     {
         _bufferedSizeBytes = checked(_bufferedSizeBytes + rowSizeBytes);
         slot.Next();
-        if (_bufferedSizeBytes < _targetRowGroupSizeBytes)
-        {
-            if (!slot.IsFull)
-            {
-                buffersChanged = false;
-                return slot;
-            }
-            if (slot.Grow())
-            {
-                buffersChanged = true;
-                return slot;
-            }
-        }
+        if (_bufferedSizeBytes < _targetRowGroupSizeBytes && (!slot.IsFull || slot.Grow()))
+            return slot;
 
         _active = EnqueueAndTakeFree(slot);
         _bufferedSizeBytes = 0;
-        buffersChanged = true;
         return _active;
     }
 

@@ -133,7 +133,7 @@ internal sealed class RowWriterSizeTests
     }
 
     [Test]
-    public void ManagedColumnReferencesSurviveGrowthSlotRolloverAndCompactingGc()
+    public void GeneratedRowSettersSurviveGrowthSlotRolloverAndCompactingGc()
     {
         using var stream = new MemoryStream();
         using (var writer = WideRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
@@ -198,7 +198,7 @@ internal sealed class RowWriterSizeTests
         while (referenceReader.MoveNext())
         {
             if (referenceReader.Current.Name != $"row-{index}")
-                throw new InvalidOperationException($"Managed cached reference row {index} was corrupted.");
+                throw new InvalidOperationException($"Reference row {index} was corrupted.");
             index++;
         }
 
@@ -213,7 +213,7 @@ internal sealed class RowWriterSizeTests
     }
 
     [Test]
-    public void CopiedGeneratedWritersRefreshManagedReferencesAfterGrowth()
+    public void AliasedGeneratedWritersShareStateAfterGrowth()
     {
         using var stream = new MemoryStream();
         using (var writer = DatasetRowSchema.CreateRowWriter(stream, new ParquetWriterOptions
@@ -243,7 +243,7 @@ internal sealed class RowWriterSizeTests
         }
 
         if (!ReadValues(stream).SequenceEqual(Enumerable.Range(0, 12)))
-            throw new InvalidOperationException("A copied writer retained stale column references after growth.");
+            throw new InvalidOperationException("Writer aliases diverged after growth.");
     }
 
     [Test]

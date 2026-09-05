@@ -26,11 +26,12 @@ writer.Complete();
 ```
 
 `writer.GetRow()` commits the previously returned row and returns a small view over the next reusable row buffer.
-The stack-bound writer keeps GC-tracked managed references into the current column arrays, so generated property setters avoid repeated
-array checks while remaining valid if a compacting GC moves the arrays. Use a row only until the next `GetRow()` call.
+Assign the generated row properties to write into their corresponding column buffers.
+Use a row only until the next `GetRow()`, `Complete()`, `Reset()`, or `Dispose()` call.
 `Complete()` commits the last row.
 
-The generated writer is a `ref struct`: keep it in synchronous code and finish its scope before an `await` or `yield` boundary.
+The generated `PipelineWriter` is a class: it can be stored in a field and reused with `Reset()`.
+Only the temporary `Row` view is a `ref struct`; it cannot be kept across an `await` or `yield` boundary.
 
 The row writer handles row-group construction, encoding, and file finalization. `Complete()` commits the file. If
 writing fails first, `Dispose()` stops the workers and releases resources without committing the incomplete file.

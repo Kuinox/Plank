@@ -245,8 +245,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var readerTypeName = GetAvailableGeneratedMemberName(schemaType, "Reader");
         var datasetWriterTypeName = GetAvailableGeneratedMemberName(schemaType, "DatasetWriter");
         var routeTypeName = GetAvailableGeneratedMemberName(schemaType, "Route");
-        var rowWriteStateTypeName = GetAvailableGeneratedMemberName(schemaType, "RowWriteState");
-        var pipelineWriterCoreTypeName = GetAvailableGeneratedMemberName(schemaType, "PipelineWriterCore");
         var rowTypeName = EscapeIdentifier(schemaType.Name);
         var namespaceName = schemaType.ContainingNamespace is { IsGlobalNamespace: false }
             ? schemaType.ContainingNamespace.ToDisplayString()
@@ -401,10 +399,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            => _rowGroupWriter.Write(serialized);");
         builder.AppendLine("    }");
         builder.AppendLine();
-        builder.Append("    public ref struct ").AppendLine(writerTypeName);
+        builder.Append("    public struct ").AppendLine(writerTypeName);
         builder.AppendLine("    {");
         builder.AppendLine("        readonly global::Plank.RowApi.RowGroupWriterCore<BufferSlot> _core;");
-        builder.Append("        ").Append(rowWriteStateTypeName).AppendLine(" _state;");
 
         builder.AppendLine();
         builder.Append("        internal ").Append(writerTypeName)
@@ -413,95 +410,27 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            _ = options ?? throw new global::System.ArgumentNullException(nameof(options));");
         builder.AppendLine("            var slot = new BufferSlot(rowGroupWriter, options.RowApiInitialRowCapacity);");
         builder.AppendLine("            _core = new global::Plank.RowApi.RowGroupWriterCore<BufferSlot>(rowGroupWriter, slot);");
-        builder.Append("            _state = new ").Append(rowWriteStateTypeName).AppendLine("(slot, 0);");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        [global::System.Diagnostics.CodeAnalysis.UnscopedRef]");
         builder.AppendLine("        public Row GetRow()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            var slot = _core.GetSlotForRow();");
-        builder.AppendLine("            _state.SetIndex(slot.CurrentIndex);");
-        builder.AppendLine("            return new Row(_state.Index, ref _state);");
-        builder.AppendLine("        }");
+        builder.AppendLine("            => _core.GetSlotForRow().GetRow();");
         builder.AppendLine();
         builder.AppendLine("        public void Write()");
         builder.AppendLine("            => _core.Write();");
         builder.AppendLine("    }");
         builder.AppendLine();
-        builder.AppendLine("    public ref struct PipelineWriter");
-        builder.AppendLine("    {");
-        builder.Append("        readonly ").Append(pipelineWriterCoreTypeName).AppendLine(" _core;");
-        builder.Append("        ").Append(rowWriteStateTypeName).AppendLine(" _state;");
-        builder.AppendLine();
-        builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions options)");
-        builder.Append("            : this(new ").Append(pipelineWriterCoreTypeName).AppendLine("(stream, options))");
-        builder.AppendLine("        {");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal PipelineWriter(global::Plank.Writing.IParquetWriteSource file, global::Plank.Writing.ParquetFilePath filePath, global::Plank.Writing.ParquetWriterOptions options)");
-        builder.Append("            : this(new ").Append(pipelineWriterCoreTypeName).AppendLine("(file, filePath, options))");
-        builder.AppendLine("        {");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
-        builder.Append("            : this(new ").Append(pipelineWriterCoreTypeName).AppendLine("(stream, onFlush, options))");
-        builder.AppendLine("        {");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, uint maxParallelism, global::Plank.Writing.ParquetWriterOptions options)");
-        builder.Append("            : this(new ").Append(pipelineWriterCoreTypeName).AppendLine("(stream, maxParallelism, options))");
-        builder.AppendLine("        {");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, uint maxParallelism, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
-        builder.Append("            : this(new ").Append(pipelineWriterCoreTypeName).AppendLine("(stream, maxParallelism, onFlush, options))");
-        builder.AppendLine("        {");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.Append("        PipelineWriter(").Append(pipelineWriterCoreTypeName).AppendLine(" core)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            _core = core;");
-        builder.Append("            _state = new ").Append(rowWriteStateTypeName)
-            .AppendLine("(core.GetCurrentSlot(), core.BufferGeneration);");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-        builder.AppendLine("        [global::System.Diagnostics.CodeAnalysis.UnscopedRef]");
-        builder.AppendLine("        public Row GetRow()");
-        builder.AppendLine("        {");
-        builder.AppendLine("            var index = _core.GetRow(ref _state);");
-        builder.AppendLine("            return new Row(index, ref _state);");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        public void Complete()");
-        builder.AppendLine("            => _core.Complete();");
-        builder.AppendLine();
-        builder.AppendLine("        public void Reset(global::System.IO.Stream stream)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            _core.Reset(stream);");
-        builder.AppendLine("            _state.Refresh(_core.GetCurrentSlot(), _core.BufferGeneration);");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        public void Dispose()");
-        builder.AppendLine("            => _core.Dispose();");
-        builder.AppendLine("    }");
-        builder.AppendLine();
-        builder.Append("    sealed class ").Append(pipelineWriterCoreTypeName)
-            .AppendLine(" : global::Plank.RowApi.PipelineRowWriterBase<BufferSlot>");
+        builder.AppendLine("    public sealed class PipelineWriter : global::Plank.RowApi.PipelineRowWriterBase<BufferSlot>");
         builder.AppendLine("    {");
         if (rowSizePlan.IsFixed)
             builder.AppendLine("        readonly int _rowsPerGroup;");
         builder.AppendLine("        bool _rowPending;");
-        builder.AppendLine("        int _bufferGeneration;");
         builder.AppendLine();
-        builder.Append("        internal ").Append(pipelineWriterCoreTypeName)
-            .AppendLine("(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions options)");
+        builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, options.RowApiMaxParallelism, null, options)");
         builder.AppendLine("        {");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.Append("        internal ").Append(pipelineWriterCoreTypeName)
-            .AppendLine("(global::Plank.Writing.IParquetWriteSource file, global::Plank.Writing.ParquetFilePath filePath, global::Plank.Writing.ParquetWriterOptions options)");
+        builder.AppendLine("        internal PipelineWriter(global::Plank.Writing.IParquetWriteSource file, global::Plank.Writing.ParquetFilePath filePath, global::Plank.Writing.ParquetWriterOptions options)");
         builder.Append("            : base(file, filePath, ").Append(schemaMemberName)
             .Append(", options.RowApiMaxParallelism, null, options, options.RowApiInitialRowCapacity, \"Plank")
             .Append(Escape(schemaType.Name))
@@ -509,23 +438,19 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        {");
         if (rowSizePlan.IsFixed)
             builder.Append("            _rowsPerGroup = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
-        builder.AppendLine("            _bufferGeneration = 0;");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.Append("        internal ").Append(pipelineWriterCoreTypeName)
-            .AppendLine("(global::System.IO.Stream stream, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
+        builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, options.RowApiMaxParallelism, onFlush, options)");
         builder.AppendLine("        {");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.Append("        internal ").Append(pipelineWriterCoreTypeName)
-            .AppendLine("(global::System.IO.Stream stream, uint maxParallelism, global::Plank.Writing.ParquetWriterOptions options)");
+        builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, uint maxParallelism, global::Plank.Writing.ParquetWriterOptions options)");
         builder.AppendLine("            : this(stream, maxParallelism, null, options)");
         builder.AppendLine("        {");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.Append("        internal ").Append(pipelineWriterCoreTypeName)
-            .AppendLine("(global::System.IO.Stream stream, uint maxParallelism, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
+        builder.AppendLine("        internal PipelineWriter(global::System.IO.Stream stream, uint maxParallelism, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
         builder.Append("            : base(stream, ").Append(schemaMemberName)
             .Append(", maxParallelism, onFlush, options, options.RowApiInitialRowCapacity, \"Plank")
             .Append(Escape(schemaType.Name))
@@ -533,44 +458,25 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        {");
         if (rowSizePlan.IsFixed)
             builder.Append("            _rowsPerGroup = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
-        builder.AppendLine("            _bufferGeneration = 0;");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        protected override BufferSlot CreateSlot(global::Plank.Writing.ParquetWriter writer)");
         builder.AppendLine("            => new(writer, RowBatchSize);");
         builder.AppendLine();
         builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-        builder.Append("        internal int GetRow(scoped ref ").Append(rowWriteStateTypeName).AppendLine(" state)");
+        builder.AppendLine("        public Row GetRow()");
         builder.AppendLine("        {");
         builder.AppendLine("            var slot = GetSlotForRow();");
-        builder.AppendLine("            if (state.Generation != _bufferGeneration)");
-        builder.AppendLine("                state.Refresh(slot, _bufferGeneration);");
-        if (!rowSizePlan.IsFixed)
-            builder.AppendLine("            state.SetIndex(slot.CurrentIndex);");
         builder.AppendLine("            if (_rowPending)");
-        builder.AppendLine("            {");
         if (rowSizePlan.IsFixed)
-            builder.AppendLine("                slot = CommitFixedRow(slot, _rowsPerGroup, out var buffersChanged);");
+            builder.AppendLine("                slot = CommitFixedRow(slot, _rowsPerGroup);");
         else
-            builder.Append("                slot = CommitVariableRow(slot, state.GetRowSize(")
-                .Append(rowSizePlan.FixedSizeExpression).AppendLine("), out var buffersChanged);");
-        builder.AppendLine("                if (buffersChanged)");
-        builder.AppendLine("                {");
-        builder.AppendLine("                    _bufferGeneration = unchecked(_bufferGeneration + 1);");
-        builder.AppendLine("                    state.Refresh(slot, _bufferGeneration);");
-        builder.AppendLine("                }");
-        builder.AppendLine("            }");
+            builder.Append("                slot = CommitVariableRow(slot, slot.GetRowSize(")
+                .Append(rowSizePlan.FixedSizeExpression).AppendLine("));");
         builder.AppendLine("            else");
         builder.AppendLine("                _rowPending = true;");
-        builder.AppendLine("            var index = slot.CurrentIndex;");
-        builder.AppendLine("            state.SetIndex(index);");
-        builder.AppendLine("            return index;");
+        builder.AppendLine("            return slot.GetRow();");
         builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal int BufferGeneration => _bufferGeneration;");
-        builder.AppendLine();
-        builder.AppendLine("        internal BufferSlot GetCurrentSlot()");
-        builder.AppendLine("            => GetSlotForRow();");
         builder.AppendLine();
         builder.AppendLine("        public void Complete()");
         builder.AppendLine("        {");
@@ -591,7 +497,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        {");
         builder.AppendLine("            ResetWriter(stream);");
         builder.AppendLine("            _rowPending = false;");
-        builder.AppendLine("            _bufferGeneration = unchecked(_bufferGeneration + 1);");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -660,13 +565,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            RefreshBuffers();");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        internal int CurrentIndex => Index;");
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+        builder.AppendLine("        internal Row GetRow()");
+        builder.AppendLine("        {");
+        builder.AppendLine("            return new Row(Index, this);");
+        builder.AppendLine("        }");
         if (!rowSizePlan.IsFixed)
         {
-            builder.AppendLine();
-            builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-            builder.AppendLine("        internal static ulong GetValueSize<T>(T value, global::Plank.Schema.ParquetPhysicalType physicalType, uint typeLength)");
-            builder.AppendLine("            => EstimateValueSize(value, physicalType, typeLength);");
             builder.AppendLine();
             builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
             builder.AppendLine("        internal ulong GetRowSize(ulong fixedSizeBytes)");
@@ -676,7 +581,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             {
                 var column = schemaColumns[columnIndex];
                 builder.Append("            size = checked(size + EstimateValueSize(")
-                    .Append(ArrayElement($"_column{columnIndex}", "Index"))
+                    .Append(UncheckedBufferElement($"_column{columnIndex}", "Index"))
                     .Append(", global::Plank.Schema.ParquetPhysicalType.")
                     .Append(column.PhysicalType).Append(", ").Append(column.TypeLength).AppendLine("U));");
             }
@@ -695,108 +600,29 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
-        AppendRowWriteState(builder, columns, rowSizePlan, schemaColumns, rowWriteStateTypeName);
-        builder.AppendLine();
-        AppendWriteRow(builder, columns, rowWriteStateTypeName);
+        AppendWriteRow(builder, columns);
         builder.AppendLine("}");
 
         return builder.ToString();
     }
 
-    static void AppendRowWriteState(
-        StringBuilder builder,
-        ImmutableArray<MappedColumn> columns,
-        RowSizePlan rowSizePlan,
-        ImmutableArray<SchemaColumn> schemaColumns,
-        string rowWriteStateTypeName)
+    static void AppendWriteRow(StringBuilder builder, ImmutableArray<MappedColumn> columns)
     {
-        var requiresOwnerSlot = columns.Any(static column => SupportsOwnerSetter(column.ClrTypeName));
-        builder.Append("    internal ref struct ").AppendLine(rowWriteStateTypeName);
-        builder.AppendLine("    {");
-        builder.AppendLine("        int _index;");
-        builder.AppendLine("        int _generation;");
-        if (requiresOwnerSlot)
-            builder.AppendLine("        internal BufferSlot _ownerSlot;");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("        internal ref ").Append(columns[i].ClrTypeName).Append(" _column")
-                .Append(i).AppendLine(";");
-        builder.AppendLine();
-        builder.Append("        internal ").Append(rowWriteStateTypeName)
-            .AppendLine("(BufferSlot ownerSlot, int generation)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            _index = ownerSlot.CurrentIndex;");
-        builder.AppendLine("            _generation = generation;");
-        if (requiresOwnerSlot)
-            builder.AppendLine("            _ownerSlot = ownerSlot;");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("            _column").Append(i)
-                .Append(" = ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(ownerSlot._column")
-                .Append(i).AppendLine(");");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        internal readonly int Index => _index;");
-        builder.AppendLine();
-        builder.AppendLine("        internal readonly int Generation => _generation;");
-        builder.AppendLine();
-        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-        builder.AppendLine("        internal void SetIndex(int index)");
-        builder.AppendLine("            => _index = index;");
-        builder.AppendLine();
-        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]");
-        builder.AppendLine("        internal void Refresh(BufferSlot ownerSlot, int generation)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            _index = ownerSlot.CurrentIndex;");
-        builder.AppendLine("            _generation = generation;");
-        if (requiresOwnerSlot)
-            builder.AppendLine("            _ownerSlot = ownerSlot;");
-        for (var i = 0; i < columns.Length; i++)
-            builder.Append("            _column").Append(i)
-                .Append(" = ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(ownerSlot._column")
-                .Append(i).AppendLine(");");
-        builder.AppendLine("        }");
-        if (!rowSizePlan.IsFixed)
-        {
-            builder.AppendLine();
-            builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-            builder.AppendLine("        internal ulong GetRowSize(ulong fixedSizeBytes)");
-            builder.AppendLine("        {");
-            builder.AppendLine("            var size = fixedSizeBytes;");
-            foreach (var columnIndex in rowSizePlan.VariableColumnIndices)
-            {
-                var column = schemaColumns[columnIndex];
-                builder.Append("            size = checked(size + BufferSlot.GetValueSize(")
-                    .Append(RefElement($"_column{columnIndex}", "_index"))
-                    .Append(", global::Plank.Schema.ParquetPhysicalType.")
-                    .Append(column.PhysicalType).Append(", ").Append(column.TypeLength).AppendLine("U));");
-            }
-            builder.AppendLine("            return size;");
-            builder.AppendLine("        }");
-        }
-        builder.AppendLine("    }");
-    }
-
-    static void AppendWriteRow(StringBuilder builder, ImmutableArray<MappedColumn> columns,
-        string rowWriteStateTypeName)
-    {
-        builder.AppendLine("    /// <summary>A small writable view over the current row buffers.</summary>");
-        builder.AppendLine("    /// <remarks>Use only until the writer advances to the next row, and never after the writer leaves scope.</remarks>");
+        builder.AppendLine("    /// <summary>A writable view over the current row buffers.</summary>");
+        builder.AppendLine("    /// <remarks>Use only until the writer advances, completes, resets, or is disposed.</remarks>");
         builder.AppendLine("    public readonly ref struct Row");
         builder.AppendLine("    {");
         builder.AppendLine("        readonly int _index;");
-        builder.AppendLine("        readonly ref byte _state;");
+        builder.AppendLine("        readonly BufferSlot _ownerSlot;");
         builder.AppendLine();
-        builder.Append("        internal Row(int index, ref ").Append(rowWriteStateTypeName).AppendLine(" state)");
+        builder.AppendLine("        internal Row(int index, BufferSlot ownerSlot)");
         builder.AppendLine("        {");
         builder.AppendLine("            _index = index;");
-        builder.Append("            _state = ref global::System.Runtime.CompilerServices.Unsafe.As<")
-            .Append(rowWriteStateTypeName).AppendLine(", byte>(ref state);");
+        builder.AppendLine("            _ownerSlot = ownerSlot;");
         builder.AppendLine("        }");
         builder.AppendLine();
-        AppendWriteProperties(
-            builder,
-            columns,
-            i => RefElement($"global::System.Runtime.CompilerServices.Unsafe.As<byte, {rowWriteStateTypeName}>(ref _state)._column{i}", "_index"),
-            $"global::System.Runtime.CompilerServices.Unsafe.As<byte, {rowWriteStateTypeName}>(ref _state)._ownerSlot");
+        AppendWriteProperties(builder, columns,
+            i => UncheckedBufferElement($"_ownerSlot._column{i}", "_index"), "_ownerSlot");
         builder.AppendLine("    }");
     }
 
@@ -846,11 +672,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
     }
 
-    static string ArrayElement(string bufferExpression, string indexExpression)
+    static string UncheckedBufferElement(string bufferExpression, string indexExpression)
         => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference({bufferExpression}), {indexExpression})";
-
-    static string RefElement(string bufferExpression, string indexExpression)
-        => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref {bufferExpression}, {indexExpression})";
 
     static bool TryMapColumn(SchemaColumn column, out MappedColumn mapped)
     {
@@ -1250,7 +1073,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static string GetRowApiColumnFieldName(string propertyName)
         => $"s_{propertyName}RowApiColumn";
 
-    internal static string GetAvailableGeneratedMemberName(INamedTypeSymbol schemaType, string preferredName)
+    static string GetAvailableGeneratedMemberName(INamedTypeSymbol schemaType, string preferredName)
     {
         if (schemaType.GetMembers(preferredName).IsDefaultOrEmpty)
             return preferredName;

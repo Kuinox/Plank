@@ -3,7 +3,7 @@ namespace Plank.SourceGen.Tests;
 internal sealed class GeneratedRowWriterAccessTests
 {
     [Test]
-    public async Task FlatRowsKeepDirectManagedColumnReferences()
+    public async Task FlatRowsUseUncheckedSetters()
     {
         const string source = """
             using Plank.Schema;
@@ -17,17 +17,24 @@ internal sealed class GeneratedRowWriterAccessTests
                 public long Count { get; set; }
             }
 
-            static class Usage
+            sealed class Usage : System.IDisposable
             {
-                public static void Write(System.IO.Stream output)
+                readonly RowSchema.PipelineWriter writer;
+                public Usage(System.IO.Stream output) => writer = RowSchema.CreateRowWriter(output);
+                public void Dispose() => writer.Dispose();
+
+                public async System.Threading.Tasks.Task Write(System.IO.Stream nextOutput)
                 {
-                    using var writer = RowSchema.CreateRowWriter(output);
+                    await System.Threading.Tasks.Task.Yield();
                     for (var i = 0; i < 10; i++)
                     {
                         var row = writer.GetRow();
                         row.Value = i;
                         row.Count = i;
                     }
+                    writer.Complete();
+                    await System.Threading.Tasks.Task.Yield();
+                    writer.Reset(nextOutput);
                     writer.Complete();
                 }
             }
@@ -36,16 +43,16 @@ internal sealed class GeneratedRowWriterAccessTests
         var generated = Generate(source);
 
         await Assert.That(generated).Contains("internal int[] _column0 = null!;");
-        await Assert.That(generated).Contains("internal ref int _column0;");
+        await Assert.That(generated).Contains("readonly BufferSlot _ownerSlot;");
         await Assert.That(generated).Contains(
-            "_column0 = ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(ownerSlot._column0);");
-        await Assert.That(generated).Contains("public ref struct PipelineWriter");
+            "_column0 = GetValues<int>(0);");
+        await Assert.That(generated).Contains("public sealed class PipelineWriter : global::Plank.RowApi.PipelineRowWriterBase<BufferSlot>");
         await Assert.That(generated).Contains("public Row GetRow()");
-        await Assert.That(generated).Contains("var index = _core.GetRow(ref _state);");
-        await Assert.That(generated).Contains("return new Row(index, ref _state);");
-        await Assert.That(generated).Contains("readonly ref byte _state;");
+        await Assert.That(generated).Contains("public struct Writer");
+        await Assert.That(generated).Contains("return new Row(Index, this);");
+        await Assert.That(generated).Contains("readonly int _index;");
         await Assert.That(generated).Contains(
-            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.CompilerServices.Unsafe.As<byte, RowWriteState>(ref _state)._column0, _index) = value;");
+            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_ownerSlot._column0), _index) = value;");
         await Assert.That(generated.Contains("GetColumnWriter", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("ColumnWriter", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("BufferedRow", StringComparison.Ordinal)).IsFalse();
@@ -58,7 +65,7 @@ internal sealed class GeneratedRowWriterAccessTests
     }
 
     [Test]
-    public async Task NullableFlatRowsKeepDirectManagedColumnReferences()
+    public async Task NullableFlatRowsUseUncheckedSetters()
     {
         const string source = """
             using Plank.Schema;
@@ -75,15 +82,15 @@ internal sealed class GeneratedRowWriterAccessTests
         var generated = Generate(source);
 
         await Assert.That(generated).Contains("internal int?[] _column0 = null!;");
-        await Assert.That(generated).Contains("internal ref int? _column0;");
+        await Assert.That(generated).Contains("readonly BufferSlot _ownerSlot;");
         await Assert.That(generated).Contains(
-            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.CompilerServices.Unsafe.As<byte, RowWriteState>(ref _state)._column0, _index) = value;");
+            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_ownerSlot._column0), _index) = value;");
         await Assert.That(generated.Contains("GetArrayDataReferenceUnchecked", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("PinnedColumn", StringComparison.Ordinal)).IsFalse();
     }
 
     [Test]
-    public async Task NestedScalarLeavesKeepDirectManagedColumnReferences()
+    public async Task NestedScalarLeavesUseUncheckedSetters()
     {
         const string source = """
             using Plank.Schema;
@@ -106,17 +113,17 @@ internal sealed class GeneratedRowWriterAccessTests
         var generated = Generate(source);
 
         await Assert.That(generated).Contains("internal int[] _column0 = null!;");
-        await Assert.That(generated).Contains("internal ref int _column0;");
-        await Assert.That(generated).Contains("Unsafe.As<byte, RowWriteState>(ref _state)._column0");
+        await Assert.That(generated).Contains("readonly BufferSlot _ownerSlot;");
+        await Assert.That(generated).Contains("MemoryMarshal.GetArrayDataReference(_ownerSlot._column0)");
         await Assert.That(generated).Contains("_column1 = GetValues<string>(1);");
-        await Assert.That(generated).Contains("internal ref string _column1;");
-        await Assert.That(generated).Contains("Unsafe.As<byte, RowWriteState>(ref _state)._column1");
+        await Assert.That(generated).Contains("public struct Writer");
+        await Assert.That(generated).Contains("MemoryMarshal.GetArrayDataReference(_ownerSlot._column1)");
         await Assert.That(generated.Contains("GetArrayDataReferenceUnchecked", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("PinnedColumn", StringComparison.Ordinal)).IsFalse();
     }
 
     [Test]
-    public async Task NestedRowsKeepDirectManagedColumnReferences()
+    public async Task NestedRowsUseUncheckedSetters()
     {
         const string source = """
             using Plank.Schema;
@@ -133,13 +140,13 @@ internal sealed class GeneratedRowWriterAccessTests
         var generated = Generate(source);
 
         await Assert.That(generated).Contains("_column0 = GetValues<");
-        await Assert.That(generated).Contains("internal ref int[] _column0;");
-        await Assert.That(generated).Contains("Unsafe.As<byte, RowWriteState>(ref _state)._column0");
-        await Assert.That(generated).Contains("public ref struct PipelineWriter");
+        await Assert.That(generated).Contains("readonly BufferSlot _ownerSlot;");
+        await Assert.That(generated).Contains("MemoryMarshal.GetArrayDataReference(_ownerSlot._column0)");
+        await Assert.That(generated).Contains("public sealed class PipelineWriter : global::Plank.RowApi.PipelineRowWriterBase<BufferSlot>");
         await Assert.That(generated).Contains("public Row GetRow()");
-        await Assert.That(generated).Contains("return new Row(index, ref _state);");
+        await Assert.That(generated).Contains("return new Row(Index, this);");
         await Assert.That(generated).Contains(
-            "slot = CommitVariableRow(slot, state.GetRowSize(0UL), out var buffersChanged);");
+            "slot = CommitVariableRow(slot, slot.GetRowSize(0UL));");
         await Assert.That(generated.Contains("GetColumnWriter", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("ColumnWriter", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("BufferedRow", StringComparison.Ordinal)).IsFalse();
@@ -173,7 +180,7 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated).Contains("readonly int _rowsPerGroup;");
         await Assert.That(generated).Contains("GetFixedRowsPerGroup(checked(4UL + 8UL))");
         await Assert.That(generated).Contains(
-            "slot = CommitFixedRow(slot, _rowsPerGroup, out var buffersChanged);");
+            "slot = CommitFixedRow(slot, _rowsPerGroup);");
         await Assert.That(generated).Contains("bool _rowPending;");
         await Assert.That(generated.Contains("public void Next()", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated.Contains("GetRowSize(ulong", StringComparison.Ordinal)).IsFalse();
@@ -203,13 +210,11 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated).Contains(
             "CommitVariableRow(slot, slot.GetRowSize(checked(4UL)));");
         await Assert.That(generated).Contains(
-            "slot = CommitVariableRow(slot, state.GetRowSize(checked(4UL)), out var buffersChanged);");
+            "slot = CommitVariableRow(slot, slot.GetRowSize(checked(4UL)));");
         await Assert.That(generated).Contains("bool _rowPending;");
         await Assert.That(generated.Contains("public void Next()", StringComparison.Ordinal)).IsFalse();
         await Assert.That(generated).Contains(
             "EstimateValueSize(global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_column1), Index), global::Plank.Schema.ParquetPhysicalType.ByteArray, 0U)");
-        await Assert.That(generated).Contains(
-            "BufferSlot.GetValueSize(global::System.Runtime.CompilerServices.Unsafe.Add(ref _column1, _index), global::Plank.Schema.ParquetPhysicalType.ByteArray, 0U)");
     }
 
     static string Generate(string source)

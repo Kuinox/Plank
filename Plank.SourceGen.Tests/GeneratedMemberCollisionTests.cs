@@ -21,10 +21,6 @@ internal sealed class GeneratedMemberCollisionTests
 
                 public int Reader { get; set; }
 
-                public int RowWriteState { get; set; }
-
-                public int PipelineWriterCore { get; set; }
-
                 static void UseGeneratedApi(System.IO.Stream stream, Plank.Writing.RowGroupWriter rowGroupWriter)
                 {
                     _ = Schema1;

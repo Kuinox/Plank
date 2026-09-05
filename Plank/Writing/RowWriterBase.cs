@@ -256,7 +256,6 @@ public abstract class RowWriterBase<TSlot> : IDisposable
     /// <summary>Queues a filled slot and obtains the next writable slot.</summary>
     /// <param name="slot">The filled slot to queue.</param>
     /// <returns>The next writable slot.</returns>
-    [MethodImpl(MethodImplOptions.NoInlining)]
     protected TSlot EnqueueAndTakeFree(TSlot slot)
     {
         ArgumentNullException.ThrowIfNull(slot);
