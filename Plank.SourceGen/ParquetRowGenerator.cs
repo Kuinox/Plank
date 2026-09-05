@@ -600,7 +600,6 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        void RefreshBuffers()");
         builder.AppendLine("        {");
-        builder.AppendLine("            BufferVersion = unchecked(BufferVersion + 1);");
         for (var i = 0; i < columns.Length; i++)
             builder.Append("            _column").Append(i).Append(" = GetValues<")
                 .Append(columns[i].ClrTypeName).Append(">(").Append(i).AppendLine(");");
@@ -610,9 +609,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         AppendWriteRow(builder, columns);
         RowCursorEmitter.AppendCursor(builder, cursorName, nextRowName,
             GetAvailableGeneratedMemberName(schemaType, "Refresh"),
+            GetAvailableGeneratedMemberName(schemaType, "Buffers"),
             columns.Select(static column => column.ClrTypeName).ToArray(),
             () => AppendWriteProperties(builder, columns,
-                i => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref _column{i}, _index)", "_ownerSlot"));
+                i => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref _buffers._column{i}, _index)", "_buffers._ownerSlot"));
         builder.AppendLine("}");
 
         return builder.ToString();

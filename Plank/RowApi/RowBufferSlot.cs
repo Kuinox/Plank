@@ -66,6 +66,18 @@ public abstract class RowBufferSlot
     internal int Count
         => Index;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryAdvanceBefore(int rowsPerGroup)
+    {
+        var next = unchecked(Index + 1);
+        // The unsigned capacity comparison also rejects integer wraparound.
+        // Leave the boundary row to the checked cold path.
+        if ((uint)next >= (uint)_rowCount || next >= rowsPerGroup)
+            return false;
+        Index = next;
+        return true;
+    }
+
     internal void Bind(ParquetWriter writer)
     {
         ArgumentNullException.ThrowIfNull(writer);

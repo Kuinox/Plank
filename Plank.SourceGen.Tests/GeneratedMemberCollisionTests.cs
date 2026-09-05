@@ -23,6 +23,7 @@ internal sealed class GeneratedMemberCollisionTests
                 public int RowCursor { get; set; }
                 public int NextRow { get; set; }
                 public int Refresh { get; set; }
+                public int Buffers { get; set; }
 
                 static void UseGeneratedApi(System.IO.Stream stream, Plank.Writing.RowGroupWriter rowGroupWriter)
                 {
@@ -35,6 +36,7 @@ internal sealed class GeneratedMemberCollisionTests
                     cursor.RowCursor = 1;
                     cursor.NextRow = 2;
                     cursor.Refresh = 3;
+                    cursor.Buffers = 4;
                 }
             }
             """;

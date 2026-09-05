@@ -58,6 +58,9 @@ The cursor retains one GC-tracked managed ref per column, initialized on its fir
 `NextRow()` and rebound when a buffer grows or the writer switches slots. Setters use
 these refs directly, without array null probes or bounds checks. Row advancement still
 validates writer state and capacity; variable-width row-size accounting is unchanged.
+One buffer-generation comparison detects when rebinding is necessary, including after
+`Reset()`. The cold refresh helper returns a new internal buffer holder instead of
+taking the cursor by reference, allowing the JIT to keep the row index in a register.
 Even a wide cursor is initialized only once, not copied for every row. Pass it to
 helpers with `ref` and avoid by-value copies or readonly receivers.
 

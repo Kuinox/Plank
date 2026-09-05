@@ -53,7 +53,8 @@ internal sealed class GeneratedRowWriterAccessTests
         await Assert.That(generated).Contains("public ref struct RowCursor");
         await Assert.That(generated).Contains("ref int _column0;");
         await Assert.That(generated).Contains(
-            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref _column0, _index) = value;");
+            "set => global::System.Runtime.CompilerServices.Unsafe.Add(ref _buffers._column0, _index) = value;");
+        await Assert.That(generated).Contains("_buffers = Buffers.Refresh(slot, generation);");
         await Assert.That(generated).Contains("return new Row(Index, this);");
         await Assert.That(generated).Contains("readonly int _index;");
         await Assert.That(generated).Contains(

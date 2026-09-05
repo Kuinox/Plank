@@ -742,7 +742,6 @@ static class NestedParquetRowEmitter
         builder.AppendLine();
         builder.AppendLine("        void RefreshBuffers()");
         builder.AppendLine("        {");
-        builder.AppendLine("            BufferVersion = unchecked(BufferVersion + 1);");
         for (var i = 0; i < model.Leaves.Length; i++)
             builder.Append("            _column").Append(i).Append(" = GetValues<")
                 .Append(model.Leaves[i].StorageShapeType).Append(">(").Append(i).AppendLine(");");
@@ -769,11 +768,12 @@ static class NestedParquetRowEmitter
         builder.AppendLine("    }");
         RowCursorEmitter.AppendCursor(builder, cursorName, nextRowName,
             ParquetRowGenerator.GetAvailableGeneratedMemberName(schemaType, "Refresh"),
+            ParquetRowGenerator.GetAvailableGeneratedMemberName(schemaType, "Buffers"),
             model.Leaves.Select(static leaf => leaf.StorageShapeType).ToArray(), () =>
             {
                 foreach (var root in model.Roots)
                     AppendWriteRowProperty(builder, root,
-                        leaf => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref _column{leaf.Ordinal}, _index)");
+                        leaf => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref _buffers._column{leaf.Ordinal}, _index)");
             });
     }
 

@@ -9,6 +9,7 @@ static class RowCursorEmitter
 {
     public static void AppendFactory(StringBuilder builder, string cursorName)
     {
+        builder.AppendLine("        internal long CurrentBufferGeneration => BufferGeneration;");
         builder.AppendLine("        /// <summary>Creates a reusable row cursor. Call NextRow before assigning each row.</summary>");
         builder.Append("        public ").Append(cursorName).AppendLine(" CreateCursor()");
         builder.AppendLine("        {");
@@ -19,7 +20,6 @@ static class RowCursorEmitter
 
     public static void AppendSlotMembers(StringBuilder builder)
     {
-        builder.AppendLine("        internal int BufferVersion { get; private set; }");
         builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
         builder.AppendLine("        internal int GetCursorIndex()");
         builder.AppendLine("        {");
@@ -28,6 +28,7 @@ static class RowCursorEmitter
     }
 
     public static void AppendCursor(StringBuilder builder, string cursorName, string nextRowName, string refreshName,
+        string buffersTypeName,
         IReadOnlyList<string> columnTypes, Action appendProperties)
     {
         builder.AppendLine("    /// <summary>A reusable writable cursor over the pipeline's column buffers.</summary>");
@@ -35,21 +36,13 @@ static class RowCursorEmitter
         builder.Append("    public ref struct ").AppendLine(cursorName);
         builder.AppendLine("    {");
         builder.AppendLine("        readonly PipelineWriter _writer;");
-        builder.AppendLine("        BufferSlot _ownerSlot;");
-        builder.AppendLine("        int _bufferVersion;");
         builder.AppendLine("        int _index;");
-        for (var i = 0; i < columnTypes.Count; i++)
-            builder.Append("        ref ").Append(columnTypes[i]).Append(" _column").Append(i).AppendLine(";");
+        builder.Append("        ").Append(buffersTypeName).AppendLine(" _buffers;");
         builder.Append("        internal ").Append(cursorName).AppendLine("(PipelineWriter writer)");
         builder.AppendLine("        {");
         // A cursor that has not advanced must fault, not write before the beginning of an array.
         builder.AppendLine("            this = default;");
         builder.AppendLine("            _writer = writer;");
-        builder.AppendLine("            _ownerSlot = null!;");
-        for (var i = 0; i < columnTypes.Count; i++)
-            builder.Append("            _column").Append(i)
-                .Append(" = ref global::System.Runtime.CompilerServices.Unsafe.NullRef<")
-                .Append(columnTypes[i]).AppendLine(">();");
         builder.AppendLine("        }");
         builder.AppendLine("        /// <summary>Commits the previous row and positions this cursor on the next writable row.</summary>");
         builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
@@ -57,21 +50,33 @@ static class RowCursorEmitter
         builder.AppendLine("        {");
         builder.AppendLine("            var slot = _writer.GetSlotForNextRow();");
         builder.AppendLine("            var index = slot.GetCursorIndex();");
-        builder.AppendLine("            if (!global::System.Object.ReferenceEquals(_ownerSlot, slot) || _bufferVersion != slot.BufferVersion)");
-        builder.Append("                ").Append(refreshName).AppendLine("(slot);");
+        builder.AppendLine("            var generation = _writer.CurrentBufferGeneration;");
+        builder.AppendLine("            if (_buffers._bufferGeneration != generation)");
+        builder.Append("                _buffers = ").Append(buffersTypeName).Append('.').Append(refreshName)
+            .AppendLine("(slot, generation);");
         builder.AppendLine("            _index = index;");
         builder.AppendLine("        }");
-        // Keep O(columns) ref setup out of the loop body and of the inliner's budget.
-        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]");
-        builder.Append("        void ").Append(refreshName).AppendLine("(BufferSlot slot)");
-        builder.AppendLine("        {");
-        for (var i = 0; i < columnTypes.Count; i++)
-            builder.Append("            _column").Append(i).Append(" = ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(slot._column")
-                .Append(i).AppendLine(");");
-        builder.AppendLine("            _ownerSlot = slot;");
-        builder.AppendLine("            _bufferVersion = slot.BufferVersion;");
-        builder.AppendLine("        }");
         appendProperties();
+        builder.Append("        ref struct ").AppendLine(buffersTypeName);
+        builder.AppendLine("        {");
+        builder.AppendLine("            internal BufferSlot _ownerSlot;");
+        builder.AppendLine("            internal long _bufferGeneration;");
+        for (var i = 0; i < columnTypes.Count; i++)
+            builder.Append("            internal ref ").Append(columnTypes[i]).Append(" _column").Append(i).AppendLine(";");
+        // Return fresh refs on the cold path; do not expose the cursor's address to a call.
+        builder.AppendLine("            [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]");
+        builder.Append("            internal static ").Append(buffersTypeName).Append(' ').Append(refreshName)
+            .AppendLine("(BufferSlot slot, long generation)");
+        builder.AppendLine("            {");
+        builder.Append("                ").Append(buffersTypeName).AppendLine(" buffers = default;");
+        for (var i = 0; i < columnTypes.Count; i++)
+            builder.Append("                buffers._column").Append(i).Append(" = ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(slot._column")
+                .Append(i).AppendLine(");");
+        builder.AppendLine("                buffers._ownerSlot = slot;");
+        builder.AppendLine("                buffers._bufferGeneration = generation;");
+        builder.AppendLine("                return buffers;");
+        builder.AppendLine("            }");
+        builder.AppendLine("        }");
         builder.AppendLine("    }");
     }
 }
