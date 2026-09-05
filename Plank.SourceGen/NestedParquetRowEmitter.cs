@@ -124,7 +124,7 @@ static class NestedParquetRowEmitter
                 return false;
             }
 
-            node = new Node(NodeKind.Leaf, parquetName, propertyName, GetTypeName(type),
+            node = new Node(NodeKind.Leaf, parquetName, propertyName, type,
                 IsNullable(type, nullableAnnotation), scalar, collectionKind: null, []);
             return true;
         }
@@ -144,7 +144,7 @@ static class NestedParquetRowEmitter
                 node = default!;
                 return false;
             }
-            node = new Node(NodeKind.List, parquetName, propertyName, GetTypeName(type),
+            node = new Node(NodeKind.List, parquetName, propertyName, type,
                 IsNullable(type, nullableAnnotation), scalar: null, "Array", [element]);
             return true;
         }
@@ -157,7 +157,7 @@ static class NestedParquetRowEmitter
                 node = default!;
                 return false;
             }
-            node = new Node(NodeKind.List, parquetName, propertyName, GetTypeName(type),
+            node = new Node(NodeKind.List, parquetName, propertyName, type,
                 IsNullable(type, nullableAnnotation), scalar: null, "List", [element]);
             return true;
         }
@@ -184,7 +184,7 @@ static class NestedParquetRowEmitter
                 error = $"Map property '{propertyName}' currently requires scalar key and value types.";
                 return false;
             }
-            node = new Node(NodeKind.Map, parquetName, propertyName, GetTypeName(type),
+            node = new Node(NodeKind.Map, parquetName, propertyName, type,
                 IsNullable(type, nullableAnnotation), scalar: null, "Dictionary", [key, value]);
             return true;
         }
@@ -227,7 +227,7 @@ static class NestedParquetRowEmitter
             children.Add(child);
         }
 
-        node = new Node(NodeKind.Group, parquetName, propertyName, GetTypeName(type),
+        node = new Node(NodeKind.Group, parquetName, propertyName, type,
             IsNullable(type, nullableAnnotation), scalar: null, collectionKind: null, children.ToImmutable());
         error = string.Empty;
         return true;
@@ -1034,7 +1034,7 @@ static class NestedParquetRowEmitter
             var element = node.Children[0];
             if (node.CollectionKind == "Array")
                 builder.Append(padding).Append(target).Append(" = (").Append(node.UserType)
-                    .Append(")global::System.Array.CreateInstance(typeof(").Append(element.UserType)
+                    .Append(")global::System.Array.CreateInstance(typeof(").Append(element.RuntimeType)
                     .Append("), ").Append(nonNullSource).AppendLine(".Length);");
             else
                 builder.Append(padding).Append(target).Append(" = new ").Append(TrimNullable(node.UserType))
@@ -1673,13 +1673,15 @@ static class NestedParquetRowEmitter
         internal ImmutableArray<Leaf> Leaves { get; } = leaves;
     }
 
-    sealed class Node(NodeKind kind, string name, string propertyName, string userType, bool optional,
+    sealed class Node(NodeKind kind, string name, string propertyName, ITypeSymbol userType, bool optional,
         Scalar? scalar, string? collectionKind, ImmutableArray<Node> children)
     {
         internal NodeKind Kind { get; } = kind;
         internal string Name { get; } = name;
         internal string PropertyName { get; } = propertyName;
-        internal string UserType { get; } = userType;
+        internal string UserType { get; } = GetTypeName(userType);
+        // Runtime type expressions omit reference annotations, but retain Nullable<T>.
+        internal string RuntimeType { get; } = userType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         internal bool Optional { get; } = optional;
         internal Scalar? Scalar { get; } = scalar;
         internal string? CollectionKind { get; } = collectionKind;
