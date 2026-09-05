@@ -35,11 +35,12 @@ internal sealed class NonPlainTimestampDecodingTests
     }
 
     [Test]
-    public void LargeRequiredPlainAndByteStreamSplitDateTimesPreserveUnitsKindsAndBatchBoundaries()
+    public void LargeRequiredDateTimesPreserveUnitsKindsAndBatchBoundaries()
     {
         ParquetDataPageVersion[] pageVersions =
             [ParquetDataPageVersion.V1, ParquetDataPageVersion.V2];
-        EncodingKind[] encodings = [EncodingKind.Plain, EncodingKind.ByteStreamSplit];
+        EncodingKind[] encodings =
+            [EncodingKind.Plain, EncodingKind.DeltaBinaryPacked, EncodingKind.ByteStreamSplit];
         foreach (var pageVersion in pageVersions)
         foreach (var encoding in encodings)
         foreach (var unit in Enum.GetValues<TimeUnit>())
@@ -302,6 +303,46 @@ internal sealed class NonPlainTimestampDecodingTests
                 buffers.Dispose();
                 writer.Dispose();
             }
+        }
+    }
+
+    [Test]
+    public void RequiredDeltaBinaryPackedDateTimesRejectOutOfRangeValuesAcrossBatches()
+    {
+        foreach (var pageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        foreach (var isAdjustedToUtc in new[] { false, true })
+        foreach (var invalidValue in new long[]
+                 {
+                     -62_135_596_800_000_001, 253_402_300_800_000_000,
+                     long.MinValue, long.MaxValue
+                 })
+        foreach (var invalidIndex in new[] { 0, 32_769, 40_002 })
+        {
+            var schema = new ParquetSchema([
+                ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int64,
+                    new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.DeltaBinaryPacked)),
+                    new LogicalType.Timestamp(TimeUnit.Micros, isAdjustedToUtc))
+            ]);
+            var values = new long[40_003];
+            values[invalidIndex] = invalidValue;
+            using var stream = new MemoryStream();
+            var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+            {
+                Compression = CompressionKind.None,
+                DataPageVersion = pageVersion
+            });
+            var serialized = writer.CreateSerializedColumn<long>(schema.LeafColumns[0]);
+            serialized.Serialize(values);
+            writer.StartRowGroup().Write(serialized);
+            writer.CloseFile();
+
+            using var source = new MemoryReadSource(stream.ToArray());
+            using var reader = schema.CreateReader(source);
+            Assert.Throws<CorruptParquetException>(() =>
+            {
+                foreach (var buffer in reader.RowGroups[0].Column<DateTime>(0))
+                    _ = buffer.Values.Length;
+            });
         }
     }
 

@@ -846,8 +846,26 @@ static partial class ColumnChunkReader
             var timestamp = GetTimestampLogicalType(column.LogicalType);
             var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
             var typed = Unsafe.As<Span<TValue>, Span<DateTime>>(ref destination);
-            for (var i = destination.Length - 1; i >= 0; i--)
-                typed[i] = new DateTime(TimestampTicks(raw64[i], timestamp.Unit), kind);
+            if (timestamp.Unit == TimeUnit.Micros)
+            {
+                // These bounds include the epoch offset, so valid values need no
+                // separate scaling-overflow check. Keep the general helper and its
+                // exception construction off the per-value hot path.
+                const long minimumMicroseconds = -62_135_596_800_000_000;
+                const long maximumMicroseconds = 253_402_300_799_999_999;
+                for (var i = destination.Length - 1; i >= 0; i--)
+                {
+                    var raw = raw64[i];
+                    if (raw < minimumMicroseconds || raw > maximumMicroseconds)
+                        _ = TimestampTicks(raw, TimeUnit.Micros);
+                    typed[i] = new DateTime(raw * 10 + DateTime.UnixEpoch.Ticks, kind);
+                }
+            }
+            else
+            {
+                for (var i = destination.Length - 1; i >= 0; i--)
+                    typed[i] = new DateTime(TimestampTicks(raw64[i], timestamp.Unit), kind);
+            }
             return;
         }
         if (typeof(TValue) == typeof(DateTimeOffset))
