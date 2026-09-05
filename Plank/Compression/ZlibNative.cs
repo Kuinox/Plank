@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Plank.Internal.Compression;
@@ -103,25 +104,33 @@ unsafe static partial class ZlibNative
         internal uint Reserved;
     }
 
+    // zlib uses the C ABI, including on Windows x86 where the default is Stdcall.
     [LibraryImport(LibraryName, EntryPoint = "zlibVersion")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial IntPtr GetVersion();
 
     [LibraryImport(LibraryName, EntryPoint = "deflateInit2_")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int DeflateInit2(void* stream, int level, int method, int windowBits, int memoryLevel,
         int strategy, byte* version, int streamSize);
 
     [LibraryImport(LibraryName, EntryPoint = "deflate")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int Deflate(void* stream, int flushMode);
 
     [LibraryImport(LibraryName, EntryPoint = "deflateEnd")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int DeflateEnd(void* stream);
 
     [LibraryImport(LibraryName, EntryPoint = "inflateInit2_")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int InflateInit2(void* stream, int windowBits, byte* version, int streamSize);
 
     [LibraryImport(LibraryName, EntryPoint = "inflate")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int Inflate(void* stream, int flushMode);
 
     [LibraryImport(LibraryName, EntryPoint = "inflateEnd")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int InflateEnd(void* stream);
 }
