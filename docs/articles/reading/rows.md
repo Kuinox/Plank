@@ -8,9 +8,8 @@ The examples use the [`EventSchema`](../schema.md#define-a-schema) type declared
 
 ## Read rows
 
-Set `path` to the file created in [Write rows](../writing/rows.md), add `using System.Text;`,
-and call [`CreateRowReader`](../schema.md#define-a-schema). Enumeration and `Current` return
-`EventSchema.ReadRow`; `EventSchema.Row` is the writer's reusable row buffer:
+Set `path` to the file created in [Write rows](../writing/rows.md) and add `using System.Text;`.
+Call [`CreateRowReader`](../schema.md#define-a-schema) and enumerate the reader:
 
 [!code-csharp[](../../../Samples/Plank.Sample/RowApiSample.cs#ReadRows)]
 
@@ -23,10 +22,8 @@ You can also use `MoveNext` and `Current` when explicit iteration is more conven
 > [!NOTE]
 > A row is a temporary view over the reader's current buffers. Read its properties before advancing the reader. Binary properties return a scoped value whose bytes must be consumed before the reader advances.
 
-`row.Name` is a `RowReaderBinaryValue`, not a string or byte array. Check `IsNull` before
-using `Value`; a non-null empty span represents an empty value, which is distinct from null.
-The example decodes the bytes with `Encoding.UTF8.GetString` for display. For allocation-free
-processing, consume `row.Name.Value` directly inside the loop.
+Binary values expose their bytes through `Value` and their null state through `IsNull`.
+The example uses `Encoding.UTF8.GetString` to display `Name`; read the span directly to avoid allocating a string.
 
 When the bytes must outlive the current iteration, copy the span into caller-owned storage before advancing the reader.
 

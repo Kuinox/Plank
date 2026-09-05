@@ -38,7 +38,7 @@ Plank validates that the selected options are compatible with the property type.
 | `long`, `ulong` | `Int64` |
 | `float` | `Float` |
 | `double` | `Double` |
-| `decimal` | `FixedLenByteArray` with `Decimal` by default; specify precision and scale |
+| `decimal` | `FixedLenByteArray` with `Decimal` |
 | `string` | `ByteArray` with `String` |
 | `byte[]`, `ReadOnlyMemory<byte>` | `ByteArray` |
 | `Guid` | 16-byte `FixedLenByteArray` with `Uuid` |
@@ -65,20 +65,16 @@ Without `AllowAllocatingValues`, the source generator reports an error for every
 
 ## Decimal values
 
-Decimal properties require explicit `Precision` (total digits). Set `Scale` to the number of
-fractional digits; its default is zero. By default, the generator selects a fixed byte width
-that can hold that precision. Nullable decimal properties use the same settings and permit null values:
+Set `Precision` to the total number of digits and `Scale` to the number of fractional digits.
+`Precision` is required; `Scale` defaults to zero:
 
 [!code-csharp[](../../Samples/Plank.Sample/DecimalApiSample.cs#DecimalSchema)]
 
-This example stores amounts such as `12.34m` or `null`. Values must fit both the declared precision
-and scale; serialization rejects precision loss and overflow instead of silently rounding.
+Writing a value that does not fit the declared precision and scale throws an exception.
 
 ## Timestamp offsets
 
-`DateTimeOffset` columns preserve the instant and are read back with a UTC (`+00:00`) offset.
-The original offset is not stored. If it matters to your application, store it in a separate column.
-For example, `2026-01-02T12:30:00+02:00` reads back as `2026-01-02T10:30:00+00:00`.
+`DateTimeOffset` values are read back in UTC. Store the original offset in a separate column if you need to keep it.
 
 ## Runtime schemas
 

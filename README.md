@@ -9,7 +9,7 @@ fuzzing infrastructure, and autonomous research tooling live in
 
 ## Getting started
 
-Consumer projects target .NET 10:
+Plank requires .NET 10:
 
 ```sh
 dotnet new console --framework net10.0 --name PlankDemo
@@ -17,18 +17,8 @@ cd PlankDemo
 dotnet add package Plank
 ```
 
-The package command applies once Plank is published to your NuGet feed. Before publication,
-run the checked-in samples from a source checkout:
-
-```sh
-dotnet run --project Samples/Plank.Sample --configuration Release
-```
-
-The sample writes and reads rows, checks null and empty binary values, roundtrips decimals and
-UTC timestamp instants, and writes partitioned datasets. It uses temporary files and deletes
-them after verification. Start with [schema declarations](https://kuinox.github.io/Plank/articles/schema.html),
+Start with [schema declarations](https://kuinox.github.io/Plank/articles/schema.html),
 [row writing](https://kuinox.github.io/Plank/articles/writing/rows.html), and [row reading](https://kuinox.github.io/Plank/articles/reading/rows.html).
-The documentation includes the same compiled sample code.
 
 ## Projects
 
@@ -53,8 +43,6 @@ The documentation source is under `docs/`. Build it with:
 pwsh ./docs/build.ps1
 ```
 
-The build runs the documentation samples before rendering. Row and dataset quickstart snippets
-are included from named regions in `Samples/Plank.Sample`; edit those sources so code and docs
-stay together. CI also executes the samples for pull requests.
+The examples are included from `Samples/Plank.Sample`. Edit them there; CI and the docs build run them.
 
 Plank is under active development; public APIs and format coverage may still evolve.

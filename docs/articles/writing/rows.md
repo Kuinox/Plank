@@ -10,8 +10,7 @@ It can also roll over to a new file around the [512 MiB](https://iceberg.apache.
 
 ## Write rows
 
-The example uses [EventSchema](../schema.md#define-a-schema). Set `path` to a new file path,
-such as `"events.parquet"`; `File.Create` replaces an existing file.
+The example uses [EventSchema](../schema.md#define-a-schema). Set `path` to the output file, such as `"events.parquet"`.
 
 [!code-csharp[](../../../Samples/Plank.Sample/RowApiSample.cs#WriteRows)]
 
@@ -21,5 +20,3 @@ last row.
 The row writer handles row-group construction, encoding, and file finalization. `Complete()` commits the file. If
 writing fails first, `Dispose()` stops the workers and releases resources without committing the incomplete file.
 A disposed writer cannot be reused.
-
-Continue with [Read rows](../reading/rows.md) to read back the populated, null, and empty names.
