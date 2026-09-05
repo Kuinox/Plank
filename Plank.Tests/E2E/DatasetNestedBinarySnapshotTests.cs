@@ -27,7 +27,25 @@ internal sealed class DatasetNestedBinarySnapshotTests
                     Details = id % 2 == 0 ? null : new DatasetNestedBinaryDetails { Id = id, Payload = reused },
                     Items = (id % 3) switch { 0 => null, 1 => [], _ => [reused, null, []] },
                     Map = new Dictionary<int, byte[]?> { [1] = reused, [2] = null, [3] = [] },
-                    Matrix = [[reused], [], [reused]]
+                    Matrix = [[reused], [], [reused]],
+                    Memories = [reused.AsMemory(1, 2), ReadOnlyMemory<byte>.Empty],
+                    OptionalMemories = (id % 3) switch
+                    {
+                        0 => null,
+                        1 => [],
+                        _ => [reused.AsMemory(1, 2), (ReadOnlyMemory<byte>?)null, ReadOnlyMemory<byte>.Empty]
+                    },
+                    MemoryList = [reused.AsMemory(1, 2), ReadOnlyMemory<byte>.Empty],
+                    OptionalMemoryList = (id % 3) switch
+                    {
+                        0 => null,
+                        1 => [],
+                        _ => [reused.AsMemory(1, 2), (ReadOnlyMemory<byte>?)null, ReadOnlyMemory<byte>.Empty]
+                    },
+                    MemoryMap = new Dictionary<int, ReadOnlyMemory<byte>?>
+                    {
+                        [1] = reused.AsMemory(1, 2), [2] = null, [3] = ReadOnlyMemory<byte>.Empty
+                    }
                 });
                 Array.Fill(reused, byte.MaxValue);
             }
@@ -84,6 +102,24 @@ internal sealed class DatasetNestedBinarySnapshotTests
                     throw new InvalidOperationException("Nested binary list shape changed.");
                 AssertPayload(matrix[0][0], id);
                 AssertPayload(matrix[2][0], id);
+
+                var memories = row.Memories;
+                if (memories.Length != 2 || !memories[1].IsEmpty)
+                    throw new InvalidOperationException("Binary memory array shape changed.");
+                AssertMemoryPayload(memories[0], id);
+
+                var memoryList = row.MemoryList;
+                if (memoryList.Count != 2 || !memoryList[1].IsEmpty)
+                    throw new InvalidOperationException("Binary memory list shape changed.");
+                AssertMemoryPayload(memoryList[0], id);
+                AssertOptionalMemories(row.OptionalMemories, id);
+                AssertOptionalMemories(row.OptionalMemoryList, id);
+
+                var memoryMap = row.MemoryMap;
+                if (memoryMap.Count != 3 || memoryMap[1] is not { } mappedMemory ||
+                    memoryMap[2].HasValue || memoryMap[3] is not { IsEmpty: true })
+                    throw new InvalidOperationException("Nullable binary memory map values changed.");
+                AssertMemoryPayload(mappedMemory, id);
             }
         }
         if (seen.Count != 12)
@@ -94,6 +130,33 @@ internal sealed class DatasetNestedBinarySnapshotTests
     {
         if (value is not { Length: 4 } || value.AsSpan().ContainsAnyExcept(checked((byte)id)))
             throw new InvalidOperationException($"Nested binary data changed for row {id}.");
+    }
+
+    static void AssertMemoryPayload(ReadOnlyMemory<byte> value, int id)
+    {
+        if (value.Length != 2 || value.Span.ContainsAnyExcept(checked((byte)id)))
+            throw new InvalidOperationException($"Nested binary memory slice changed for row {id}.");
+    }
+
+    static void AssertOptionalMemories(IReadOnlyList<ReadOnlyMemory<byte>?>? values, int id)
+    {
+        if (id % 3 == 0)
+        {
+            if (values is not null)
+                throw new InvalidOperationException("A null memory collection became non-null.");
+        }
+        else if (id % 3 == 1)
+        {
+            if (values is not { Count: 0 })
+                throw new InvalidOperationException("An empty memory collection changed.");
+        }
+        else
+        {
+            if (values is not { Count: 3 } || values[0] is not { } memory ||
+                values[1].HasValue || values[2] is not { IsEmpty: true })
+                throw new InvalidOperationException("Nullable binary memory collection elements changed.");
+            AssertMemoryPayload(memory, id);
+        }
     }
 
     static ReadOnlySpan<byte> Route(DatasetNestedBinarySnapshotRow row, IParquetBufferPool bufferPool,
@@ -164,6 +227,16 @@ internal sealed partial class DatasetNestedBinarySnapshotRow
     public Dictionary<int, byte[]?> Map { get; set; } = [];
 
     public List<List<byte[]>> Matrix { get; set; } = [];
+
+    public ReadOnlyMemory<byte>[] Memories { get; set; } = [];
+
+    public ReadOnlyMemory<byte>?[]? OptionalMemories { get; set; }
+
+    public List<ReadOnlyMemory<byte>> MemoryList { get; set; } = [];
+
+    public List<ReadOnlyMemory<byte>?>? OptionalMemoryList { get; set; }
+
+    public Dictionary<int, ReadOnlyMemory<byte>?> MemoryMap { get; set; } = [];
 }
 
 internal sealed class DatasetNestedBinaryDetails
