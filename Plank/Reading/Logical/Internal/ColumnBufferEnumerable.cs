@@ -18,7 +18,7 @@ readonly struct ColumnBufferEnumerable<T>
 
     internal ColumnBufferEnumerable(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
         LeafColumn definition, IParquetBufferPool bufferPool, ulong rowCount, ParquetPagePruner? pruner,
-        bool borrowRequiredPlainValues, bool borrowBinaryValues)
+        bool borrowRequiredPlainValues, bool borrowBinaryValues, ParquetRepetition physicalRepetition)
     {
         ArgumentNullException.ThrowIfNull(physicalReader);
         ArgumentNullException.ThrowIfNull(definition);
@@ -27,7 +27,17 @@ readonly struct ColumnBufferEnumerable<T>
         _physicalReader = physicalReader;
         _rowGroupOrdinal = rowGroupOrdinal;
         _columnOrdinal = columnOrdinal;
-        _column = definition.Column;
+        var column = definition.Column;
+        var options = column.Options;
+        // The requested CLR type controls nullable materialization, but page layout is dictated
+        // by the file. Required V1 pages have no definition-level prefix, even when requested as
+        // optional. Preserve requested logical types and converters when binding file repetition.
+        _column = options.Repetition == physicalRepetition
+            ? column
+            : new Column(column.Name, column.PhysicalType,
+                new ColumnOptions(physicalRepetition, options.Encodings, options.TypeLength,
+                    options.Compression, options.CompressionLevel, options.BloomFilter),
+                column.LogicalType, column.PageStrategy, column.Converter, column.FieldId);
         _definition = definition;
         _bufferPool = bufferPool;
         _rowCount = rowCount;
@@ -37,7 +47,7 @@ readonly struct ColumnBufferEnumerable<T>
     }
 
     internal Enumerator GetEnumerator()
-        => new(_physicalReader, _rowGroupOrdinal, _columnOrdinal, _definition, _bufferPool, _rowCount, _pruner,
+        => new(_physicalReader, _rowGroupOrdinal, _columnOrdinal, _column, _definition, _bufferPool, _rowCount, _pruner,
             _borrowRequiredPlainValues, _borrowBinaryValues);
 
     internal struct Enumerator : IDisposable
@@ -60,7 +70,7 @@ readonly struct ColumnBufferEnumerable<T>
         bool _openedCursor;
 
         internal Enumerator(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
-            LeafColumn definition,
+            Column column, LeafColumn definition,
             IParquetBufferPool bufferPool, ulong rowCount, ParquetPagePruner? pruner,
             bool borrowRequiredPlainValues, bool borrowBinaryValues)
         {
@@ -71,7 +81,7 @@ readonly struct ColumnBufferEnumerable<T>
             _physicalReader = physicalReader;
             _rowGroupOrdinal = rowGroupOrdinal;
             _columnOrdinal = columnOrdinal;
-            _column = definition.Column;
+            _column = column;
             _definition = definition;
             _bufferPool = bufferPool;
             _rowCount = rowCount;
