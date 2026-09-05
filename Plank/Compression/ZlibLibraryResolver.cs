@@ -6,6 +6,7 @@ namespace Plank.Internal.Compression;
 
 static class ZlibLibraryResolver
 {
+    static readonly OSPlatform Android = OSPlatform.Create("ANDROID");
     static int _resolverRegistered;
 
     internal static void Register()
@@ -24,7 +25,7 @@ static class ZlibLibraryResolver
         if (TryLoadRuntimeAsset(assembly, out var runtimeHandle))
             return runtimeHandle;
 
-        foreach (var candidate in GetSystemLibraryCandidates())
+        foreach (var candidate in GetSystemLibraryCandidates(GetCurrentPlatform()))
             if (NativeLibrary.TryLoad(candidate, assembly, searchPath, out var systemHandle))
                 return systemHandle;
 
@@ -34,7 +35,7 @@ static class ZlibLibraryResolver
     static bool TryLoadRuntimeAsset(Assembly assembly, out IntPtr handle)
     {
         foreach (var baseDirectory in GetBaseDirectories(assembly))
-            foreach (var path in GetRuntimeAssetPaths())
+            foreach (var path in GetRuntimeAssetPaths(GetCurrentPlatform(), RuntimeInformation.ProcessArchitecture))
             {
                 var fullPath = Path.Combine(baseDirectory, path);
                 if (NativeLibrary.TryLoad(fullPath, out handle))
@@ -57,74 +58,74 @@ static class ZlibLibraryResolver
         return [assemblyDirectory, AppContext.BaseDirectory];
     }
 
-    static string[] GetRuntimeAssetPaths()
+    static OSPlatform GetCurrentPlatform()
     {
+        // Android is a distinct .NET platform; IsLinux() deliberately excludes it.
+        if (OperatingSystem.IsAndroid())
+            return Android;
         if (OperatingSystem.IsWindows())
-        {
-            if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
-                return
-                [
-                    Path.Combine("runtimes", "win-x64", "native", "zlib.dll"),
-                    "zlib.dll",
-                ];
-            if (RuntimeInformation.ProcessArchitecture == Architecture.X86)
-                return
-                [
-                    Path.Combine("runtimes", "win-x86", "native", "zlib.dll"),
-                    "zlib.dll",
-                ];
-
-            return [];
-        }
-
+            return OSPlatform.Windows;
         if (OperatingSystem.IsLinux())
-        {
-            if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
-                return
-                [
-                    Path.Combine("runtimes", "linux-x64", "native", "libz.so"),
-                    "libz.so",
-                ];
-            if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-                return
-                [
-                    Path.Combine("runtimes", "linux-arm64", "native", "libz.so"),
-                    "libz.so",
-                ];
-
-            return [];
-        }
-
+            return OSPlatform.Linux;
         if (OperatingSystem.IsMacOS())
-        {
-            if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
-                return
-                [
-                    Path.Combine("runtimes", "osx-x64", "native", "libz.dylib"),
-                    "libz.dylib",
-                ];
-            if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-                return
-                [
-                    Path.Combine("runtimes", "osx-arm64", "native", "libz.dylib"),
-                    "libz.dylib",
-                ];
+            return OSPlatform.OSX;
 
-            return [];
-        }
-
-        return [];
+        return default;
     }
 
-    static string[] GetSystemLibraryCandidates()
+    internal static string[] GetRuntimeAssetPaths(OSPlatform platform, Architecture architecture)
     {
-        if (OperatingSystem.IsWindows())
+        string runtimePrefix;
+        string libraryFileName;
+        if (platform == OSPlatform.Windows)
+        {
+            runtimePrefix = "win";
+            libraryFileName = "zlib.dll";
+        }
+        else if (platform == OSPlatform.Linux || platform == Android)
+        {
+            runtimePrefix = platform == Android ? "android" : "linux";
+            libraryFileName = "libz.so";
+        }
+        else if (platform == OSPlatform.OSX)
+        {
+            runtimePrefix = "osx";
+            libraryFileName = "libz.dylib";
+        }
+        else
+            return [];
+
+        var architectureName = architecture switch
+        {
+            Architecture.X64 => "x64",
+            Architecture.Arm64 => "arm64",
+            Architecture.X86 when platform == OSPlatform.Windows => "x86",
+            _ => null,
+        };
+        if (architectureName is null)
+            return [];
+
+        return
+        [
+            Path.Combine("runtimes", $"{runtimePrefix}-{architectureName}", "native", libraryFileName),
+            libraryFileName,
+        ];
+    }
+
+    internal static string[] GetSystemLibraryCandidates(OSPlatform platform)
+    {
+        if (platform == OSPlatform.Windows)
             return ["zlib.dll", "zlib1.dll", "libz.dll", "z"];
 
-        if (OperatingSystem.IsLinux())
+        // Android exposes the unversioned NDK library, not Linux's libz.so.1 SONAME.
+        // Loading by name also lets the Android runtime find libraries packaged in the APK.
+        if (platform == Android)
+            return ["libz.so", "libz", "z"];
+
+        if (platform == OSPlatform.Linux)
             return ["libz.so.1", "libz.so", "libz", "z"];
 
-        if (OperatingSystem.IsMacOS())
+        if (platform == OSPlatform.OSX)
             return ["libz.dylib", "libz.1.dylib", "libz", "z"];
 
         return [];
