@@ -17,6 +17,10 @@ fuzzing infrastructure, and autonomous research tooling live in
 
 ## Build and test
 
+Install the .NET 10 SDK (10.0.100 or a newer .NET 10 feature band).
+The repository accepts newer .NET 10 SDK feature bands, matching the `10.0.x`
+SDK selected by CI and release workflows.
+
 ```sh
 git submodule update --init third_party/parquet-testing
 dotnet test --solution Plank.sln --configuration Release
