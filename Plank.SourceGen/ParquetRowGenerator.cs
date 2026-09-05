@@ -151,12 +151,14 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var schemaTypes = context.SyntaxProvider.ForAttributeWithMetadataName(
             fullyQualifiedMetadataName: "Plank.Schema.ParquetSchemaAttribute",
             predicate: static (node, _) => node is ClassDeclarationSyntax,
-            transform: static (ctx, _) => (INamedTypeSymbol)ctx.TargetSymbol);
+            transform: static (ctx, _) => (Type: (INamedTypeSymbol)ctx.TargetSymbol,
+                Compilation: ctx.SemanticModel.Compilation));
 
-        context.RegisterSourceOutput(schemaTypes, static (sourceContext, typeSymbol) => Emit(sourceContext, typeSymbol));
+        context.RegisterSourceOutput(schemaTypes, static (sourceContext, schema) =>
+            Emit(sourceContext, schema.Type, schema.Compilation));
     }
 
-    static void Emit(SourceProductionContext context, INamedTypeSymbol schemaType)
+    static void Emit(SourceProductionContext context, INamedTypeSymbol schemaType, Compilation compilation)
     {
         if (schemaType.TypeKind != TypeKind.Class || schemaType.Arity != 0)
         {
@@ -164,7 +166,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             return;
         }
 
-        if (NestedParquetRowEmitter.TryEmit(context, schemaType))
+        if (NestedParquetRowEmitter.TryEmit(context, schemaType, compilation))
             return;
 
         if (!TryExtractColumns(schemaType, out var columns, out var extractError))
