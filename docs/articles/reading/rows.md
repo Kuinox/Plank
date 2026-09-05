@@ -10,42 +10,19 @@ The examples use the [`EventSchema`](../schema.md#define-a-schema) type declared
 
 Call [`CreateRowReader`](../schema.md#define-a-schema) and enumerate the reader:
 
-```csharp
-using var stream = File.OpenRead("events.parquet");
-using EventSchema.RowReader reader = EventSchema.CreateRowReader(stream);
-
-foreach (EventSchema.Row row in reader)
-    Console.WriteLine($"{row.Id}: {row.Name} at {row.OccurredAt}");
-```
+[!code-csharp[](../../../Samples/Plank.Sample/RowApiSample.cs#ReadRows)]
 
 The reader binds properties to file columns by name, so the columns do not need to appear in the same order in the file.
 
 You can also use `MoveNext` and `Current` when explicit iteration is more convenient:
 
-```csharp
-while (reader.MoveNext())
-{
-    EventSchema.Row row = reader.Current;
-    Console.WriteLine(row.Id);
-}
-```
+[!code-csharp[](../../../Samples/Plank.Sample/RowApiSample.cs#ReadExplicitly)]
 
 > [!NOTE]
 > A row is a temporary view over the reader's current buffers. Read its properties before advancing the reader. Binary properties return a scoped value whose bytes must be consumed before the reader advances.
 
-For example, a schema property named `Payload` exposes its current bytes through `Value`, along with its null state. Process the span in the reading loop:
-
-```csharp
-while (reader.MoveNext())
-{
-    EventSchema.ReadRow row = reader.Current;
-    RowReaderBinaryValue value = row.Payload;
-    if (value.IsNull)
-        continue;
-
-    ConsumeNow(value.Value);
-}
-```
+Binary values expose their bytes through `Value` and their null state through `IsNull`.
+Read the span directly to avoid allocating a string.
 
 When the bytes must outlive the current iteration, copy the span into caller-owned storage before advancing the reader.
 
@@ -53,16 +30,7 @@ When the bytes must outlive the current iteration, copy the span into caller-own
 
 Pass a projection to decode only the properties you need:
 
-```csharp
-EventSchema.Projection projection = EventSchema.Projection.Id |
-    EventSchema.Projection.Name;
-
-using var stream = File.OpenRead("events.parquet");
-using EventSchema.RowReader reader = EventSchema.CreateRowReader(stream, projection);
-
-foreach (EventSchema.Row row in reader)
-    Console.WriteLine($"{row.Id}: {row.Name}");
-```
+[!code-csharp[](../../../Samples/Plank.Sample/RowApiSample.cs#ReadSelectedRows)]
 
 Every property has a matching projection. Combine projections with `|`, or use `Projection.All` to select every property. Accessing a property that was not selected throws `InvalidOperationException`.
 

@@ -51,6 +51,9 @@ try {
         Invoke-DotNet tool restore
     }
 
+    # Compile and run the sources included by the quickstart articles before publishing them.
+    Invoke-DotNet run --project $ProjectPath --configuration Release
+
     Invoke-DotNet docfx docs/docfx.json
 
     if ($SkipHighlighter) {

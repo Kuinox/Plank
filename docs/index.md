@@ -12,6 +12,18 @@ writers, and reports incompatible mappings at build time.
 Start with [Schema](articles/schema.md), then see [Reading](articles/reading/index.md) or
 [Writing](articles/writing/index.md).
 
+## Installation
+
+Plank requires .NET 10:
+
+```sh
+dotnet new console --framework net10.0 --name PlankDemo
+cd PlankDemo
+dotnet add package Plank
+```
+
+See the [sample project](https://github.com/Kuinox/Plank/tree/master/Samples/Plank.Sample) for complete examples.
+
 ## Faster Parquet writes
 
 Plank was built to reduce the time it takes to read and write Parquet files in .NET. Once a

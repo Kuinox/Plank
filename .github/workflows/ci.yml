@@ -34,3 +34,6 @@ jobs:
 
       - name: Test
         run: dotnet test --solution Plank.sln --configuration Release
+
+      - name: Verify documentation samples
+        run: dotnet run --project Samples/Plank.Sample --configuration Release

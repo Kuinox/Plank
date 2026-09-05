@@ -8,60 +8,33 @@ It can write any number of output files while keeping only a fixed number open a
 
 Each output file follows the same row-group and rollover targets as the row writer.
 
+The examples use [EventSchema](../schema.md#define-a-schema) and the `FileParquetSource`
+adapter below.
+
+## File sources
+
+Implement `IParquetReadWriteSource` to open and reopen dataset files. This example uses local files:
+
+[!code-csharp[](../../../Samples/Plank.Sample/FileParquetSource.cs#FileParquetSource)]
+
+Dispose the writer before disposing its sources.
+
 ## Route rows
 
 The route returns the UTF-8 path that should receive each row:
 
-```csharp-invisible
-IParquetReadWriteSource[] files = [file1, file2];
-```
-
-```csharp
-var writer = EventSchema.CreateDatasetWriter(
-    static (row, _, out ParquetBuffer? allocation) =>
-    {
-        allocation = null;
-        return row.Id % 2 == 0
-            ? "events/even.parquet"u8
-            : "events/odd.parquet"u8;
-    },
-    files);
-```
-
-Static UTF-8 paths do not need an allocation. For paths built at runtime, use the provided buffer pool:
-
-```csharp
-var pooledWriter = EventSchema.CreateDatasetWriter(
-    static (row, pool, out ParquetBuffer? allocation) =>
-    {
-        var path = $"events/bucket={row.Id % 16}.parquet";
-        var buffer = pool.Rent(checked((uint)Encoding.UTF8.GetByteCount(path)));
-        var length = Encoding.UTF8.GetBytes(path, buffer.Span);
-        allocation = buffer;
-        return buffer.Span[..length];
-    },
-    files);
-```
-
-Plank releases the returned allocation when it no longer needs the path.
+[!code-csharp[](../../../Samples/Plank.Sample/DatasetApiSample.cs#StaticDataset)]
 
 `files` contains the reusable read/write sources. Its length is the maximum number of files kept open.
 
-## Write rows
+`Queue()` copies the row into the writer buffers. Disposing the writer writes the remaining rows and closes every open file.
 
-Queue rows in any mix:
+Plank appends to existing files. Use a new directory to start a fresh dataset.
 
-```csharp
-foreach (EventSchema row in events)
-    writer.Queue(row);
-```
+## Build paths at runtime
 
-`Queue()` copies the row into the writer buffers.
+Static UTF-8 paths do not need an allocation. For paths built at runtime, use the provided buffer pool:
 
-## Dispose the writer
+[!code-csharp[](../../../Samples/Plank.Sample/DatasetApiSample.cs#AllocatedDataset)]
 
-```csharp
-writer.Dispose();
-```
-
-This writes the remaining rows and closes every open file.
+Plank releases the returned allocation when it no longer needs the path.

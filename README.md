@@ -7,6 +7,19 @@ documentation, samples, and correctness/compatibility tests. Experimental benchm
 fuzzing infrastructure, and autonomous research tooling live in
 [Plank-Lab](https://github.com/Kuinox/Plank-Lab).
 
+## Getting started
+
+Plank requires .NET 10:
+
+```sh
+dotnet new console --framework net10.0 --name PlankDemo
+cd PlankDemo
+dotnet add package Plank
+```
+
+Start with [schema declarations](https://kuinox.github.io/Plank/articles/schema.html),
+[row writing](https://kuinox.github.io/Plank/articles/writing/rows.html), and [row reading](https://kuinox.github.io/Plank/articles/reading/rows.html).
+
 ## Projects
 
 - `Plank` — the reader and writer package.
@@ -29,5 +42,7 @@ The documentation source is under `docs/`. Build it with:
 ```powershell
 pwsh ./docs/build.ps1
 ```
+
+The docs build runs the examples in `Samples/Plank.Sample`.
 
 Plank is under active development; public APIs and format coverage may still evolve.

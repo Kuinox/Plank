@@ -6,19 +6,7 @@ Declare a schema to keep the C# model and parquet file aligned on column names, 
 
 Add [`[ParquetSchema]`](xref:Plank.Schema.ParquetSchemaAttribute) to a partial class:
 
-```csharp
-using Plank.Schema;
-
-[ParquetSchema]
-public sealed partial class EventSchema
-{
-    public int Id { get; init; }
-
-    public byte[]? Name { get; init; }
-
-    public DateTimeOffset OccurredAt { get; init; }
-}
-```
+[!code-csharp[](../../Samples/Plank.Sample/EventSchema.cs#EventSchema)]
 
 Each property becomes a column. Non-nullable properties are required and nullable properties are optional.
 
@@ -55,6 +43,7 @@ Plank validates that the selected options are compatible with the property type.
 | `long`, `ulong` | `Int64` |
 | `float` | `Float` |
 | `double` | `Double` |
+| `decimal` | `FixedLenByteArray` with `Decimal` |
 | `string` | `ByteArray` with `String` |
 | `byte[]`, `ReadOnlyMemory<byte>` | `ByteArray` |
 | `Guid` | 16-byte `FixedLenByteArray` with `Uuid` |
@@ -78,6 +67,19 @@ public sealed partial class SimpleSchema
 
 Without `AllowAllocatingValues`, the source generator reports an error for every `string` property. Use
 `byte[]` or `ReadOnlyMemory<byte>` when allocation-free access is required.
+
+## Decimal values
+
+Set `Precision` to the total number of digits and `Scale` to the number of fractional digits.
+`Precision` is required and `Scale` defaults to zero:
+
+[!code-csharp[](../../Samples/Plank.Sample/DecimalApiSample.cs#DecimalSchema)]
+
+Writing a value that does not fit the declared precision and scale throws an exception.
+
+## Timestamp offsets
+
+`DateTimeOffset` values are read back in UTC. Store the original offset in a separate column if you need to keep it.
 
 ## Runtime schemas
 
