@@ -6,6 +6,7 @@ namespace Plank.Reading.Logical;
 
 public sealed class ParquetReader : IDisposable
 {
+    static readonly ParquetSchema EmptySchema = new(System.Collections.Immutable.ImmutableArray<ColumnDefinition>.Empty);
     readonly ParquetSchema? _requestedSchema;
     internal readonly ParquetFileReader PhysicalReader;
     InternalParquetFooter _footer;
@@ -35,7 +36,7 @@ public sealed class ParquetReader : IDisposable
             BufferPool = readerOptions.BufferPool,
             VerifyPageCrc = readerOptions.VerifyPageCrc
         });
-        Schema = new ParquetSchema(System.Collections.Immutable.ImmutableArray<ColumnDefinition>.Empty);
+        Schema = EmptySchema;
         _footer = InternalParquetFooter.Empty;
         Metadata = default;
         _footerVersion = 0;
@@ -61,25 +62,48 @@ public sealed class ParquetReader : IDisposable
     internal ParquetPagePruner? PagePruner
         => _pagePruner;
 
+    /// <summary>Opens a source and loads its logical schema and row groups.</summary>
+    /// <remarks>
+    /// Earlier row group and column handles are invalidated before opening the source. If opening or schema
+    /// validation fails, logical metadata is cleared; the reader can be reset again with another source.
+    /// </remarks>
     public void Reset(Stream stream, ParquetPagePruner? pagePruner = null)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(stream);
+        var previousFooter = InvalidateLogicalState();
         PhysicalReader.Reset(stream);
-        _pagePruner = pagePruner;
-        ResetLogicalState();
+        ResetLogicalState(previousFooter, pagePruner);
     }
 
+    /// <summary>Opens a source and loads its logical schema and row groups.</summary>
+    /// <remarks>
+    /// Earlier row group and column handles are invalidated before opening the source. If opening or schema
+    /// validation fails, logical metadata is cleared; the reader can be reset again with another source.
+    /// </remarks>
     public void Reset(IParquetReadSource source, ParquetPagePruner? pagePruner = null)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
+        var previousFooter = InvalidateLogicalState();
         PhysicalReader.Reset(source);
-        _pagePruner = pagePruner;
-        ResetLogicalState();
+        ResetLogicalState(previousFooter, pagePruner);
     }
 
-    void ResetLogicalState()
+    InternalParquetFooter InvalidateLogicalState()
+    {
+        // Physical reset can replace the source or return its metadata buffers before it throws.
+        // Retire logical handles first, while retaining reusable arrays only for a successful bind.
+        var previousFooter = _footer;
+        _footerVersion++;
+        _footer = InternalParquetFooter.Empty;
+        Schema = EmptySchema;
+        Metadata = default;
+        _pagePruner = null;
+        return previousFooter;
+    }
+
+    void ResetLogicalState(InternalParquetFooter previousFooter, ParquetPagePruner? pagePruner)
     {
         var physicalMetadata = PhysicalReader.Metadata;
         var fileSchema = PhysicalSchemaBinder.BuildSchema(physicalMetadata);
@@ -87,19 +111,19 @@ public sealed class ParquetReader : IDisposable
             ValidateRequestedSchema(_requestedSchema, fileSchema);
 
         var schema = _requestedSchema ?? fileSchema;
-        var footerVersion = _footerVersion + 1;
-        var footer = PhysicalSchemaBinder.Bind(PhysicalReader, fileSchema, schema, _footer, Options.Strict,
-            Options.BufferPool, footerVersion);
+        var footer = PhysicalSchemaBinder.Bind(PhysicalReader, fileSchema, schema, previousFooter, Options.Strict,
+            Options.BufferPool, _footerVersion);
 
         Schema = schema;
         _footer = footer;
         Metadata = new ParquetFileMetadata(fileSchema, physicalMetadata.FooterOffset,
             physicalMetadata.FooterLength, physicalMetadata.FileVersion);
-        _footerVersion = footerVersion;
+        _pagePruner = pagePruner;
     }
 
     internal void ValidateRowGroup(RowGroup rowGroup)
     {
+        ThrowIfDisposed();
         if (!ReferenceEquals(rowGroup.Reader, this))
             throw new ArgumentException("Row group does not belong to this reader.", nameof(rowGroup));
         if (rowGroup.Index < 0)
@@ -144,10 +168,11 @@ public sealed class ParquetReader : IDisposable
         return new RowGroup(this, _footer.RowGroups[index]);
     }
 
-    void ValidateFooterVersion(int footerVersion)
+    internal void ValidateFooterVersion(int footerVersion)
     {
+        ThrowIfDisposed();
         if (footerVersion != _footerVersion)
-            throw new InvalidOperationException("The row group collection is stale because the reader was reset.");
+            throw new InvalidOperationException("The reader handle is stale because the reader was reset.");
     }
 
     internal int GetColumnOrdinal(LeafColumn column)

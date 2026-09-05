@@ -56,7 +56,7 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
         DisposeBuffers();
         RowGroup.ValidatePhysicalType<T>(Column);
         _buffers = new RowGroupColumn<T>.Enumerator(
-            rowGroup.EnumerateBuffers<T>(Definition, Ordinal).GetEnumerator());
+            rowGroup.EnumerateBuffers<T>(Definition, Ordinal).GetEnumerator(), rowGroup);
         _buffersOpen = true;
         _buffer = default;
         _usingMissing = false;

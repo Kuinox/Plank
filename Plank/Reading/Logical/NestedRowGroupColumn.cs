@@ -35,8 +35,8 @@ public readonly struct NestedRowGroupColumn<T>
                 or ParquetPhysicalType.FixedLenByteArray
                 or ParquetPhysicalType.Int96)
             return new(_rowGroup.EnumerateVariableLengthNestedBuffers<T>(Definition.Column, _columnOrdinal)
-                .GetEnumerator());
-        return new(_rowGroup.EnumerateNestedBuffers<T>(Definition.Column, _columnOrdinal).GetEnumerator());
+                .GetEnumerator(), _rowGroup);
+        return new(_rowGroup.EnumerateNestedBuffers<T>(Definition.Column, _columnOrdinal).GetEnumerator(), _rowGroup);
     }
 
     public struct Enumerator : IDisposable
@@ -44,16 +44,22 @@ public readonly struct NestedRowGroupColumn<T>
         NestedColumnBufferEnumerable<T>.Enumerator _inner;
         VariableLengthNestedColumnBufferEnumerable<T>.Enumerator _variableLengthInner;
         readonly bool _isVariableLength;
+        readonly ParquetReader _reader;
+        readonly int _footerVersion;
 
-        internal Enumerator(NestedColumnBufferEnumerable<T>.Enumerator inner)
+        internal Enumerator(NestedColumnBufferEnumerable<T>.Enumerator inner, RowGroup rowGroup)
         {
+            _reader = rowGroup.GetReader();
+            _footerVersion = rowGroup.Metadata.FooterVersion;
             _inner = inner;
             _variableLengthInner = default;
             _isVariableLength = false;
         }
 
-        internal Enumerator(VariableLengthNestedColumnBufferEnumerable<T>.Enumerator inner)
+        internal Enumerator(VariableLengthNestedColumnBufferEnumerable<T>.Enumerator inner, RowGroup rowGroup)
         {
+            _reader = rowGroup.GetReader();
+            _footerVersion = rowGroup.Metadata.FooterVersion;
             _inner = default;
             _variableLengthInner = inner;
             _isVariableLength = true;
@@ -63,7 +69,10 @@ public readonly struct NestedRowGroupColumn<T>
             => _isVariableLength ? _variableLengthInner.Current : _inner.Current;
 
         public bool MoveNext()
-            => _isVariableLength ? _variableLengthInner.MoveNext() : _inner.MoveNext();
+        {
+            _reader.ValidateFooterVersion(_footerVersion);
+            return _isVariableLength ? _variableLengthInner.MoveNext() : _inner.MoveNext();
+        }
 
         public void Dispose()
         {

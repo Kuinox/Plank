@@ -243,7 +243,8 @@ static class NestedParquetRowEmitter
             return true;
         }
 
-        if (type is not INamedTypeSymbol groupType || groupType.TypeKind is not (TypeKind.Class or TypeKind.Struct))
+        if (GetNonNullableType(type) is not INamedTypeSymbol groupType ||
+            groupType.TypeKind is not (TypeKind.Class or TypeKind.Struct))
         {
             node = default!;
             error = $"Unsupported nested CLR type '{type.ToDisplayString()}' on property '{propertyName}'.";
@@ -1183,7 +1184,8 @@ static class NestedParquetRowEmitter
                 builder.Append(padding).Append("    ").Append(target).AppendLine(" = default!;");
                 builder.Append(padding).AppendLine("else");
                 AppendProjectAssignment(builder, names, child, leaf, target,
-                    source + "!." + EscapeIdentifier(child.PropertyName), depth, indent + 1, indexes);
+                    source + (node.IsNullableValueType ? ".Value." : "!.") + EscapeIdentifier(child.PropertyName),
+                    depth, indent + 1, indexes);
             }
             else
                 AppendProjectAssignment(builder, names, child, leaf, target,
@@ -1538,6 +1540,8 @@ static class NestedParquetRowEmitter
         internal string UserType { get; } = GetTypeName(userType);
         // Runtime type expressions omit reference annotations, but retain Nullable<T>.
         internal string RuntimeType { get; } = userType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        internal bool IsNullableValueType { get; } = userType is INamedTypeSymbol
+            { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T };
         internal bool Optional { get; } = optional;
         internal Scalar? Scalar { get; } = scalar;
         internal string? CollectionKind { get; } = collectionKind;

@@ -67,7 +67,6 @@ public sealed class RowReaderCore : IDisposable
         _states = CreateStates(schema, columns);
         _projectedStates = new RowApiColumnReadState[_states.Length];
         _reader = new ParquetReader(CreateLooseReaderOptions(options));
-        _reader.Reset(source);
         _rowGroup = default;
         _rowGroups = default;
         _rowGroupRowsRemaining = 0;
@@ -78,9 +77,18 @@ public sealed class RowReaderCore : IDisposable
         _batchLength = 0;
         _batchOffset = 0;
         _currentBatchOffset = 0;
-        ApplyProjection(projection);
-        ResolveFileSchema();
-        RebuildProjectedStates();
+        try
+        {
+            _reader.Reset(source);
+            ApplyProjection(projection);
+            ResolveFileSchema();
+            RebuildProjectedStates();
+        }
+        catch
+        {
+            Dispose();
+            throw;
+        }
     }
 
     /// <summary>Advances the generated reader to the next row.</summary>
@@ -371,6 +379,9 @@ public sealed class RowReaderCore : IDisposable
     int ResolveColumnOrdinal(ImmutableArray<Column> fileColumns, Column expected, string columnName, string propertyName,
         bool projected)
     {
+        if (!projected)
+            return -1;
+
         for (var i = 0; i < fileColumns.Length; i++)
         {
             var actual = fileColumns[i];
@@ -384,8 +395,6 @@ public sealed class RowReaderCore : IDisposable
             return i;
         }
 
-        if (!projected)
-            return -1;
         if (_schemaEvolution?.MissingColumns == MissingColumnEvolutionBehavior.MaterializeDefault)
             return -1;
 
