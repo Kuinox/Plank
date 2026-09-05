@@ -59,9 +59,10 @@ static class NestedParquetRowEmitter
     static bool TryCreateModel(INamedTypeSymbol schemaType, out Model model, out string error)
     {
         var roots = new List<Node>();
+        var activeTypes = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default) { schemaType };
         foreach (var property in GetProperties(schemaType))
         {
-            if (!TryCreatePropertyNode(property, out var root, out error))
+            if (!TryCreatePropertyNode(property, activeTypes, out var root, out error))
             {
                 model = default!;
                 return false;
@@ -124,7 +125,8 @@ static class NestedParquetRowEmitter
         return true;
     }
 
-    static bool TryCreatePropertyNode(IPropertySymbol property, out Node node, out string error)
+    static bool TryCreatePropertyNode(IPropertySymbol property, HashSet<INamedTypeSymbol> activeTypes,
+        out Node node, out string error)
     {
         var parquetName = property.Name;
         if (!TryReadNameOverride(property, ref parquetName, out error))
@@ -146,7 +148,7 @@ static class NestedParquetRowEmitter
             return false;
         }
         if (!TryCreateNode(property.Type, property.NullableAnnotation, parquetName, property.Name,
-                property, allowLeafOverrides: true, out node, out error))
+                property, allowLeafOverrides: true, activeTypes, out node, out error))
             return false;
 
         // Field IDs identify the declared property, including LIST/MAP/group containers. They must
@@ -166,8 +168,8 @@ static class NestedParquetRowEmitter
     }
 
     static bool TryCreateNode(ITypeSymbol type, NullableAnnotation nullableAnnotation, string parquetName,
-        string propertyName, IPropertySymbol? sourceProperty, bool allowLeafOverrides, out Node node,
-        out string error)
+        string propertyName, IPropertySymbol? sourceProperty, bool allowLeafOverrides,
+        HashSet<INamedTypeSymbol> activeTypes, out Node node, out string error)
     {
         if (IsFlatScalar(type))
         {
@@ -193,7 +195,7 @@ static class NestedParquetRowEmitter
             }
 
             if (!TryCreateNode(array.ElementType, array.ElementNullableAnnotation, "element", "Element",
-                    sourceProperty, allowLeafOverrides, out var element, out error))
+                    sourceProperty, allowLeafOverrides, activeTypes, out var element, out error))
             {
                 node = default!;
                 return false;
@@ -206,7 +208,7 @@ static class NestedParquetRowEmitter
         if (type is INamedTypeSymbol named && IsList(named))
         {
             if (!TryCreateNode(named.TypeArguments[0], named.TypeArgumentNullableAnnotations[0], "element", "Element",
-                    sourceProperty, allowLeafOverrides, out var element, out error))
+                    sourceProperty, allowLeafOverrides, activeTypes, out var element, out error))
             {
                 node = default!;
                 return false;
@@ -225,9 +227,9 @@ static class NestedParquetRowEmitter
                 return false;
             }
             if (!TryCreateNode(dictionary.TypeArguments[0], dictionary.TypeArgumentNullableAnnotations[0],
-                    "key", "Key", sourceProperty: null, allowLeafOverrides: false, out var key, out error) ||
+                    "key", "Key", sourceProperty: null, allowLeafOverrides: false, activeTypes, out var key, out error) ||
                 !TryCreateNode(dictionary.TypeArguments[1], dictionary.TypeArgumentNullableAnnotations[1],
-                    "value", "Value", sourceProperty: null, allowLeafOverrides: false, out var value, out error))
+                    "value", "Value", sourceProperty: null, allowLeafOverrides: false, activeTypes, out var value, out error))
             {
                 node = default!;
                 return false;
@@ -251,6 +253,29 @@ static class NestedParquetRowEmitter
             return false;
         }
 
+        if (!activeTypes.Add(groupType))
+        {
+            node = default!;
+            error = $"Property '{propertyName}' references recursive group type '{groupType.ToDisplayString()}'. " +
+                "Recursive CLR types cannot be represented by a finite Parquet schema.";
+            return false;
+        }
+        try
+        {
+            return TryCreateGroupNode(type, groupType, nullableAnnotation, parquetName, propertyName, activeTypes,
+                out node, out error);
+        }
+        finally
+        {
+            // Only ancestors are recursive; independent sibling groups may share a CLR type.
+            activeTypes.Remove(groupType);
+        }
+    }
+
+    static bool TryCreateGroupNode(ITypeSymbol type, INamedTypeSymbol groupType, NullableAnnotation nullableAnnotation,
+        string parquetName, string propertyName, HashSet<INamedTypeSymbol> activeTypes, out Node node,
+        out string error)
+    {
         var childProperties = GetProperties(groupType);
         if (childProperties.IsDefaultOrEmpty)
         {
@@ -274,7 +299,7 @@ static class NestedParquetRowEmitter
                 error = $"Nested group property '{groupType.Name}.{property.Name}' must have a setter or init accessor.";
                 return false;
             }
-            if (!TryCreatePropertyNode(property, out var child, out error))
+            if (!TryCreatePropertyNode(property, activeTypes, out var child, out error))
             {
                 node = default!;
                 return false;
