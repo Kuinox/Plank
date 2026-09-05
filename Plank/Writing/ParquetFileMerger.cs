@@ -13,7 +13,7 @@ public sealed class ParquetFileMerger
 
     internal ParquetFileMerger(IParquetReadSource source, IParquetWriteSource destination, ParquetSchema schema,
         ParquetMergeOptions options)
-        : this(ValidateDistinctDestination(source, destination), schema, options, existingSource: null)
+        : this(ValidateDistinctDestination(source, destination), schema, options, existingSource: null, source)
     {
         try
         {
@@ -33,7 +33,7 @@ public sealed class ParquetFileMerger
     }
 
     ParquetFileMerger(IParquetWriteSource destination, ParquetSchema schema, ParquetMergeOptions options,
-        IParquetReadSource? existingSource)
+        IParquetReadSource? existingSource, IParquetReadSource? firstSource = null)
     {
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(schema);
@@ -48,8 +48,11 @@ public sealed class ParquetFileMerger
         {
             if (existingSource is null)
             {
-                destination.SetLength(0);
-                _writer = new ParquetWriter(destination, schema, options.WriterOptions);
+                // Validate the first input before truncating a possibly populated destination.
+                _reader.Reset(firstSource ?? throw new ArgumentNullException(nameof(firstSource)));
+                MutationSchemaValidator.Validate(schema, _reader.PhysicalReader.Metadata);
+                _ = ParquetWriter.ValidateImport(_reader.PhysicalReader.Metadata, schema.LeafColumns.Length);
+                _writer = new ParquetWriter(destination, schema, options.WriterOptions, truncate: true);
             }
             else
             {
@@ -75,6 +78,9 @@ public sealed class ParquetFileMerger
 
     public long RowCount { get; private set; }
 
+    /// <summary>Imports a file with the same complete physical schema without reencoding its pages.</summary>
+    /// <remarks>The source must remain stable and must not alias the destination storage, even through
+    /// a separate custom adapter.</remarks>
     public void AppendFile(IParquetReadSource source)
     {
         if (_closed)
@@ -128,7 +134,7 @@ public sealed class ParquetFileMerger
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(destination);
-        if (ReferenceEquals(source, destination))
+        if (ParquetSourceIdentity.AreSame(source, destination))
             throw new ArgumentException("The source and destination must be different for an out-of-place merge.",
                 nameof(destination));
         return destination;

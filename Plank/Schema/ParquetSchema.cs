@@ -75,17 +75,27 @@ public sealed record ParquetSchema
     public ParquetWriter CreateWriter(IParquetWriteSource destination, ParquetWriterOptions? options = null)
         => new(destination, this, options ?? ParquetWriterOptions.Default);
 
+    /// <summary>Appends to a file whose complete physical schema matches this schema.</summary>
+    /// <remarks>Field order, nested layout, repetition, logical types, and field IDs must match. Reader
+    /// projections and schema evolution are not supported when retaining existing encoded pages.</remarks>
     public ParquetWriter CreateAppender(Stream stream, ParquetAppendOptions? options = null)
         => new(stream, this, options ?? ParquetAppendOptions.Default);
 
+    /// <summary>Appends to an existing file, copying its retained data if a separate destination is used.</summary>
+    /// <remarks>The complete physical schema must match. The source must remain stable while opening the
+    /// appender. Source and destination may refer to the same storage.</remarks>
     public ParquetWriter CreateAppender(IParquetReadSource source, IParquetWriteSource destination,
         ParquetAppendOptions? options = null)
         => new(source, destination, this, options ?? ParquetAppendOptions.Default);
 
+    /// <summary>Opens a file for in-place merging with an exactly matching physical schema.</summary>
     public ParquetFileMerger CreateMerger(IParquetReadWriteSource destination,
         ParquetMergeOptions? options = null)
         => new(destination, this, options ?? ParquetMergeOptions.Default);
 
+    /// <summary>Copies a file into a destination for merging with an exactly matching physical schema.</summary>
+    /// <remarks>Source and destination must refer to different storage, including when using separate
+    /// custom adapters. The source must remain stable throughout the merge.</remarks>
     public ParquetFileMerger CreateMerger(IParquetReadSource source, IParquetWriteSource destination,
         ParquetMergeOptions? options = null)
         => new(source, destination, this, options ?? ParquetMergeOptions.Default);

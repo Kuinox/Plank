@@ -62,8 +62,9 @@ public sealed class ParquetWriter : IDisposable
     {
     }
 
-    internal ParquetWriter(IParquetWriteSource destination, ParquetSchema schema, ParquetWriterOptions options)
-        : this(destination, schema, options, appendOptions: null)
+    internal ParquetWriter(IParquetWriteSource destination, ParquetSchema schema, ParquetWriterOptions options,
+        bool truncate = false)
+        : this(destination, schema, options, appendOptions: null, truncate: truncate)
     {
     }
 
@@ -74,7 +75,7 @@ public sealed class ParquetWriter : IDisposable
     }
 
     ParquetWriter(IParquetWriteSource destination, ParquetSchema schema, ParquetWriterOptions options,
-        ParquetAppendOptions? appendOptions, IParquetReadSource? appendSource = null)
+        ParquetAppendOptions? appendOptions, IParquetReadSource? appendSource = null, bool truncate = false)
     {
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(schema);
@@ -122,7 +123,18 @@ public sealed class ParquetWriter : IDisposable
         {
             _createdBy = options.CreatedBy;
             _keyValueMetadata = SnapshotMetadata(options.KeyValueMetadata);
-            OpenFile(destination);
+            try
+            {
+                // Merger construction must finish schema-dependent option validation before clearing a file.
+                if (truncate)
+                    destination.SetLength(0);
+                OpenFile(destination);
+            }
+            catch
+            {
+                ReleaseBuffers();
+                throw;
+            }
         }
         else
         {
@@ -212,15 +224,17 @@ public sealed class ParquetWriter : IDisposable
         ArgumentNullException.ThrowIfNull(source);
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot merge a file while a row group is open.");
-        if (ReferenceEquals(source, _destination))
+        if (ParquetSourceIdentity.AreSame(source, _destination))
             throw new ArgumentException("The merge source and destination must be different.", nameof(source));
 
         reader.Reset(source);
         var metadata = reader.PhysicalReader.Metadata;
+        MutationSchemaValidator.Validate(_schema, metadata);
         if (metadata.RowGroupCount > int.MaxValue - _rowGroupCount)
             throw new InvalidOperationException($"Cannot write more than {int.MaxValue} row groups to one file.");
 
-        var importedRowCount = ValidateImport(metadata);
+        var importedRowCount = ValidateImport(metadata, ColumnCount);
+        _ = checked(_totalRowCount + importedRowCount);
         var importedCreatedBy = preserveMetadata ? _options.CreatedBy ?? DecodeCreatedBy(metadata) : _createdBy;
         var importedKeyValueMetadata = preserveMetadata
             ? MergeMetadata(metadata, _options.KeyValueMetadata)
@@ -452,6 +466,8 @@ public sealed class ParquetWriter : IDisposable
         });
         reader.Reset(source);
         var metadata = reader.PhysicalReader.Metadata;
+        MutationSchemaValidator.Validate(_schema, metadata);
+        _ = ValidateImport(metadata, ColumnCount);
 
         var appendLatest = appendOptions.AppendToLatestRowGroup && metadata.RowGroupCount > 0;
         var retainedRowGroupCount = metadata.RowGroupCount - (appendLatest ? 1 : 0);
@@ -463,7 +479,7 @@ public sealed class ParquetWriter : IDisposable
             var latestRelativeOffset = checked((int)(latestPhysical.MetadataOffset - metadata.FooterOffset));
             _latestRowGroupMetadata = metadata.FooterBytes
                 .Slice(latestRelativeOffset, latestPhysical.MetadataLength).ToArray();
-            _latestRowGroupOffset = checked((long)latestPhysical.ColumnChunkOffset);
+            _latestRowGroupOffset = checked((long)GetLatestRowGroupReplacementOffset(metadata));
             _originalFooterOffset = checked((long)metadata.FooterOffset);
             _latestRowCount = checked((uint)latestPhysical.RowCount);
         }
@@ -495,8 +511,42 @@ public sealed class ParquetWriter : IDisposable
         _totalRowCount = totalRowCount;
         _rowGroupOpen = false;
         FileOffset = checked((long)metadata.FooterOffset);
+        if (!ParquetSourceIdentity.AreSame(source, destination))
+        {
+            // A separate destination must receive the retained pages too. If custom adapters alias the
+            // same storage this is still safe: each source range is written back at its original offset.
+            using var copyBuffer = _options.BufferPool.Rent(64 * 1024);
+            FileOffset = 0;
+            CopyRange(source, 0, metadata.FooterOffset, copyBuffer.Span);
+        }
         destination.SetLength(checked((ulong)FileOffset));
         SerializedFileMetadata.Reset();
+    }
+
+    static ulong GetLatestRowGroupReplacementOffset(Reading.Physical.ParquetFileMetadata metadata)
+    {
+        var latestOrdinal = metadata.RowGroupCount - 1;
+        var replacementOffset = metadata.FooterOffset;
+        for (var column = 0; column < metadata.RowGroups[latestOrdinal].ColumnCount; column++)
+            replacementOffset = Math.Min(replacementOffset, metadata.ColumnChunk(latestOrdinal, column).ChunkOffset);
+
+        // RowGroup.file_offset is advisory, not a safe truncation boundary. Other writers may also place
+        // earlier groups' indexes or Bloom filters after the latest group's pages. Keep the original data
+        // section in those layouts and write replacement pages at the footer instead of erasing live data.
+        for (var group = 0; group < latestOrdinal; group++)
+            for (var column = 0; column < metadata.RowGroups[group].ColumnCount; column++)
+            {
+                var chunk = metadata.ColumnChunk(group, column);
+                if (checked(chunk.ChunkOffset + chunk.TotalCompressedSize) > replacementOffset ||
+                    chunk.ColumnIndexLength != 0 &&
+                    checked(chunk.ColumnIndexOffset + chunk.ColumnIndexLength) > replacementOffset ||
+                    chunk.OffsetIndexLength != 0 &&
+                    checked(chunk.OffsetIndexOffset + chunk.OffsetIndexLength) > replacementOffset ||
+                    chunk.HasBloomFilter && (chunk.BloomFilterLength == 0 ||
+                        checked(chunk.BloomFilterOffset + chunk.BloomFilterLength) > replacementOffset))
+                    return metadata.FooterOffset;
+            }
+        return replacementOffset;
     }
 
     void PrepareLatestRowGroupReplacement()
@@ -549,21 +599,20 @@ public sealed class ParquetWriter : IDisposable
     static ParquetKeyValueMetadata[] SnapshotMetadata(IReadOnlyList<ParquetKeyValueMetadata> metadata)
         => metadata.Count == 0 ? [] : metadata.ToArray();
 
-    long ValidateImport(Reading.Physical.ParquetFileMetadata metadata)
+    internal static long ValidateImport(Reading.Physical.ParquetFileMetadata metadata, int columnCount)
     {
         long rowCount = 0;
         for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroupOrdinal++)
         {
             var rowGroup = metadata.RowGroups[rowGroupOrdinal];
-            if (rowGroup.ColumnCount != ColumnCount)
+            if (rowGroup.ColumnCount != columnCount)
                 throw new CorruptParquetException(
-                    $"Row group {rowGroupOrdinal} has {rowGroup.ColumnCount} columns; expected {ColumnCount}.");
+                    $"Row group {rowGroupOrdinal} has {rowGroup.ColumnCount} columns; expected {columnCount}.");
             rowCount = checked(rowCount + checked((long)rowGroup.RowCount));
             for (var columnOrdinal = 0; columnOrdinal < rowGroup.ColumnCount; columnOrdinal++)
                 ValidateImportChunk(metadata.ColumnChunk(rowGroupOrdinal, columnOrdinal), metadata.FooterOffset);
         }
 
-        _ = checked(_totalRowCount + rowCount);
         return rowCount;
     }
 
@@ -578,6 +627,8 @@ public sealed class ParquetWriter : IDisposable
             throw new CorruptParquetException("Column dictionary page offset is outside its column chunk.");
         if (chunk.ColumnIndexLength != 0)
             ValidateImportRange(chunk.ColumnIndexOffset, chunk.ColumnIndexLength, footerOffset, "column index");
+        if (chunk.BloomFilterLength != 0)
+            ValidateImportRange(chunk.BloomFilterOffset, chunk.BloomFilterLength, footerOffset, "Bloom filter");
         if (chunk.OffsetIndexLength != 0)
         {
             if (chunk.OffsetIndexLength > int.MaxValue)
