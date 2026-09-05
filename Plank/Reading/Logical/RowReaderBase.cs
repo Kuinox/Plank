@@ -12,8 +12,7 @@ abstract class RowReaderBase<TSlot> : IDisposable
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(schema);
 
-        Reader = new ParquetReader(schema, options);
-        Reader.Reset(stream);
+        Reader = schema.CreateReader(stream, options);
         _disposed = false;
     }
 
