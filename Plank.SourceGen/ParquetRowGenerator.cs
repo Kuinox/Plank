@@ -164,6 +164,15 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             return;
         }
 
+        if (schemaType.ContainingType is not null)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
+                schemaType.Locations.FirstOrDefault(),
+                $"Schema type '{schemaType.ToDisplayString()}' is declared inside another type. " +
+                "Declare [ParquetSchema] classes directly in a namespace or the global namespace."));
+            return;
+        }
+
         if (NestedParquetRowEmitter.TryEmit(context, schemaType))
             return;
 
