@@ -240,6 +240,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     {
         var rowSizePlan = CreateRowSizePlan(schemaColumns.Select(static column =>
             new RowSizeColumn(column.PhysicalType, column.ClrTypeName, column.TypeLength, column.IsValueType)));
+        var cursorName = GetAvailableGeneratedMemberName(schemaType, "RowCursor");
+        var nextRowName = GetAvailableGeneratedMemberName(schemaType, "NextRow");
         var schemaMemberName = GetAvailableGeneratedMemberName(schemaType, "Schema");
         var writerTypeName = GetAvailableGeneratedMemberName(schemaType, "Writer");
         var readerTypeName = GetAvailableGeneratedMemberName(schemaType, "Reader");
@@ -464,7 +466,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            => new(writer, RowBatchSize);");
         builder.AppendLine();
         builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-        builder.AppendLine("        public Row GetRow()");
+        builder.AppendLine("        public Row GetRow() => GetSlotForNextRow().GetRow();");
+        RowCursorEmitter.AppendFactory(builder, cursorName);
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+        builder.AppendLine("        internal BufferSlot GetSlotForNextRow()");
         builder.AppendLine("        {");
         builder.AppendLine("            var slot = GetSlotForRow();");
         builder.AppendLine("            if (_rowPending)");
@@ -475,7 +480,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 .Append(rowSizePlan.FixedSizeExpression).AppendLine("));");
         builder.AppendLine("            else");
         builder.AppendLine("                _rowPending = true;");
-        builder.AppendLine("            return slot.GetRow();");
+        builder.AppendLine("            return slot;");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        public void Complete()");
@@ -549,6 +554,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("    public sealed class BufferSlot : global::Plank.RowApi.RowBufferSlot");
         builder.AppendLine("    {");
+        RowCursorEmitter.AppendSlotMembers(builder);
         for (var i = 0; i < columns.Length; i++)
             builder.Append("        internal ").Append(columns[i].ClrTypeName).Append("[] _column")
                 .Append(i).AppendLine(" = null!;");
@@ -600,6 +606,22 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
+        AppendWriteRow(builder, columns);
+        RowCursorEmitter.AppendCursor(builder, cursorName, nextRowName,
+            GetAvailableGeneratedMemberName(schemaType, "Refresh"),
+            GetAvailableGeneratedMemberName(schemaType, "Buffers"),
+            columns.Select(static column => column.ClrTypeName).ToArray(),
+            () => AppendWriteProperties(builder, columns,
+                i => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref _buffers._column{i}, _index)", "_buffers._ownerSlot"));
+        builder.AppendLine("}");
+
+        return builder.ToString();
+    }
+
+    static void AppendWriteRow(StringBuilder builder, ImmutableArray<MappedColumn> columns)
+    {
+        builder.AppendLine("    /// <summary>A writable view over the current row buffers.</summary>");
+        builder.AppendLine("    /// <remarks>Use only until the writer advances, completes, resets, or is disposed.</remarks>");
         builder.AppendLine("    public readonly ref struct Row");
         builder.AppendLine("    {");
         builder.AppendLine("        readonly int _index;");
@@ -611,12 +633,25 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            _ownerSlot = ownerSlot;");
         builder.AppendLine("        }");
         builder.AppendLine();
+        AppendWriteProperties(builder, columns,
+            i => UncheckedBufferElement($"_ownerSlot._column{i}", "_index"), "_ownerSlot");
+        builder.AppendLine("    }");
+    }
+
+    static void AppendWriteProperties(
+        StringBuilder builder,
+        ImmutableArray<MappedColumn> columns,
+        Func<int, string> element,
+        string ownerSlot)
+    {
         for (var i = 0; i < columns.Length; i++)
         {
-            var bufferElement = UncheckedBufferElement($"_ownerSlot._column{i}", "_index");
-            builder.Append("        public ref ").Append(columns[i].ClrTypeName).Append(' ')
-                .Append(EscapeIdentifier(columns[i].PropertyName)).Append(" => ref ")
-                .Append(bufferElement).AppendLine(";");
+            var bufferElement = element(i);
+            builder.Append("        public ").Append(columns[i].ClrTypeName).Append(' ')
+                .Append(EscapeIdentifier(columns[i].PropertyName)).AppendLine();
+            builder.AppendLine("        {");
+            builder.Append("            set => ").Append(bufferElement).AppendLine(" = value;");
+            builder.AppendLine("        }");
             if (SupportsOwnerSetter(columns[i].ClrTypeName))
             {
                 builder.AppendLine();
@@ -629,7 +664,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                         .Append(columns[i].ClrTypeName).Append(") : owner.Memory;").AppendLine();
                     builder.AppendLine("            if (owner is not null)");
                     builder.AppendLine("            {");
-                    builder.AppendLine("                _ownerSlot.RegisterOwner(owner);");
+                    builder.Append("                ").Append(ownerSlot).AppendLine(".RegisterOwner(owner);");
                     builder.AppendLine("            }");
                     builder.AppendLine("        }");
                 }
@@ -640,17 +675,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     builder.AppendLine("        {");
                     builder.AppendLine("            global::System.ArgumentNullException.ThrowIfNull(owner);");
                     builder.Append("            ").Append(bufferElement).AppendLine(" = owner.Memory;");
-                    builder.AppendLine("            _ownerSlot.RegisterOwner(owner);");
+                    builder.Append("            ").Append(ownerSlot).AppendLine(".RegisterOwner(owner);");
                     builder.AppendLine("        }");
                 }
             }
             if (i < columns.Length - 1)
                 builder.AppendLine();
         }
-        builder.AppendLine("    }");
-        builder.AppendLine("}");
-
-        return builder.ToString();
     }
 
     static string UncheckedBufferElement(string bufferExpression, string indexExpression)
@@ -1054,7 +1085,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static string GetRowApiColumnFieldName(string propertyName)
         => $"s_{propertyName}RowApiColumn";
 
-    static string GetAvailableGeneratedMemberName(INamedTypeSymbol schemaType, string preferredName)
+    internal static string GetAvailableGeneratedMemberName(INamedTypeSymbol schemaType, string preferredName)
     {
         if (schemaType.GetMembers(preferredName).IsDefaultOrEmpty)
             return preferredName;

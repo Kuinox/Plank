@@ -18,6 +18,9 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
     TSlot _active;
     bool _completed;
 
+    /// <summary>Identifies the current writable buffers for generated cursor invalidation.</summary>
+    protected long BufferGeneration { get; private set; } = 1;
+
     /// <summary>Initializes the infrastructure for a generated pipeline row writer.</summary>
     /// <param name="stream">The destination stream.</param>
     /// <param name="schema">The generated Parquet schema.</param>
@@ -112,11 +115,32 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected TSlot CommitFixedRow(TSlot slot, int rowsPerGroup)
     {
-        slot.Next();
-        if (slot.Count < rowsPerGroup && (!slot.IsFull || slot.Grow()))
+        if (slot.TryAdvanceBefore(rowsPerGroup))
             return slot;
+        return CommitFixedRowBoundary(slot, rowsPerGroup);
+    }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    TSlot CommitFixedRowBoundary(TSlot slot, int rowsPerGroup)
+    {
+        slot.Next();
+        if (slot.Count < rowsPerGroup)
+        {
+            if (slot.IsFull)
+            {
+                if (!slot.Grow())
+                    return SwitchFixedSlot(slot);
+                BufferGeneration++;
+            }
+            return slot;
+        }
+        return SwitchFixedSlot(slot);
+    }
+
+    TSlot SwitchFixedSlot(TSlot slot)
+    {
         _active = EnqueueAndTakeFree(slot);
+        BufferGeneration++;
         return _active;
     }
 
@@ -129,10 +153,22 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
     {
         _bufferedSizeBytes = checked(_bufferedSizeBytes + rowSizeBytes);
         slot.Next();
-        if (_bufferedSizeBytes < _targetRowGroupSizeBytes && (!slot.IsFull || slot.Grow()))
+        if (_bufferedSizeBytes < _targetRowGroupSizeBytes && !slot.IsFull)
             return slot;
 
+        return CommitVariableRowBoundary(slot);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    TSlot CommitVariableRowBoundary(TSlot slot)
+    {
+        if (_bufferedSizeBytes < _targetRowGroupSizeBytes && slot.Grow())
+        {
+            BufferGeneration++;
+            return slot;
+        }
         _active = EnqueueAndTakeFree(slot);
+        BufferGeneration++;
         _bufferedSizeBytes = 0;
         return _active;
     }
@@ -174,5 +210,6 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         _active = TakeInitialSlot();
         _bufferedSizeBytes = 0;
         _completed = false;
+        BufferGeneration++;
     }
 }
