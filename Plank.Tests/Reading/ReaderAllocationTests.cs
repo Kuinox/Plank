@@ -754,8 +754,10 @@ internal sealed class ReaderAllocationTests
         var path = CreateFile(schema, CreateValues(4096), compression);
         try
         {
+            // Other tests can fill the shared pool enough to trigger allocating memory-pressure checks.
+            using var pool = new DefaultParquetBufferPool();
             using var stream = File.OpenRead(path);
-            using var reader = schema.CreateReader(stream);
+            using var reader = schema.CreateReader(stream, new ParquetReaderOptions { BufferPool = pool });
             var rowGroup = reader.RowGroups[0];
             for (var i = 0; i < 8; i++)
                 _ = SumValues(rowGroup, schema.LeafColumns[0]);
