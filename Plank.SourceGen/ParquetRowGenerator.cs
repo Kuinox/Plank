@@ -951,7 +951,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("    }");
     }
 
-    static bool IsSupportedMapping(SchemaColumn column, string clrType)
+    internal static bool IsSupportedMapping(SchemaColumn column, string clrType)
     {
         if (column.ConverterTypeName is not null)
             return true;
@@ -1129,11 +1129,18 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     }
 
     static bool TryExtractColumn(IPropertySymbol property, out SchemaColumn column, out string error)
+        => TryExtractColumn(property.Type, property.NullableAnnotation, property, out column, out error);
+
+    // Both emitters use the same scalar mapping, overrides and validation. Collection elements supply
+    // their element type and the declaring property; map elements have no declaring attribute.
+    internal static bool TryExtractColumn(ITypeSymbol type, NullableAnnotation nullableAnnotation,
+        IPropertySymbol? property, out SchemaColumn column, out string error)
     {
         error = string.Empty;
         column = default;
 
-        if (!TryGetConverterSpec(property, out var converter, out error))
+        ConverterSpec? converter = null;
+        if (property is not null && !TryGetConverterSpec(property, out converter, out error))
             return false;
 
         string clrTypeName;
@@ -1141,21 +1148,21 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         LogicalTypeSpec? inferredLogicalType;
         if (converter is null)
         {
-            if (!TryNormalizeClrType(property.Type, property.NullableAnnotation, out clrTypeName))
+            if (!TryNormalizeClrType(type, nullableAnnotation, out clrTypeName))
             {
-                error = $"Unsupported CLR type '{property.Type.ToDisplayString()}' for schema property '{property.Name}'.";
+                error = $"Unsupported CLR type '{type.ToDisplayString()}' for schema property '{property?.Name ?? "element"}'.";
                 return false;
             }
 
             if (!TryInferDefaults(clrTypeName, out inferredPhysicalType, out inferredLogicalType))
             {
-                error = $"Could not infer parquet mapping for CLR type '{property.Type.ToDisplayString()}' on property '{property.Name}'.";
+                error = $"Could not infer parquet mapping for CLR type '{type.ToDisplayString()}' on property '{property?.Name ?? "element"}'.";
                 return false;
             }
         }
         else
         {
-            clrTypeName = property.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            clrTypeName = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
             if (!TryInferDefaults(converter.Value.PhysicalClrTypeName, out inferredPhysicalType,
                     out inferredLogicalType))
             {
@@ -1165,7 +1172,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             }
         }
 
-        var columnName = property.Name;
+        var columnName = property?.Name ?? "element";
         var physicalType = inferredPhysicalType;
         var logicalType = inferredLogicalType;
         int? fieldId = null;
@@ -1176,7 +1183,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var bloomFilterFalsePositiveProbability = 0.01;
         var bloomFilterExpectedDistinctValueCount = 0U;
         var bloomFilterMaximumBytes = 128U * 1024 * 1024;
-        if (!TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref fieldId,
+        if (property is not null && !TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref fieldId,
                 ref encodings, ref compression, ref compressionLevel, ref bloomFilter,
                 ref bloomFilterFalsePositiveProbability, ref bloomFilterExpectedDistinctValueCount,
                 ref bloomFilterMaximumBytes, out error))
@@ -1190,13 +1197,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         }
         if (columnName.Length == 0)
         {
-            error = $"Property '{property.Name}' has an empty parquet column name.";
+            error = $"Property '{property?.Name ?? "element"}' has an empty parquet column name.";
             return false;
         }
 
         var repetition = IsNullableClrType(clrTypeName) ? "Optional" : "Required";
-        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, property.Type.IsValueType,
-            logicalType, property.Name, encodings,
+        column = new SchemaColumn(columnName, physicalType, repetition, clrTypeName, type.IsValueType,
+            logicalType, property?.Name ?? "element", encodings,
             GetTypeLength(physicalType, converter?.PhysicalClrTypeName ?? clrTypeName, logicalType), converter?.TypeName,
             fieldId, compression, compressionLevel, bloomFilter, bloomFilterFalsePositiveProbability,
             bloomFilterExpectedDistinctValueCount, bloomFilterMaximumBytes);
@@ -1448,6 +1455,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     static bool TryGetEncodingNames(TypedConstant constant, out ImmutableArray<string> encodings)
     {
+        if (constant.IsNull)
+        {
+            encodings = [];
+            return true;
+        }
         if (constant.Kind != TypedConstantKind.Array)
         {
             encodings = [];
@@ -1646,7 +1658,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return true;
     }
 
-    static string GetLogicalTypeExpression(LogicalTypeSpec logicalType)
+    internal static string GetLogicalTypeExpression(LogicalTypeSpec logicalType)
         => logicalType.Kind switch
         {
             "Int" => $"new global::Plank.Schema.LogicalType.Int({logicalType.BitWidth.GetValueOrDefault()}, {ToBoolLiteral(logicalType.IsSigned)})",
@@ -1674,7 +1686,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static bool IsNullableClrType(string clrTypeName)
         => clrTypeName.EndsWith("?", StringComparison.Ordinal);
 
-    static ImmutableArray<SchemaDiagnostic> ValidateSchemaColumns(ImmutableArray<SchemaColumn> columns)
+    internal static ImmutableArray<SchemaDiagnostic> ValidateSchemaColumns(ImmutableArray<SchemaColumn> columns)
     {
         var diagnostics = ImmutableArray.CreateBuilder<SchemaDiagnostic>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -1699,6 +1711,23 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (!IsEncodingSupported(column.PhysicalType, encoding))
                     diagnostics.Add(new SchemaDiagnostic(InvalidEncoding,
                         $"Encoding '{encoding}' does not support physical type '{column.PhysicalType}' for column '{column.Name}'."));
+            }
+
+            if (column.BloomFilter)
+            {
+                if (double.IsNaN(column.BloomFilterFalsePositiveProbability) ||
+                    double.IsInfinity(column.BloomFilterFalsePositiveProbability) ||
+                    column.BloomFilterFalsePositiveProbability is <= 0 or >= 1)
+                    diagnostics.Add(new SchemaDiagnostic(InvalidTypeHint,
+                        $"Column '{column.Name}' Bloom filter probability must be finite, greater than zero and less than one."));
+                var maximumBytes = column.BloomFilterMaximumBytes;
+                if (maximumBytes is < 32 or > 128U * 1024 * 1024 ||
+                    (maximumBytes & (maximumBytes - 1)) != 0)
+                    diagnostics.Add(new SchemaDiagnostic(InvalidTypeHint,
+                        $"Column '{column.Name}' Bloom filter maximum bytes must be a power of two between 32 and 134217728."));
+                if (column.PhysicalType == "Boolean")
+                    diagnostics.Add(new SchemaDiagnostic(InvalidTypeHint,
+                        $"Column '{column.Name}' cannot use a Bloom filter with physical type 'Boolean'."));
             }
 
             ValidateLogicalType(column, diagnostics);
@@ -2006,7 +2035,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return clrTypeName.Length > 0 && IsSupportedClrType(clrTypeName);
     }
 
-    static string GetColumnOptionsExpression(SchemaColumn column)
+    internal static string GetColumnOptionsExpression(SchemaColumn column)
     {
         var builder = new StringBuilder();
         builder.Append("new global::Plank.Schema.ColumnOptions(global::Plank.Schema.ParquetRepetition.")
@@ -2127,7 +2156,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         internal bool IsFixed => VariableColumnIndices.IsEmpty;
     }
 
-    readonly struct SchemaColumn
+    internal readonly struct SchemaColumn
     {
         public SchemaColumn(string name, string physicalType, string repetition, string clrTypeName, bool isValueType,
             LogicalTypeSpec? logicalType, string rowPropertyName, ImmutableArray<string> encodings, uint typeLength,
@@ -2202,7 +2231,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public string PhysicalClrTypeName { get; }
     }
 
-    readonly struct LogicalTypeSpec
+    internal readonly struct LogicalTypeSpec
     {
         public LogicalTypeSpec(string kind, string? unit = null, bool? isAdjustedToUtc = null, int? precision = null,
             int? scale = null, int? bitWidth = null, bool? isSigned = null)
@@ -2231,7 +2260,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public bool? IsSigned { get; }
     }
 
-    readonly struct SchemaDiagnostic
+    internal readonly struct SchemaDiagnostic
     {
         public SchemaDiagnostic(DiagnosticDescriptor descriptor, string message)
         {

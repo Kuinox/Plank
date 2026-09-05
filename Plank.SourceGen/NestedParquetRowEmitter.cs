@@ -31,7 +31,16 @@ static class NestedParquetRowEmitter
             return true;
         }
 
-        context.AddSource(GetHintName(schemaType), BuildSource(schemaType, model));
+        var hasDiagnostics = false;
+        foreach (var leaf in model.Leaves)
+            foreach (var diagnostic in ParquetRowGenerator.ValidateSchemaColumns([leaf.Node.Scalar!.Column]))
+            {
+                context.ReportDiagnostic(Diagnostic.Create(diagnostic.Descriptor,
+                    schemaType.Locations.FirstOrDefault(), diagnostic.Message));
+                hasDiagnostics = true;
+            }
+        if (!hasDiagnostics)
+            context.AddSource(GetHintName(schemaType), BuildSource(schemaType, model));
         return true;
     }
 
@@ -67,6 +76,12 @@ static class NestedParquetRowEmitter
             return false;
         }
 
+        if (!ValidateSiblingNames(roots, out error))
+        {
+            model = default!;
+            return false;
+        }
+
         var leaves = new List<Leaf>();
         var usedNames = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < roots.Count; i++)
@@ -92,6 +107,23 @@ static class NestedParquetRowEmitter
         return true;
     }
 
+    static bool ValidateSiblingNames(IEnumerable<Node> nodes, out string error)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var node in nodes)
+        {
+            if (!names.Add(node.Name))
+            {
+                error = $"Duplicate column name '{node.Name}' is not allowed within the same group.";
+                return false;
+            }
+            if (!ValidateSiblingNames(node.Children, out error))
+                return false;
+        }
+        error = string.Empty;
+        return true;
+    }
+
     static bool TryCreatePropertyNode(IPropertySymbol property, out Node node, out string error)
     {
         var parquetName = property.Name;
@@ -107,8 +139,30 @@ static class NestedParquetRowEmitter
             return false;
         }
 
-        return TryCreateNode(property.Type, property.NullableAnnotation, parquetName, property.Name,
-            property, allowLeafOverrides: true, out node, out error);
+        if (DeclaresConverter(property))
+        {
+            node = default!;
+            error = $"Property '{property.Name}' declares a converter, which is not supported in generated nested schemas.";
+            return false;
+        }
+        if (!TryCreateNode(property.Type, property.NullableAnnotation, parquetName, property.Name,
+                property, allowLeafOverrides: true, out node, out error))
+            return false;
+
+        // Field IDs identify the declared property, including LIST/MAP/group containers. They must
+        // not migrate to synthetic list elements when leaf options are forwarded to those elements.
+        node.FieldId = GetColumnAttribute(property)?.NamedArguments
+            .FirstOrDefault(static argument => argument.Key == "FieldId").Value.Value as int?;
+        var optionTarget = node;
+        while (optionTarget.Kind == NodeKind.List)
+            optionTarget = optionTarget.Children[0];
+        if (optionTarget.Kind != NodeKind.Leaf && HasLeafOverrides(property))
+        {
+            error = $"Property '{property.Name}' declares leaf column options on a group or map. " +
+                "Place these options on its scalar properties instead.";
+            return false;
+        }
+        return true;
     }
 
     static bool TryCreateNode(ITypeSymbol type, NullableAnnotation nullableAnnotation, string parquetName,
@@ -442,6 +496,8 @@ static class NestedParquetRowEmitter
                 builder.Append(')');
                 break;
         }
+        if (node.FieldId is { } fieldId)
+            builder.Append(" with { FieldId = ").Append(fieldId).Append(" }");
     }
 
     static void AppendDescriptors(StringBuilder builder, Model model)
@@ -1194,63 +1250,25 @@ static class NestedParquetRowEmitter
         var userType = GetTypeName(type);
         var nonNullableType = GetNonNullableType(type);
         var normalized = GetTypeName(nonNullableType.WithNullableAnnotation(NullableAnnotation.NotAnnotated));
-        var physicalType = normalized switch
-        {
-            "bool" => "Boolean",
-            "byte" or "ushort" or "int" or "uint" or "global::System.DateOnly" => "Int32",
-            "long" or "ulong" or "global::System.DateTime" or "global::System.DateTimeOffset" or
-                "global::System.TimeOnly" => "Int64",
-            "float" => "Float",
-            "double" => "Double",
-            "string" or "byte[]" or "global::System.ReadOnlyMemory<byte>" => "ByteArray",
-            "global::System.Guid" => "FixedLenByteArray",
-            _ => string.Empty
-        };
-        if (physicalType.Length == 0)
+        if (normalized == "decimal")
         {
             scalar = default!;
             error = $"Unsupported nested scalar CLR type '{type.ToDisplayString()}'.";
             return false;
         }
-
-        var logicalExpression = normalized switch
-        {
-            "byte" => "new global::Plank.Schema.LogicalType.Int(8, false)",
-            "ushort" => "new global::Plank.Schema.LogicalType.Int(16, false)",
-            "uint" => "new global::Plank.Schema.LogicalType.Int(32, false)",
-            "ulong" => "new global::Plank.Schema.LogicalType.Int(64, false)",
-            "global::System.DateOnly" => "new global::Plank.Schema.LogicalType.Date()",
-            "global::System.TimeOnly" => "new global::Plank.Schema.LogicalType.Time(global::Plank.Schema.TimeUnit.Micros, false)",
-            "global::System.DateTime" or "global::System.DateTimeOffset" =>
-                "new global::Plank.Schema.LogicalType.Timestamp(global::Plank.Schema.TimeUnit.Micros, true)",
-            "string" => "new global::Plank.Schema.LogicalType.String()",
-            "global::System.Guid" => "new global::Plank.Schema.LogicalType.Uuid()",
-            _ => null
-        };
-        ImmutableArray<string> encodings = [];
-        string? compression = null;
-        int? compressionLevel = null;
-        var inferredPhysicalType = physicalType;
-        if (allowOverrides && property is not null &&
-            !TryReadLeafOverrides(property, normalized, ref physicalType, ref logicalExpression, ref encodings,
-                ref compression, ref compressionLevel, out error))
+        if (!ParquetRowGenerator.TryExtractColumn(type, nullableAnnotation,
+                allowOverrides ? property : null, out var column, out error))
         {
             scalar = default!;
             return false;
         }
-        if (physicalType != inferredPhysicalType)
+        var physicalType = column.PhysicalType;
+        if (!ParquetRowGenerator.IsSupportedMapping(column, column.ClrTypeName))
         {
             scalar = default!;
-            error = $"Property '{property?.Name}' cannot override physical type '{inferredPhysicalType}' with '{physicalType}' in a generated nested schema.";
+            error = $"Property '{property?.Name}' CLR type '{column.ClrTypeName}' is incompatible with physical type '{physicalType}'.";
             return false;
         }
-        for (var i = 0; i < encodings.Length; i++)
-            if (!IsEncodingCompatible(encodings[i], physicalType))
-            {
-                scalar = default!;
-                error = $"Property '{property?.Name}' selects encoding '{encodings[i]}', which is incompatible with physical type '{physicalType}'.";
-                return false;
-            }
 
         var storageType = normalized switch
         {
@@ -1269,9 +1287,7 @@ static class NestedParquetRowEmitter
             "string" or "byte[]" or "global::System.ReadOnlyMemory<byte>" or "global::System.Guid" or
             "global::System.DateOnly" or "global::System.DateTime" or "global::System.DateTimeOffset" or
             "global::System.TimeOnly";
-        scalar = new Scalar(userType, normalized, physicalType, logicalExpression, encodings,
-            normalized == "global::System.Guid" ? 16u : 0u, compression, compressionLevel, storageType,
-            supportsNestedStorage,
+        scalar = new Scalar(userType, normalized, column, storageType, supportsNestedStorage,
             physicalType is "ByteArray" or "FixedLenByteArray" or "Int96");
         error = string.Empty;
         return true;
@@ -1290,150 +1306,17 @@ static class NestedParquetRowEmitter
         return true;
     }
 
-    static bool TryReadLeafOverrides(IPropertySymbol property, string normalizedType, ref string physicalType,
-        ref string? logicalExpression, ref ImmutableArray<string> encodings, ref string? compression,
-        ref int? compressionLevel, out string error)
+    static bool HasLeafOverrides(IPropertySymbol property)
     {
-        error = string.Empty;
         var attribute = GetColumnAttribute(property);
-        if (attribute is null)
-            return true;
-        for (var i = 0; i < attribute.ConstructorArguments.Length; i++)
-        {
-            var parameter = attribute.AttributeConstructor?.Parameters[i];
-            if (parameter?.Type.ToDisplayString() != "Plank.Schema.ParquetPhysicalType")
-                continue;
-            if (!TryGetEnumValue(attribute.ConstructorArguments[i], out var value) ||
-                !TryGetPhysicalType(value, out physicalType))
-            {
-                error = $"Property '{property.Name}' declares an invalid ParquetPhysicalType override.";
-                return false;
-            }
-        }
-        foreach (var argument in attribute.NamedArguments)
-        {
-            if (argument.Key == "Encodings")
-            {
-                var encodingBuilder = ImmutableArray.CreateBuilder<string>();
-                foreach (var item in argument.Value.Values)
-                {
-                    if (!TryGetEnumValue(item, out var value) || !TryGetEncoding(value, out var encoding))
-                    {
-                        error = $"Property '{property.Name}' declares an invalid EncodingKind override.";
-                        return false;
-                    }
-                    encodingBuilder.Add(encoding);
-                }
-                encodings = encodingBuilder.ToImmutable();
-            }
-            else if (argument.Key == "Compression")
-            {
-                if (!TryGetEnumValue(argument.Value, out var value) ||
-                    !TryGetCompression(value, out compression))
-                {
-                    error = $"Property '{property.Name}' declares an invalid CompressionKind override.";
-                    return false;
-                }
-            }
-            else if (argument.Key == "CompressionLevel")
-            {
-                if (argument.Value.Value is not int value)
-                {
-                    error = $"Property '{property.Name}' declares an invalid compression level.";
-                    return false;
-                }
-                compressionLevel = value;
-            }
-            else if (argument.Key == "LogicalType")
-            {
-                if (!TryGetEnumValue(argument.Value, out var logical) ||
-                    !TryApplyLogicalOverride(property, normalizedType, logical, ref logicalExpression, out error))
-                {
-                    if (error.Length == 0)
-                        error = $"Property '{property.Name}' declares an invalid LogicalTypeKind override.";
-                    return false;
-                }
-            }
-        }
-        return true;
+        return attribute is not null &&
+            (attribute.ConstructorArguments.Any(static argument => argument.Type?.ToDisplayString() ==
+                "Plank.Schema.ParquetPhysicalType") ||
+             attribute.NamedArguments.Any(static argument => argument.Key != "FieldId"));
     }
-
-    static bool TryApplyLogicalOverride(IPropertySymbol property, string normalizedType, int logical,
-        ref string? logicalExpression, out string error)
-    {
-        error = string.Empty;
-        var compatible = logical switch
-        {
-            0 => normalizedType is not ("byte" or "ushort" or "uint" or "ulong" or
-                "global::System.DateOnly" or "global::System.TimeOnly" or "global::System.DateTime" or
-                "global::System.DateTimeOffset"),
-            1 or 2 => normalizedType is "string" or "byte[]" or "global::System.ReadOnlyMemory<byte>",
-            3 => normalizedType == "global::System.Guid",
-            4 => normalizedType == "global::System.DateOnly",
-            5 => normalizedType == "global::System.TimeOnly",
-            6 => normalizedType is "global::System.DateTime" or "global::System.DateTimeOffset",
-            7 => normalizedType is "byte" or "ushort" or "uint" or "ulong",
-            _ => false
-        };
-        if (!compatible)
-        {
-            error = $"Property '{property.Name}' logical type override is incompatible with CLR type '{normalizedType}'.";
-            return false;
-        }
-
-        logicalExpression = logical switch
-        {
-            0 => null,
-            1 => "new global::Plank.Schema.LogicalType.String()",
-            2 => "new global::Plank.Schema.LogicalType.Json()",
-            3 => "new global::Plank.Schema.LogicalType.Uuid()",
-            _ => logicalExpression
-        };
-        return true;
-    }
-
-    static bool IsEncodingCompatible(string encoding, string physicalType)
-        => encoding switch
-        {
-            "Plain" or "PlainDictionary" or "RleDictionary" => true,
-            "Rle" => physicalType == "Boolean",
-            "BitPacked" => false,
-            "DeltaBinaryPacked" => physicalType is "Int32" or "Int64",
-            "DeltaLengthByteArray" or "DeltaByteArray" => physicalType == "ByteArray",
-            "ByteStreamSplit" => physicalType is "Int32" or "Int64" or "Float" or "Double" or
-                "FixedLenByteArray",
-            "Alp" => physicalType is "Float" or "Double",
-            _ => false
-        };
 
     static string GetColumnOptionsExpression(Node node)
-    {
-        var scalar = node.Scalar!;
-        var builder = new StringBuilder("new global::Plank.Schema.ColumnOptions(global::Plank.Schema.ParquetRepetition.");
-        builder.Append(node.Optional ? "Optional" : "Required");
-        if (!scalar.Encodings.IsDefaultOrEmpty)
-        {
-            builder.Append(", global::System.Collections.Immutable.ImmutableArray.Create(");
-            for (var i = 0; i < scalar.Encodings.Length; i++)
-            {
-                if (i > 0)
-                    builder.Append(", ");
-                builder.Append("global::Plank.Schema.EncodingKind.").Append(scalar.Encodings[i]);
-            }
-            builder.Append(')');
-        }
-        if (scalar.TypeLength > 0)
-        {
-            if (scalar.Encodings.IsDefaultOrEmpty)
-                builder.Append(", default");
-            builder.Append(", ").Append(scalar.TypeLength);
-        }
-        if (scalar.Compression is { } compression)
-            builder.Append(", compression: global::Plank.Schema.CompressionKind.").Append(compression);
-        if (scalar.CompressionLevel is { } compressionLevel)
-            builder.Append(", compressionLevel: ").Append(compressionLevel);
-        return builder.Append(')').ToString();
-    }
+        => ParquetRowGenerator.GetColumnOptionsExpression(node.Scalar!.Column);
 
     static string ConvertFromStorage(Leaf leaf, string expression)
     {
@@ -1585,56 +1468,6 @@ static class NestedParquetRowEmitter
             .NamedArguments.Any(static argument =>
                 argument.Key == "AllowAllocatingValues" && argument.Value.Value is true) == true;
 
-    static bool TryGetEnumValue(TypedConstant constant, out int value)
-    {
-        if (constant.Value is int intValue)
-        {
-            value = intValue;
-            return true;
-        }
-        value = 0;
-        return false;
-    }
-
-    static bool TryGetPhysicalType(int value, out string physicalType)
-    {
-        physicalType = value switch
-        {
-            0 => "Boolean", 1 => "Int32", 2 => "Int64", 3 => "Int96", 4 => "Float", 5 => "Double",
-            6 => "ByteArray", 7 => "FixedLenByteArray", _ => string.Empty
-        };
-        return physicalType.Length > 0;
-    }
-
-    static bool TryGetEncoding(int value, out string encoding)
-    {
-        // These are EncodingKind's values, which are the Parquet format's wire values; 1 is unused.
-        encoding = value switch
-        {
-            0 => "Plain", 2 => "PlainDictionary", 3 => "Rle", 4 => "BitPacked",
-            5 => "DeltaBinaryPacked", 6 => "DeltaLengthByteArray", 7 => "DeltaByteArray", 8 => "RleDictionary",
-            9 => "ByteStreamSplit", 10 => "Alp",
-            _ => string.Empty
-        };
-        return encoding.Length > 0;
-    }
-
-    static bool TryGetCompression(int value, out string? compression)
-    {
-        compression = value switch
-        {
-            0 => "None",
-            1 => "Snappy",
-            2 => "Gzip",
-            3 => "Zstd",
-            4 => "Lz4",
-            5 => "Brotli",
-            6 => "Lz4Legacy",
-            _ => null
-        };
-        return compression is not null;
-    }
-
     static string GetHintName(INamedTypeSymbol schemaType)
         => ToIdentifier(schemaType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)) + ".NestedSchemaApi.g.cs";
 
@@ -1676,6 +1509,7 @@ static class NestedParquetRowEmitter
     sealed class Node(NodeKind kind, string name, string propertyName, string userType, bool optional,
         Scalar? scalar, string? collectionKind, ImmutableArray<Node> children)
     {
+        internal int? FieldId { get; set; }
         internal NodeKind Kind { get; } = kind;
         internal string Name { get; } = name;
         internal string PropertyName { get; } = propertyName;
@@ -1687,18 +1521,16 @@ static class NestedParquetRowEmitter
         internal List<Leaf> Leaves { get; } = [];
     }
 
-    sealed class Scalar(string userType, string nonNullableUserType, string physicalType,
-        string? logicalExpression, ImmutableArray<string> encodings, uint typeLength, string? compression,
-        int? compressionLevel, string storageType, bool supportsNestedStorage, bool isBinary)
+    sealed class Scalar(string userType, string nonNullableUserType, ParquetRowGenerator.SchemaColumn column,
+        string storageType, bool supportsNestedStorage, bool isBinary)
     {
+        internal ParquetRowGenerator.SchemaColumn Column { get; } = column;
         internal string UserType { get; } = userType;
         internal string NonNullableUserType { get; } = nonNullableUserType;
-        internal string PhysicalType { get; } = physicalType;
-        internal string? LogicalExpression { get; } = logicalExpression;
-        internal ImmutableArray<string> Encodings { get; } = encodings;
-        internal uint TypeLength { get; } = typeLength;
-        internal string? Compression { get; } = compression;
-        internal int? CompressionLevel { get; } = compressionLevel;
+        internal string PhysicalType => Column.PhysicalType;
+        internal string? LogicalExpression => Column.LogicalType is { } logical
+            ? ParquetRowGenerator.GetLogicalTypeExpression(logical) : null;
+        internal uint TypeLength => Column.TypeLength;
         internal string StorageType { get; } = storageType;
         internal bool SupportsNestedStorage { get; } = supportsNestedStorage;
         internal bool IsBinary { get; } = isBinary;
