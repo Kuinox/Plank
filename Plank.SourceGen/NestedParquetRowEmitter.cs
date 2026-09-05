@@ -1444,10 +1444,8 @@ static class NestedParquetRowEmitter
             return expression;
         return scalar.NonNullableUserType switch
         {
-            "byte" => $"unchecked((byte){expression})",
-            "ushort" => $"unchecked((ushort){expression})",
-            "uint" => $"unchecked((uint){expression})",
-            "ulong" => $"unchecked((ulong){expression})",
+            "byte" or "ushort" or "uint" or "ulong" =>
+                ConvertUnsignedInteger(leaf, expression, scalar.NonNullableUserType),
             "string" => $"{expression} is null ? null! : global::System.Text.Encoding.UTF8.GetString({expression})",
             "global::System.ReadOnlyMemory<byte>" => scalar.UserType.EndsWith("?", StringComparison.Ordinal)
                 ? $"{expression} is null ? (global::System.ReadOnlyMemory<byte>?)null : new global::System.ReadOnlyMemory<byte>({expression})"
@@ -1478,8 +1476,8 @@ static class NestedParquetRowEmitter
             return expression;
         return scalar.NonNullableUserType switch
         {
-            "byte" or "ushort" or "uint" => $"unchecked((int){expression})",
-            "ulong" => $"unchecked((long){expression})",
+            "byte" or "ushort" or "uint" or "ulong" =>
+                ConvertUnsignedInteger(leaf, expression, scalar.StorageType),
             "string" => $"{expression} is null ? null! : global::System.Text.Encoding.UTF8.GetBytes({expression}!)",
             "global::System.ReadOnlyMemory<byte>" => scalar.UserType.EndsWith("?", StringComparison.Ordinal)
                 ? $"{expression}.HasValue ? {expression}!.Value.ToArray() : null!"
@@ -1499,6 +1497,16 @@ static class NestedParquetRowEmitter
                     : $"GeneratedNestedToUnixMicroseconds({expression})",
             _ => expression
         };
+    }
+
+    static string ConvertUnsignedInteger(Leaf leaf, string expression, string targetType)
+    {
+        // Lift the conversion for optional values so null survives in both directions.
+        // Keep the unchecked conversion: UINT32/UINT64 use signed physical storage and
+        // values above the signed maximum must retain their original bit patterns.
+        if (leaf.Node.Optional)
+            targetType += "?";
+        return $"unchecked(({targetType}){expression})";
     }
 
     static string ConvertBinaryFromSpan(Scalar scalar, string expression)
