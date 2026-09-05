@@ -15,9 +15,9 @@ sealed class GeneratedMemberNames
     {
         reserved = new HashSet<string>(schemaType.GetMembers().Select(static member => member.Name),
             StringComparer.Ordinal) { schemaType.Name };
-        propertyNames = new HashSet<string>(schemaType.GetMembers().OfType<IPropertySymbol>()
-            .Where(static property => !property.IsStatic && !property.IsIndexer && !property.IsImplicitlyDeclared)
+        propertyNames = new HashSet<string>(SchemaProperties.GetProperties(schemaType)
             .Select(static property => property.Name), StringComparer.Ordinal);
+        reserved.UnionWith(propertyNames);
         // Allocate stable API names before property-derived helpers can claim one of them.
         foreach (var name in new[]
         {

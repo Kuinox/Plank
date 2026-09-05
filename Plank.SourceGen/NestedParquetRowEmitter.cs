@@ -1426,12 +1426,7 @@ static class NestedParquetRowEmitter
         => node.Kind is NodeKind.List or NodeKind.Map || node.Children.Any(ContainsCollection);
 
     static ImmutableArray<IPropertySymbol> GetProperties(INamedTypeSymbol type)
-        => type.GetMembers().OfType<IPropertySymbol>()
-            .Where(static property => !property.IsStatic && !property.IsIndexer && !property.IsImplicitlyDeclared)
-            .OrderBy(static property => property.Locations.FirstOrDefault()?.SourceTree?.FilePath, StringComparer.Ordinal)
-            .ThenBy(static property => property.Locations.FirstOrDefault()?.SourceSpan.Start ?? int.MaxValue)
-            .ThenBy(static property => property.Name, StringComparer.Ordinal)
-            .ToImmutableArray();
+        => SchemaProperties.GetProperties(type);
 
     static bool HasUsableConstructor(INamedTypeSymbol type)
         => type.TypeKind == TypeKind.Struct || type.InstanceConstructors.Any(static constructor =>
