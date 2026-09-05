@@ -1711,6 +1711,10 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (!IsEncodingSupported(column.PhysicalType, encoding))
                     diagnostics.Add(new SchemaDiagnostic(InvalidEncoding,
                         $"Encoding '{encoding}' does not support physical type '{column.PhysicalType}' for column '{column.Name}'."));
+                else if (IsDecimalClr(column.ClrTypeName) && column.PhysicalType == "ByteArray" &&
+                    encoding is "DeltaByteArray" or "DeltaLengthByteArray")
+                    diagnostics.Add(new SchemaDiagnostic(InvalidEncoding,
+                        $"Encoding '{encoding}' requires a binary CLR carrier and cannot encode decimal column '{column.Name}'."));
             }
 
             if (column.BloomFilter)

@@ -906,6 +906,14 @@ static class Encoding
             return checked(sizeof(int) + memory.Length);
         }
 
+        if (typeof(T) == typeof(decimal))
+        {
+            // BYTE_ARRAY decimals carry a length-prefixed, signed big-endian unscaled integer.
+            // Reuse the writer's conversion so sizing observes precision and scale validation too.
+            var decimalValue = Unsafe.As<T, decimal>(ref value);
+            return checked(sizeof(int) + ParquetDecimalConverter.GetByteCount(decimalValue, column));
+        }
+
         throw new InvalidOperationException(
             $"Column '{column.Name}' cannot estimate plain encoded size for value type '{typeof(T)}'.");
     }

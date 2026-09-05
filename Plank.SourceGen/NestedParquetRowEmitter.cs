@@ -1250,12 +1250,6 @@ static class NestedParquetRowEmitter
         var userType = GetTypeName(type);
         var nonNullableType = GetNonNullableType(type);
         var normalized = GetTypeName(nonNullableType.WithNullableAnnotation(NullableAnnotation.NotAnnotated));
-        if (normalized == "decimal")
-        {
-            scalar = default!;
-            error = $"Unsupported nested scalar CLR type '{type.ToDisplayString()}'.";
-            return false;
-        }
         if (!ParquetRowGenerator.TryExtractColumn(type, nullableAnnotation,
                 allowOverrides ? property : null, out var column, out error))
         {
@@ -1287,8 +1281,10 @@ static class NestedParquetRowEmitter
             "string" or "byte[]" or "global::System.ReadOnlyMemory<byte>" or "global::System.Guid" or
             "global::System.DateOnly" or "global::System.DateTime" or "global::System.DateTimeOffset" or
             "global::System.TimeOnly";
+        // Decimal is materialized by the typed row reader even when its physical carrier is binary.
+        // Guid/string/binary values use the span reader and their explicit conversions instead.
         scalar = new Scalar(userType, normalized, column, storageType, supportsNestedStorage,
-            physicalType is "ByteArray" or "FixedLenByteArray" or "Int96");
+            normalized != "decimal" && (physicalType is "ByteArray" or "FixedLenByteArray" or "Int96"));
         error = string.Empty;
         return true;
     }
@@ -1451,7 +1447,7 @@ static class NestedParquetRowEmitter
         => type.ToDisplayString(TypeNameFormat);
 
     static bool IsNonNullableValueType(string type)
-        => type is "bool" or "byte" or "ushort" or "int" or "uint" or "long" or "ulong" or "float" or "double" or
+        => type is "bool" or "byte" or "ushort" or "int" or "uint" or "long" or "ulong" or "float" or "double" or "decimal" or
             "global::System.DateOnly" or "global::System.DateTime" or "global::System.DateTimeOffset" or
             "global::System.TimeOnly" or "global::System.Guid" or "global::System.ReadOnlyMemory<byte>";
 
