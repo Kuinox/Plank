@@ -156,10 +156,12 @@ internal sealed class GeneratedRowReaderE2ETests
     }
 
     [Test]
-    public async Task GeneratedRowReaderAllowsRequiredFileColumnForOptionalGeneratedColumn()
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public async Task GeneratedRowReaderAllowsRequiredFileColumnForOptionalGeneratedColumn(ParquetDataPageVersion pageVersion)
     {
         using var stream = CreateEvolvingFile(includeAdded: true, addedOptional: false, idPhysicalType: Plank.Schema.ParquetPhysicalType.Int32,
-            maybeOptional: false);
+            maybeOptional: false, pageVersion: pageVersion);
         using var reader = EvolvingRowSchema.CreateRowReader(stream,
             EvolvingRowSchema.Projection.Maybe, schemaEvolution: MissingColumnEvolution);
 
@@ -339,7 +341,7 @@ internal sealed class GeneratedRowReaderE2ETests
     }
 
     static MemoryStream CreateEvolvingFile(bool includeAdded, bool addedOptional, Plank.Schema.ParquetPhysicalType idPhysicalType,
-        bool maybeOptional)
+        bool maybeOptional, ParquetDataPageVersion pageVersion = ParquetDataPageVersion.V2)
     {
         var columns = new List<Plank.Schema.ColumnDefinition>
         {
@@ -357,7 +359,7 @@ internal sealed class GeneratedRowReaderE2ETests
 
         var schema = new Plank.Schema.ParquetSchema([.. columns]);
         var stream = new MemoryStream();
-        var writer = schema.CreateWriter(stream);
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions { DataPageVersion = pageVersion });
         var rowGroup = writer.StartRowGroup();
 
         if (idPhysicalType == Plank.Schema.ParquetPhysicalType.Int64)

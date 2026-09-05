@@ -1,5 +1,7 @@
 using ParquetSharp;
 using Plank.Schema;
+using Plank.Writing;
+using ParquetDataPageVersion = Plank.Writing.ParquetDataPageVersion;
 
 namespace Plank.Tests.E2E;
 
@@ -20,6 +22,36 @@ internal sealed class CustomValueConverterE2ETests
         new(11),
         null
     ];
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void RequiredFileValuesPreserveRequestedNullableConverter(ParquetDataPageVersion version)
+    {
+        var physical = new ParquetSchema([ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int32)]);
+        var requested = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32,
+                converter: new CustomMappedValueConverter())
+        ]);
+        int[] expected = [7, 11, 42, -3];
+        using var output = new MemoryStream();
+        using (var writer = physical.CreateWriter(output, new ParquetWriterOptions
+               { Compression = CompressionKind.None, DataPageVersion = version }))
+        {
+            var column = writer.CreateSerializedColumn<int>(physical.LeafColumns[0]);
+            column.Serialize(expected);
+            writer.StartRowGroup().Write(column);
+            writer.CloseFile();
+        }
+        using var input = new MemoryStream(output.ToArray());
+        using var reader = requested.CreateReader(input);
+        var values = new List<int?>();
+        foreach (var buffer in reader.RowGroups[0].Column<CustomMappedValue?>(0))
+            foreach (var value in buffer.Values)
+                values.Add(value?.Value);
+        if (!values.ToArray().AsSpan().SequenceEqual(expected.Select(value => (int?)value).ToArray()))
+            throw new InvalidOperationException("Required-to-optional evolution lost the requested custom converter.");
+    }
 
     [Test]
     public async Task RuntimeSchemaRoundTripsRequiredAndOptionalValues()
