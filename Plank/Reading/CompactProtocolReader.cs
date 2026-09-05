@@ -147,6 +147,8 @@ ref struct CompactProtocolReader
         var available = Remaining;
         if (length <= available)
             return (int)length;
+        if (length > int.MaxValue)
+            throw new CorruptParquetException($"Compact protocol binary length {length} exceeds Int32.MaxValue.");
         if (_bufferMayBeTruncated)
             throw new CompactProtocolTruncatedException(checked((int)(length - available)));
         throw new CorruptParquetException(

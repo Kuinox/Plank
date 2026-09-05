@@ -8,6 +8,13 @@ static class PageHeaderReader
     internal static PageHeader Read(ReadOnlySpan<byte> buffer, uint maxUncompressedPageSize = uint.MaxValue)
         => Read(buffer, maxUncompressedPageSize, bufferMayBeTruncated: false);
 
+    internal static int GetRequiredBufferLength(int length, int missingBytes, int maximumLength)
+    {
+        if (missingBytes <= 0 || missingBytes > maximumLength - length)
+            throw new CorruptParquetException("Page header exceeds its remaining column chunk or indexed page length.");
+        return length + missingBytes;
+    }
+
     /// <summary>
     /// Parses a header out of a buffer that may not hold all of it yet, reporting
     /// how many more bytes are needed instead of failing.

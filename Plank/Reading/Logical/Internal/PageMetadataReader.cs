@@ -7,7 +7,7 @@ namespace Plank.Reading.Logical.Internal;
 
 static class PageMetadataReader
 {
-    const int MaxPageHeaderLength = 64 * 1024;
+    const int InitialPageHeaderLength = 64 * 1024;
 
     internal static ParquetDataPageMetadataCollection Open(ParquetFileReader reader, int rowGroupOrdinal,
         int physicalColumnOrdinal, LeafColumn definition, ulong rowCount)
@@ -391,37 +391,48 @@ static class PageMetadataReader
         ulong totalUncompressedSize, bool copyStatistics, ref StatisticsBufferBuilder statisticsBuilder,
         out EncodedStatistics copiedStatistics)
     {
-        var maxLength = Math.Min(remainingChunkLength, MaxPageHeaderLength);
-        using var buffer = reader.BufferPool.Rent(checked((uint)maxLength));
+        var maxLength = remainingChunkLength;
+        var buffer = reader.BufferPool.Rent(checked((uint)Math.Min(maxLength, InitialPageHeaderLength)));
         var maxUncompressedPageSize = (uint)Math.Min(totalUncompressedSize, uint.MaxValue);
         var length = 0;
         var missingBytes = 1;
-        while (length < maxLength)
+        try
         {
-            // One byte to start, because the first parse cannot know anything, and
-            // afterwards exactly the shortfall the parse reported.
-            var wanted = (int)Math.Min((long)length + Math.Max(missingBytes, 1), maxLength);
-            reader.Source.ReadExactly(offset + (ulong)length, buffer.Span[length..wanted]);
-            length = wanted;
+            while (true)
+            {
+                // Grow storage as necessary, but read exactly the shortfall so metadata
+                // inspection never reads page payload bytes.
+                var wanted = PageHeaderReader.GetRequiredBufferLength(length, missingBytes, maxLength);
+                if (wanted > buffer.Length)
+                {
+                    var capacity = (uint)Math.Min(maxLength, Math.Max((long)buffer.Length * 2, wanted));
+                    var grown = reader.BufferPool.Rent(capacity);
+                    buffer.Span[..length].CopyTo(grown.Span);
+                    buffer.Dispose();
+                    buffer = grown;
+                }
+                reader.Source.ReadExactly(offset + (ulong)length, buffer.Span[length..wanted]);
+                length = wanted;
 
-            if (!PageHeaderReader.TryRead(buffer.Span[..length], maxUncompressedPageSize, out var header,
-                    out missingBytes))
-                continue;
+                if (!PageHeaderReader.TryRead(buffer.Span[..length], maxUncompressedPageSize, out var header,
+                        out missingBytes))
+                    continue;
 
-            var statistics = header.Statistics;
-            if (header.Type == PageHeaderType.DataPageV2 && !statistics.HasNullCount)
-                statistics = WithNullCount(statistics, header.NullCount);
+                var statistics = header.Statistics;
+                if (header.Type == PageHeaderType.DataPageV2 && !statistics.HasNullCount)
+                    statistics = WithNullCount(statistics, header.NullCount);
 
-            // The offsets in EncodedStatistics are relative to the window that was
-            // parsed, so that whole window is what Copy has to slice out of.
-            copiedStatistics = copyStatistics
-                ? statisticsBuilder.Copy(buffer.Span[..length], statistics)
-                : default;
-            return header;
+                // Statistics offsets refer to the complete parsed header window.
+                copiedStatistics = copyStatistics
+                    ? statisticsBuilder.Copy(buffer.Span[..length], statistics)
+                    : default;
+                return header;
+            }
         }
-
-        throw new CorruptParquetException(
-            $"Page header exceeds the supported maximum length of {MaxPageHeaderLength} bytes.");
+        finally
+        {
+            buffer.Dispose();
+        }
     }
 
     static EncodedStatistics WithNullCount(EncodedStatistics statistics, uint nullCount)
