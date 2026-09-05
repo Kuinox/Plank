@@ -10,6 +10,12 @@ Add [`[ParquetSchema]`](xref:Plank.Schema.ParquetSchemaAttribute) to a partial c
 
 Each property becomes a column. Non-nullable properties are required and nullable properties are optional.
 
+Use plain DTOs with properties declared directly on the type. Schema classes and nested object types
+must not inherit from a custom base class, even an empty one. This also applies to nested objects in
+arrays and lists. The generator reports `PLANKGEN003` instead of silently omitting inherited data.
+Interface implementation is allowed, and nested structs remain supported. Map inherited domain models
+into dedicated DTOs before writing them.
+
 Plank generates the readers and writers for `EventSchema`. See [Reading](reading/index.md) and [Writing](writing/index.md) for usage.
 
 Schema properties keep their declared names in generated row views and column selectors. If a generated

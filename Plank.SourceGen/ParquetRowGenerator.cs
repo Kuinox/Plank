@@ -172,6 +172,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             return;
         }
 
+        if (!ValidateDtoInheritance(schemaType, out var inheritanceError))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
+                schemaType.Locations.FirstOrDefault(), inheritanceError));
+            return;
+        }
+
         if (NestedParquetRowEmitter.TryEmit(context, schemaType, compilation))
             return;
 
@@ -229,6 +236,22 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         var source = BuildSource(schemaType, columns, mappedColumns.ToImmutable());
         context.AddSource(GetHintName(schemaType), source);
+    }
+
+    internal static bool ValidateDtoInheritance(INamedTypeSymbol type, out string error)
+    {
+        if (type.TypeKind == TypeKind.Class &&
+            type.BaseType is { SpecialType: not SpecialType.System_Object } baseType)
+        {
+            error = $"Schema DTO type '{type.WithNullableAnnotation(NullableAnnotation.NotAnnotated).ToDisplayString()}' " +
+                $"inherits from '{baseType.ToDisplayString()}'. " +
+                "Schema DTOs must not inherit from a custom base class. " +
+                "Declare the properties directly on a plain DTO instead.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
     }
 
     static string GetHintName(INamedTypeSymbol schemaType)
