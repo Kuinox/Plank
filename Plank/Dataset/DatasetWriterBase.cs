@@ -78,7 +78,7 @@ public abstract class DatasetWriterBase<TRow>
 
         options.Validate();
         _schema = schema;
-        _columns = columns;
+        _columns = DatasetBufferSlot.CreateSnapshotColumns(columns);
         _options = options;
         var createFileParts = filePath is not null;
         var writerOptions = createFileParts ? options.WriterOptions : options.AppendOptions.WriterOptions;
@@ -129,7 +129,7 @@ public abstract class DatasetWriterBase<TRow>
     /// <param name="rowIndex">The destination row index.</param>
     /// <param name="value">The value to set.</param>
     protected void SetColumnValue<T>(int slotIndex, int columnIndex, int rowIndex, T value)
-        => GetSlot(slotIndex).SetValue(columnIndex, rowIndex, value);
+        => GetSlot(slotIndex).SetSnapshotValue(columnIndex, rowIndex, value);
 
     /// <summary>Gets the UTF-8 path for one schema row.</summary>
     /// <param name="row">The schema row.</param>
@@ -149,11 +149,11 @@ public abstract class DatasetWriterBase<TRow>
 
         for (var i = 0; i < _states.Length; i++)
         {
-            var slot = new DatasetBufferSlot(_columns, _rowBufferCapacity);
+            var slot = new DatasetBufferSlot(_columns, _rowBufferCapacity, _bufferPool);
             _states[i] = new PartitionState(slot, i);
         }
 
-        _parkedRows = new DatasetBufferSlot(_columns, _pendingRowCapacity);
+        _parkedRows = new DatasetBufferSlot(_columns, _pendingRowCapacity, _bufferPool);
         _initialized = true;
     }
 
@@ -270,7 +270,7 @@ public abstract class DatasetWriterBase<TRow>
             }
         }
 
-        _parkedRows.ResetForReuse();
+        _parkedRows.ResetForReuseAndSize();
         failure?.Throw();
     }
 
@@ -279,8 +279,16 @@ public abstract class DatasetWriterBase<TRow>
         state.LastUse = unchecked(++_clock);
         if (state.RolloverPending)
             Rollover(state);
-        CopyRow(row, state.SlotIndex, state.Slot.Count);
-        state.Slot.NextSized();
+        try
+        {
+            CopyRow(row, state.SlotIndex, state.Slot.Count);
+            state.Slot.NextSized();
+        }
+        catch
+        {
+            state.Slot.ClearRow(state.Slot.Count);
+            throw;
+        }
         if (state.Slot.BufferedSizeBytes >= _targetRowGroupSizeBytes ||
             state.Slot.IsFull && !state.Slot.Grow())
             WriteRows(state);
@@ -421,7 +429,7 @@ public abstract class DatasetWriterBase<TRow>
             if (state.RolloverPending)
                 Rollover(state);
 
-            _parkedRows.CopyRowTo(current, state.Slot, state.Slot.Count);
+            _parkedRows.MoveRowTo(current, state.Slot, state.Slot.Count);
             state.Slot.NextSized();
             RemoveParkedRow(current, previous, next);
             _pendingKeys[keyIndex].RowCount--;
@@ -805,31 +813,6 @@ public abstract class DatasetWriterBase<TRow>
         internal ulong LastUse;
         internal bool RolloverPending;
         internal bool Active;
-    }
-
-    sealed class DatasetBufferSlot : RowBufferSlot
-    {
-        readonly RowBufferSizeTracker _sizeTracker;
-
-        internal DatasetBufferSlot(RowApiColumnDescriptor[] columns, int rowCount)
-            : base(columns, rowCount)
-        {
-            _sizeTracker = CreateSizeTracker();
-        }
-
-        internal ulong BufferedSizeBytes { get; private set; }
-
-        internal void NextSized()
-        {
-            BufferedSizeBytes = checked(BufferedSizeBytes + _sizeTracker.GetRowSize(Count));
-            Next();
-        }
-
-        internal void ResetForReuseAndSize()
-        {
-            ResetForReuse();
-            BufferedSizeBytes = 0;
-        }
     }
 
     struct PendingKeyState
