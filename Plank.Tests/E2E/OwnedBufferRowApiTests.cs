@@ -22,7 +22,9 @@ public sealed partial class OwnedUtf8StringRowSchema
 internal sealed class OwnedBufferRowApiTests
 {
     [Test]
-    public void GeneratedRowApiAcceptsImemoryOwnerAndDisposesOwnersAfterSlotReuse()
+    [Arguments(false)]
+    [Arguments(true)]
+    public void GeneratedRowApiAcceptsImemoryOwnerAndDisposesOwnersAfterSlotReuse(bool useCursor)
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-owned-buffer-row-api-{Guid.NewGuid():N}.parquet");
         var owners = new List<TrackingMemoryOwner>(1024);
@@ -37,13 +39,22 @@ internal sealed class OwnedBufferRowApiTests
                     TargetRowGroupSizeBytes = 1024
                 });
 
+                var cursor = writer.CreateCursor();
                 for (var i = 0; i < 1024; i++)
                 {
                     var owner = new TrackingMemoryOwner([(byte)(i & 0xFF)]);
                     owners.Add(owner);
 
-                    var row = writer.GetRow();
-                    row.SetPayload(owner);
+                    if (useCursor)
+                    {
+                        cursor.NextRow();
+                        cursor.SetPayload(owner);
+                    }
+                    else
+                    {
+                        var row = writer.GetRow();
+                        row.SetPayload(owner);
+                    }
                 }
 
                 writer.Complete();

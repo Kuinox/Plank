@@ -565,6 +565,8 @@ static class NestedParquetRowEmitter
             new ParquetRowGenerator.RowSizeColumn(leaf.Node.Scalar!.PhysicalType, leaf.StorageShapeType,
                 leaf.Node.Scalar.TypeLength,
                 leaf.CollectionLevels.IsEmpty && leaf.Node.Scalar.StorageType != "byte[]")));
+        var cursorName = ParquetRowGenerator.GetAvailableGeneratedMemberName(schemaType, "RowCursor");
+        var nextRowName = ParquetRowGenerator.GetAvailableGeneratedMemberName(schemaType, "NextRow");
         var rowTypeName = EscapeIdentifier(schemaType.Name);
         builder.AppendLine("    public struct Writer");
         builder.AppendLine("    {");
@@ -604,7 +606,11 @@ static class NestedParquetRowEmitter
             builder.Append("            _rowsPerGroup = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
         builder.AppendLine("        }");
         builder.AppendLine("        protected override BufferSlot CreateSlot(global::Plank.Writing.ParquetWriter writer) => new(writer, RowBatchSize);");
-        builder.AppendLine("        public Row GetRow()");
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+        builder.AppendLine("        public Row GetRow() => GetSlotForNextRow().GetRow();");
+        RowCursorEmitter.AppendFactory(builder, cursorName);
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+        builder.AppendLine("        internal BufferSlot GetSlotForNextRow()");
         builder.AppendLine("        {");
         builder.AppendLine("            var slot = GetSlotForRow();");
         builder.AppendLine("            if (_rowPending)");
@@ -615,7 +621,7 @@ static class NestedParquetRowEmitter
                 .Append(rowSizePlan.FixedSizeExpression).AppendLine("));");
         builder.AppendLine("            else");
         builder.AppendLine("                _rowPending = true;");
-        builder.AppendLine("            return slot.GetRow();");
+        builder.AppendLine("            return slot;");
         builder.AppendLine("        }");
         builder.AppendLine("        public void Complete()");
         builder.AppendLine("        {");
@@ -690,6 +696,7 @@ static class NestedParquetRowEmitter
         builder.AppendLine();
         builder.AppendLine("    public sealed class BufferSlot : global::Plank.RowApi.RowBufferSlot");
         builder.AppendLine("    {");
+        RowCursorEmitter.AppendSlotMembers(builder);
         for (var i = 0; i < model.Leaves.Length; i++)
             builder.Append("        internal ").Append(model.Leaves[i].StorageShapeType).Append("[] _column")
                 .Append(i).AppendLine(" = null!;");
@@ -706,6 +713,7 @@ static class NestedParquetRowEmitter
         builder.AppendLine("            RefreshBuffers();");
         builder.AppendLine("        }");
         builder.AppendLine();
+        builder.AppendLine("        [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
         builder.AppendLine("        internal Row GetRow()");
         builder.AppendLine("        {");
         builder.AppendLine("            return new Row(Index, this);");
@@ -740,6 +748,8 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
+        builder.AppendLine("    /// <summary>A writable view over the current row buffers.</summary>");
+        builder.AppendLine("    /// <remarks>Use only until the writer advances, completes, resets, or is disposed.</remarks>");
         builder.AppendLine("    public readonly ref struct Row");
         builder.AppendLine("    {");
         builder.AppendLine("        readonly int _index;");
@@ -752,20 +762,31 @@ static class NestedParquetRowEmitter
         for (var i = 0; i < model.Roots.Length; i++)
         {
             builder.AppendLine();
-            AppendWriteRowProperty(builder, model.Roots[i]);
+            AppendWriteRowProperty(builder, model.Roots[i],
+                leaf => UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"));
         }
         builder.AppendLine("    }");
+        RowCursorEmitter.AppendCursor(builder, cursorName, nextRowName,
+            ParquetRowGenerator.GetAvailableGeneratedMemberName(schemaType, "Refresh"),
+            ParquetRowGenerator.GetAvailableGeneratedMemberName(schemaType, "Buffers"),
+            model.Leaves.Select(static leaf => leaf.StorageShapeType).ToArray(), () =>
+            {
+                foreach (var root in model.Roots)
+                    AppendWriteRowProperty(builder, root,
+                        leaf => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref _buffers._column{leaf.Ordinal}, _index)");
+            });
     }
 
-    static void AppendWriteRowProperty(StringBuilder builder, Node root)
+    static void AppendWriteRowProperty(StringBuilder builder, Node root, Func<Leaf, string> element)
     {
         if (root.Kind == NodeKind.Leaf)
         {
             var leaf = root.Leaves[0];
-            builder.Append("        public ref ").Append(root.UserType).Append(' ')
-                .Append(EscapeIdentifier(root.PropertyName)).Append(" => ref ")
-                .Append(UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"))
-                .AppendLine(";");
+            builder.Append("        public ").Append(root.UserType).Append(' ')
+                .Append(EscapeIdentifier(root.PropertyName)).AppendLine();
+            builder.AppendLine("        {");
+            builder.Append("            set => ").Append(element(leaf)).AppendLine(" = value;");
+            builder.AppendLine("        }");
             return;
         }
 
@@ -773,8 +794,7 @@ static class NestedParquetRowEmitter
             .Append(EscapeIdentifier(root.PropertyName)).AppendLine();
         builder.AppendLine("        {");
         builder.Append("            get => Read").Append(ToIdentifier(root.PropertyName)).Append('(');
-        AppendLeafArguments(builder, root,
-            static leaf => UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"));
+        AppendLeafArguments(builder, root, element);
         builder.AppendLine(");");
         builder.AppendLine("            set");
         builder.AppendLine("            {");
@@ -782,7 +802,7 @@ static class NestedParquetRowEmitter
         {
             var leaf = root.Leaves[i];
             builder.Append("                ")
-                .Append(UncheckedBufferElement($"_ownerSlot._column{leaf.Ordinal}", "_index"))
+                .Append(element(leaf))
                 .Append(" = Project")
                 .Append(leaf.UniqueName).AppendLine("(value);");
         }
