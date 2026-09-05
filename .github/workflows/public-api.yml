@@ -1,0 +1,71 @@
+name: Public API
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  pull-requests: write
+
+concurrency:
+  group: public-api-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Report public API changes
+    if: github.event.action != 'edited' || github.event.changes.base
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # Only reads GitHub metadata; never checks out or runs pull request code.
+      - name: Update PR comment
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const params = { ...context.repo, pull_number: context.issue.number };
+            const { data: pr } = await github.rest.pulls.get(params);
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              ...params,
+              per_page: 100,
+            });
+            if (files.length < pr.changed_files) {
+              throw new Error('GitHub did not return the full PR file list. Cannot report API changes.');
+            }
+
+            const apiFiles = [
+              'Plank/PublicAPI.Shipped.txt',
+              'Plank/PublicAPI.Unshipped.txt',
+            ];
+            const changed = apiFiles.filter(path => files.some(file =>
+              file.filename === path || file.previous_filename === path));
+            const message = changed.length
+              ? '**Public API changed.**\n\n' + changed.map(path => '- `' + path + '`').join('\n')
+              : '**Public API unchanged.**';
+            const marker = '<!-- plank-public-api -->';
+            const body = marker + '\n' + message;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const previous = comments.find(comment =>
+              comment.user?.type === 'Bot' && comment.body?.startsWith(marker));
+
+            if (!previous) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            } else if (previous.body !== body) {
+              await github.rest.issues.updateComment({
+                ...context.repo,
+                comment_id: previous.id,
+                body,
+              });
+            }
+
+            await core.summary.addRaw(message).write();
