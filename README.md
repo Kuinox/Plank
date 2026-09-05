@@ -43,6 +43,6 @@ The documentation source is under `docs/`. Build it with:
 pwsh ./docs/build.ps1
 ```
 
-The examples are included from `Samples/Plank.Sample`. Edit them there; CI and the docs build run them.
+The docs build runs the examples in `Samples/Plank.Sample`.
 
 Plank is under active development; public APIs and format coverage may still evolve.

@@ -9,7 +9,7 @@ It can write any number of output files while keeping only a fixed number open a
 Each output file follows the same row-group and rollover targets as the row writer.
 
 The examples use [EventSchema](../schema.md#define-a-schema) and the `FileParquetSource`
-adapter below. Add `using Plank;`, `using Plank.Writing;`, and `using System.Text;`.
+adapter below.
 
 ## File sources
 

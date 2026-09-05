@@ -4,8 +4,7 @@ Declare a schema to keep the C# model and parquet file aligned on column names, 
 
 ## Define a schema
 
-Add `using Plank.Schema;` and apply [`[ParquetSchema]`](xref:Plank.Schema.ParquetSchemaAttribute)
-to a partial class:
+Add [`[ParquetSchema]`](xref:Plank.Schema.ParquetSchemaAttribute) to a partial class:
 
 [!code-csharp[](../../Samples/Plank.Sample/EventSchema.cs#EventSchema)]
 
@@ -66,7 +65,7 @@ Without `AllowAllocatingValues`, the source generator reports an error for every
 ## Decimal values
 
 Set `Precision` to the total number of digits and `Scale` to the number of fractional digits.
-`Precision` is required; `Scale` defaults to zero:
+`Precision` is required and `Scale` defaults to zero:
 
 [!code-csharp[](../../Samples/Plank.Sample/DecimalApiSample.cs#DecimalSchema)]
 
