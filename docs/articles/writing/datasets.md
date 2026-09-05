@@ -1,67 +1,46 @@
 # Dataset writer layer
 
-The dataset writer sits above the [row write layer](rows.md). It routes rows to multiple Parquet files.
+The dataset writer sits above the [row write layer](rows.md). It routes mixed rows to multiple
+Parquet files while keeping only a fixed number open at a time. Each output file follows the
+same row-group and rollover targets as the row writer.
 
-Use it to write a partitioned dataset when rows belonging to different files are mixed together.
+The examples use [EventSchema](../schema.md#define-a-schema) and the `FileParquetSource`
+adapter below. Add `using Plank;`, `using Plank.Writing;`, and `using System.Text;`.
 
-It can write any number of output files while keeping only a fixed number open at a time.
+## Provide reusable file sources
 
-Each output file follows the same row-group and rollover targets as the row writer.
+A dataset writer needs sources that can open, read, write, close, and reopen paths. Copy this
+local-file adapter into your project, or implement `IParquetReadWriteSource` for your storage:
+
+[!code-csharp[](../../../Samples/Plank.Sample/FileParquetSource.cs#FileParquetSource)]
+
+The adapter creates missing parent directories and respects the `FileMode` requested by Plank.
+Each source owns at most one open file. Dispose the writer before disposing its sources.
 
 ## Route rows
 
-The route returns the UTF-8 path that should receive each row:
+The route returns the UTF-8 path that should receive each row. Static UTF-8 paths do not need
+an allocation. This complete write operation uses one source to handle two output paths:
 
-```csharp-invisible
-IParquetReadWriteSource[] files = [file1, file2];
-```
+[!code-csharp[](../../../Samples/Plank.Sample/DatasetApiSample.cs#StaticDataset)]
 
-```csharp
-var writer = EventSchema.CreateDatasetWriter(
-    static (row, _, out ParquetBuffer? allocation) =>
-    {
-        allocation = null;
-        return row.Id % 2 == 0
-            ? "events/even.parquet"u8
-            : "events/odd.parquet"u8;
-    },
-    files);
-```
+`files.Length` limits the number of files kept open; it does not limit the number of partitions.
+Plank closes and reuses a source when another path needs it. `Queue()` copies each row into
+writer buffers. Disposing the writer writes remaining rows and closes all open files.
 
-Static UTF-8 paths do not need an allocation. For paths built at runtime, use the provided buffer pool:
+Paths here are relative to the process working directory. Use a fresh output directory for a
+new dataset: if a path already contains a compatible Parquet file, Plank appends to it. Running
+the example again adds the rows again; it does not overwrite or deduplicate them.
 
-```csharp
-var pooledWriter = EventSchema.CreateDatasetWriter(
-    static (row, pool, out ParquetBuffer? allocation) =>
-    {
-        var path = $"events/bucket={row.Id % 16}.parquet";
-        var buffer = pool.Rent(checked((uint)Encoding.UTF8.GetByteCount(path)));
-        var length = Encoding.UTF8.GetBytes(path, buffer.Span);
-        allocation = buffer;
-        return buffer.Span[..length];
-    },
-    files);
-```
+## Build paths at runtime
 
-Plank releases the returned allocation when it no longer needs the path.
+For dynamic paths, return storage rented from the provided buffer pool and hand its ownership
+to Plank through `allocation`:
 
-`files` contains the reusable read/write sources. Its length is the maximum number of files kept open.
+[!code-csharp[](../../../Samples/Plank.Sample/DatasetApiSample.cs#AllocatedDataset)]
 
-## Write rows
+Plank releases the returned allocation when it no longer needs the path. Do not dispose that
+buffer or reuse its span after returning it.
 
-Queue rows in any mix:
-
-```csharp
-foreach (EventSchema row in events)
-    writer.Queue(row);
-```
-
-`Queue()` copies the row into the writer buffers.
-
-## Dispose the writer
-
-```csharp
-writer.Dispose();
-```
-
-This writes the remaining rows and closes every open file.
+The [runnable sample](https://github.com/Kuinox/Plank/tree/master/Samples/Plank.Sample)
+reads back each partition and checks both source reuse and appending on a second run.

@@ -12,6 +12,28 @@ writers, and reports incompatible mappings at build time.
 Start with [Schema](articles/schema.md), then see [Reading](articles/reading/index.md) or
 [Writing](articles/writing/index.md).
 
+## Try the examples
+
+Plank targets .NET 10. Once the package is published to your NuGet feed, create a consumer project with:
+
+```sh
+dotnet new console --framework net10.0 --name PlankDemo
+cd PlankDemo
+dotnet add package Plank
+```
+
+Define [EventSchema](articles/schema.md#define-a-schema), then use the [row writer](articles/writing/rows.md)
+and [row reader](articles/reading/rows.md) in your program. These snippets come directly from the
+[runnable sample project](https://github.com/Kuinox/Plank/tree/master/Samples/Plank.Sample).
+Before publication, or to try all examples together, run this from a source checkout:
+
+```sh
+dotnet run --project Samples/Plank.Sample --configuration Release
+```
+
+The sample creates temporary files, verifies their contents, and deletes them. A successful run
+ends with `All documentation samples passed.`
+
 ## Faster Parquet writes
 
 Plank was built to reduce the time it takes to read and write Parquet files in .NET. Once a

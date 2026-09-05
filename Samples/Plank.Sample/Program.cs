@@ -4,10 +4,19 @@ static class Program
 {
     static void Main()
     {
-        var columnPath = ColumnApiSample.Run();
-        Console.WriteLine($"Column API sample wrote: {columnPath}");
-
-        var rowPath = RowApiSample.Run();
-        Console.WriteLine($"Row API sample wrote: {rowPath}");
+        var paths = new List<string>();
+        try
+        {
+            paths.Add(ColumnApiSample.Run());
+            paths.Add(RowApiSample.Run());
+            DecimalApiSample.Run();
+            DatasetApiSample.Run();
+            Console.WriteLine("All documentation samples passed.");
+        }
+        finally
+        {
+            foreach (var path in paths)
+                File.Delete(path);
+        }
     }
 }
