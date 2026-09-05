@@ -41,7 +41,7 @@ public readonly struct RowGroup
         var reader = GetReader();
         reader.ValidateRowGroup(this);
         var columnOrdinal = reader.GetColumnOrdinal(column);
-        ValidateFlatProjection(column);
+        ValidateFlatProjection(column, columnOrdinal);
         ValidatePhysicalType<T>(column.Column);
         return new RowGroupColumn<T>(this, column, columnOrdinal);
     }
@@ -68,7 +68,7 @@ public readonly struct RowGroup
             throw new ArgumentOutOfRangeException(nameof(columnOrdinal), columnOrdinal,
                 "Column ordinal is outside the reader schema.");
         var column = columns[columnOrdinal];
-        ValidateFlatProjection(column);
+        ValidateFlatProjection(column, columnOrdinal);
         ValidatePhysicalType<T>(column.Column);
         return new RowGroupColumn<T>(this, column, columnOrdinal);
     }
@@ -240,11 +240,19 @@ public readonly struct RowGroup
         ValidatePhysicalType<T>(column);
     }
 
-    static void ValidateFlatProjection(LeafColumn column)
+    void ValidateFlatProjection(LeafColumn column, int columnOrdinal)
     {
-        if (column.MaxRepetitionLevel == 0)
-            return;
-        throw new NotSupportedException(
-            $"Column '{column.Path}' contains repeated values; use NestedColumn<T> to read its dense values and levels.");
+        var chunk = GetColumnChunkMetadata(columnOrdinal);
+        var physicalOrdinal = chunk.PhysicalColumnOrdinal >= 0 ? chunk.PhysicalColumnOrdinal : columnOrdinal;
+        var physicalColumn = GetReader().Metadata.Schema.LeafColumns[physicalOrdinal];
+        if (column.MaxRepetitionLevel != 0 || physicalColumn.MaxRepetitionLevel != 0)
+            throw new NotSupportedException(
+                $"Column '{column.Path}' contains repeated values; use NestedColumn<T> to read its dense values and levels.");
+        // Flat decoders represent definition levels as a one-bit presence mask. Both the requested
+        // schema and the file must fit that representation; requested nullability cannot change
+        // the level bit width encoded in the file.
+        if (column.MaxDefinitionLevel > 1 || physicalColumn.MaxDefinitionLevel > 1)
+            throw new NotSupportedException(
+                $"Column '{column.Path}' contains multiple optional levels; use NestedColumn<T> to read its dense values and levels.");
     }
 }

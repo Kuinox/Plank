@@ -69,6 +69,11 @@ foreach (EventSchema.ReadRowGroup rowGroup in reader.RowGroups)
 
 Nullable schema properties generate nullable column types such as [`RowGroupColumn<int?>`](xref:Plank.Reading.Logical.RowGroupColumn`1).
 
+Flat column reads support at most one optional level along a leaf's path. For repeated
+values or multiple optional levels (such as an optional leaf inside an optional struct),
+use `rowGroup.NestedColumn<T>(column)` with a non-nullable value type. It exposes dense
+values together with definition and repetition levels; `Column<T>` rejects these shapes.
+
 ## Read binary values
 
 Binary columns use the same generic column API as other unmanaged values. Each generated binary
