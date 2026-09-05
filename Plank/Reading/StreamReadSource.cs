@@ -5,6 +5,8 @@ public sealed class StreamReadSource : IParquetReadSource
     Stream _stream;
     readonly object _gate = new();
 
+    internal Stream Stream => _stream;
+
     public StreamReadSource(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
