@@ -10,20 +10,10 @@ It can also roll over to a new file around the [512 MiB](https://iceberg.apache.
 
 ## Write rows
 
-```csharp
-using var stream = File.Create("events.parquet");
-using var writer = EventSchema.CreateRowWriter(stream);
+The example uses [EventSchema](../schema.md#define-a-schema). Set `path` to a new file path,
+such as `"events.parquet"`; `File.Create` replaces an existing file.
 
-for (var id = 0; id < 100; id++)
-{
-    var row = writer.GetRow();
-    row.Id = id;
-    row.Name = "event"u8.ToArray();
-    row.OccurredAt = DateTimeOffset.UtcNow;
-}
-
-writer.Complete();
-```
+[!code-csharp[](../../../Samples/Plank.Sample/RowApiSample.cs#WriteRows)]
 
 `writer.GetRow()` commits the previously returned row and returns a small view over the next reusable row buffer.
 Assign the generated row properties to write into their corresponding column buffers.
@@ -73,3 +63,5 @@ Neither the writer nor its cursors support concurrent writes.
 The row writer handles row-group construction, encoding, and file finalization. `Complete()` commits the file. If
 writing fails first, `Dispose()` stops the workers and releases resources without committing the incomplete file.
 A disposed writer cannot be reused.
+
+Continue with [Read rows](../reading/rows.md) to read back the populated, null, and empty names.

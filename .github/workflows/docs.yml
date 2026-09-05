@@ -8,6 +8,7 @@ on:
       - ".config/dotnet-tools.json"
       - ".github/workflows/docs.yml"
       - "docs/**"
+      - "Samples/Plank.Sample/**"
       - "Plank/**"
       - "Plank.SourceGen/**"
       - "Plank.Native.Zlib/artifacts/packages/**"
