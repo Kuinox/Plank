@@ -12,8 +12,8 @@ sealed class DatasetBufferSlot : RowBufferSlot
     readonly RowBufferSizeTracker _sizeTracker;
     readonly IParquetBufferPool _bufferPool;
     readonly RowApiColumnDescriptor[] _columns;
-    readonly SnapshotChunk?[]?[] _owners;
-    SnapshotChunk? _currentChunk;
+    readonly SnapshotMemory[]?[] _snapshots;
+    ParquetBuffer _currentChunk;
     int _chunkOffset;
 
     internal DatasetBufferSlot(RowApiColumnDescriptor[] columns, int rowCount, IParquetBufferPool bufferPool)
@@ -22,11 +22,11 @@ sealed class DatasetBufferSlot : RowBufferSlot
         _columns = columns;
         _bufferPool = bufferPool;
         _sizeTracker = CreateSizeTracker();
-        _owners = new SnapshotChunk?[columns.Length][];
+        _snapshots = new SnapshotMemory[columns.Length][];
         for (var i = 0; i < columns.Length; i++)
             if (columns[i] is RowApiColumnDescriptor<ReadOnlyMemory<byte>> or
                 RowApiColumnDescriptor<ReadOnlyMemory<byte>?>)
-                _owners[i] = new SnapshotChunk?[rowCount];
+                _snapshots[i] = CreateSnapshots(rowCount);
     }
 
     internal ulong BufferedSizeBytes { get; private set; }
@@ -92,63 +92,68 @@ sealed class DatasetBufferSlot : RowBufferSlot
 
     ReadOnlyMemory<byte> Snapshot(int columnIndex, int rowIndex, ReadOnlySpan<byte> bytes)
     {
-        var owners = _owners[columnIndex]!;
-        owners[rowIndex]?.Release();
-        owners[rowIndex] = null;
+        var snapshot = _snapshots[columnIndex]![rowIndex];
+        snapshot.Reset();
         if (bytes.IsEmpty)
             return ReadOnlyMemory<byte>.Empty;
 
-        if (_currentChunk is null || bytes.Length > _currentChunk.GetSpan().Length - _chunkOffset)
+        if (bytes.Length > _currentChunk.Length - _chunkOffset)
         {
-            _currentChunk?.Release();
-            _currentChunk = null;
+            _currentChunk.Dispose();
             _chunkOffset = 0;
-            _currentChunk = new SnapshotChunk(_bufferPool.Rent(Math.Max(SnapshotChunkSize, checked((uint)bytes.Length))));
+            _currentChunk = _bufferPool.Rent(Math.Max(SnapshotChunkSize, checked((uint)bytes.Length)));
         }
 
-        var memory = _currentChunk.Memory.Slice(_chunkOffset, bytes.Length);
-        bytes.CopyTo(memory.Span);
+        bytes.CopyTo(_currentChunk.Span.Slice(_chunkOffset, bytes.Length));
+        var memory = snapshot.SetBuffer(_currentChunk.RetainSlice(_chunkOffset, bytes.Length));
         _chunkOffset += bytes.Length;
-        _currentChunk.Retain();
-        owners[rowIndex] = _currentChunk;
         return memory;
     }
 
     internal void MoveRowTo(int sourceIndex, DatasetBufferSlot destination, int destinationIndex)
     {
         CopyRowTo(sourceIndex, destination, destinationIndex);
-        for (var i = 0; i < _owners.Length; i++)
+        for (var i = 0; i < _snapshots.Length; i++)
         {
-            if (_owners[i] is not { } owners)
+            if (_snapshots[i] is not { } snapshots)
                 continue;
-            destination._owners[i]![destinationIndex] = owners[sourceIndex];
-            owners[sourceIndex] = null;
+            // The copied memory refers to this adapter. Move it with its retained slice and
+            // give the parked position the destination's spare adapter for its next value.
+            var target = destination._snapshots[i]!;
+            (snapshots[sourceIndex], target[destinationIndex]) = (target[destinationIndex], snapshots[sourceIndex]);
         }
     }
 
     internal new void ClearRow(int index)
     {
         base.ClearRow(index);
-        for (var i = 0; i < _owners.Length; i++)
-        {
-            if (_owners[i] is not { } owners)
-                continue;
-            owners[index]?.Release();
-            owners[index] = null;
-        }
+        for (var i = 0; i < _snapshots.Length; i++)
+            _snapshots[i]?[index].Reset();
     }
 
     protected override void OnBuffersResized()
     {
-        for (var i = 0; i < _owners.Length; i++)
+        for (var i = 0; i < _snapshots.Length; i++)
         {
-            if (_owners[i] is null)
+            if (_snapshots[i] is not { } snapshots)
                 continue;
             var rowCount = _columns[i] is RowApiColumnDescriptor<ReadOnlyMemory<byte>>
                 ? GetValues<ReadOnlyMemory<byte>>(i).Length
                 : GetValues<ReadOnlyMemory<byte>?>(i).Length;
-            Array.Resize(ref _owners[i], rowCount);
+            var previousCount = snapshots.Length;
+            Array.Resize(ref snapshots, rowCount);
+            for (var rowIndex = previousCount; rowIndex < rowCount; rowIndex++)
+                snapshots[rowIndex] = new SnapshotMemory();
+            _snapshots[i] = snapshots;
         }
+    }
+
+    static SnapshotMemory[] CreateSnapshots(int rowCount)
+    {
+        var snapshots = new SnapshotMemory[rowCount];
+        for (var i = 0; i < rowCount; i++)
+            snapshots[i] = new SnapshotMemory();
+        return snapshots;
     }
 
     internal void NextSized()
@@ -160,53 +165,40 @@ sealed class DatasetBufferSlot : RowBufferSlot
     internal void ResetForReuseAndSize()
     {
         ResetForReuse();
-        for (var i = 0; i < _owners.Length; i++)
+        for (var i = 0; i < _snapshots.Length; i++)
         {
-            if (_owners[i] is not { } owners)
+            if (_snapshots[i] is not { } snapshots)
                 continue;
-            for (var rowIndex = 0; rowIndex < owners.Length; rowIndex++)
-            {
-                owners[rowIndex]?.Release();
-                owners[rowIndex] = null;
-            }
+            for (var rowIndex = 0; rowIndex < snapshots.Length; rowIndex++)
+                snapshots[rowIndex].Reset();
         }
-        _currentChunk?.Release();
-        _currentChunk = null;
+        _currentChunk.Dispose();
         _chunkOffset = 0;
         BufferedSizeBytes = 0;
     }
 
-    // Each buffered value and the appending slot hold one reference. Promotion moves the value's
-    // reference to the active slot, so clearing/reusing a parked row cannot invalidate its bytes.
-    sealed class SnapshotChunk(ParquetBuffer buffer) : MemoryManager<byte>
+    // Preallocated with column capacity and reused, including across parked-row promotion.
+    // Only adapts a retained ParquetBuffer slice to the serializer's ReadOnlyMemory API;
+    // ParquetBuffer supplies all reference counting and allocation ownership.
+    sealed class SnapshotMemory : MemoryManager<byte>
     {
-        ParquetBuffer _buffer = buffer;
-        int _references = 1;
+        ParquetBuffer _buffer;
 
-        internal void Retain()
-            => _references++;
-
-        internal void Release()
+        internal ReadOnlyMemory<byte> SetBuffer(ParquetBuffer buffer)
         {
-            if (--_references == 0)
-                ((IDisposable)this).Dispose();
+            _buffer = buffer;
+            return Memory;
         }
 
-        public override Span<byte> GetSpan()
-            => _buffer.Span;
+        internal void Reset() => _buffer.Dispose();
 
-        public override unsafe MemoryHandle Pin(int elementIndex = 0)
-        {
-            if ((uint)elementIndex > (uint)_buffer.Length)
-                throw new ArgumentOutOfRangeException(nameof(elementIndex));
-            Retain();
-            return new MemoryHandle((byte*)_buffer.DangerousGetAddress() + elementIndex, pinnable: this);
-        }
+        public override Span<byte> GetSpan() => _buffer.Span;
 
-        public override void Unpin()
-            => Release();
+        // These private snapshots are consumed synchronously as spans by the serializer.
+        public override MemoryHandle Pin(int elementIndex = 0) => throw new NotSupportedException();
 
-        protected override void Dispose(bool disposing)
-            => _buffer.Dispose();
+        public override void Unpin() { }
+
+        protected override void Dispose(bool disposing) => Reset();
     }
 }

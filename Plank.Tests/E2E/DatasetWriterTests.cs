@@ -155,6 +155,53 @@ internal sealed class DatasetWriterTests
     }
 
     [Test]
+    [Arguments(false, 1024)]
+    [Arguments(true, 1024)]
+    [Arguments(false, 70000)]
+    [Arguments(true, 70000)]
+    public async Task BinaryQueueDoesNotAllocateAcrossSnapshotChunks(bool parked, int payloadSize)
+    {
+        var activePath = NewPath();
+        var parkedPath = NewPath();
+        try
+        {
+            using var pool = new DefaultParquetBufferPool();
+            var options = new ParquetWriterOptions { BufferPool = pool, RowApiInitialRowCapacity = 128 };
+            using var writer = DatasetBinaryRowSchema.CreateDatasetWriter(SelectBinaryPath, CreateFiles(1),
+                new DatasetWriterOptions
+                {
+                    PendingRowCapacity = 128,
+                    WriterOptions = options,
+                    AppendOptions = new ParquetAppendOptions { WriterOptions = options }
+                });
+            var bytes = new byte[payloadSize];
+            var row = new DatasetBinaryRowSchema
+            {
+                Path = Encoding.UTF8.GetBytes(parked ? parkedPath : activePath),
+                Payload = bytes,
+                OptionalPayload = bytes,
+                Memory = bytes.AsMemory(1, payloadSize - 2),
+                OptionalMemory = bytes.AsMemory(2, payloadSize - 4)
+            };
+            writer.Queue(new DatasetBinaryRowSchema { Path = Encoding.UTF8.GetBytes(activePath) });
+            for (var i = 0; i < 8; i++)
+                writer.Queue(row);
+
+            // Stay within row capacity and below the flush threshold, but consume many binary chunks.
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 100; i++)
+                writer.Queue(row);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            await Assert.That(allocated).IsEqualTo(0);
+        }
+        finally
+        {
+            DeleteIfPresent(activePath);
+            DeleteIfPresent(parkedPath);
+        }
+    }
+
+    [Test]
     public async Task SecondDisposeThrows()
     {
         var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1));
