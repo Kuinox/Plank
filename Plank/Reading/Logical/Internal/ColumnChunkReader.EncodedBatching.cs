@@ -843,18 +843,14 @@ static partial class ColumnChunkReader
         }
         if (typeof(TValue) == typeof(DateTime))
         {
-            var timestamp = GetTimestampLogicalType(column.LogicalType);
-            var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
             var typed = Unsafe.As<Span<TValue>, Span<DateTime>>(ref destination);
-            for (var i = destination.Length - 1; i >= 0; i--)
-                typed[i] = new DateTime(TimestampTicks(raw64[i], timestamp.Unit), kind);
+            MaterializeDateTimes(raw64, typed, column.LogicalType);
             return;
         }
         if (typeof(TValue) == typeof(DateTimeOffset))
         {
             var typed = Unsafe.As<Span<TValue>, Span<DateTimeOffset>>(ref destination);
-            for (var i = destination.Length - 1; i >= 0; i--)
-                typed[i] = DecodeTimestamp(raw64[i], column.LogicalType);
+            MaterializeDateTimes(raw64, typed, column.LogicalType);
             return;
         }
         throw new InvalidOperationException(
