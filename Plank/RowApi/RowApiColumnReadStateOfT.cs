@@ -82,29 +82,7 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
         => true;
 
     internal override int PrepareBatch(int consumedRows)
-    {
-        // Missing columns expose one synthetic default value for every row. They are
-        // normally excluded from the advancing-state list, but keeping this method
-        // total prevents a future caller from exhausting that synthetic value.
-        if (_usingMissing)
-            return int.MaxValue;
-
-        if (CurrentIndex < 0)
-        {
-            TakeNextBuffer();
-        }
-        else
-        {
-            CurrentIndex = checked(CurrentIndex + consumedRows);
-            if (CurrentIndex == BufferedValueCount)
-                TakeNextBuffer();
-            else if ((uint)CurrentIndex > (uint)BufferedValueCount)
-                throw new CorruptParquetException(
-                    $"Column '{PropertyName}' advanced beyond its current value buffer.");
-        }
-
-        return BufferedValueCount - CurrentIndex;
-    }
+        => _usingMissing ? int.MaxValue : PrepareValueBatch(consumedRows);
 
     internal override void AdvanceBuffer()
     {

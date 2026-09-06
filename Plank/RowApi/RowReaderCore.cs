@@ -242,10 +242,11 @@ public sealed class RowReaderCore : IDisposable
     {
         ThrowIfNotPositioned();
         var state = GetBinaryState(column);
-        var value = state.CurrentValue;
+        var index = GetCurrentIndex(state);
+        var value = state.GetValue(index);
         if (!value.IsEmpty)
             return new RowReaderBinaryValue(value);
-        return new RowReaderBinaryValue(state.CurrentIsNull
+        return new RowReaderBinaryValue(state.IsNull(index)
             ? default
             : RowReaderBinaryValue.NonNullEmpty);
     }
