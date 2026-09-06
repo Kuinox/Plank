@@ -9,6 +9,78 @@ namespace Plank.Tests.Reading;
 internal sealed class DeltaBinaryPackedDecoderTests
 {
     [Test]
+    [Arguments(9)]
+    [Arguments(10)]
+    [Arguments(11)]
+    [Arguments(12)]
+    [Arguments(13)]
+    [Arguments(14)]
+    [Arguments(15)]
+    [Arguments(16)]
+    public void ReadInt32WideResidualsPreserveLanesTailsAndWrapping(int bitWidth)
+    {
+        foreach (var count in new[] { 32, 33, 34, 128, 129, 130, 257 })
+        foreach (var minDelta in new[] { -17L, int.MaxValue, long.MaxValue - ushort.MaxValue })
+        {
+            var payload = new List<byte>();
+            WriteUnsignedVarIntReference(128, payload);
+            WriteUnsignedVarIntReference(4, payload);
+            WriteUnsignedVarIntReference((ulong)count, payload);
+            WriteUnsignedVarIntReference((ulong)int.MaxValue * 2, payload);
+            var expected = new int[count];
+            expected[0] = int.MaxValue;
+            var previous = (long)expected[0];
+            var random = new Random(bitWidth * 1000 + count);
+            for (var first = 1; first < count; first += 128)
+            {
+                var deltas = new long[128];
+                for (var i = 0; i < deltas.Length; i++)
+                {
+                    var residual = (i % 32) switch
+                    {
+                        0 => 0,
+                        31 => (1 << bitWidth) - 1,
+                        _ => random.Next(1 << bitWidth)
+                    };
+                    deltas[i] = minDelta + residual;
+                    if (first + i < count)
+                    {
+                        previous = unchecked(previous + deltas[i]);
+                        expected[first + i] = unchecked((int)previous);
+                    }
+                }
+                WriteDeltaBlockReference(deltas, minDelta, payload);
+            }
+
+            var bytes = payload.ToArray();
+            var decoded = new int[count + 2];
+            decoded[0] = decoded[^1] = 123456789;
+            var consumed = DeltaBinaryPackedDecoder.ReadInt32(bytes, decoded.AsSpan(1, count));
+            if (consumed != bytes.Length || !decoded.AsSpan(1, count).SequenceEqual(expected) ||
+                decoded[0] != 123456789 || decoded[^1] != 123456789)
+                throw new InvalidOperationException($"Int32 width {bitWidth}, count {count} failed.");
+            var batchState = DeltaBinaryPackedDecoder.StartBatch(bytes, count);
+            var batched = new int[count];
+            while (batchState.Active)
+            {
+                var length = batchState.NextBatchCount(64);
+                DeltaBinaryPackedDecoder.ReadInt32Batch(bytes,
+                    batched.AsSpan(batchState.ValuesRead, length), ref batchState);
+            }
+            if (!batched.SequenceEqual(expected) || batchState.Offset != bytes.Length)
+                throw new InvalidOperationException($"Batched Int32 width {bitWidth}, count {count} failed.");
+            foreach (var canonicalLayout in new[] { false, true })
+            {
+                var nullable = new int?[count + 2];
+                DeltaBinaryPackedDecoder.ReadNullableInt32(bytes, nullable.AsSpan(1, count), canonicalLayout);
+                if (!nullable.AsSpan(1, count).SequenceEqual(expected.Select(static value => (int?)value).ToArray()) ||
+                    nullable[0] is not null || nullable[^1] is not null)
+                    throw new InvalidOperationException($"Nullable Int32 width {bitWidth}, count {count} failed.");
+            }
+        }
+    }
+
+    [Test]
     public void ReadInt32HandlesDeltasWiderThanInt32()
     {
         var values = new[] { int.MinValue, int.MaxValue, int.MinValue, 0 };
