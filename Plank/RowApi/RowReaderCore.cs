@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.ExceptionServices;
 using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Schema;
@@ -11,7 +12,15 @@ namespace Plank.RowApi;
 /// </remarks>
 public sealed class RowReaderCore : IDisposable
 {
-    readonly RowApiColumnReadState[] _states;
+    RowApiColumnReadState[] _states;
+    readonly ParquetExecutionOptions _execution;
+    readonly int _maxReadAhead;
+    RowReaderWorkers? _workers;
+    RowReaderWorkers.Work[] _work;
+    RowReaderWorkers.Work[]? _aheadWork;
+    RowApiColumnReadState[]? _aheadStates;
+    RowGroup? _aheadGroup;
+    ExceptionDispatchInfo? _fault;
     readonly RowApiColumnReadState[] _projectedStates;
     readonly ParquetReader _reader;
     RowGroup _rowGroup;
@@ -62,9 +71,12 @@ public sealed class RowReaderCore : IDisposable
             throw new ArgumentException("Row API column descriptors must match the row API schema column count.",
                 nameof(columns));
 
+        _execution = options.Execution;
+        _maxReadAhead = options.MaxReadAheadRowGroups;
         _schemaEvolution = schemaEvolution;
         _streamSource = source as StreamReadSource;
         _states = CreateStates(schema, columns);
+        _work = CreateWork(_states);
         _projectedStates = new RowApiColumnReadState[_states.Length];
         _reader = new ParquetReader(CreateLooseReaderOptions(options));
         _rowGroup = default;
@@ -79,7 +91,7 @@ public sealed class RowReaderCore : IDisposable
         _currentBatchOffset = 0;
         try
         {
-            _reader.Reset(source);
+            _reader.Reset(PrepareSource(source));
             ApplyProjection(projection);
             ResolveFileSchema();
             RebuildProjectedStates();
@@ -96,9 +108,19 @@ public sealed class RowReaderCore : IDisposable
     public bool MoveNext()
     {
         ThrowIfDisposed();
-        EnsureStarted();
-        _hasCurrent = ReadNextRow();
-        return _hasCurrent;
+        _fault?.Throw();
+        _hasCurrent = false;
+        try
+        {
+            EnsureStarted();
+            _hasCurrent = ReadNextRow();
+            return _hasCurrent;
+        }
+        catch (Exception ex)
+        {
+            _fault = ExceptionDispatchInfo.Capture(ex);
+            throw;
+        }
     }
 
     /// <summary>Resets the generated row reader to a stream and projection.</summary>
@@ -108,6 +130,8 @@ public sealed class RowReaderCore : IDisposable
     public void Reset(Stream stream, RowApiColumnDescriptor[]? projection,
         ParquetSchemaEvolutionOptions? schemaEvolution = null)
     {
+        ThrowIfDisposed();
+        DrainReadAhead();
         if (_streamSource is null)
             _streamSource = new StreamReadSource(stream);
         else
@@ -127,9 +151,11 @@ public sealed class RowReaderCore : IDisposable
         if (schemaEvolution is not null)
             _schemaEvolution = schemaEvolution;
 
+        DrainReadAhead();
+        _fault = null;
         ApplyProjection(projection);
         DisposeColumnReaders();
-        _reader.Reset(source);
+        _reader.Reset(PrepareSource(source));
         _rowGroup = default;
         _rowGroups = default;
         _rowGroupRowsRemaining = 0;
@@ -212,7 +238,15 @@ public sealed class RowReaderCore : IDisposable
         if (_disposed)
             return;
 
+        DrainReadAhead();
+        _workers?.Dispose();
+        _workers = null;
         DisposeColumnReaders();
+        foreach (var work in _work)
+            work.Dispose();
+        if (_aheadWork is not null)
+            foreach (var work in _aheadWork)
+                work.Dispose();
         _reader.Dispose();
         _disposed = true;
     }
@@ -280,8 +314,29 @@ public sealed class RowReaderCore : IDisposable
         }
         else
         {
-            for (var i = 0; i < _projectedStateCount; i++)
-                _projectedStates[i].Advance();
+            if (_workers is null)
+            {
+                for (var i = 0; i < _projectedStateCount; i++)
+                    _projectedStates[i].Advance();
+            }
+            else
+            {
+                var queued = false;
+                for (var i = 0; i < _projectedStateCount; i++)
+                {
+                    var state = _projectedStates[i];
+                    state.CurrentIndex++;
+                    if ((uint)state.CurrentIndex >= (uint)state.BufferedValueCount)
+                    {
+                        QueueBuffer(state);
+                        queued = true;
+                    }
+                    else
+                        state.Prefetched = false;
+                }
+                if (queued)
+                    WaitForWork(_work);
+            }
         }
 
         _rowGroupRowsRemaining--;
@@ -293,10 +348,33 @@ public sealed class RowReaderCore : IDisposable
         while (true)
         {
             DisposeColumnReaders();
-            if (!_rowGroups.MoveNext())
-                return false;
-
-            _rowGroup = _rowGroups.Current;
+            if (_aheadGroup is { } ahead)
+            {
+                WaitForWork(_aheadWork!);
+                (_states, _aheadStates) = (_aheadStates!, _states);
+                (_work, _aheadWork) = (_aheadWork!, _work);
+                _aheadGroup = null;
+                _rowGroup = ahead;
+                RebuildProjectedStates();
+            }
+            else
+            {
+                if (!_rowGroups.MoveNext())
+                    return false;
+                _rowGroup = _rowGroups.Current;
+                if (_rowGroup.RowCount == 0)
+                    continue;
+                for (var i = 0; i < _states.Length; i++)
+                {
+                    var state = _states[i];
+                    state.Prefetched = false;
+                    state.ResetBufferState();
+                    if (state.Projected)
+                        state.Open(_rowGroup);
+                    if (state.Materialized)
+                        state.SetMissingValue();
+                }
+            }
             _rowGroupRowsRemaining = _rowGroup.RowCount;
             _batchLength = 0;
             _batchOffset = 0;
@@ -304,15 +382,7 @@ public sealed class RowReaderCore : IDisposable
             if (_rowGroupRowsRemaining == 0)
                 continue;
 
-            for (var i = 0; i < _states.Length; i++)
-            {
-                var state = _states[i];
-                state.ResetBufferState();
-                if (state.Projected)
-                    state.Open(_rowGroup);
-                if (state.Materialized)
-                    state.SetMissingValue();
-            }
+            StartReadAhead();
 
             return true;
         }
@@ -362,8 +432,30 @@ public sealed class RowReaderCore : IDisposable
     {
         var consumedRows = _batchLength;
         var availableRows = int.MaxValue;
-        for (var i = 0; i < _projectedStateCount; i++)
-            availableRows = Math.Min(availableRows, _projectedStates[i].PrepareBatch(consumedRows));
+        if (_workers is null)
+        {
+            for (var i = 0; i < _projectedStateCount; i++)
+                availableRows = Math.Min(availableRows, _projectedStates[i].PrepareBatch(consumedRows));
+        }
+        else
+        {
+            for (var i = 0; i < _projectedStateCount; i++)
+            {
+                var state = _projectedStates[i];
+                if (state.CurrentIndex >= 0)
+                    state.CurrentIndex = checked(state.CurrentIndex + consumedRows);
+                if (state.CurrentIndex < 0 || state.CurrentIndex == state.BufferedValueCount)
+                    QueueBuffer(state);
+                else if ((uint)state.CurrentIndex > (uint)state.BufferedValueCount)
+                    throw new CorruptParquetException($"Column '{state.PropertyName}' advanced beyond its current value buffer.");
+            }
+            WaitForWork(_work);
+            for (var i = 0; i < _projectedStateCount; i++)
+            {
+                var state = _projectedStates[i];
+                availableRows = Math.Min(availableRows, state.BufferedValueCount - state.CurrentIndex);
+            }
+        }
 
         if (availableRows <= 0)
             throw new CorruptParquetException("A projected row API column produced an empty value batch.");
@@ -459,6 +551,16 @@ public sealed class RowReaderCore : IDisposable
         if (_started)
             return;
 
+        if (_execution.WorkerCount > 1 && _projectedStateCount != 0)
+        {
+            var count = Math.Min(_execution.WorkerCount, _projectedStateCount);
+            if (_workers is not null && _workers.Count < count)
+            {
+                _workers.Dispose();
+                _workers = null;
+            }
+            _workers ??= new RowReaderWorkers(_execution, count);
+        }
         _rowGroups = _reader.RowGroups.GetEnumerator();
         _started = true;
     }
@@ -466,7 +568,88 @@ public sealed class RowReaderCore : IDisposable
     void DisposeColumnReaders()
     {
         for (var i = 0; i < _states.Length; i++)
+        {
+            _states[i].Prefetched = false;
             _states[i].DisposeBuffers();
+        }
+    }
+
+    static RowReaderWorkers.Work[] CreateWork(RowApiColumnReadState[] states)
+        => states.Select(state => new RowReaderWorkers.Work(state)).ToArray();
+
+    IParquetReadSource PrepareSource(IParquetReadSource source)
+        => _execution.WorkerCount == 1 || source is MemoryReadSource or FileReadSource or StreamReadSource
+            ? source
+            : new RowReaderSynchronizedSource(source);
+
+    void QueueBuffer(RowApiColumnReadState state)
+    {
+        var work = _work[state.Descriptor.Column.Ordinal];
+        work.PrefetchGroup = null;
+        _workers!.Enqueue(work);
+    }
+
+    static void WaitForWork(RowReaderWorkers.Work[] work)
+    {
+        // Always join every job, including after a sibling failed.
+        foreach (var item in work)
+            item.Done.Wait();
+        foreach (var item in work)
+            item.Fault?.Throw();
+    }
+
+    void StartReadAhead()
+    {
+        if (_workers is null || _maxReadAhead == 0)
+            return;
+        while (_rowGroups.MoveNext())
+        {
+            var group = _rowGroups.Current;
+            if (group.RowCount == 0)
+                continue;
+            if (_aheadStates is null)
+            {
+                _aheadStates = _states.Select(state => state.Descriptor.CreateState()).ToArray();
+                _aheadWork = CreateWork(_aheadStates);
+            }
+            _aheadGroup = group;
+            for (var i = 0; i < _states.Length; i++)
+            {
+                var state = _aheadStates[i];
+                state.ResetBufferState();
+                state.Prefetched = false;
+                state.Projected = _states[i].Projected;
+                state.Materialized = _states[i].Materialized;
+                state.Ordinal = _states[i].Ordinal;
+                var work = _aheadWork![i];
+                work.Fault = null;
+                if (state.Materialized)
+                    state.SetMissingValue();
+                if (!state.Projected)
+                    continue;
+                work.PrefetchGroup = group;
+                _workers.Enqueue(work);
+            }
+            return;
+        }
+    }
+
+    void DrainReadAhead()
+    {
+        foreach (var work in _work)
+        {
+            work.Done.Wait();
+            work.Fault = null;
+        }
+        if (_aheadWork is not null)
+            foreach (var work in _aheadWork)
+            {
+                work.Done.Wait();
+                work.Fault = null;
+                work.State.Prefetched = false;
+                work.State.DisposeBuffers();
+            }
+        _aheadGroup = null;
     }
 
     void ThrowIfDisposed()

@@ -77,13 +77,13 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
 
         if (CurrentIndex < 0)
         {
-            AdvanceBuffer();
+            TakeNextBuffer();
         }
         else
         {
             CurrentIndex = checked(CurrentIndex + consumedRows);
             if (CurrentIndex == BufferedValueCount)
-                AdvanceBuffer();
+                TakeNextBuffer();
             else if ((uint)CurrentIndex > (uint)BufferedValueCount)
                 throw new CorruptParquetException(
                     $"Column '{PropertyName}' advanced beyond its current value buffer.");

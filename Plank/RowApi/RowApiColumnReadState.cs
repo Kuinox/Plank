@@ -34,6 +34,8 @@ abstract class RowApiColumnReadState : IDisposable
 
     internal bool Materialized;
 
+    internal bool Prefetched;
+
     internal int CurrentIndex;
 
     internal int BufferedValueCount;
@@ -78,8 +80,22 @@ abstract class RowApiColumnReadState : IDisposable
     {
         CurrentIndex++;
         if ((uint)CurrentIndex < (uint)BufferedValueCount)
+        {
+            Prefetched = false;
             return;
-        AdvanceBuffer();
+        }
+        TakeNextBuffer();
+    }
+
+    internal void TakeNextBuffer()
+    {
+        if (Prefetched)
+        {
+            Prefetched = false;
+            CurrentIndex = 0;
+        }
+        else
+            AdvanceBuffer();
     }
 
     internal abstract void AdvanceBuffer();
