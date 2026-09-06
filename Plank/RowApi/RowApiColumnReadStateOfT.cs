@@ -31,7 +31,7 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
     internal Span<T> CurrentSpan
         => _usingMissing
             ? MemoryMarshal.CreateSpan(ref _missing, 1)
-            : _buffer.WritableValues;
+            : _buffer.ValidatedWritableValues;
 
     internal override void ResetBufferState()
     {
@@ -94,12 +94,16 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
 
     internal override void AdvanceBuffer()
     {
+        // Do not retain a view of a previous buffer if advancing or validation fails.
+        _buffer = default;
         while (true)
         {
             if (!_buffers.MoveNext())
                 throw new CorruptParquetException($"Column '{PropertyName}' ended before the row group was complete.");
 
-            _buffer = _buffers.Current;
+            var buffer = _buffers.Current;
+            _ = buffer.WritableValues;
+            _buffer = buffer;
             BufferedValueCount = _buffer.ValueCount;
             CurrentIndex = 0;
             if (BufferedValueCount != 0)

@@ -128,6 +128,10 @@ public unsafe struct ParquetBuffer : IDisposable
         return MemoryMarshal.CreateSpan(ref Unsafe.AsRef<T>(buffer._data), count);
     }
 
+    // Only for a buffer/count/type combination already validated by AsSpan<T>.
+    internal static Span<T> AsValidatedSpan<T>(ParquetBuffer buffer, int count)
+        => MemoryMarshal.CreateSpan(ref Unsafe.AsRef<T>(buffer._data), count);
+
     internal readonly bool IsExclusivelyOwned
     {
         get
