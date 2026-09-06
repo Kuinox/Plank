@@ -6,6 +6,8 @@ namespace Plank.RowApi;
 
 sealed class RowApiColumnReadState<T> : RowApiColumnReadState
 {
+    static readonly Type ValueType = typeof(T);
+
     RowGroupColumn<T>.Enumerator _buffers;
     ColumnBuffer<T> _buffer;
     T _missing;
@@ -29,9 +31,12 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
     }
 
     internal Span<T> CurrentSpan
-        => _usingMissing
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _usingMissing
             ? MemoryMarshal.CreateSpan(ref _missing, 1)
             : _buffer.ValidatedWritableValues;
+    }
 
     internal override void ResetBufferState()
     {
@@ -64,33 +69,20 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
         BufferedValueCount = 0;
     }
 
+    internal override unsafe RowApiValueBatch GetValueBatch()
+    {
+        if (!Projected || _usingMissing)
+            return default;
+        var values = CurrentSpan[CurrentIndex..];
+        return new RowApiValueBatch((nint)Unsafe.AsPointer(ref MemoryMarshal.GetReference(values)),
+            ValueType);
+    }
+
     internal override bool SupportsBatchAdvance
         => true;
 
     internal override int PrepareBatch(int consumedRows)
-    {
-        // Missing columns expose one synthetic default value for every row. They are
-        // normally excluded from the advancing-state list, but keeping this method
-        // total prevents a future caller from exhausting that synthetic value.
-        if (_usingMissing)
-            return int.MaxValue;
-
-        if (CurrentIndex < 0)
-        {
-            TakeNextBuffer();
-        }
-        else
-        {
-            CurrentIndex = checked(CurrentIndex + consumedRows);
-            if (CurrentIndex == BufferedValueCount)
-                TakeNextBuffer();
-            else if ((uint)CurrentIndex > (uint)BufferedValueCount)
-                throw new CorruptParquetException(
-                    $"Column '{PropertyName}' advanced beyond its current value buffer.");
-        }
-
-        return BufferedValueCount - CurrentIndex;
-    }
+        => _usingMissing ? int.MaxValue : PrepareValueBatch(consumedRows);
 
     internal override void AdvanceBuffer()
     {

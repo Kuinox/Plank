@@ -1,8 +1,55 @@
+using System.Runtime.InteropServices;
+
 namespace Plank.Tests.Writing;
 
 [NotInParallel]
 internal sealed class ParquetBufferTests
 {
+    [Test]
+    public void LargeBuffersStaggerAlignedPayloadsAndReuseRetainedStorage()
+    {
+        using var pool = new DefaultParquetBufferPool(ParquetBufferRetentionPolicy.ZeroAllocation);
+        var buffers = new ParquetBuffer[64];
+        var offsets = new HashSet<nint>();
+        var addresses = new HashSet<nint>();
+        try
+        {
+            for (var i = 0; i < buffers.Length; i++)
+            {
+                buffers[i] = pool.Rent(256 * 1024);
+                var address = buffers[i].DangerousGetAddress();
+                var allocation = Marshal.ReadIntPtr(address - Marshal.SizeOf<ParquetBufferHeader>(),
+                    Marshal.OffsetOf<ParquetBufferHeader>(nameof(ParquetBufferHeader.Allocation)).ToInt32());
+                offsets.Add(address - allocation);
+                addresses.Add(address);
+                if (address % 64 != 0 || buffers[i].Length != 256 * 1024)
+                    throw new InvalidOperationException("Coloring changed alignment or bucket capacity.");
+                buffers[i].Span[0] = (byte)i;
+            }
+            if (offsets.Count != 64)
+                throw new InvalidOperationException("Large allocations did not stagger their payload offsets.");
+            var retained = buffers[0].RetainSlice(0, 1);
+            try
+            {
+                for (var i = 0; i < buffers.Length; i++) buffers[i].Dispose();
+                if (retained.Span[0] != 0)
+                    throw new InvalidOperationException("A retained colored slice lost its storage.");
+            }
+            finally { retained.Dispose(); }
+            var allocationCount = pool.NativeAllocationCount;
+            var secondAddresses = CompleteDemandCycle(pool, 64, 256 * 1024);
+            if (!addresses.SetEquals(secondAddresses) || pool.NativeAllocationCount != allocationCount)
+                throw new InvalidOperationException("Colored storage was not reused after warmup.");
+            pool.Trim();
+            if (pool.RetainedBytes != 0)
+                throw new InvalidOperationException("Trim did not release colored storage.");
+        }
+        finally
+        {
+            for (var i = 0; i < buffers.Length; i++) buffers[i].Dispose();
+        }
+    }
+
     [Test]
     public void GenericRentUsesBytePoolAndProjectsAsTypedSpan()
     {

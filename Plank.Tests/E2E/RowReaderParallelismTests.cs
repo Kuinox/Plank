@@ -113,7 +113,13 @@ internal sealed class RowReaderParallelismTests
         for (var i = 0; i < RowsPerGroup; i++)
             if (!reader.MoveNext() || reader.Current.Id != (ulong)i)
                 throw new InvalidOperationException("Read-ahead fault affected an earlier row group.");
+        var previous = reader.Current;
         ExpectFailure(() => reader.MoveNext());
+        var unavailable = false;
+        try { _ = previous.Id; }
+        catch (InvalidOperationException) { unavailable = true; }
+        if (!unavailable)
+            throw new InvalidOperationException("A failed refill left the previous values accessible.");
         ExpectFailure(() => reader.MoveNext());
         source.FailNextGroup = false;
         reader.Reset(source);
@@ -145,14 +151,21 @@ internal sealed class RowReaderParallelismTests
         {
             var row = reader.Current;
             if (row.Id != (ulong)index || row.DefaultValue != (uint)(index * 7) ||
-                !row.Payload.Value.SequenceEqual(BitConverter.GetBytes(index)) ||
+                !row.Payload.Value.SequenceEqual(CreatePayload(index)) ||
                 row.Tag.IsNull != (index % 5 == 0) ||
-                !row.Tag.IsNull && !row.Tag.Value.SequenceEqual(new byte[] { (byte)(index % 13) }))
+                !row.Tag.IsNull && !row.Tag.Value.SequenceEqual(CreateTag(index)))
                 throw new InvalidOperationException($"Incorrect row {index}.");
             index++;
         }
         if (index != RowsPerGroup * 3) throw new InvalidOperationException($"Incorrect row count {index}.");
     }
+
+    // Variable lengths make binary page boundaries differ from numeric batches.
+    static byte[] CreatePayload(int index)
+        => Enumerable.Repeat((byte)index, index % 129).ToArray();
+
+    static byte[]? CreateTag(int index)
+        => index % 5 == 0 ? null : Enumerable.Repeat((byte)(index % 13), index % 11).ToArray();
 
     static byte[] CreateFile()
     {
@@ -164,9 +177,9 @@ internal sealed class RowReaderParallelismTests
             var rowGroup = writer.StartRowGroup();
             rowGroup.Id.Serialize(indices.Select(i => (ulong)i).ToArray());
             rowGroup.Write(rowGroup.Id);
-            rowGroup.Tag.Serialize(indices.Select(i => i % 5 == 0 ? null : new byte[] { (byte)(i % 13) }).ToArray());
+            rowGroup.Tag.Serialize(indices.Select(CreateTag).ToArray());
             rowGroup.Write(rowGroup.Tag);
-            rowGroup.Payload.Serialize(indices.Select(BitConverter.GetBytes).ToArray());
+            rowGroup.Payload.Serialize(indices.Select(CreatePayload).ToArray());
             rowGroup.Write(rowGroup.Payload);
             rowGroup.DefaultValue.Serialize(indices.Select(i => (uint)(i * 7)).ToArray());
             rowGroup.Write(rowGroup.DefaultValue);

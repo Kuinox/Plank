@@ -22,11 +22,11 @@ sealed class RowApiBinaryColumnReadState : RowApiColumnReadState
         _buffersOpen = false;
     }
 
-    internal ReadOnlySpan<byte> CurrentValue
-        => _usingMissing || CurrentIndex < 0 ? [] : _buffer.GetValue(CurrentIndex);
+    internal ReadOnlySpan<byte> GetValue(int index)
+        => _usingMissing || index < 0 ? [] : _buffer.GetValue(index);
 
-    internal bool CurrentIsNull
-        => _usingMissing ? _missingIsNull : CurrentIndex >= 0 && _buffer.IsNull(CurrentIndex);
+    internal bool IsNull(int index)
+        => _usingMissing ? _missingIsNull : index >= 0 && _buffer.IsNull(index);
 
     internal override void ResetBufferState()
     {
@@ -56,6 +56,12 @@ sealed class RowApiBinaryColumnReadState : RowApiColumnReadState
         CurrentIndex = -1;
         BufferedValueCount = 0;
     }
+
+    internal override bool SupportsBatchAdvance
+        => true;
+
+    internal override int PrepareBatch(int consumedRows)
+        => _usingMissing ? int.MaxValue : PrepareValueBatch(consumedRows);
 
     internal override void AdvanceBuffer()
     {

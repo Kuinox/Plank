@@ -70,11 +70,32 @@ abstract class RowApiColumnReadState : IDisposable
 
     internal abstract void Open(RowGroup rowGroup);
 
+    internal virtual RowApiValueBatch GetValueBatch() => default;
+
     internal virtual bool SupportsBatchAdvance
         => false;
 
     internal virtual int PrepareBatch(int consumedRows)
         => throw new InvalidOperationException($"Column '{PropertyName}' does not support batched row advancement.");
+
+    internal int PrepareValueBatch(int consumedRows)
+    {
+        if (CurrentIndex < 0)
+        {
+            TakeNextBuffer();
+        }
+        else
+        {
+            CurrentIndex = checked(CurrentIndex + consumedRows);
+            if (CurrentIndex == BufferedValueCount)
+                TakeNextBuffer();
+            else if ((uint)CurrentIndex > (uint)BufferedValueCount)
+                throw new CorruptParquetException(
+                    $"Column '{PropertyName}' advanced beyond its current value buffer.");
+        }
+
+        return BufferedValueCount - CurrentIndex;
+    }
 
     internal void Advance()
     {
@@ -104,4 +125,10 @@ abstract class RowApiColumnReadState : IDisposable
 
     public void Dispose()
         => DisposeBuffers();
+}
+
+readonly struct RowApiValueBatch(nint address, Type type)
+{
+    internal readonly nint Address = address;
+    internal readonly Type Type = type;
 }
