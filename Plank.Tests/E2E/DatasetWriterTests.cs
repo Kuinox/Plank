@@ -1,4 +1,5 @@
 using System.Text;
+using System.Runtime.InteropServices;
 using Plank.Dataset;
 using Plank.Reading;
 using Plank.Reading.Physical;
@@ -154,6 +155,53 @@ internal sealed class DatasetWriterTests
     }
 
     [Test]
+    [Arguments(false, 1024)]
+    [Arguments(true, 1024)]
+    [Arguments(false, 70000)]
+    [Arguments(true, 70000)]
+    public async Task BinaryQueueDoesNotAllocateAcrossSnapshotChunks(bool parked, int payloadSize)
+    {
+        var activePath = NewPath();
+        var parkedPath = NewPath();
+        try
+        {
+            using var pool = new DefaultParquetBufferPool();
+            var options = new ParquetWriterOptions { BufferPool = pool, RowApiInitialRowCapacity = 128 };
+            using var writer = DatasetBinaryRowSchema.CreateDatasetWriter(SelectBinaryPath, CreateFiles(1),
+                new DatasetWriterOptions
+                {
+                    PendingRowCapacity = 128,
+                    WriterOptions = options,
+                    AppendOptions = new ParquetAppendOptions { WriterOptions = options }
+                });
+            var bytes = new byte[payloadSize];
+            var row = new DatasetBinaryRowSchema
+            {
+                Path = Encoding.UTF8.GetBytes(parked ? parkedPath : activePath),
+                Payload = bytes,
+                OptionalPayload = bytes,
+                Memory = bytes.AsMemory(1, payloadSize - 2),
+                OptionalMemory = bytes.AsMemory(2, payloadSize - 4)
+            };
+            writer.Queue(new DatasetBinaryRowSchema { Path = Encoding.UTF8.GetBytes(activePath) });
+            for (var i = 0; i < 8; i++)
+                writer.Queue(row);
+
+            // Stay within row capacity and below the flush threshold, but consume many binary chunks.
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 100; i++)
+                writer.Queue(row);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            await Assert.That(allocated).IsEqualTo(0);
+        }
+        finally
+        {
+            DeleteIfPresent(activePath);
+            DeleteIfPresent(parkedPath);
+        }
+    }
+
+    [Test]
     public async Task SecondDisposeThrows()
     {
         var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1));
@@ -290,6 +338,194 @@ internal sealed class DatasetWriterTests
         await Assert.That(values.SequenceEqual(Enumerable.Range(0, 10))).IsTrue();
     }
 
+    [Test]
+    [Arguments(0, 16)]
+    [Arguments(3, 16)]
+    [Arguments(3, 1000)]
+    public async Task QueueSnapshotsBinaryValues(int pendingCapacity, int payloadSize)
+    {
+        var paths = Enumerable.Range(0, 3).Select(_ => NewPath()).ToArray();
+        var pathBytes = paths.Select(Encoding.UTF8.GetBytes).ToArray();
+        var pool = new OwnershipTrackingPool();
+        try
+        {
+            using (var writer = DatasetBinaryRowSchema.CreateDatasetWriter(SelectBinaryPath, CreateFiles(1),
+                       BinaryOptions(pool, pendingCapacity)))
+            {
+                var reused = new byte[payloadSize];
+                for (var id = 0; id < 80; id++)
+                {
+                    Array.Fill(reused, checked((byte)id));
+                    writer.Queue(new DatasetBinaryRowSchema
+                    {
+                        Path = pathBytes[pendingCapacity == 0 ? 0 : id % 3],
+                        Id = id,
+                        Payload = reused,
+                        OptionalPayload = id % 3 == 0 ? null : id % 3 == 1 ? [] : reused,
+                        Memory = reused.AsMemory(2, payloadSize - 4),
+                        OptionalMemory = id % 3 == 0 ? (ReadOnlyMemory<byte>?)null : id % 3 == 1
+                            ? ReadOnlyMemory<byte>.Empty : reused.AsMemory(3, payloadSize - 6)
+                    });
+                    Array.Fill(reused, (byte)255);
+                }
+            }
+
+            await Assert.That(pool.Outstanding).IsEqualTo(0);
+            var seen = new HashSet<int>();
+            foreach (var path in paths.Where(File.Exists))
+            {
+                using var stream = File.OpenRead(path);
+                using var reader = DatasetBinaryRowSchema.CreateRowReader(stream);
+                while (reader.MoveNext())
+                {
+                    var row = reader.Current;
+                    if (!seen.Add(row.Id))
+                        throw new InvalidOperationException("A queued row was duplicated.");
+                    AssertPayload(row.Payload.Value, row.Id, payloadSize);
+                    AssertPayload(row.Memory.Value, row.Id, payloadSize - 4);
+                    var optionalPayload = row.OptionalPayload;
+                    var optionalMemory = row.OptionalMemory;
+                    if (optionalPayload.IsNull != (row.Id % 3 == 0) || optionalMemory.IsNull != (row.Id % 3 == 0))
+                        throw new InvalidOperationException("Queue changed binary nullability.");
+                    if (!optionalPayload.IsNull)
+                    {
+                        AssertPayload(optionalPayload.Value, row.Id, row.Id % 3 == 1 ? 0 : payloadSize);
+                        AssertPayload(optionalMemory.Value, row.Id, row.Id % 3 == 1 ? 0 : payloadSize - 6);
+                    }
+                }
+            }
+            await Assert.That(seen.Count).IsEqualTo(80);
+        }
+        finally
+        {
+            foreach (var path in paths)
+                DeleteIfPresent(path);
+        }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task FailedQueueReleasesBinarySnapshotsAndReusesTheRow(bool parked)
+    {
+        var activePath = NewPath();
+        var failedPath = parked ? NewPath() : activePath;
+        var pool = new OwnershipTrackingPool();
+        try
+        {
+            using (var writer = DatasetBinaryRowSchema.CreateDatasetWriter(SelectBinaryPath, CreateFiles(1),
+                       BinaryOptions(pool, 3)))
+            {
+                writer.Queue(new DatasetBinaryRowSchema { Path = Encoding.UTF8.GetBytes(activePath), Id = 1 });
+                var badRow = new DatasetBinaryRowSchema
+                {
+                    Path = Encoding.UTF8.GetBytes(failedPath),
+                    Id = 2,
+                    Payload = new byte[70000],
+                    Memory = new byte[70000],
+                    ThrowOnTail = true
+                };
+                await Assert.That(() => writer.Queue(badRow)).Throws<InvalidOperationException>();
+                writer.Queue(new DatasetBinaryRowSchema { Path = badRow.Path, Id = 3 });
+            }
+            await Assert.That(pool.Outstanding).IsEqualTo(0);
+            using var stream = File.OpenRead(failedPath);
+            using var reader = DatasetBinaryRowSchema.CreateRowReader(stream);
+            var ids = new List<int>();
+            while (reader.MoveNext())
+            {
+                ids.Add(reader.Current.Id);
+                if (!reader.Current.Payload.Value.IsEmpty || !reader.Current.Memory.Value.IsEmpty)
+                    throw new InvalidOperationException("A failed row left binary data in the reused slot.");
+            }
+            await Assert.That(ids).IsEquivalentTo(parked ? new List<int> { 3 } : [1, 3]);
+        }
+        finally
+        {
+            DeleteIfPresent(activePath);
+            DeleteIfPresent(failedPath);
+        }
+    }
+
+    [Test]
+    public async Task DiscardedParkedRowsReleaseBinarySnapshotsWhenOpeningFails()
+    {
+        var activePath = NewPath();
+        var parkedPath = NewPath();
+        var pool = new OwnershipTrackingPool();
+        var files = CreateFiles(1);
+        try
+        {
+            var writer = DatasetBinaryRowSchema.CreateDatasetWriter(SelectBinaryPath, files, BinaryOptions(pool, 3));
+            writer.Queue(new DatasetBinaryRowSchema { Path = Encoding.UTF8.GetBytes(activePath) });
+            writer.Queue(new DatasetBinaryRowSchema
+            {
+                Path = Encoding.UTF8.GetBytes(parkedPath),
+                Payload = new byte[70000],
+                Memory = new byte[70000]
+            });
+            files[0].FailOpen = true;
+            await Assert.That(() => writer.Dispose()).Throws<IOException>();
+            await Assert.That(pool.Outstanding).IsEqualTo(0);
+        }
+        finally
+        {
+            files[0].Dispose();
+            DeleteIfPresent(activePath);
+            DeleteIfPresent(parkedPath);
+        }
+    }
+
+    static void AssertPayload(ReadOnlySpan<byte> actual, int id, int length)
+    {
+        if (actual.Length != length || actual.ContainsAnyExcept(checked((byte)id)))
+            throw new InvalidOperationException($"Queued binary value changed for row {id} (expected {length} bytes).");
+    }
+
+    static DatasetWriterOptions BinaryOptions(IParquetBufferPool pool, int pendingCapacity)
+    {
+        var writerOptions = new ParquetWriterOptions
+        {
+            BufferPool = pool,
+            RowApiInitialRowCapacity = 2
+        };
+        return new DatasetWriterOptions
+        {
+            PendingRowCapacity = checked((uint)pendingCapacity),
+            WriterOptions = writerOptions,
+            AppendOptions = new ParquetAppendOptions { WriterOptions = writerOptions }
+        };
+    }
+
+    static ReadOnlySpan<byte> SelectBinaryPath(DatasetBinaryRowSchema row, IParquetBufferPool pool,
+        out ParquetBuffer? allocation)
+    {
+        _ = pool;
+        allocation = null;
+        return row.Path;
+    }
+
+    sealed class OwnershipTrackingPool : IParquetBufferPool
+    {
+        internal int Outstanding;
+
+        public ParquetBuffer Rent(uint minimumByteLength)
+        {
+            if (minimumByteLength == 0)
+                return default;
+            var length = checked((int)minimumByteLength);
+            var allocation = Marshal.AllocHGlobal(checked(length + 64));
+            Outstanding++;
+            return ParquetBuffer.Create(allocation, length + 64, 64, length, Return);
+        }
+
+        void Return(nint allocation)
+        {
+            Outstanding--;
+            Marshal.FreeHGlobal(allocation);
+        }
+    }
+
     static ReadOnlySpan<byte> SelectPath(DatasetRowSchema row, IParquetBufferPool bufferPool,
         out ParquetBuffer? allocation)
     {
@@ -346,6 +582,7 @@ internal sealed class DatasetWriterTests
     {
         FileStream? _stream;
         internal int OpenCount;
+        internal bool FailOpen;
         internal readonly List<string> OpenedPaths = [];
 
         public ulong Length
@@ -353,6 +590,8 @@ internal sealed class DatasetWriterTests
 
         public void Open(ReadOnlySpan<byte> path, FileMode mode)
         {
+            if (FailOpen)
+                throw new IOException("Test open failure.");
             if (_stream is not null)
                 throw new InvalidOperationException("The file is already open.");
             var filePath = Encoding.UTF8.GetString(path);
