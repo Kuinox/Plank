@@ -559,16 +559,16 @@ static class DeltaBinaryPackedDecoder
         else
         {
             var laneMask = 0x0001000100010001UL * ((1UL << bitWidth) - 1);
-            for (var index = 0; index < MiniBlockChunk; index += Vector256<long>.Count)
+            for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
             {
-                // Four fields may start on a half-byte boundary. Shift the packed word to the
-                // first field, then deposit the fields into four UInt16 lanes before widening.
                 var bitOffset = index * bitWidth;
-                var packedWord = ReadPackedWord(packed, bitOffset / 8) >> (bitOffset & 7);
-                var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
-                var residuals = Avx2.ConvertToVector256Int64(
-                    Vector128.CreateScalar(unpacked).AsUInt16());
-                ReconstructFourInt32(residuals, minDelta, ref previous,
+                var lowerWord = ReadPackedWord(packed, bitOffset / 8) >> (bitOffset & 7);
+                var upperBitOffset = bitOffset + 4 * bitWidth;
+                var upperWord = ReadPackedWord(packed, upperBitOffset / 8) >> (upperBitOffset & 7);
+                var lower = Bmi2.X64.ParallelBitDeposit(lowerWord, laneMask);
+                var upper = Bmi2.X64.ParallelBitDeposit(upperWord, laneMask);
+                var residuals = Avx2.ConvertToVector256Int32(Vector128.Create(lower, upper).AsUInt16());
+                ReconstructEightInt32(residuals, minDelta, ref previous,
                     ref destinationStart, index);
             }
         }
@@ -595,14 +595,16 @@ static class DeltaBinaryPackedDecoder
         else
         {
             var laneMask = 0x0001000100010001UL * ((1UL << bitWidth) - 1);
-            for (var index = 0; index < MiniBlockChunk; index += Vector256<long>.Count)
+            for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
             {
                 var bitOffset = index * bitWidth;
-                var packedWord = ReadPackedWord(packed, bitOffset / 8) >> (bitOffset & 7);
-                var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
-                var residuals = Avx2.ConvertToVector256Int64(
-                    Vector128.CreateScalar(unpacked).AsUInt16());
-                ReconstructFourNullableInt32(residuals, minDelta, ref previous,
+                var lowerWord = ReadPackedWord(packed, bitOffset / 8) >> (bitOffset & 7);
+                var upperBitOffset = bitOffset + 4 * bitWidth;
+                var upperWord = ReadPackedWord(packed, upperBitOffset / 8) >> (upperBitOffset & 7);
+                var lower = Bmi2.X64.ParallelBitDeposit(lowerWord, laneMask);
+                var upper = Bmi2.X64.ParallelBitDeposit(upperWord, laneMask);
+                var residuals = Avx2.ConvertToVector256Int32(Vector128.Create(lower, upper).AsUInt16());
+                ReconstructEightNullableInt32(residuals, minDelta, ref previous,
                     ref destinationStart, index);
             }
         }
@@ -614,17 +616,6 @@ static class DeltaBinaryPackedDecoder
     {
         var values = ReconstructEightInt32Values(residuals, minDelta, ref previous);
         values.StoreUnsafe(ref destination, (nuint)index);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static void ReconstructFourInt32(Vector256<long> residuals, long minDelta,
-        ref long previous, ref int destination, int index)
-    {
-        var values = PrefixSum(residuals + Vector256.Create(minDelta));
-        values += Vector256.Create(previous);
-        Vector256.Narrow(values, Vector256<long>.Zero).GetLower()
-            .StoreUnsafe(ref destination, (nuint)index);
-        previous = values.GetElement(Vector256<long>.Count - 1);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
