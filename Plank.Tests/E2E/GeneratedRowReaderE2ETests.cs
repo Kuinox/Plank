@@ -13,6 +13,62 @@ internal sealed class GeneratedRowReaderE2ETests
     };
 
     [Test]
+    public void GeneratedValueReferencesRemainWritableAcrossGcAndInvalidateOnResetAndDispose()
+    {
+        using var stream = CreateBatchedEvolvingFile(4_097, prependEmptyRowGroup: true);
+        using var reader = EvolvingRowSchema.CreateRowReader(stream,
+            EvolvingRowSchema.Projection.Id | EvolvingRowSchema.Projection.Added | EvolvingRowSchema.Projection.Maybe,
+            schemaEvolution: MissingColumnEvolution);
+        if (!reader.MoveNext())
+            throw new InvalidOperationException("Expected a row.");
+        var row = reader.Current;
+        ref var id = ref row.Id;
+        ref var added = ref row.Added;
+        ref var maybe = ref row.Maybe;
+        id = 1234;
+        added = 5678;
+        maybe = 9012;
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        if (row.Id != 1234 || row.Added != 5678 || row.Maybe != 9012)
+            throw new InvalidOperationException("Writable value references were not preserved through GC.");
+
+        reader.Reset(stream,
+            EvolvingRowSchema.Projection.Id | EvolvingRowSchema.Projection.Added | EvolvingRowSchema.Projection.Maybe);
+        AssertValueViewUnavailable(row, disposed: false);
+        var count = 0;
+        while (reader.MoveNext())
+        {
+            var current = reader.Current;
+            var expectedMaybe = count % 5 == 1 ? (int?)null : (count + 1) * 10;
+            if (current.Id != CreateBatchedId(count) || current.Added != 0 || current.Maybe != expectedMaybe)
+                throw new InvalidOperationException($"Incorrect value after reset at row {count}.");
+            count++;
+        }
+        if (count != 4_097)
+            throw new InvalidOperationException("Unexpected row count after reset.");
+        AssertValueViewUnavailable(row, disposed: false);
+        reader.Dispose();
+        AssertValueViewUnavailable(row, disposed: true);
+    }
+
+    static void AssertValueViewUnavailable(EvolvingRowSchema.ReadRow row, bool disposed)
+    {
+        try
+        {
+            _ = row.Id;
+        }
+        catch (ObjectDisposedException) when (disposed)
+        {
+            return;
+        }
+        catch (InvalidOperationException) when (!disposed)
+        {
+            return;
+        }
+        throw new InvalidOperationException("An invalidated value view remained readable.");
+    }
+
+    [Test]
     public async Task GeneratedRowReaderReadsProjectedColumnsAcrossRowGroups()
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-generated-row-reader-{Guid.NewGuid():N}.parquet");
