@@ -6,7 +6,7 @@ namespace Plank.RowApi;
 
 sealed class RowApiColumnReadState<T> : RowApiColumnReadState
 {
-    static readonly RuntimeTypeHandle ValueType = typeof(T).TypeHandle;
+    static readonly Type ValueType = typeof(T);
 
     RowGroupColumn<T>.Enumerator _buffers;
     ColumnBuffer<T> _buffer;
@@ -31,9 +31,12 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
     }
 
     internal Span<T> CurrentSpan
-        => _usingMissing
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _usingMissing
             ? MemoryMarshal.CreateSpan(ref _missing, 1)
             : _buffer.ValidatedWritableValues;
+    }
 
     internal override void ResetBufferState()
     {

@@ -124,7 +124,8 @@ public sealed class RowReaderCore : IDisposable
 
     bool MoveNextSlow()
     {
-        Array.Clear(_valueBatches);
+        if (_batchLength != 0)
+            Array.Clear(_valueBatches);
         _hasCurrent = false;
         try
         {
@@ -207,20 +208,26 @@ public sealed class RowReaderCore : IDisposable
     public unsafe ref T GetCurrent<T>(int columnIndex)
     {
         // Bound addresses exist only while positioned on a validated value batch.
-        if ((uint)columnIndex < (uint)_valueBatches.Length)
+        if (_batchAdvance && (uint)columnIndex < (uint)_valueBatches.Length)
         {
             ref readonly var batch = ref _valueBatches[columnIndex];
-            if (batch.Address != 0 && batch.Type.Equals(typeof(T).TypeHandle))
+            if (batch.Address != 0 && batch.Type == typeof(T))
                 return ref Unsafe.Add(
                     ref Unsafe.AsRef<T>((void*)batch.Address), _currentBatchOffset);
         }
         return ref GetCurrentChecked<T>(columnIndex);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     ref T GetCurrentChecked<T>(int columnIndex)
     {
         ThrowIfNotPositioned();
-        var state = (RowApiColumnReadState<T>)_states[columnIndex];
+        var untypedState = _states[columnIndex];
+        // This sealed type needs only an exact check. A returning cast helper here
+        // makes the JIT spill floating-point locals around each inlined value access.
+        if (untypedState.GetType() != typeof(RowApiColumnReadState<T>))
+            throw new InvalidCastException();
+        var state = Unsafe.As<RowApiColumnReadState<T>>(untypedState);
         if (!state.Projected && !state.Materialized)
             throw new InvalidOperationException($"Column '{state.PropertyName}' was not selected.");
         var values = state.CurrentSpan;
@@ -257,6 +264,7 @@ public sealed class RowReaderCore : IDisposable
     }
 
     /// <summary>Throws if the generated reader is not positioned on a row.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void ThrowIfNotPositioned()
     {
         ThrowIfDisposed();
@@ -498,6 +506,7 @@ public sealed class RowReaderCore : IDisposable
         _batchOffset = 0;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     int GetCurrentIndex(RowApiColumnReadState state)
         => state.Materialized || !_batchAdvance
             ? state.CurrentIndex
@@ -688,6 +697,7 @@ public sealed class RowReaderCore : IDisposable
         _aheadGroup = null;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void ThrowIfDisposed()
     {
         if (_disposed)

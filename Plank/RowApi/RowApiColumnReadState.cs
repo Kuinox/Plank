@@ -108,8 +108,8 @@ abstract class RowApiColumnReadState : IDisposable
         => DisposeBuffers();
 }
 
-readonly struct RowApiValueBatch(nint address, RuntimeTypeHandle type)
+readonly struct RowApiValueBatch(nint address, Type type)
 {
     internal readonly nint Address = address;
-    internal readonly RuntimeTypeHandle Type = type;
+    internal readonly Type Type = type;
 }
