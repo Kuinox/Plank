@@ -170,6 +170,7 @@ public sealed class RowReaderCore : IDisposable
 
         DrainReadAhead();
         _fault = null;
+        Array.Clear(_valueBatches);
         ApplyProjection(projection);
         DisposeColumnReaders();
         _reader.Reset(PrepareSource(source));
