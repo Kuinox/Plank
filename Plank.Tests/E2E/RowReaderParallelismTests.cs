@@ -113,7 +113,13 @@ internal sealed class RowReaderParallelismTests
         for (var i = 0; i < RowsPerGroup; i++)
             if (!reader.MoveNext() || reader.Current.Id != (ulong)i)
                 throw new InvalidOperationException("Read-ahead fault affected an earlier row group.");
+        var previous = reader.Current;
         ExpectFailure(() => reader.MoveNext());
+        var unavailable = false;
+        try { _ = previous.Id; }
+        catch (InvalidOperationException) { unavailable = true; }
+        if (!unavailable)
+            throw new InvalidOperationException("A failed refill left the previous values accessible.");
         ExpectFailure(() => reader.MoveNext());
         source.FailNextGroup = false;
         reader.Reset(source);

@@ -70,6 +70,8 @@ abstract class RowApiColumnReadState : IDisposable
 
     internal abstract void Open(RowGroup rowGroup);
 
+    internal virtual RowApiValueBatch GetValueBatch() => default;
+
     internal virtual bool SupportsBatchAdvance
         => false;
 
@@ -104,4 +106,10 @@ abstract class RowApiColumnReadState : IDisposable
 
     public void Dispose()
         => DisposeBuffers();
+}
+
+readonly struct RowApiValueBatch(nint address, RuntimeTypeHandle type)
+{
+    internal readonly nint Address = address;
+    internal readonly RuntimeTypeHandle Type = type;
 }

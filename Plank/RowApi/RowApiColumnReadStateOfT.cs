@@ -6,6 +6,8 @@ namespace Plank.RowApi;
 
 sealed class RowApiColumnReadState<T> : RowApiColumnReadState
 {
+    static readonly RuntimeTypeHandle ValueType = typeof(T).TypeHandle;
+
     RowGroupColumn<T>.Enumerator _buffers;
     ColumnBuffer<T> _buffer;
     T _missing;
@@ -62,6 +64,15 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
         _usingMissing = false;
         CurrentIndex = -1;
         BufferedValueCount = 0;
+    }
+
+    internal override unsafe RowApiValueBatch GetValueBatch()
+    {
+        if (!Projected || _usingMissing)
+            return default;
+        var values = CurrentSpan[CurrentIndex..];
+        return new RowApiValueBatch((nint)Unsafe.AsPointer(ref MemoryMarshal.GetReference(values)),
+            ValueType);
     }
 
     internal override bool SupportsBatchAdvance

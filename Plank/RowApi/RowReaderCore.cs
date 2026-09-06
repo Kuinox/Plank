@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Runtime.ExceptionServices;
+using System.Runtime.CompilerServices;
 using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Schema;
@@ -13,6 +14,7 @@ namespace Plank.RowApi;
 public sealed class RowReaderCore : IDisposable
 {
     RowApiColumnReadState[] _states;
+    readonly RowApiValueBatch[] _valueBatches;
     readonly ParquetExecutionOptions _execution;
     readonly int _maxReadAhead;
     RowReaderWorkers? _workers;
@@ -76,6 +78,7 @@ public sealed class RowReaderCore : IDisposable
         _schemaEvolution = schemaEvolution;
         _streamSource = source as StreamReadSource;
         _states = CreateStates(schema, columns);
+        _valueBatches = new RowApiValueBatch[_states.Length];
         _work = CreateWork(_states);
         _projectedStates = new RowApiColumnReadState[_states.Length];
         _reader = new ParquetReader(CreateLooseReaderOptions(options));
@@ -121,6 +124,7 @@ public sealed class RowReaderCore : IDisposable
 
     bool MoveNextSlow()
     {
+        Array.Clear(_valueBatches);
         _hasCurrent = false;
         try
         {
@@ -130,6 +134,7 @@ public sealed class RowReaderCore : IDisposable
         }
         catch (Exception ex)
         {
+            Array.Clear(_valueBatches);
             _fault = ExceptionDispatchInfo.Capture(ex);
             throw;
         }
@@ -197,7 +202,21 @@ public sealed class RowReaderCore : IDisposable
     /// <param name="columnIndex">The generated schema ordinal.</param>
     /// <returns>A reference to the current value.</returns>
     /// <remarks>The source generator supplies an ordinal and type validated when the reader is constructed.</remarks>
-    public ref T GetCurrent<T>(int columnIndex)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public unsafe ref T GetCurrent<T>(int columnIndex)
+    {
+        // Bound addresses exist only while positioned on a validated value batch.
+        if ((uint)columnIndex < (uint)_valueBatches.Length)
+        {
+            ref readonly var batch = ref _valueBatches[columnIndex];
+            if (batch.Address != 0 && batch.Type.Equals(typeof(T).TypeHandle))
+                return ref Unsafe.Add(
+                    ref Unsafe.AsRef<T>((void*)batch.Address), _currentBatchOffset);
+        }
+        return ref GetCurrentChecked<T>(columnIndex);
+    }
+
+    ref T GetCurrentChecked<T>(int columnIndex)
     {
         ThrowIfNotPositioned();
         var state = (RowApiColumnReadState<T>)_states[columnIndex];
@@ -471,6 +490,9 @@ public sealed class RowReaderCore : IDisposable
 
         if (availableRows <= 0)
             throw new CorruptParquetException("A projected row API column produced an empty value batch.");
+        // The minimum available count bounds every access until the next refill.
+        for (var i = 0; i < _states.Length; i++)
+            _valueBatches[i] = _states[i].GetValueBatch();
         _batchLength = checked((int)Math.Min((ulong)availableRows, _rowGroupRowsRemaining));
         _batchOffset = 0;
     }
@@ -579,6 +601,7 @@ public sealed class RowReaderCore : IDisposable
 
     void DisposeColumnReaders()
     {
+        Array.Clear(_valueBatches);
         for (var i = 0; i < _states.Length; i++)
         {
             _states[i].Prefetched = false;
