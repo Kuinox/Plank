@@ -343,8 +343,12 @@ internal sealed class WriterAllocationTests
             new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.Plain]));
         var schema = new ParquetSchema([column]);
         using var stream = new MemoryStream(capacity: 1024 * 1024);
-        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        // Keep prior tests' shared-pool retention from triggering a timed memory-pressure
+        // check (GC.GetGCMemoryInfo allocates) inside the page-version measurement.
+        using var pool = new DefaultParquetBufferPool();
+        using var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
+            BufferPool = pool,
             Compression = CompressionKind.Gzip,
             DataPageVersion = version
         });
