@@ -226,8 +226,15 @@ internal sealed class CustomValueConverterE2ETests
         rowGroup.Write(rowGroup.ParentId);
         writer.CloseFile();
 
-        var source = new Plank.Reading.MemoryReadSource(stream.ToArray());
-        using var reader = CustomMappedRowSchema.CreateRowReader(source);
+        using var source = new Plank.Reading.MemoryReadSource(stream.ToArray());
+        using var pool = new DefaultParquetBufferPool();
+        using var reader = CustomMappedRowSchema.CreateRowReader(source, options: new()
+        {
+            BufferPool = pool,
+            // Measure conversion on this thread. Worker completion waits can lazily
+            // allocate even after warmup, and worker allocations escape this counter.
+            Execution = new() { WorkerCount = 1 }
+        });
         for (var i = 0; i < 8; i++)
         {
             reader.Reset(source);
