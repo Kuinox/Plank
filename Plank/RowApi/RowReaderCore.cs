@@ -109,6 +109,18 @@ public sealed class RowReaderCore : IDisposable
     {
         ThrowIfDisposed();
         _fault?.Throw();
+        if (_batchOffset < _batchLength)
+        {
+            _currentBatchOffset = _batchOffset++;
+            _rowGroupRowsRemaining--;
+            _hasCurrent = true;
+            return true;
+        }
+        return MoveNextSlow();
+    }
+
+    bool MoveNextSlow()
+    {
         _hasCurrent = false;
         try
         {
