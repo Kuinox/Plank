@@ -41,7 +41,7 @@ public sealed class RowReaderCore : IDisposable
     int _currentBatchOffset;
 
     /// <summary>Initializes a generated row reader over a stream.</summary>
-    /// <param name="stream">The source stream, owned by this reader and closed on disposal or failed construction.</param>
+    /// <param name="stream">The source stream.</param>
     /// <param name="schema">The generated row schema.</param>
     /// <param name="columns">The generated column descriptors.</param>
     /// <param name="projection">The selected columns, or <see langword="null"/> for all columns.</param>
@@ -55,7 +55,7 @@ public sealed class RowReaderCore : IDisposable
     }
 
     /// <summary>Initializes a generated row reader over a random-access source.</summary>
-    /// <param name="source">The random-access source. Ownership remains with the caller.</param>
+    /// <param name="source">The random-access source.</param>
     /// <param name="schema">The generated row schema.</param>
     /// <param name="columns">The generated column descriptors.</param>
     /// <param name="projection">The selected columns, or <see langword="null"/> for all columns.</param>
@@ -157,7 +157,7 @@ public sealed class RowReaderCore : IDisposable
     }
 
     /// <summary>Resets the generated row reader to a stream and projection.</summary>
-    /// <param name="stream">The new owned stream. A different previous stream is closed; a rejected stream is closed before returning.</param>
+    /// <param name="stream">The new source stream.</param>
     /// <param name="projection">The selected columns, or <see langword="null"/> for all columns.</param>
     /// <param name="schemaEvolution">An optional replacement schema-evolution policy.</param>
     public void Reset(Stream stream, RowApiColumnDescriptor[]? projection,
@@ -185,7 +185,7 @@ public sealed class RowReaderCore : IDisposable
     }
 
     /// <summary>Resets the generated row reader to a random-access source and projection.</summary>
-    /// <param name="source">The new caller-owned source. Any previously owned stream is closed.</param>
+    /// <param name="source">The new random-access source.</param>
     /// <param name="projection">The selected columns, or <see langword="null"/> for all columns.</param>
     /// <param name="schemaEvolution">An optional replacement schema-evolution policy.</param>
     public void Reset(IParquetReadSource source, RowApiColumnDescriptor[]? projection,
