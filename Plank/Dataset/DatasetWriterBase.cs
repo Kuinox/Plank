@@ -683,8 +683,9 @@ public abstract class DatasetWriterBase<TRow>
         var file = state.File;
         try
         {
-            if (file is { } sources)
-                sources.Destination.Close();
+            // CloseFile can fail before releasing pooled serialization buffers. Dispose
+            // aborts the writer without attempting to finalize the failed file again.
+            state.Writer?.Dispose();
         }
         finally
         {
