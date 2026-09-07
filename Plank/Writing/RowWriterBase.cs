@@ -66,13 +66,16 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         _bufferPool = options.BufferPool;
         _targetFileSizeBytes = options.TargetFileSizeBytes;
         var workerCount = checked((int)maxParallelism);
+        // One worker needs a spare slot to overlap production and serialization.
+        // With multiple workers, keep one slot per worker to avoid overloading worker 0.
+        var slotCount = workerCount == 1 ? 2 : workerCount;
         _execution = options.Execution;
         _workerReadySlots = CreateWorkerReadySlots(workerCount);
-        _freeSlots = new Queue<TSlot>(workerCount);
-        _slotOwners = new Dictionary<TSlot, int>(workerCount, ReferenceEqualityComparer.Instance);
-        _serializedSlots = new Dictionary<ulong, QueuedSlot>(workerCount);
+        _freeSlots = new Queue<TSlot>(slotCount);
+        _slotOwners = new Dictionary<TSlot, int>(slotCount, ReferenceEqualityComparer.Instance);
+        _serializedSlots = new Dictionary<ulong, QueuedSlot>(slotCount);
         _workers = new Thread[workerCount];
-        _slots = new TSlot?[workerCount];
+        _slots = new TSlot?[slotCount];
         _lifecycleGate = new object();
         _gate = new object();
         _writeGate = new object();
@@ -127,13 +130,16 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         _bufferPool = options.BufferPool;
         _targetFileSizeBytes = options.TargetFileSizeBytes;
         var workerCount = checked((int)maxParallelism);
+        // One worker needs a spare slot to overlap production and serialization.
+        // With multiple workers, keep one slot per worker to avoid overloading worker 0.
+        var slotCount = workerCount == 1 ? 2 : workerCount;
         _execution = options.Execution;
         _workerReadySlots = CreateWorkerReadySlots(workerCount);
-        _freeSlots = new Queue<TSlot>(workerCount);
-        _slotOwners = new Dictionary<TSlot, int>(workerCount, ReferenceEqualityComparer.Instance);
-        _serializedSlots = new Dictionary<ulong, QueuedSlot>(workerCount);
+        _freeSlots = new Queue<TSlot>(slotCount);
+        _slotOwners = new Dictionary<TSlot, int>(slotCount, ReferenceEqualityComparer.Instance);
+        _serializedSlots = new Dictionary<ulong, QueuedSlot>(slotCount);
         _workers = new Thread[workerCount];
-        _slots = new TSlot?[workerCount];
+        _slots = new TSlot?[slotCount];
         _lifecycleGate = new object();
         _gate = new object();
         _writeGate = new object();
@@ -184,12 +190,12 @@ public abstract class RowWriterBase<TSlot> : IDisposable
             if (_slotsInitialized)
                 throw new InvalidOperationException("Row writer slots are already initialized.");
 
-            for (var i = 0; i < _workers.Length; i++)
+            for (var i = 0; i < _slots.Length; i++)
             {
                 var slot = CreateSlotChecked();
                 _slots[i] = slot;
                 // Keep the slot's reusable input and serialized buffers on the same worker across every reuse.
-                _slotOwners.Add(slot, i);
+                _slotOwners.Add(slot, i % _workers.Length);
                 _freeSlots.Enqueue(slot);
                 _freeSignal.Release();
             }

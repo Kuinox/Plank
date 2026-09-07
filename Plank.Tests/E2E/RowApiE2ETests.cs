@@ -113,7 +113,7 @@ internal sealed class RowApiE2ETests
     }
 
     [Test]
-    public async Task NextBlocksWhenAllWorkersAreBusy()
+    public async Task ProducerCanFillOneExtraSlotBeforeBlocking()
     {
         var path = Path.Combine(Path.GetTempPath(), $"plank-row-pipeline-blocking-{Guid.NewGuid():N}.parquet");
         var serializeStarted = new ManualResetEventSlim(false);
@@ -126,24 +126,33 @@ internal sealed class RowApiE2ETests
                 using var writer = new BlockingTestIntPipelineWriter(stream, rowBatchSize: 1, maxParallelism: 1,
                     new ParquetWriterOptions(), serializeStarted, releaseSerialize);
 
-                ref var value = ref writer.GetValue();
-                value = 42;
+                Task? nextTask = null;
+                try
+                {
+                    writer.GetValue() = 42;
+                    nextTask = Task.Run(() => writer.Next());
+                    if (!serializeStarted.Wait(TimeSpan.FromSeconds(2)))
+                        throw new InvalidOperationException("Timed out waiting for serialization to start.");
+                    await nextTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
 
-                var nextTask = Task.Run(() => writer.Next());
-                if (!serializeStarted.Wait(TimeSpan.FromSeconds(2)))
-                    throw new InvalidOperationException("Timed out waiting for worker serialization to start.");
-
-                await Task.Delay(150).ConfigureAwait(false);
-                if (nextTask.IsCompleted)
-                    throw new InvalidOperationException("Next() should block while all workers are busy.");
-
-                releaseSerialize.Set();
-                await nextTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                    // The worker remains blocked while the producer fills its spare slot.
+                    writer.GetValue() = 43;
+                    nextTask = Task.Run(() => writer.Next());
+                    await Task.Delay(150).ConfigureAwait(false);
+                    if (nextTask.IsCompleted)
+                        throw new InvalidOperationException("Next() should block when both slots are occupied.");
+                }
+                finally
+                {
+                    releaseSerialize.Set();
+                    if (nextTask is not null)
+                        await nextTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                }
                 writer.CompleteWriting();
             }
 
-            AssertParquetSharp(path, [42]);
-            await AssertParquetNetAsync(path, [42]).ConfigureAwait(false);
+            AssertParquetSharp(path, [42, 43]);
+            await AssertParquetNetAsync(path, [42, 43]).ConfigureAwait(false);
         }
         finally
         {
@@ -174,21 +183,25 @@ internal sealed class RowApiE2ETests
                 using var writer = new BlockingFiveColumnPipelineWriter(stream, rowBatchSize: 1, maxParallelism: 2,
                     new ParquetWriterOptions(), serializeStarted, releaseSerialize);
 
-                writer.SetCurrentRow(expected[0][0]);
-                writer.Next();
-
-                writer.SetCurrentRow(expected[1][0]);
-                var nextTask = Task.Run(() => writer.Next());
-
-                if (!serializeStarted.Wait(TimeSpan.FromSeconds(2)))
-                    throw new InvalidOperationException("Timed out waiting for both workers to start serialization.");
-
-                await Task.Delay(150).ConfigureAwait(false);
-                if (nextTask.IsCompleted)
-                    throw new InvalidOperationException("Next() should block when two workers are busy on two slots.");
-
-                releaseSerialize.Set();
-                await nextTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                Task? nextTask = null;
+                try
+                {
+                    writer.SetCurrentRow(expected[0][0]);
+                    writer.Next();
+                    writer.SetCurrentRow(expected[1][0]);
+                    nextTask = Task.Run(() => writer.Next());
+                    if (!serializeStarted.Wait(TimeSpan.FromSeconds(2)))
+                        throw new InvalidOperationException("Timed out waiting for both serializers.");
+                    await Task.Delay(150).ConfigureAwait(false);
+                    if (nextTask.IsCompleted)
+                        throw new InvalidOperationException("Next() should block when both worker slots are occupied.");
+                }
+                finally
+                {
+                    releaseSerialize.Set();
+                    if (nextTask is not null)
+                        await nextTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                }
                 writer.CompleteWriting();
             }
 
@@ -817,7 +830,8 @@ internal sealed class RowApiE2ETests
 
         internal void SerializeColumns()
         {
-            _serializeStarted.Signal();
+            if (!_releaseSerialize.IsSet)
+                _serializeStarted.Signal();
             _releaseSerialize.Wait(TimeSpan.FromSeconds(5));
             _s0.Serialize(new ReadOnlySpan<int>(_c0, 0, _index));
             _s1.Serialize(new ReadOnlySpan<int>(_c1, 0, _index));
