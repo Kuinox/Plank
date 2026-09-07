@@ -4,6 +4,15 @@ namespace Plank.Reading.Physical;
 
 public sealed class ParquetFileMetadata
 {
+    /// <summary>Decodes an owned snapshot of the column chunk's optional geospatial statistics.</summary>
+    /// <remarks>Allocates on each call. Bounds and type codes are reported as stored; no geometry decoding or spatial pruning is performed.</remarks>
+    public ParquetGeospatialStatistics? ReadGeospatialStatistics(int rowGroupOrdinal, int columnOrdinal)
+    {
+        var chunk = ColumnChunk(rowGroupOrdinal, columnOrdinal);
+        return chunk.GeospatialStatisticsLength == 0 ? null : ParquetGeospatialStatistics.Read(
+            FooterBytes.Slice(chunk.GeospatialStatisticsOffset, chunk.GeospatialStatisticsLength));
+    }
+
     internal ParquetBuffer FooterBuffer;
     internal ParquetBuffer SchemaNodeBuffer;
     internal ParquetBuffer ColumnBuffer;

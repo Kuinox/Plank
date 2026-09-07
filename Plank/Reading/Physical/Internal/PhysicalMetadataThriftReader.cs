@@ -666,6 +666,8 @@ static class PhysicalMetadataThriftReader
         var physicalType = (ParquetPhysicalType?)null;
         var encodings = default(ParquetColumnChunkEncodings);
         var statistics = default(EncodedStatistics);
+        var geospatialOffset = 0;
+        var geospatialLength = 0;
 
         reader.BeginStruct();
 
@@ -679,7 +681,7 @@ static class PhysicalMetadataThriftReader
                 case 3:
                     ReadColumnMetadata(ref reader, metadata, ref physicalType, ref compression, ref dataPageOffset,
                         ref dictionaryPageOffset, ref totalCompressedSize, ref totalUncompressedSize, ref valueCount,
-                        ref encodings, ref statistics, ref bloomFilterOffset, ref bloomFilterLength,
+                        ref encodings, ref statistics, ref geospatialOffset, ref geospatialLength, ref bloomFilterOffset, ref bloomFilterLength,
                         expectedColumnOrdinal);
                     break;
                 case 4:
@@ -706,13 +708,15 @@ static class PhysicalMetadataThriftReader
         return new ParquetColumnChunkInfo(rowGroupOrdinal, expectedColumnOrdinal, physicalType.Value, compression,
             valueCount, dataPageOffset, dictionaryPageOffset, totalCompressedSize, totalUncompressedSize,
             columnIndexOffset, columnIndexLength, offsetIndexOffset, offsetIndexLength, bloomFilterOffset,
-            bloomFilterLength, encodings, statistics);
+            bloomFilterLength, encodings, statistics)
+        { GeospatialStatisticsOffset = geospatialOffset, GeospatialStatisticsLength = geospatialLength };
     }
 
     static void ReadColumnMetadata(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
         ref ParquetPhysicalType? physicalType, ref CompressionKind compression, ref ulong dataPageOffset,
         ref ulong dictionaryPageOffset, ref ulong totalCompressedSize, ref ulong totalUncompressedSize,
         ref ulong valueCount, ref ParquetColumnChunkEncodings encodings, ref EncodedStatistics statistics,
+        ref int geospatialOffset, ref int geospatialLength,
         ref ulong bloomFilterOffset, ref uint bloomFilterLength, int expectedColumnOrdinal)
     {
         reader.BeginStruct();
@@ -755,6 +759,13 @@ static class PhysicalMetadataThriftReader
                     break;
                 case 15:
                     bloomFilterLength = reader.ReadI32AsU32();
+                    break;
+                case 17:
+                    if (type != CompactProtocolType.Struct)
+                        throw new CorruptParquetException("Expected geospatial statistics to be a struct.");
+                    geospatialOffset = reader.Offset;
+                    reader.Skip(type);
+                    geospatialLength = reader.Offset - geospatialOffset;
                     break;
                 default:
                     reader.Skip(type, inlineBool);

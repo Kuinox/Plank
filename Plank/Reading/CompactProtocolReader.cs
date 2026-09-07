@@ -33,6 +33,14 @@ ref struct CompactProtocolReader
         _depth = 0;
     }
 
+    internal double ReadDouble()
+    {
+        EnsureAvailable(sizeof(double));
+        var value = System.Buffers.Binary.BinaryPrimitives.ReadDoubleLittleEndian(_buffer.Slice(_offset, sizeof(double)));
+        _offset += sizeof(double);
+        return value;
+    }
+
     internal int Offset
         => _offset;
 
@@ -188,6 +196,10 @@ ref struct CompactProtocolReader
                 return;
             case CompactProtocolType.I64:
                 _ = ReadI64();
+                return;
+            case CompactProtocolType.Double:
+                EnsureAvailable(sizeof(double));
+                _offset += sizeof(double);
                 return;
             case CompactProtocolType.Binary:
             {

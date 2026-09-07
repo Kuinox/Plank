@@ -18,6 +18,8 @@ public readonly record struct ParquetColumnChunkInfo(
     uint OffsetIndexLength,
     ParquetColumnChunkEncodings Encodings)
 {
+    internal int GeospatialStatisticsOffset { get; init; }
+    internal int GeospatialStatisticsLength { get; init; }
     internal readonly EncodedStatistics Statistics;
 
     internal ParquetColumnChunkInfo(int rowGroupOrdinal, int columnOrdinal, ParquetPhysicalType physicalType,

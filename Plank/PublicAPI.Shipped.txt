@@ -909,3 +909,17 @@ Plank.Writing.ParquetWriterOptions.RowApiInitialRowCapacity.get -> int
 Plank.Writing.ParquetWriterOptions.RowApiInitialRowCapacity.init -> void
 Plank.RowApi.PipelineRowWriterBase<TSlot>.ResetWriter(System.IO.Stream! stream) -> void
 Plank.Writing.RowWriterBase<TSlot>.ResetPipeline(System.IO.Stream! stream) -> void
+Plank.Reading.Physical.ParquetGeospatialStatistics
+Plank.Reading.Physical.ParquetBoundingBox
+Plank.Reading.Physical.ParquetGeospatialStatistics.BoundingBox.get -> Plank.Reading.Physical.ParquetBoundingBox?
+Plank.Reading.Physical.ParquetGeospatialStatistics.GeospatialTypes.get -> System.Collections.Generic.IReadOnlyList<int>?
+Plank.Reading.Physical.ParquetFileMetadata.ReadGeospatialStatistics(int rowGroupOrdinal, int columnOrdinal) -> Plank.Reading.Physical.ParquetGeospatialStatistics?
+Plank.Reading.Logical.ParquetColumnChunkMetadata.ReadGeospatialStatistics() -> Plank.Reading.Physical.ParquetGeospatialStatistics?
+Plank.Reading.Physical.ParquetBoundingBox.XMin.get -> double
+Plank.Reading.Physical.ParquetBoundingBox.XMax.get -> double
+Plank.Reading.Physical.ParquetBoundingBox.YMin.get -> double
+Plank.Reading.Physical.ParquetBoundingBox.YMax.get -> double
+Plank.Reading.Physical.ParquetBoundingBox.ZMin.get -> double?
+Plank.Reading.Physical.ParquetBoundingBox.ZMax.get -> double?
+Plank.Reading.Physical.ParquetBoundingBox.MMin.get -> double?
+Plank.Reading.Physical.ParquetBoundingBox.MMax.get -> double?

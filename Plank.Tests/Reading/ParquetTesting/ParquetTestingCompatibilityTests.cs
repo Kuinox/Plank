@@ -121,22 +121,6 @@ internal sealed class ParquetTestingCompatibilityTests
         ["data/datapage_v1-uncompressed-checksum.parquet"] = PageIndexOnly("page-header probe: partial header parses"),
 
         // ---------------------------------------------------------------------------
-        // 2. CompactProtocolReader.Skip does not know the DOUBLE wire type, so it cannot
-        //    step over an unknown field carrying one. The GEOMETRY/GEOGRAPHY statistics
-        //    the geospatial files put in their footers are exactly that, and the footer
-        //    parse dies on a field Plank is otherwise free to ignore.
-        // ---------------------------------------------------------------------------
-        ["data/geospatial/crs-arbitrary-value.parquet"] = FooterRejected("compact protocol: cannot skip DOUBLE"),
-        ["data/geospatial/crs-default.parquet"] = FooterRejected("compact protocol: cannot skip DOUBLE"),
-        ["data/geospatial/crs-projjson.parquet"] = FooterRejected("compact protocol: cannot skip DOUBLE"),
-        ["data/geospatial/crs-srid.parquet"] = FooterRejected("compact protocol: cannot skip DOUBLE"),
-        ["data/geospatial/geography-lines.parquet"] = FooterRejected("compact protocol: cannot skip DOUBLE"),
-        ["data/geospatial/geography-points.parquet"] = FooterRejected("compact protocol: cannot skip DOUBLE"),
-        ["data/geospatial/geography-polygons.parquet"] = FooterRejected("compact protocol: cannot skip DOUBLE"),
-        ["data/geospatial/geospatial-with-nan.parquet"] = FooterRejected("compact protocol: cannot skip DOUBLE"),
-        ["data/geospatial/geospatial.parquet"] = FooterRejected("compact protocol: cannot skip DOUBLE"),
-
-        // ---------------------------------------------------------------------------
         // 3. Decoder defects. Each of these is a distinct bug reachable from the public
         //    reader on a file a mainstream writer produced.
         // ---------------------------------------------------------------------------
