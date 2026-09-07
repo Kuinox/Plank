@@ -45,7 +45,31 @@ foreach (LeafColumn column in reader.Schema.LeafColumns)
 
 [`Reset(Stream)`](xref:Plank.Reading.Logical.ParquetReader.Reset(System.IO.Stream)) reads the footer and binds the file schema. [`Schema`](xref:Plank.Reading.Logical.ParquetReader.Schema) is the schema used to read values, while [`Metadata.Schema`](xref:Plank.Reading.Logical.ParquetFileMetadata.Schema) always describes the complete schema stored in the file.
 
-## Read column values
+## Read discovered column values
+
+Discovery also supports reading values without a generated schema. Copy this reader
+into your project; it selects `rowGroup.Column<T>(column)` using each discovered
+leaf's physical type, logical annotation and definition level.
+
+[!code-csharp[](../../../Samples/Plank.Sample/UnknownSchemaReader.cs)]
+
+Call it with a seekable input stream (the reader takes ownership of the stream):
+
+```csharp
+using Plank.Sample;
+
+using var input = File.OpenRead("external.parquet");
+UnknownSchemaReader.Dump(input, Console.Out);
+```
+
+The example prints one column at a time. It demonstrates nullable numbers, timestamps,
+decimals, UTF8 text and raw binary. Values are consumed before advancing each buffer;
+copy values if your application must retain them. Decimal values must fit .NET's
+`decimal` range. Repeated lists, maps, and leaves with multiple optional ancestors need `NestedColumn<T>` and explicit level
+handling; this example rejects them instead of silently flattening their shape.
+Other binary annotations are printed as hex rather than interpreted as text.
+
+## Read generated column values
 
 Enumerate the buffers exposed by the generated column property:
 

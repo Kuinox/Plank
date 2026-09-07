@@ -10,6 +10,7 @@ static class Program
             paths.Add(ColumnApiSample.Run());
             paths.Add(RowApiSample.Run());
             DecimalApiSample.Run();
+            UnknownSchemaSample.Run();
             DatasetApiSample.Run();
             Console.WriteLine("All documentation samples passed.");
         }
