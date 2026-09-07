@@ -28,6 +28,7 @@ public sealed class RowReaderCore : IDisposable
     RowGroup _rowGroup;
     ParquetSchemaEvolutionOptions? _schemaEvolution;
     StreamReadSource? _streamSource;
+    Stream? _ownedStream;
     RowGroupCollection.Enumerator _rowGroups;
     ulong _rowGroupRowsRemaining;
     bool _started;
@@ -40,7 +41,7 @@ public sealed class RowReaderCore : IDisposable
     int _currentBatchOffset;
 
     /// <summary>Initializes a generated row reader over a stream.</summary>
-    /// <param name="stream">The source stream.</param>
+    /// <param name="stream">The source stream, owned by this reader and closed on disposal or failed construction.</param>
     /// <param name="schema">The generated row schema.</param>
     /// <param name="columns">The generated column descriptors.</param>
     /// <param name="projection">The selected columns, or <see langword="null"/> for all columns.</param>
@@ -49,12 +50,12 @@ public sealed class RowReaderCore : IDisposable
     public RowReaderCore(Stream stream, ParquetSchema schema, RowApiColumnDescriptor[] columns,
         RowApiColumnDescriptor[]? projection, RowReaderOptions options,
         ParquetSchemaEvolutionOptions? schemaEvolution)
-        : this(new StreamReadSource(stream), schema, columns, projection, options, schemaEvolution)
+        : this(null, stream ?? throw new ArgumentNullException(nameof(stream)), schema, columns, projection, options, schemaEvolution)
     {
     }
 
     /// <summary>Initializes a generated row reader over a random-access source.</summary>
-    /// <param name="source">The random-access source.</param>
+    /// <param name="source">The random-access source. Ownership remains with the caller.</param>
     /// <param name="schema">The generated row schema.</param>
     /// <param name="columns">The generated column descriptors.</param>
     /// <param name="projection">The selected columns, or <see langword="null"/> for all columns.</param>
@@ -63,45 +64,59 @@ public sealed class RowReaderCore : IDisposable
     public RowReaderCore(IParquetReadSource source, ParquetSchema schema, RowApiColumnDescriptor[] columns,
         RowApiColumnDescriptor[]? projection, RowReaderOptions options,
         ParquetSchemaEvolutionOptions? schemaEvolution)
+        : this(source ?? throw new ArgumentNullException(nameof(source)), null, schema, columns, projection, options, schemaEvolution)
     {
-        ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(schema);
-        ArgumentNullException.ThrowIfNull(columns);
-        ArgumentNullException.ThrowIfNull(options);
-        options.Validate();
-        if (columns.Length != schema.LeafColumns.Length)
-            throw new ArgumentException("Row API column descriptors must match the row API schema column count.",
-                nameof(columns));
+    }
 
-        _execution = options.Execution;
-        _maxReadAhead = options.MaxReadAheadRowGroups;
-        _schemaEvolution = schemaEvolution;
-        _streamSource = source as StreamReadSource;
-        _states = CreateStates(schema, columns);
-        _valueBatches = new RowApiValueBatch[_states.Length];
-        _work = CreateWork(_states);
-        _projectedStates = new RowApiColumnReadState[_states.Length];
-        _reader = new ParquetReader(CreateLooseReaderOptions(options));
-        _rowGroup = default;
-        _rowGroups = default;
-        _rowGroupRowsRemaining = 0;
-        _started = false;
-        _hasCurrent = false;
-        _disposed = false;
-        _batchAdvance = false;
-        _batchLength = 0;
-        _batchOffset = 0;
-        _currentBatchOffset = 0;
+    RowReaderCore(IParquetReadSource? source, Stream? stream, ParquetSchema schema,
+        RowApiColumnDescriptor[] columns, RowApiColumnDescriptor[]? projection,
+        RowReaderOptions options, ParquetSchemaEvolutionOptions? schemaEvolution)
+    {
+        _ownedStream = stream;
         try
         {
-            _reader.Reset(PrepareSource(source));
+            ArgumentNullException.ThrowIfNull(schema);
+            ArgumentNullException.ThrowIfNull(columns);
+            ArgumentNullException.ThrowIfNull(options);
+            options.Validate();
+            if (columns.Length != schema.LeafColumns.Length)
+                throw new ArgumentException("Row API column descriptors must match the row API schema column count.",
+                    nameof(columns));
+
+            _execution = options.Execution;
+            _maxReadAhead = options.MaxReadAheadRowGroups;
+            _schemaEvolution = schemaEvolution;
+            _states = CreateStates(schema, columns);
+            _valueBatches = new RowApiValueBatch[_states.Length];
+            _work = CreateWork(_states);
+            _projectedStates = new RowApiColumnReadState[_states.Length];
+            _reader = new ParquetReader(CreateLooseReaderOptions(options));
+            _rowGroup = default;
+            _rowGroups = default;
+            _rowGroupRowsRemaining = 0;
+            _started = false;
+            _hasCurrent = false;
+            _disposed = false;
+            _batchAdvance = false;
+            _batchLength = 0;
+            _batchOffset = 0;
+            _currentBatchOffset = 0;
+            if (stream is not null)
+            {
+                _streamSource = new StreamReadSource(stream);
+                source = _streamSource;
+            }
+            _reader.Reset(PrepareSource(source!));
             ApplyProjection(projection);
             ResolveFileSchema();
             RebuildProjectedStates();
         }
         catch
         {
-            Dispose();
+            if (_reader is not null)
+                Dispose();
+            else
+                DisposeOwnedStream();
             throw;
         }
     }
@@ -142,23 +157,35 @@ public sealed class RowReaderCore : IDisposable
     }
 
     /// <summary>Resets the generated row reader to a stream and projection.</summary>
-    /// <param name="stream">The new source stream.</param>
+    /// <param name="stream">The new owned stream. A different previous stream is closed; a rejected stream is closed before returning.</param>
     /// <param name="projection">The selected columns, or <see langword="null"/> for all columns.</param>
     /// <param name="schemaEvolution">An optional replacement schema-evolution policy.</param>
     public void Reset(Stream stream, RowApiColumnDescriptor[]? projection,
         ParquetSchemaEvolutionOptions? schemaEvolution = null)
     {
         ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(stream);
         DrainReadAhead();
-        if (_streamSource is null)
-            _streamSource = new StreamReadSource(stream);
-        else
-            _streamSource.Reset(stream);
-        Reset(_streamSource, projection, schemaEvolution);
+        if (!ReferenceEquals(_ownedStream, stream))
+            DisposeOwnedStream();
+        _ownedStream = stream;
+        try
+        {
+            if (_streamSource is null)
+                _streamSource = new StreamReadSource(stream);
+            else
+                _streamSource.Reset(stream);
+            ResetCore(_streamSource, projection, schemaEvolution);
+        }
+        catch
+        {
+            DisposeOwnedStream();
+            throw;
+        }
     }
 
     /// <summary>Resets the generated row reader to a random-access source and projection.</summary>
-    /// <param name="source">The new random-access source.</param>
+    /// <param name="source">The new caller-owned source. Any previously owned stream is closed.</param>
     /// <param name="projection">The selected columns, or <see langword="null"/> for all columns.</param>
     /// <param name="schemaEvolution">An optional replacement schema-evolution policy.</param>
     public void Reset(IParquetReadSource source, RowApiColumnDescriptor[]? projection,
@@ -166,10 +193,17 @@ public sealed class RowReaderCore : IDisposable
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
+        DrainReadAhead();
+        DisposeOwnedStream();
+        ResetCore(source, projection, schemaEvolution);
+    }
+
+    void ResetCore(IParquetReadSource source, RowApiColumnDescriptor[]? projection,
+        ParquetSchemaEvolutionOptions? schemaEvolution)
+    {
         if (schemaEvolution is not null)
             _schemaEvolution = schemaEvolution;
 
-        DrainReadAhead();
         _fault = null;
         Array.Clear(_valueBatches);
         ApplyProjection(projection);
@@ -280,16 +314,30 @@ public sealed class RowReaderCore : IDisposable
             return;
 
         DrainReadAhead();
-        _workers?.Dispose();
-        _workers = null;
-        DisposeColumnReaders();
-        foreach (var work in _work)
-            work.Dispose();
-        if (_aheadWork is not null)
-            foreach (var work in _aheadWork)
-                work.Dispose();
-        _reader.Dispose();
         _disposed = true;
+        try
+        {
+            _workers?.Dispose();
+            _workers = null;
+            DisposeColumnReaders();
+            foreach (var work in _work)
+                work.Dispose();
+            if (_aheadWork is not null)
+                foreach (var work in _aheadWork)
+                    work.Dispose();
+            _reader.Dispose();
+        }
+        finally
+        {
+            DisposeOwnedStream();
+        }
+    }
+
+    void DisposeOwnedStream()
+    {
+        var stream = _ownedStream;
+        _ownedStream = null;
+        stream?.Dispose();
     }
 
     static RowApiColumnReadState[] CreateStates(ParquetSchema schema, RowApiColumnDescriptor[] columns)

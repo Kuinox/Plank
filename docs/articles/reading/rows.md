@@ -39,3 +39,12 @@ Every property has a matching projection. Combine projections with `|`, or use `
 By default, the row reader requires each selected column to exist and match the row schema. It validates physical type, logical type, and required or optional repetition.
 
 For files whose schema evolves over time, pass [`ParquetSchemaEvolutionOptions`](xref:Plank.Reading.ParquetSchemaEvolutionOptions) to [`CreateRowReader`](../schema.md#define-a-schema). The options can allow selected compatibility changes, such as materializing a default value for a missing column or reading a required file column into a nullable property.
+
+### Stream ownership
+
+Generated `CreateRowReader(Stream)` and `Reset(Stream)` take ownership of the
+stream. Disposing the reader or resetting onto a different stream or source
+closes the owned stream. Resetting onto the same stream keeps it open. A stream
+rejected during construction or reset is closed before the exception returns.
+The `IParquetReadSource` overloads borrow their source: callers retain ownership,
+including when they supply a `StreamReadSource` wrapper.

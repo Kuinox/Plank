@@ -15,6 +15,119 @@ internal sealed class GeneratedRowReaderE2ETests
     [Test]
     [Arguments(1)]
     [Arguments(4)]
+    public void GeneratedReaderOwnsStreamsAcrossResetAndDispose(int workers)
+    {
+        using var file = CreateBatchedEvolvingFile(4_097, prependEmptyRowGroup: true);
+        using var first = new OwnershipTrackingStream(file.ToArray());
+        using var second = new OwnershipTrackingStream(file.ToArray());
+        using var reader = EvolvingRowSchema.CreateRowReader(first,
+            EvolvingRowSchema.Projection.Id,
+            new Plank.RowApi.RowReaderOptions { Execution = new() { WorkerCount = workers } });
+        if (!reader.MoveNext()) throw new InvalidOperationException("Expected a row.");
+        reader.Reset(first, EvolvingRowSchema.Projection.Id);
+        CheckDisposals(first, 0);
+        if (!reader.MoveNext()) throw new InvalidOperationException("Same-stream reset failed.");
+        reader.Reset(second, EvolvingRowSchema.Projection.Id);
+        CheckDisposals(first, 1);
+        CheckDisposals(second, 0);
+        if (!reader.MoveNext()) throw new InvalidOperationException("Replacement reset failed.");
+        reader.Dispose();
+        reader.Dispose();
+        CheckDisposals(first, 1);
+        CheckDisposals(second, 1);
+    }
+
+    [Test]
+    public void GeneratedReaderDoesNotDisposeOrRetargetBorrowedStreamSources()
+    {
+        using var file = CreateBatchedEvolvingFile(1, prependEmptyRowGroup: false);
+        using var borrowed = new OwnershipTrackingStream(file.ToArray());
+        using var owned = new OwnershipTrackingStream(file.ToArray());
+        using var source = new Plank.Reading.StreamReadSource(borrowed);
+        using var reader = EvolvingRowSchema.CreateRowReader(source, EvolvingRowSchema.Projection.Id);
+        reader.Reset(source, EvolvingRowSchema.Projection.Id);
+        CheckDisposals(borrowed, 0);
+        reader.Reset(owned, EvolvingRowSchema.Projection.Id);
+        CheckDisposals(borrowed, 0);
+        // Retargeting the caller's wrapper would make this read touch owned instead.
+        borrowed.ReadCount = 0;
+        source.ReadExactly(0, new byte[4]);
+        if (borrowed.ReadCount == 0) throw new InvalidOperationException("Borrowed wrapper was retargeted.");
+        reader.Reset(source, EvolvingRowSchema.Projection.Id);
+        CheckDisposals(owned, 1);
+        reader.Dispose();
+        CheckDisposals(borrowed, 0);
+        CheckDisposals(owned, 1);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void GeneratedReaderClosesRejectedStreamsAndCanResetAgain(bool unreadable)
+    {
+        using var file = CreateBatchedEvolvingFile(1, prependEmptyRowGroup: false);
+        using var first = new OwnershipTrackingStream(file.ToArray());
+        using var rejected = new OwnershipTrackingStream([], readable: !unreadable);
+        using var replacement = new OwnershipTrackingStream(file.ToArray());
+        using var reader = EvolvingRowSchema.CreateRowReader(first, EvolvingRowSchema.Projection.Id);
+        if (unreadable)
+            ExpectAccessException<InvalidOperationException>(() => reader.Reset(rejected));
+        else
+            ExpectAccessException<Plank.CorruptParquetException>(() => reader.Reset(rejected));
+        CheckDisposals(first, 1);
+        CheckDisposals(rejected, 1);
+        reader.Reset(replacement, EvolvingRowSchema.Projection.Id);
+        if (!reader.MoveNext()) throw new InvalidOperationException("Recovery reset failed.");
+        reader.Dispose();
+        CheckDisposals(rejected, 1);
+        CheckDisposals(replacement, 1);
+    }
+
+    [Test]
+    public void GeneratedReaderClosesStreamsOnConstructionFailureButBorrowsSources()
+    {
+        using var invalid = new OwnershipTrackingStream([]);
+        ExpectAccessException<Plank.CorruptParquetException>(() => EvolvingRowSchema.CreateRowReader(invalid));
+        CheckDisposals(invalid, 1);
+        using var unreadable = new OwnershipTrackingStream([], readable: false);
+        ExpectAccessException<InvalidOperationException>(() => EvolvingRowSchema.CreateRowReader(unreadable));
+        CheckDisposals(unreadable, 1);
+        using var borrowed = new OwnershipTrackingStream([]);
+        using var source = new Plank.Reading.StreamReadSource(borrowed);
+        ExpectAccessException<Plank.CorruptParquetException>(() => EvolvingRowSchema.CreateRowReader(source));
+        CheckDisposals(borrowed, 0);
+        using var badOptions = new OwnershipTrackingStream([]);
+        ExpectAccessException<ArgumentNullException>(() => new Plank.RowApi.RowReaderCore(
+            badOptions, null!, [], null, null!, null));
+        CheckDisposals(badOptions, 1);
+    }
+
+    static void CheckDisposals(OwnershipTrackingStream stream, int expected)
+    {
+        if (stream.DisposeCount != expected)
+            throw new InvalidOperationException($"Expected {expected} disposals, got {stream.DisposeCount}.");
+    }
+
+    sealed class OwnershipTrackingStream(byte[] bytes, bool readable = true) : MemoryStream(bytes)
+    {
+        public int DisposeCount { get; private set; }
+        public int ReadCount { get; set; }
+        public override bool CanRead => readable && base.CanRead;
+        public override int Read(Span<byte> buffer)
+        {
+            ReadCount++;
+            return base.Read(buffer);
+        }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) DisposeCount++;
+            base.Dispose(disposing);
+        }
+    }
+
+    [Test]
+    [Arguments(1)]
+    [Arguments(4)]
     public void BoundValueAccessPreservesPositionTypeProjectionAndOrdinalChecks(int workers)
     {
         using var stream = CreateBatchedEvolvingFile(4_097, prependEmptyRowGroup: true);
