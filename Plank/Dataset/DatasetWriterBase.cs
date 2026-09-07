@@ -492,7 +492,7 @@ public abstract class DatasetWriterBase<TRow>
                 var filePath = GetFilePath(pathBuffer.Span[..pathLength], _nextFileIndex, out filePathAllocation);
                 if (filePath.IsEmpty)
                     throw new InvalidOperationException("The dataset file path selector returned an empty path.");
-                file.Destination.Open(filePath, FileMode.Create);
+                file.Destination.Open(filePath, FileMode.CreateNew);
                 writer = _schema.CreateWriter(file.Destination, _options.WriterOptions);
             }
             else
@@ -618,7 +618,7 @@ public abstract class DatasetWriterBase<TRow>
                 out filePathAllocation);
             if (filePath.IsEmpty)
                 throw new InvalidOperationException("The dataset file path selector returned an empty path.");
-            file.Destination.Open(filePath, FileMode.Create);
+            file.Destination.Open(filePath, FileMode.CreateNew);
             writer = _schema.CreateWriter(file.Destination, _options.WriterOptions);
             state.Slot.Bind(writer);
             state.Writer = writer;
