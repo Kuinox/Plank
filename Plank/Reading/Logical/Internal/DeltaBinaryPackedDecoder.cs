@@ -144,8 +144,12 @@ static class DeltaBinaryPackedDecoder
             if (payload.Length - offset < layout.MiniBlockCount)
                 throw new CorruptParquetException(
                     "Unexpected end of delta-binary-packed bit widths.");
+            // Widths are present for every mini-block, but unused mini-blocks in
+            // the final block have no payload and their widths are unspecified.
+            var usedMiniBlocks = Math.Min(layout.MiniBlockCount,
+                1 + (remaining - 1) / layout.MiniBlockSize);
             int encodedByteCount;
-            if (layout.MiniBlockCount == 4)
+            if (usedMiniBlocks == 4)
             {
                 var width0 = payload[offset];
                 var width1 = payload[offset + 1];
@@ -160,14 +164,13 @@ static class DeltaBinaryPackedDecoder
             else
             {
                 encodedByteCount = 0;
-                for (var i = 0; i < layout.MiniBlockCount; i++)
+                for (var i = 0; i < usedMiniBlocks; i++)
                 {
                     var bitWidth = payload[offset + i];
                     if (bitWidth > 64)
                         throw new CorruptParquetException(
                             $"Delta binary packed mini-block bit width {bitWidth} exceeds 64.");
-                    encodedByteCount = checked(encodedByteCount +
-                        layout.MiniBlockSize * bitWidth / 8);
+                    encodedByteCount = checked(encodedByteCount + layout.MiniBlockSize * bitWidth / 8);
                 }
             }
             offset += layout.MiniBlockCount;
@@ -417,7 +420,7 @@ static class DeltaBinaryPackedDecoder
             for (var i = 0; i < bitWidths.Length; i++)
                 bitWidths[i] = reader.ReadByte();
 
-            for (var miniBlock = 0; miniBlock < bitWidths.Length; miniBlock++)
+            for (var miniBlock = 0; miniBlock < bitWidths.Length && index < destination.Length; miniBlock++)
             {
                 var bitWidth = bitWidths[miniBlock];
                 if (bitWidth > 64)
@@ -495,7 +498,7 @@ static class DeltaBinaryPackedDecoder
             for (var i = 0; i < bitWidths.Length; i++)
                 bitWidths[i] = reader.ReadByte();
 
-            for (var miniBlock = 0; miniBlock < bitWidths.Length; miniBlock++)
+            for (var miniBlock = 0; miniBlock < bitWidths.Length && index < destination.Length; miniBlock++)
             {
                 var bitWidth = bitWidths[miniBlock];
                 if (bitWidth > 64)
@@ -954,7 +957,7 @@ static class DeltaBinaryPackedDecoder
             for (var i = 0; i < bitWidths.Length; i++)
                 bitWidths[i] = reader.ReadByte();
 
-            for (var miniBlock = 0; miniBlock < bitWidths.Length; miniBlock++)
+            for (var miniBlock = 0; miniBlock < bitWidths.Length && index < destination.Length; miniBlock++)
             {
                 var bitWidth = bitWidths[miniBlock];
                 for (var i = 0; i < layout.MiniBlockSize; i++)
@@ -1037,7 +1040,7 @@ static class DeltaBinaryPackedDecoder
             for (var i = 0; i < bitWidths.Length; i++)
                 bitWidths[i] = reader.ReadByte();
 
-            for (var miniBlock = 0; miniBlock < bitWidths.Length; miniBlock++)
+            for (var miniBlock = 0; miniBlock < bitWidths.Length && index < destination.Length; miniBlock++)
             {
                 var bitWidth = bitWidths[miniBlock];
                 if (bitWidth > 64)

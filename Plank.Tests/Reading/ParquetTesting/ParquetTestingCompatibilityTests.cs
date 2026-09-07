@@ -141,24 +141,10 @@ internal sealed class ParquetTestingCompatibilityTests
         //    reader on a file a mainstream writer produced.
         // ---------------------------------------------------------------------------
 
-        // The canonical DELTA_BINARY_PACKED conformance file: 65 columns, one per bit
-        // width from 0 to 64, with delta_binary_packed_expect.csv as ground truth.
-        // ParquetTestingDeltaEncodingTests covers what it should decode to.
-        ["data/delta_binary_packed.parquet"] = ValuesOnly("DELTA_BINARY_PACKED: 'Unexpected end of delta-binary-packed mini-block'"),
-
-        // The DELTA_BYTE_ARRAY companion. The block size it reads (26888794261) is not a
-        // plausible header field, so the decoder is starting from the wrong offset.
-        ["data/delta_byte_array.parquet"] = ValuesOnly("DELTA_BYTE_ARRAY: reads an implausible block size"),
-
-        // Optional PLAIN INT32 columns whose page holds fewer values than the header's
-        // value count, because the nulls do not occupy payload. Plank sizes the payload
-        // from the value count instead of the non-null count.
-        ["data/nullable.impala.parquet"] = ValuesOnly("PLAIN: payload sized from value count, not non-null count"),
-        ["data/nulls.snappy.parquet"] = new(true, false, true, "PLAIN: payload sized from value count, not non-null count"),
-
-        // A TIMESTAMP(NANOS) that fits a DateTime comfortably (2020-12-24) is rejected by
-        // the scaling bound check.
-        ["data/nested_structs.rust.parquet"] = ValuesOnly("TIMESTAMP(NANOS): bound check rejects an in-range value"),
+        // This fixture declares TIMESTAMP_MICROS, but its raw values include
+        // 1608822900000000000 microseconds, beyond DateTime's year-9999 limit.
+        // Physical Int64 access remains available; DateTime projection rejects it.
+        ["data/nested_structs.rust.parquet"] = ValuesOnly("TIMESTAMP_MICROS: value outside .NET DateTime range"),
 
         // ---------------------------------------------------------------------------
         // 4. Footer strictness. Plank refuses files other implementations accept.
