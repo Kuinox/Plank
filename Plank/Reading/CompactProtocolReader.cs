@@ -189,6 +189,10 @@ ref struct CompactProtocolReader
             case CompactProtocolType.I64:
                 _ = ReadI64();
                 return;
+            case CompactProtocolType.Double:
+                EnsureAvailable(sizeof(double));
+                _offset += sizeof(double);
+                return;
             case CompactProtocolType.Binary:
             {
                 // The length has to land in a local first: ReadBinaryLength
