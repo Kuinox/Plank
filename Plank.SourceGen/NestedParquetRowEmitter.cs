@@ -490,7 +490,8 @@ static class NestedParquetRowEmitter
             builder.AppendLine();
         }
 
-        builder.Append(GetAccessibilityKeyword(schemaType.DeclaredAccessibility)).Append(" partial class ")
+        builder.Append(GetAccessibilityKeyword(schemaType.DeclaredAccessibility))
+            .Append(schemaType.IsRecord ? " partial record class " : " partial class ")
             .Append(EscapeIdentifier(schemaType.Name)).AppendLine();
         builder.AppendLine("{");
         AppendSchema(builder, names, model);
