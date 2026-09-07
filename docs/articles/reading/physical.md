@@ -57,22 +57,3 @@ foreach (ParquetPage page in reader.OpenPages(rowGroupOrdinal, columnOrdinal))
 [`OpenPages`](xref:Plank.Reading.Physical.ParquetFileReader.OpenPages(System.Int32,System.Int32)) returns a [`ParquetPageCursor`](xref:Plank.Reading.Physical.ParquetPageCursor) for one row-group column.
 
 Each page exposes a parsed [`PageHeader`](xref:Plank.Reading.PageHeader) and a payload byte span. The payload is still parquet-encoded column data; dictionary encoding, levels, and values are decoded by the logical read layer.
-
-## Geospatial statistics
-
-`reader.Metadata.ReadGeospatialStatistics(rowGroupOrdinal, columnOrdinal)` returns
-an owned snapshot of optional column-chunk geospatial statistics, or `null` when
-absent. The logical API exposes the same snapshot through
-`rowGroup.GetColumnMetadata(columnOrdinal).ReadGeospatialStatistics()`.
-
-The snapshot contains an optional `BoundingBox` with required `XMin`, `XMax`,
-`YMin`, and `YMax` values and nullable `ZMin`, `ZMax`, `MMin`, and `MMax` values.
-`GeospatialTypes` contains the stored WKB integer type codes (including dimension
-offsets); `null` means the list is absent and an empty list means unknown types.
-Unknown type codes, NaN coordinates, and antimeridian bounds where `XMin > XMax`
-are preserved.
-
-Decoding allocates only when this method is called; the snapshot remains valid
-after the reader is reset or disposed. Malformed statistics throw
-`CorruptParquetException` when decoded. This API reads existing statistics; it
-does not compute them when writing or apply spatial pruning.
