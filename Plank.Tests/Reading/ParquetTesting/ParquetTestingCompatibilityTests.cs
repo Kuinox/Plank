@@ -141,10 +141,6 @@ internal sealed class ParquetTestingCompatibilityTests
         // Both files are valid and both are read by arrow.
         ["data/null_list.parquet"] = FooterRejected("schema: UNKNOWN logical type required to be optional"),
 
-        // A page header longer than the 64 KiB probe window -- the same probe as group 1,
-        // failing at the other end of its loop.
-        ["data/column_chunk_key_value_metadata.parquet"] = ValuesAndPageIndex("page-header probe: exceeds the 64 KiB window"),
-
         // ---------------------------------------------------------------------------
         // 5. Files that are malformed on purpose. Rejecting them is correct; they are
         //    listed so the suite notices if the rejection ever turns into a crash.

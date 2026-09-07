@@ -76,5 +76,7 @@ readonly struct InternalColumnChunkMetadata
     internal EncodedStatistics Statistics { get; }
 
     internal ulong ChunkOffset
-        => DictionaryPageOffset > 0 && DictionaryPageOffset < DataPageOffset ? DictionaryPageOffset : DataPageOffset;
+        => DictionaryPageOffset > 0 && (DataPageOffset == 0 || DictionaryPageOffset < DataPageOffset)
+            ? DictionaryPageOffset
+            : DataPageOffset;
 }
