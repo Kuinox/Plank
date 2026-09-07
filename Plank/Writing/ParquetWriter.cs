@@ -528,7 +528,12 @@ public sealed class ParquetWriter : IDisposable
         var latestOrdinal = metadata.RowGroupCount - 1;
         var replacementOffset = metadata.FooterOffset;
         for (var column = 0; column < metadata.RowGroups[latestOrdinal].ColumnCount; column++)
-            replacementOffset = Math.Min(replacementOffset, metadata.ColumnChunk(latestOrdinal, column).ChunkOffset);
+        {
+            var chunk = metadata.ColumnChunk(latestOrdinal, column);
+            // A chunk with no pages may use zero as its absent data-page offset.
+            if (chunk.TotalCompressedSize != 0)
+                replacementOffset = Math.Min(replacementOffset, chunk.ChunkOffset);
+        }
 
         // RowGroup.file_offset is advisory, not a safe truncation boundary. Other writers may also place
         // earlier groups' indexes or Bloom filters after the latest group's pages. Keep the original data
@@ -610,17 +615,26 @@ public sealed class ParquetWriter : IDisposable
                     $"Row group {rowGroupOrdinal} has {rowGroup.ColumnCount} columns; expected {columnCount}.");
             rowCount = checked(rowCount + checked((long)rowGroup.RowCount));
             for (var columnOrdinal = 0; columnOrdinal < rowGroup.ColumnCount; columnOrdinal++)
-                ValidateImportChunk(metadata.ColumnChunk(rowGroupOrdinal, columnOrdinal), metadata.FooterOffset);
+                ValidateImportChunk(metadata.ColumnChunk(rowGroupOrdinal, columnOrdinal), metadata.FooterOffset,
+                    rowGroup.RowCount);
         }
 
         return rowCount;
     }
 
-    static void ValidateImportChunk(Reading.Physical.ParquetColumnChunkInfo chunk, ulong footerOffset)
+    static void ValidateImportChunk(Reading.Physical.ParquetColumnChunkInfo chunk, ulong footerOffset, ulong rowCount)
     {
-        ValidateImportRange(chunk.ChunkOffset, chunk.TotalCompressedSize, footerOffset, "column chunk");
+        var empty = rowCount == 0 && chunk.ValueCount == 0;
+        var noPages = empty && chunk.TotalCompressedSize == 0 && chunk.TotalUncompressedSize == 0 &&
+            chunk.DictionaryPageOffset == 0;
+        // Empty groups may have no pages at all (Plank), or only a dictionary page
+        // with data_page_offset = 0 (Arrow). Neither implies a corrupt data range.
+        if (!noPages || chunk.ChunkOffset != 0)
+            ValidateImportRange(chunk.ChunkOffset, chunk.TotalCompressedSize, footerOffset, "column chunk",
+                allowEmpty: noPages);
         var chunkEnd = checked(chunk.ChunkOffset + chunk.TotalCompressedSize);
-        if (chunk.DataPageOffset < chunk.ChunkOffset || chunk.DataPageOffset >= chunkEnd)
+        if (!noPages && !(empty && chunk.DataPageOffset == 0) &&
+            (chunk.DataPageOffset < chunk.ChunkOffset || chunk.DataPageOffset >= chunkEnd))
             throw new CorruptParquetException("Column data page offset is outside its column chunk.");
         if (chunk.DictionaryPageOffset != 0 &&
             (chunk.DictionaryPageOffset < chunk.ChunkOffset || chunk.DictionaryPageOffset >= chunkEnd))
@@ -637,9 +651,10 @@ public sealed class ParquetWriter : IDisposable
         }
     }
 
-    static void ValidateImportRange(ulong offset, ulong length, ulong footerOffset, string name)
+    static void ValidateImportRange(ulong offset, ulong length, ulong footerOffset, string name,
+        bool allowEmpty = false)
     {
-        if (length == 0 || offset < (ulong)_fileMagic.Length || offset > footerOffset ||
+        if (length == 0 && !allowEmpty || offset < (ulong)_fileMagic.Length || offset > footerOffset ||
             length > footerOffset - offset)
             throw new CorruptParquetException(
                 $"The {name} at offset {offset} with length {length} is outside the source data section.");
@@ -660,7 +675,9 @@ public sealed class ParquetWriter : IDisposable
             var destinationChunkOffset = FileOffset;
             var relocation = checked(destinationChunkOffset - checked((long)sourceChunk.ChunkOffset));
             CopyRange(source, sourceChunk.ChunkOffset, sourceChunk.TotalCompressedSize, copyBuffer);
-            importedChunk.DataPageOffset = RelocateOffset(sourceChunk.DataPageOffset, relocation);
+            importedChunk.DataPageOffset = sourceChunk.TotalCompressedSize == 0
+                ? destinationChunkOffset
+                : RelocateOffset(sourceChunk.DataPageOffset, relocation);
             importedChunk.DictionaryPageOffset = RelocateOffset(sourceChunk.DictionaryPageOffset, relocation);
             importedChunk.ValueCount = checked((long)sourceChunk.ValueCount);
             importedChunk.TotalUncompressedSize = checked((long)sourceChunk.TotalUncompressedSize);
