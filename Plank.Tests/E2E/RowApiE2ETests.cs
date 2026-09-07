@@ -173,8 +173,7 @@ internal sealed class RowApiE2ETests
         var expected = new[]
         {
             new[] { 10, 11, 12, 13, 14 },
-            new[] { 20, 21, 22, 23, 24 },
-            new[] { 30, 31, 32, 33, 34 }
+            new[] { 20, 21, 22, 23, 24 }
         };
 
         try
@@ -193,13 +192,9 @@ internal sealed class RowApiE2ETests
                     nextTask = Task.Run(() => writer.Next());
                     if (!serializeStarted.Wait(TimeSpan.FromSeconds(2)))
                         throw new InvalidOperationException("Timed out waiting for both serializers.");
-                    await nextTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-
-                    writer.SetCurrentRow(expected[2][0]);
-                    nextTask = Task.Run(() => writer.Next());
                     await Task.Delay(150).ConfigureAwait(false);
                     if (nextTask.IsCompleted)
-                        throw new InvalidOperationException("Next() should block when all three slots are occupied.");
+                        throw new InvalidOperationException("Next() should block when both worker slots are occupied.");
                 }
                 finally
                 {

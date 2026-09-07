@@ -66,8 +66,9 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         _bufferPool = options.BufferPool;
         _targetFileSizeBytes = options.TargetFileSizeBytes;
         var workerCount = checked((int)maxParallelism);
-        // The producer needs its own slot while all serialization workers are busy.
-        var slotCount = checked(workerCount + 1);
+        // One worker needs a spare slot to overlap production and serialization.
+        // With multiple workers, keep one slot per worker to avoid overloading worker 0.
+        var slotCount = workerCount == 1 ? 2 : workerCount;
         _execution = options.Execution;
         _workerReadySlots = CreateWorkerReadySlots(workerCount);
         _freeSlots = new Queue<TSlot>(slotCount);
@@ -129,8 +130,9 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         _bufferPool = options.BufferPool;
         _targetFileSizeBytes = options.TargetFileSizeBytes;
         var workerCount = checked((int)maxParallelism);
-        // The producer needs its own slot while all serialization workers are busy.
-        var slotCount = checked(workerCount + 1);
+        // One worker needs a spare slot to overlap production and serialization.
+        // With multiple workers, keep one slot per worker to avoid overloading worker 0.
+        var slotCount = workerCount == 1 ? 2 : workerCount;
         _execution = options.Execution;
         _workerReadySlots = CreateWorkerReadySlots(workerCount);
         _freeSlots = new Queue<TSlot>(slotCount);
