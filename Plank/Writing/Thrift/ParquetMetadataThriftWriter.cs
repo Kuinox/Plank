@@ -878,6 +878,11 @@ static class ParquetMetadataThriftWriter
         if (relocated.HasDictionaryPage)
             writer.WriteFieldI64(11, relocated.DictionaryPageOffset);
         WriteImportedStatistics(ref writer, source.Statistics, sourceFooter);
+        if (relocated.BloomFilterLength > 0)
+        {
+            writer.WriteFieldI64(14, relocated.BloomFilterOffset);
+            writer.WriteFieldI32(15, checked((int)relocated.BloomFilterLength));
+        }
         writer.EndStruct(previousMetadata);
 
         if (relocated.OffsetIndexLength > 0)
