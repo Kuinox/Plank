@@ -12,6 +12,16 @@ namespace Plank.Tests.Reading;
 [NotInParallel]
 internal sealed class ReaderAllocationTests
 {
+    [Before(Test)]
+    public void ClearRetainedBuffersBeforeWarmup()
+    {
+        // Other tests can leave >=64 MiB in the shared pool. Its periodic pressure
+        // probe calls GC.GetGCMemoryInfo(), which allocates 288 bytes on .NET 10.
+        // Measure warmed reader operations independently of that retained state.
+        // This class is NotInParallel, and each test warms its buffers afterwards.
+        DefaultParquetBufferPool.Shared.Trim();
+    }
+
     // Snappier 1.3.1 creates per-operation decompressor state. Remove this budget when its reusable API ships.
     const long ManagedSnappyAllocationBudget = 80;
 
