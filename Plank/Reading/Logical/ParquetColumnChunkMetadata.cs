@@ -47,6 +47,13 @@ public readonly struct ParquetColumnChunkMetadata
         return _rowGroup.GetReader().PhysicalReader.OpenBloomFilter(_rowGroup.Index, physicalColumnOrdinal);
     }
 
+    /// <summary>Decodes an owned snapshot of the optional geospatial statistics. Allocates on each call.</summary>
+    public Plank.Reading.Physical.ParquetGeospatialStatistics? ReadGeospatialStatistics()
+    {
+        var ordinal = GetMetadata().PhysicalColumnOrdinal;
+        return ordinal < 0 ? null : _rowGroup.GetReader().PhysicalReader.Metadata.ReadGeospatialStatistics(_rowGroup.Index, ordinal);
+    }
+
     public ParquetStatistics Statistics
     {
         get
