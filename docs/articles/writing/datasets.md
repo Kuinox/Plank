@@ -1,13 +1,5 @@
 # Dataset writer layer
 
-For a complete application, start with the [first round-trip](../quickstart.md). These snippets require:
-
-```csharp
-using System.Text;
-using Plank;
-using Plank.Writing;
-```
-
 The dataset writer sits above the [row write layer](rows.md). It routes rows to multiple Parquet files.
 
 Use it to write a partitioned dataset when rows belonging to different files are mixed together.

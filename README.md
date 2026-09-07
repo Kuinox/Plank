@@ -17,7 +17,7 @@ cd PlankDemo
 dotnet add package Plank
 ```
 
-Run the complete [first round-trip](https://kuinox.github.io/Plank/articles/quickstart.html), then explore [schema declarations](https://kuinox.github.io/Plank/articles/schema.html),
+Start with [schema declarations](https://kuinox.github.io/Plank/articles/schema.html),
 [row writing](https://kuinox.github.io/Plank/articles/writing/rows.html), and [row reading](https://kuinox.github.io/Plank/articles/reading/rows.html).
 
 ## Projects

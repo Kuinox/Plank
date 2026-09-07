@@ -1,11 +1,5 @@
 # Row read layer
 
-For a complete application, start with the [first round-trip](../quickstart.md). These snippets require:
-
-```csharp
-using System.Text;
-```
-
 The row read layer exposes parquet data as strongly typed rows. It is built on top of the logical reader.
 
 Use it when you want to ingest data as rows instead of columns.
