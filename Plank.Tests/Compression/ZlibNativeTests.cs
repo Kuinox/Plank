@@ -66,6 +66,26 @@ internal sealed class ZlibNativeTests
             }
     }
 
+    [Test]
+    public void ConcatenatedGzipMembersIncludeEmptyMembers()
+    {
+        var first = CompressWithZlib("first"u8.ToArray(), 1);
+        var second = CompressWithZlib("second"u8.ToArray(), 9);
+        var empty = CompressWithZlib([], 1);
+        AssertZlibDecodes("firstsecond"u8.ToArray(), [.. empty, .. first, .. empty, .. second, .. empty]);
+        AssertZlibDecodes([], [.. empty, .. empty]);
+    }
+
+    [Test]
+    public void ConcatenatedGzipRejectsOversizedOutputAndTrailingGarbage()
+    {
+        var member = CompressWithZlib("hello"u8.ToArray(), 1);
+        Assert.Throws<CorruptParquetException>(() => GzipInflater.Decompress([.. member, .. member], new byte[5]));
+        Assert.Throws<CorruptParquetException>(() => GzipInflater.Decompress([.. member, 1, 2, 3], new byte[5]));
+        Assert.Throws<CorruptParquetException>(() => GzipInflater.Decompress([.. member, .. member[..^1]], new byte[10]));
+        Assert.Throws<CorruptParquetException>(() => GzipInflater.Decompress(member, []));
+    }
+
     static byte[] CompressWithZlib(byte[] payload, int level)
     {
         var destination = new BufferWriter(DefaultParquetBufferPool.Shared, 4096, 4096);
