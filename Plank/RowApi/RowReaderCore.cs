@@ -25,6 +25,7 @@ public sealed class RowReaderCore : IDisposable
     ExceptionDispatchInfo? _fault;
     readonly RowApiColumnReadState[] _projectedStates;
     readonly ParquetReader _reader;
+    readonly ParquetSchema _schema;
     RowGroup _rowGroup;
     ParquetSchemaEvolutionOptions? _schemaEvolution;
     StreamReadSource? _streamSource;
@@ -85,6 +86,7 @@ public sealed class RowReaderCore : IDisposable
 
             _execution = options.Execution;
             _maxReadAhead = options.MaxReadAheadRowGroups;
+            _schema = schema;
             _schemaEvolution = schemaEvolution;
             _states = CreateStates(schema, columns);
             _valueBatches = new RowApiValueBatch[_states.Length];
@@ -479,12 +481,12 @@ public sealed class RowReaderCore : IDisposable
 
     void ResolveFileSchema()
     {
-        var fileColumns = _reader.Metadata.Schema.Columns;
+        var fileSchema = _reader.Metadata.Schema;
         for (var i = 0; i < _states.Length; i++)
         {
             var state = _states[i];
-            var ordinal = ResolveColumnOrdinal(fileColumns, state.Column, state.Column.Name, state.PropertyName,
-                state.Projected);
+            var ordinal = ResolveColumnOrdinal(fileSchema, state.Column, _schema.LeafPaths[i], state.Column.Name,
+                state.PropertyName, state.Projected);
             if (ordinal < 0)
             {
                 if (state.Projected)
@@ -561,16 +563,18 @@ public sealed class RowReaderCore : IDisposable
             ? state.CurrentIndex
             : checked(state.CurrentIndex + _currentBatchOffset);
 
-    int ResolveColumnOrdinal(ImmutableArray<Column> fileColumns, Column expected, string columnName, string propertyName,
-        bool projected)
+    int ResolveColumnOrdinal(ParquetSchema fileSchema, Column expected, ImmutableArray<string> expectedPath,
+        string columnName, string propertyName, bool projected)
     {
         if (!projected)
             return -1;
 
+        var fileColumns = fileSchema.Columns;
         for (var i = 0; i < fileColumns.Length; i++)
         {
             var actual = fileColumns[i];
-            if (actual.Name != expected.Name)
+            // Dots can be literal characters inside a name, so joined paths are not unique.
+            if (!fileSchema.LeafPaths[i].AsSpan().SequenceEqual(expectedPath.AsSpan()))
                 continue;
 
             ValidatePhysicalType(actual, expected, columnName);
