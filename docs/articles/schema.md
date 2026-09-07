@@ -1,5 +1,11 @@
 # Schema
 
+For a complete application, start with the [first round-trip](quickstart.md). These snippets require:
+
+```csharp
+using Plank.Schema;
+```
+
 Declare a schema to keep the C# model and parquet file aligned on column names, types, and options. Plank uses that declaration to generate type-safe readers and writers and reports incompatible mappings at build time.
 
 ## Define a schema

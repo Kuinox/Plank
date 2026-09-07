@@ -1,5 +1,7 @@
 - name: Overview
   href: index.md
+- name: First round-trip
+  href: articles/quickstart.md
 - name: Schema
   href: articles/schema.md
 - name: Reading

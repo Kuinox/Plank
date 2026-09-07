@@ -9,7 +9,7 @@ already column-oriented or the file layout needs to be controlled directly.
 Schemas are declared as C# types. A source generator creates the corresponding readers and
 writers, and reports incompatible mappings at build time.
 
-Start with [Schema](articles/schema.md), then see [Reading](articles/reading/index.md) or
+Start with the [first round-trip](articles/quickstart.md) and [Schema](articles/schema.md), then see [Reading](articles/reading/index.md) or
 [Writing](articles/writing/index.md).
 
 ## Installation

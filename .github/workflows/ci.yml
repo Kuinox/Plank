@@ -37,3 +37,6 @@ jobs:
 
       - name: Verify documentation samples
         run: dotnet run --project Samples/Plank.Sample --configuration Release
+
+      - name: Verify quickstart against NuGet packages
+        run: bash .github/scripts/verify-quickstart.sh
