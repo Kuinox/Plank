@@ -103,7 +103,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
-    public void ReadInt32HandlesDeltasWiderThanInt32()
+    public void ReadInt32HandlesWrappingDeltas()
     {
         var values = new[] { int.MinValue, int.MaxValue, int.MinValue, 0 };
         var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 1024, 1024);
@@ -849,9 +849,8 @@ internal sealed class DeltaBinaryPackedDecoderTests
     /// <remarks>
     /// Arrow computes its deltas with wrapping 32-bit subtraction, so a column
     /// holding values from both ends of the type is ordinary output, not an edge
-    /// case. Plank's own encoder widens instead, which is why round-tripping
-    /// through it — the only INT32 delta coverage there used to be — never
-    /// produced a payload the reader rejected.
+    /// case. Keep independent encoder coverage so a matching writer and reader
+    /// mistake cannot hide an interoperability failure.
     /// </remarks>
     [Test]
     public async Task ReadsFullRangeInt32ValuesWrittenByAnotherImplementation()
@@ -1108,7 +1107,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
             for (var i = 0; i < count; i++)
             {
                 var current = values[index + i];
-                var delta = (long)current - previous;
+                var delta = unchecked(current - previous);
                 previous = current;
                 deltas[i] = delta;
                 minDelta = Math.Min(minDelta, delta);
