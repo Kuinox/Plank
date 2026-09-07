@@ -11,16 +11,8 @@ namespace Plank.Tests.Reading.ParquetTesting;
 /// contents apache/parquet-testing ships alongside the files.
 /// </summary>
 /// <remarks>
-/// Every other decoder test in this repository is a round trip through Plank's own writer,
-/// which cannot catch a decoder and an encoder that are wrong in the same way. These two
-/// files were written by parquet-mr and the CSVs next to them are what parquet-mr, arrow-cpp
-/// and arrow-rs all agree they decode to, so this is the first test in the suite that checks
-/// Plank against something other than itself.
-///
-/// The corpus ships two more expectation pairs, delta_binary_packed and delta_byte_array,
-/// which are the wide bit-width and long-string stress cases. Plank cannot decode either
-/// yet -- both are recorded in <see cref="ParquetTestingCompatibilityTests"/> -- and they
-/// belong here as soon as it can.
+/// Corpus files and their expected CSVs validate interoperability independently of
+/// Plank's writer, including wide bit widths and partial final delta blocks.
 /// </remarks>
 internal sealed class ParquetTestingDeltaEncodingTests
 {
@@ -36,6 +28,16 @@ internal sealed class ParquetTestingDeltaEncodingTests
     public void DeltaEncodingOptionalColumn_MatchesExpectedCsv()
         => AssertMatchesExpectation("data/delta_encoding_optional_column.parquet",
             "data/delta_encoding_optional_column_expect.csv");
+
+    [Test]
+    public void DeltaBinaryPackedAllBitWidths_MatchesExpectedCsv()
+        => AssertMatchesExpectation("data/delta_binary_packed.parquet",
+            "data/delta_binary_packed_expect.csv");
+
+    [Test]
+    public void DeltaByteArrayLongStrings_MatchesExpectedCsv()
+        => AssertMatchesExpectation("data/delta_byte_array.parquet",
+            "data/delta_byte_array_expect.csv");
 
     static void AssertMatchesExpectation(string parquetPath, string csvPath)
     {

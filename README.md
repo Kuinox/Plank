@@ -48,3 +48,15 @@ pwsh ./docs/build.ps1
 The docs build runs the examples in `Samples/Plank.Sample`.
 
 Plank is under active development; public APIs and format coverage may still evolve.
+
+## Compatibility
+
+The [upstream corpus matrix](Plank.Tests/Reading/ParquetTesting/ParquetTestingCompatibilityTests.cs)
+records both successful reads and known failures. A passing test run means those
+outcomes match the matrix; it does not mean every corpus file is supported.
+The matrix also includes intentionally malformed files that should be rejected.
+
+Use `NestedColumn<T>` for repeated values and leaves with multiple optional levels;
+the flat column API supports at most one definition level. Timestamp projection to
+`DateTime` is limited to .NET's representable date range. Read physical `long` values
+when you need to preserve timestamps outside that range.

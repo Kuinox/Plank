@@ -9,6 +9,28 @@ namespace Plank.Tests.Reading;
 internal sealed class DeltaBinaryPackedDecoderTests
 {
     [Test]
+    public void UnusedMiniBlockWidthsDoNotConsumeTheNextStream()
+    {
+        // Two values: 0, 1. Only the first of four mini-blocks has payload.
+        // Its 32 one-bit residuals are padded; unused widths may be arbitrary.
+        byte[] encoded = [0x80, 1, 4, 2, 0, 0, 1, 255, 64, 17, 1, 0, 0, 0];
+        byte[] payload = [.. encoded, 0x80, 1, 4, 1, 0];
+        var ints = new int[2];
+        var longs = new long[2];
+        var nullable = new int?[2];
+        var narrow = new byte[2];
+        if (DeltaBinaryPackedDecoder.GetEncodedLength(payload, 2) != encoded.Length ||
+            DeltaBinaryPackedDecoder.ReadInt32(payload, ints) != encoded.Length ||
+            DeltaBinaryPackedDecoder.ReadInt64(payload, longs) != encoded.Length ||
+            DeltaBinaryPackedDecoder.ReadNullableInt32(payload, nullable, canonicalLayout: true) != encoded.Length ||
+            DeltaBinaryPackedDecoder.ReadNarrowInt32<byte>(payload, narrow) != encoded.Length ||
+            !ints.SequenceEqual(new[] { 0, 1 }) || !longs.SequenceEqual(new long[] { 0, 1 }) ||
+            !nullable.SequenceEqual(new int?[] { 0, 1 }) || !narrow.SequenceEqual(new byte[] { 0, 1 }))
+            throw new InvalidOperationException("Unused mini-blocks consumed the next delta stream.");
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(encoded[..^1]));
+    }
+
+    [Test]
     [Arguments(9)]
     [Arguments(10)]
     [Arguments(11)]
@@ -49,7 +71,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
                         expected[first + i] = unchecked((int)previous);
                     }
                 }
-                WriteDeltaBlockReference(deltas, minDelta, payload);
+                WriteDeltaBlockReference(deltas, minDelta, payload, Math.Min(128, count - first));
             }
 
             var bytes = payload.ToArray();
@@ -1141,7 +1163,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
         return output.ToArray();
     }
 
-    static void WriteDeltaBlockReference(long[] deltas, long minDelta, List<byte> output)
+    static void WriteDeltaBlockReference(long[] deltas, long minDelta, List<byte> output, int valueCount = 128)
     {
         WriteUnsignedVarIntReference((ulong)((minDelta << 1) ^ (minDelta >> 63)), output);
 
@@ -1161,7 +1183,8 @@ internal sealed class DeltaBinaryPackedDecoderTests
             output.Add(bitWidths[block]);
         }
 
-        for (var block = 0; block < bitWidths.Length; block++)
+        // The final used mini-block is padded, but unused mini-blocks have no payload.
+        for (var block = 0; block < (valueCount + 31) / 32; block++)
             output.AddRange(PackReference(deltas.AsSpan(block * 32, 32), bitWidths[block]));
     }
 

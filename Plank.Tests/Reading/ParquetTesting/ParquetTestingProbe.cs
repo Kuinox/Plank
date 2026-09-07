@@ -106,7 +106,7 @@ static class ParquetTestingProbe
 
     static void DrainColumn(RowGroup group, LeafColumn column)
     {
-        if (column.MaxRepetitionLevel > 0)
+        if (column.MaxRepetitionLevel > 0 || column.MaxDefinitionLevel > 1)
         {
             DrainNestedColumn(group, column);
             return;
