@@ -150,11 +150,6 @@ internal sealed class ParquetTestingCompatibilityTests
         // plausible header field, so the decoder is starting from the wrong offset.
         ["data/delta_byte_array.parquet"] = ValuesOnly("DELTA_BYTE_ARRAY: reads an implausible block size"),
 
-        // Multi-member gzip streams. The file exists upstream precisely because writers
-        // concatenate members and readers are expected to inflate all of them; Plank
-        // inflates the first and rejects the rest as trailing bytes.
-        ["data/concatenated_gzip_members.parquet"] = ValuesOnly("gzip: only the first member is inflated"),
-
         // Optional PLAIN INT32 columns whose page holds fewer values than the header's
         // value count, because the nulls do not occupy payload. Plank sizes the payload
         // from the value count instead of the non-null count.
