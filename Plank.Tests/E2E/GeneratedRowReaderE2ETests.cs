@@ -13,6 +13,53 @@ internal sealed class GeneratedRowReaderE2ETests
     };
 
     [Test]
+    [Arguments(1)]
+    [Arguments(4)]
+    public void BoundValueAccessPreservesPositionTypeProjectionAndOrdinalChecks(int workers)
+    {
+        using var stream = CreateBatchedEvolvingFile(4_097, prependEmptyRowGroup: true);
+        var schema = CreateBatchedEvolvingSchema();
+        var id = new Plank.RowApi.RowApiColumnDescriptor<int>("Id", schema.LeafColumns[0]);
+        var maybe = new Plank.RowApi.RowApiColumnDescriptor<int?>("Maybe", schema.LeafColumns[1]);
+        using var core = new Plank.RowApi.RowReaderCore(stream, schema, [id, maybe], null,
+            new Plank.RowApi.RowReaderOptions { Execution = new() { WorkerCount = workers } }, null);
+        ExpectAccessException<InvalidOperationException>(() => { _ = core.GetCurrent<int>(0); });
+        ExpectAccessException<InvalidOperationException>(() => { _ = core.GetCurrent<int>(-1); });
+        if (!core.MoveNext()) throw new InvalidOperationException("Expected a row.");
+        ExpectAccessException<InvalidCastException>(() => { _ = core.GetCurrent<long>(0); });
+        ExpectAccessException<InvalidCastException>(() => { _ = core.GetCurrent<object>(0); });
+        ExpectAccessException<IndexOutOfRangeException>(() => { _ = core.GetCurrent<int>(-1); });
+        ExpectAccessException<IndexOutOfRangeException>(() => { _ = core.GetCurrent<int>(2); });
+        var index = 0;
+        do
+        {
+            var expectedMaybe = index % 5 == 1 ? (int?)null : (index + 1) * 10;
+            if (core.GetCurrent<int>(0) != CreateBatchedId(index) || core.GetCurrent<int?>(1) != expectedMaybe)
+                throw new InvalidOperationException($"Wrong bound value at row {index}.");
+            index++;
+        } while (core.MoveNext());
+        if (index != 4_097) throw new InvalidOperationException("Incorrect row count.");
+        ExpectAccessException<InvalidOperationException>(() => { _ = core.GetCurrent<int>(0); });
+        core.Reset(stream, [maybe]);
+        ExpectAccessException<InvalidOperationException>(() => { _ = core.GetCurrent<int?>(1); });
+        if (!core.MoveNext() || core.GetCurrent<int?>(1) != 10)
+            throw new InvalidOperationException("Projected reset did not return the expected value.");
+        ExpectAccessException<InvalidOperationException>(() => { _ = core.GetCurrent<int>(0); });
+        core.Reset(stream, null);
+        if (!core.MoveNext() || core.GetCurrent<int>(0) != CreateBatchedId(0))
+            throw new InvalidOperationException("Reset did not restore the column binding.");
+        core.Dispose();
+        ExpectAccessException<ObjectDisposedException>(() => { _ = core.GetCurrent<int>(0); });
+    }
+
+    static void ExpectAccessException<TException>(Action action) where TException : Exception
+    {
+        try { action(); }
+        catch (TException) { return; }
+        throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
+    }
+
+    [Test]
     public void GeneratedValueReferencesRemainWritableAcrossGcAndInvalidateOnResetAndDispose()
     {
         using var stream = CreateBatchedEvolvingFile(4_097, prependEmptyRowGroup: true);

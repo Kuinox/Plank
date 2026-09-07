@@ -197,7 +197,10 @@ public readonly struct ColumnBuffer<T>
     // Row readers validate once when acquiring the buffer, then retain it until
     // advancement. Their per-value access still checks the index against this span.
     internal Span<T> ValidatedWritableValues
-        => ParquetBuffer.AsValidatedSpan<T>(_nativeValues, _valueCount);
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => ParquetBuffer.AsValidatedSpan<T>(_nativeValues, _valueCount);
+    }
 
     static ReadOnlySpan<T> ProjectBorrowedValues(ReadOnlySpan<byte> bytes, int valueCount)
         => MemoryMarshal.CreateReadOnlySpan(

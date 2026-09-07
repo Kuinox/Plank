@@ -6,6 +6,8 @@ namespace Plank;
 public sealed unsafe class DefaultParquetBufferPool : IParquetBufferPool, IDisposable
 {
     const int Alignment = 64;
+    const int MinimumColoredCapacity = 64 * 1024;
+    const int CacheColors = 64;
     const int MinimumBucketPower = 4;
     const int BucketCount = 27;
     const int AdaptiveSampleCount = 100;
@@ -22,6 +24,7 @@ public sealed unsafe class DefaultParquetBufferPool : IParquetBufferPool, IDispo
     readonly long _memoryPressureCheckIntervalMilliseconds;
     long _retainedBytes;
     long _nativeAllocationCount;
+    int _nextCacheColor;
     long _lastMemoryPressureCheck = long.MinValue;
     long _rejectRetentionUntil;
     int _disposed;
@@ -110,13 +113,18 @@ public sealed unsafe class DefaultParquetBufferPool : IParquetBufferPool, IDispo
                 return new ParquetBuffer(header, data, header->Capacity, _returnAllocation);
             }
 
-            var payloadOffset = Alignment;
+            // Stagger large payloads so row-wise reads do not collide in one L1 cache set.
+            var color = capacity >= MinimumColoredCapacity
+                ? Interlocked.Increment(ref _nextCacheColor) & (CacheColors - 1)
+                : 0;
+            var payloadOffset = Alignment * (1 + color);
             var required = checked(payloadOffset + capacity);
             var allocationByteLength = Align(required, Alignment);
             var allocation = (nint)NativeMemory.AlignedAlloc((nuint)allocationByteLength, Alignment);
             if (allocation == 0)
                 throw new OutOfMemoryException();
             Interlocked.Increment(ref _nativeAllocationCount);
+            *(int*)allocation = payloadOffset;
 
             return ParquetBuffer.CreatePooled(allocation, allocationByteLength, payloadOffset, capacity,
                 bucketIndex < BucketCount ? bucketIndex : -1, _returnAllocation);
@@ -138,7 +146,7 @@ public sealed unsafe class DefaultParquetBufferPool : IParquetBufferPool, IDispo
 
     void ReturnAllocation(nint allocation)
     {
-        var data = (byte*)allocation + Alignment;
+        var data = (byte*)allocation + *(int*)allocation;
         var header = (ParquetBufferHeader*)(data - sizeof(ParquetBufferHeader));
         var bucketIndex = header->BucketIndex;
         var completedDemandCycle = false;
