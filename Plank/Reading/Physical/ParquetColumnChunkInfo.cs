@@ -51,5 +51,7 @@ public readonly record struct ParquetColumnChunkInfo(
         => BloomFilterOffset != 0;
 
     public ulong ChunkOffset
-        => DictionaryPageOffset > 0 && DictionaryPageOffset < DataPageOffset ? DictionaryPageOffset : DataPageOffset;
+        => DictionaryPageOffset > 0 && (DataPageOffset == 0 || DictionaryPageOffset < DataPageOffset)
+            ? DictionaryPageOffset
+            : DataPageOffset;
 }
