@@ -141,11 +141,6 @@ internal sealed class ParquetTestingCompatibilityTests
         //    reader on a file a mainstream writer produced.
         // ---------------------------------------------------------------------------
 
-        // Multi-member gzip streams. The file exists upstream precisely because writers
-        // concatenate members and readers are expected to inflate all of them; Plank
-        // inflates the first and rejects the rest as trailing bytes.
-        ["data/concatenated_gzip_members.parquet"] = ValuesOnly("gzip: only the first member is inflated"),
-
         // This fixture declares TIMESTAMP_MICROS, but its raw values include
         // 1608822900000000000 microseconds, beyond DateTime's year-9999 limit.
         // Physical Int64 access remains available; DateTime projection rejects it.
