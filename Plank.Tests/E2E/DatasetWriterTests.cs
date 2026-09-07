@@ -482,6 +482,33 @@ internal sealed class DatasetWriterTests
             throw new InvalidOperationException($"Queued binary value changed for row {id} (expected {length} bytes).");
     }
 
+    [Test]
+    public async Task FailedFlushReleasesWriterBuffersAndClosesFile()
+    {
+        var path = NewPath();
+        var pool = new OwnershipTrackingPool();
+        var files = CreateFiles(1);
+        try
+        {
+            var writer = DatasetBinaryRowSchema.CreateDatasetWriter(SelectBinaryPath, files, BinaryOptions(pool, 0));
+            writer.Queue(new DatasetBinaryRowSchema
+            {
+                Path = Encoding.UTF8.GetBytes(path),
+                Payload = new byte[70000]
+            });
+            files[0].FailFlush = true;
+            await Assert.That(() => writer.Dispose()).Throws<IOException>();
+            await Assert.That(pool.Outstanding).IsEqualTo(0);
+            // FileShare.None would prevent this if cleanup left the destination open.
+            using var reopened = File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        }
+        finally
+        {
+            files[0].Dispose();
+            DeleteIfPresent(path);
+        }
+    }
+
     static DatasetWriterOptions BinaryOptions(IParquetBufferPool pool, int pendingCapacity)
     {
         var writerOptions = new ParquetWriterOptions
@@ -583,6 +610,7 @@ internal sealed class DatasetWriterTests
         FileStream? _stream;
         internal int OpenCount;
         internal bool FailOpen;
+        internal bool FailFlush;
         internal readonly List<string> OpenedPaths = [];
 
         public ulong Length
@@ -624,7 +652,11 @@ internal sealed class DatasetWriterTests
             => GetStream().SetLength(checked((long)length));
 
         public void Flush()
-            => GetStream().Flush();
+        {
+            if (FailFlush)
+                throw new IOException("Test flush failure.");
+            GetStream().Flush();
+        }
 
         public void Dispose()
             => Close();
