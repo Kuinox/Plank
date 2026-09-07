@@ -339,6 +339,81 @@ internal sealed class DatasetWriterTests
     }
 
     [Test]
+    public async Task FilePartsPreserveExistingFilesWhenAWriterRestarts()
+    {
+        var path = NewPath();
+        var pathUtf8 = Encoding.UTF8.GetBytes(path);
+        using var file = new TestParquetSource();
+        try
+        {
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, SelectPartPath, [file]))
+                writer.Queue(new DatasetRowSchema { Value = 1, Path = "a"u8.ToArray() });
+            var originalBytes = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
+
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, SelectPartPath, [file]))
+                await Assert.That(() => writer.Queue(new DatasetRowSchema { Value = 2, Path = "a"u8.ToArray() }))
+                    .Throws<IOException>();
+
+            var preservedBytes = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
+            await Assert.That(preservedBytes.SequenceEqual(originalBytes)).IsTrue();
+            await Assert.That(ReadValues(path)).IsEquivalentTo([1]);
+        }
+        finally
+        {
+            DeleteIfPresent(path);
+        }
+
+        ReadOnlySpan<byte> SelectPartPath(ReadOnlySpan<byte> partitionKey, ulong fileIndex,
+            IParquetBufferPool bufferPool, out ParquetBuffer? allocation)
+        {
+            allocation = null;
+            return pathUtf8;
+        }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task FilePartsPreserveRowsWhenASelectorRepeatsAPath(bool rollover)
+    {
+        var path = NewPath();
+        var pathUtf8 = Encoding.UTF8.GetBytes(path);
+        using var file = new TestParquetSource();
+        try
+        {
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, SelectPartPath, [file],
+                       new DatasetWriterOptions
+                       {
+                           PendingRowCapacity = 0,
+                           WriterOptions = new ParquetWriterOptions
+                           {
+                               TargetRowGroupSizeBytes = 1,
+                               TargetFileSizeBytes = 1
+                           }
+                       }))
+            {
+                writer.Queue(new DatasetRowSchema { Value = 1, Path = "a"u8.ToArray() });
+                var nextPartition = rollover ? "a"u8.ToArray() : "b"u8.ToArray();
+                await Assert.That(() => writer.Queue(new DatasetRowSchema { Value = 2, Path = nextPartition }))
+                    .Throws<IOException>();
+            }
+
+            await Assert.That(ReadValues(path)).IsEquivalentTo([1]);
+        }
+        finally
+        {
+            DeleteIfPresent(path);
+        }
+
+        ReadOnlySpan<byte> SelectPartPath(ReadOnlySpan<byte> partitionKey, ulong fileIndex,
+            IParquetBufferPool bufferPool, out ParquetBuffer? allocation)
+        {
+            allocation = null;
+            return pathUtf8;
+        }
+    }
+
+    [Test]
     [Arguments(0, 16)]
     [Arguments(3, 16)]
     [Arguments(3, 1000)]
