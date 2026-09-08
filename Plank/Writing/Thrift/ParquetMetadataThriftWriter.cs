@@ -878,6 +878,12 @@ static class ParquetMetadataThriftWriter
         if (relocated.HasDictionaryPage)
             writer.WriteFieldI64(11, relocated.DictionaryPageOffset);
         WriteImportedStatistics(ref writer, source.Statistics, sourceFooter);
+        if (source.GeospatialStatisticsLength > 0)
+        {
+            writer.WriteFieldHeader(17, CompactType.Struct);
+            writer.WriteRaw(sourceFooter.Slice(source.GeospatialStatisticsOffset,
+                source.GeospatialStatisticsLength));
+        }
         writer.EndStruct(previousMetadata);
 
         if (relocated.OffsetIndexLength > 0)
@@ -1297,6 +1303,9 @@ static class ParquetMetadataThriftWriter
 
         internal void WriteRaw(ref BufferWriter source)
             => _buffer.CopyFrom(ref source);
+
+        internal void WriteRaw(scoped ReadOnlySpan<byte> source)
+            => _buffer.Write(source);
 
         void WriteI16(int value)
             => WriteVarInt32(EncodeZigZag32(value));
