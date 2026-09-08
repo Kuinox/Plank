@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using Plank.Schema;
 
 namespace Plank.Reading.Logical.Internal;
@@ -107,8 +109,38 @@ static partial class ColumnChunkReader
         if (typeof(T) == typeof(DateTime))
         {
             var typed = MemoryMarshal.Cast<T, DateTime>(destination);
-            for (var i = typed.Length - 1; i >= 0; i--)
-                typed[i] = new DateTime(TUnit.ToTicks(raw[i]), kind);
+            var index = typed.Length;
+            if (typeof(TUnit) == typeof(MicrosTimestamp) && Avx2.IsSupported)
+            {
+                ref var sourceStart = ref MemoryMarshal.GetReference(raw);
+                ref var destinationStart = ref Unsafe.As<DateTime, ulong>(
+                    ref MemoryMarshal.GetReference(typed));
+                var minimum = Vector256.Create(MicrosTimestamp.Minimum);
+                var maximum = Vector256.Create(MicrosTimestamp.Maximum);
+                var epoch = Vector256.Create(DateTime.UnixEpoch.Ticks);
+                var kindProbe = new DateTime(0, kind);
+                var kindBits = Vector256.Create(Unsafe.As<DateTime, ulong>(ref kindProbe));
+                while (index >= Vector256<long>.Count)
+                {
+                    var next = index - Vector256<long>.Count;
+                    var source = Vector256.LoadUnsafe(ref sourceStart, (nuint)next);
+                    // Check before scaling; invalid lanes retain the scalar corruption check.
+                    var invalid = Avx2.CompareGreaterThan(minimum, source) |
+                        Avx2.CompareGreaterThan(source, maximum);
+                    if (Avx2.MoveMask(invalid.AsByte()) != 0)
+                        break;
+                    var scaled = Avx2.ShiftLeftLogical(source.AsUInt64(), 3).AsInt64() +
+                        Avx2.ShiftLeftLogical(source.AsUInt64(), 1).AsInt64();
+                    ((scaled + epoch).AsUInt64() | kindBits).StoreUnsafe(
+                        ref destinationStart, (nuint)next);
+                    index = next;
+                }
+            }
+            while (index != 0)
+            {
+                index--;
+                typed[index] = new DateTime(TUnit.ToTicks(raw[index]), kind);
+            }
         }
         else if (typeof(T) == typeof(DateTimeOffset))
         {

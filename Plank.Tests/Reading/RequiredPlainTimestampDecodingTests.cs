@@ -98,6 +98,42 @@ internal sealed class RequiredPlainTimestampDecodingTests
         }
     }
 
+    [Test]
+    public void MicrosecondVectorsPreserveBoundaryValuesAndTails()
+    {
+        long[] boundaries = [-62_135_596_800_000_000L, -1, 0, 1, 253_402_300_799_999_999L];
+        foreach (var pageType in new[] { PageHeaderType.DataPage, PageHeaderType.DataPageV2 })
+        foreach (var utc in new[] { false, true })
+        for (var length = 1; length <= 33; length++)
+        {
+            var raw = Enumerable.Range(0, length).Select(i => boundaries[i % boundaries.Length]).ToArray();
+            var actual = Decode(raw, TimeUnit.Micros, utc, pageType);
+            for (var i = 0; i < length; i++)
+            {
+                var expected = new DateTime(raw[i] * 10 + DateTime.UnixEpoch.Ticks,
+                    utc ? DateTimeKind.Utc : DateTimeKind.Unspecified);
+                if (actual[i].Ticks != expected.Ticks || actual[i].Kind != expected.Kind)
+                    throw new InvalidOperationException($"Microsecond vector mismatch at {i} of {length}.");
+            }
+        }
+    }
+
+    [Test]
+    public void MicrosecondVectorsRejectInvalidValuesInEveryLaneAndTail()
+    {
+        long[] invalidValues = [-62_135_596_800_000_001L, 253_402_300_800_000_000L,
+            long.MinValue, long.MaxValue];
+        foreach (var pageType in new[] { PageHeaderType.DataPage, PageHeaderType.DataPageV2 })
+        foreach (var utc in new[] { false, true })
+        foreach (var invalid in invalidValues)
+        for (var index = 0; index < 17; index++)
+        {
+            var raw = new long[17];
+            raw[index] = invalid;
+            AssertRejected(raw, TimeUnit.Micros, utc, pageType);
+        }
+    }
+
     static DateTime[] Decode(long[] rawValues, TimeUnit unit, bool adjustedToUtc, PageHeaderType pageType)
     {
         var payload = new byte[checked(rawValues.Length * sizeof(long))];
