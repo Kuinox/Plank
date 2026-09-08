@@ -150,7 +150,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     {
         var schemaTypes = context.SyntaxProvider.ForAttributeWithMetadataName(
             fullyQualifiedMetadataName: "Plank.Schema.ParquetSchemaAttribute",
-            predicate: static (node, _) => node is ClassDeclarationSyntax,
+            predicate: static (node, _) => node is ClassDeclarationSyntax or RecordDeclarationSyntax,
             transform: static (ctx, _) => (Type: (INamedTypeSymbol)ctx.TargetSymbol,
                 Compilation: ctx.SemanticModel.Compilation));
 
@@ -285,7 +285,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.AppendLine();
         }
 
-        builder.Append(GetAccessibilityKeyword(schemaType.DeclaredAccessibility)).Append(" partial class ")
+        builder.Append(GetAccessibilityKeyword(schemaType.DeclaredAccessibility))
+            .Append(schemaType.IsRecord ? " partial record class " : " partial class ")
             .Append(EscapeIdentifier(schemaType.Name)).AppendLine();
         builder.AppendLine("{");
         builder.Append("    public static global::Plank.Schema.ParquetSchema ").Append(names.Root("Schema"))
@@ -1127,7 +1128,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         error = string.Empty;
         var properties = schemaType.GetMembers()
             .OfType<IPropertySymbol>()
-            .Where(static p => !p.IsStatic && !p.IsIndexer)
+            .Where(static p => !p.IsStatic && !p.IsIndexer && !p.IsImplicitlyDeclared)
             .OrderBy(static p => p.Locations.FirstOrDefault()?.SourceTree?.FilePath, StringComparer.Ordinal)
             .ThenBy(static p => p.Locations.FirstOrDefault()?.SourceSpan.Start ?? int.MaxValue)
             .ThenBy(static p => p.Name, StringComparer.Ordinal)
