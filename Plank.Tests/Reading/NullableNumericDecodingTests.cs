@@ -11,6 +11,50 @@ namespace Plank.Tests.Reading;
 
 internal sealed class NullableNumericDecodingTests
 {
+    [Test]
+    public void DoubleScatterPreservesNullsBitsTailsAndGuards()
+    {
+        long[] bits = [0, long.MinValue, 0x7ff0_0000_0000_0000, unchecked((long)0xfff0_0000_0000_0000UL),
+            0x7ff8_0000_0000_0011, 1, 0x3ff0_0000_0000_0000];
+        for (var length = 0; length <= 65; length++)
+        foreach (var nullPeriod in new[] { 0, 2, 17 })
+        {
+            var definitions = new byte[length];
+            var expected = new double?[length];
+            for (var i = 0; i < length; i++)
+                if (nullPeriod == 0 || i % nullPeriod != 0)
+                {
+                    definitions[i] = 1;
+                    expected[i] = BitConverter.Int64BitsToDouble(bits[i % bits.Length]);
+                }
+            var physical = expected.Where(x => x.HasValue).Select(x => x.Value).ToArray();
+            var actual = Enumerable.Repeat<double?>(123.5, length + 2).ToArray();
+            ColumnChunkReader.ScatterNullableDoubleBatchForTesting(definitions, physical,
+                actual.AsSpan(1, length));
+            if (actual[0] != 123.5 || actual[^1] != 123.5)
+                throw new InvalidOperationException("Double expansion overwrote a guard.");
+            for (var i = 0; i < length; i++)
+                if (actual[i + 1].HasValue != expected[i].HasValue ||
+                    (expected[i].HasValue && BitConverter.DoubleToInt64Bits(actual[i + 1].Value) !=
+                        BitConverter.DoubleToInt64Bits(expected[i].Value)))
+                    throw new InvalidOperationException($"Double expansion changed value {i} of {length}.");
+        }
+    }
+
+    [Test]
+    public void DoubleScatterRejectsUnusedPhysicalValues()
+    {
+        try
+        {
+            ColumnChunkReader.ScatterNullableDoubleBatchForTesting([1, 0], [1.0, 2.0], new double?[2]);
+        }
+        catch (CorruptParquetException)
+        {
+            return;
+        }
+        throw new InvalidOperationException("Nullable expansion accepted unused physical values.");
+    }
+
     static readonly EncodingKind[] Encodings =
     [
         EncodingKind.Plain,

@@ -17,6 +17,7 @@ static partial class ColumnChunkReader
     static readonly bool NullableDateTimeHasCanonicalLayout = HasCanonicalNullableDateTimeLayout();
     static readonly bool NullableInt32HasCanonicalLayout = HasCanonicalNullableInt32Layout();
     static readonly bool NullableInt64HasCanonicalLayout = HasCanonicalNullableInt64Layout();
+    static readonly bool NullableDoubleHasCanonicalLayout = HasCanonicalNullableDoubleLayout();
     internal static bool TryDecodeDictionaryPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
         => TryDecodeDictionaryPageIntoNative(header, payload, default, column, ref state, bufferPool);
@@ -1055,6 +1056,16 @@ static partial class ColumnChunkReader
         ReadOnlySpan<TValue> physical, Span<TValue?> destination)
         where TValue : struct
     {
+        if (typeof(TValue) == typeof(double) && NullableDoubleHasCanonicalLayout &&
+            Avx2.IsSupported && physical.Length == definitions.Length &&
+            definitions.IndexOf((byte)0) < 0)
+        {
+            ExpandAllPresentInt64Batch(
+                Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<long>>(ref physical),
+                Unsafe.As<Span<TValue?>, Span<long?>>(ref destination));
+            return;
+        }
+
         var physicalIndex = physical.Length;
         for (var i = definitions.Length - 1; i >= 0; i--)
             destination[i] = definitions[i] == 0 ? null : physical[--physicalIndex];
@@ -1062,6 +1073,21 @@ static partial class ColumnChunkReader
             throw new CorruptParquetException(
                 $"Definition levels consumed {physical.Length - physicalIndex} physical values, " +
                 $"expected {physical.Length}.");
+    }
+
+    internal static void ScatterNullableDoubleBatchForTesting(ReadOnlySpan<byte> definitions,
+        ReadOnlySpan<double> physical, Span<double?> destination)
+        => ScatterNullableFixedWidthBatch(definitions, physical, destination);
+
+    static bool HasCanonicalNullableDoubleLayout()
+    {
+        if (Unsafe.SizeOf<double?>() != 2 * sizeof(long))
+            return false;
+        const long bits = 0x1234_5678_9abc_def0;
+        double?[] probe = [BitConverter.Int64BitsToDouble(bits)];
+        ref var nullable = ref MemoryMarshal.GetArrayDataReference(probe);
+        ref var firstWord = ref Unsafe.As<double?, long>(ref nullable);
+        return firstWord == 1 && Unsafe.Add(ref firstWord, 1) == bits;
     }
 
     static void DecodeDefinitionBitset(ReadOnlySpan<byte> payload, int valueCount, EncodingKind encoding,
