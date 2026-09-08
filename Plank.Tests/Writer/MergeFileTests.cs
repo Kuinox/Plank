@@ -11,6 +11,45 @@ namespace Plank.Tests.Writer;
 internal sealed class MergeFileTests
 {
     [Test]
+    public async Task PreservesSortingColumnsForEachImportedRowGroup()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("Id", ParquetPhysicalType.Int32),
+            ColumnDefinition.RequiredLeaf("Sequence", ParquetPhysicalType.Int32)
+        ]);
+        var first = WriteTwoColumnFile(schema, [1, 2], [20, 10], new ParquetWriterOptions
+        {
+            SortingColumns =
+            [
+                new ParquetSortingColumn(0),
+                new ParquetSortingColumn(1, descending: true, nullsFirst: true)
+            ]
+        });
+        var second = WriteTwoColumnFile(schema, [4, 3], [30, 40], new ParquetWriterOptions
+        {
+            SortingColumns = [new ParquetSortingColumn(0, descending: true, nullsFirst: false)]
+        });
+
+        using var destination = new MemoryParquetSource();
+        var merger = schema.CreateMerger(new MemoryReadSource(first), destination);
+        merger.AppendFile(new MemoryReadSource(second));
+        merger.CloseFile();
+
+        using var stream = new MemoryStream(destination.ToArray(), writable: false);
+        using var reader = new ParquetFileReader();
+        reader.Reset(stream);
+        var firstSorting = reader.Metadata.RowGroupSortingColumns(0).ToArray();
+        var secondSorting = reader.Metadata.RowGroupSortingColumns(1).ToArray();
+        await Assert.That(firstSorting.Length).IsEqualTo(2);
+        await Assert.That(firstSorting[0]).IsEqualTo(new ParquetSortingColumn(0));
+        await Assert.That(firstSorting[1]).IsEqualTo(new ParquetSortingColumn(1,
+            descending: true, nullsFirst: true));
+        await Assert.That(secondSorting.Length).IsEqualTo(1);
+        await Assert.That(secondSorting[0]).IsEqualTo(new ParquetSortingColumn(0,
+            descending: true, nullsFirst: false));
+    }
+
+    [Test]
     public async Task MergesCompressedRowGroupsWithoutReencoding()
     {
         var schema = CreateSchema(ParquetPhysicalType.Int32);
@@ -228,6 +267,22 @@ internal sealed class MergeFileTests
         var column = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         column.Serialize(values);
         writer.StartRowGroup().Write(column);
+        writer.CloseFile();
+        return destination.ToArray();
+    }
+
+    static byte[] WriteTwoColumnFile(ParquetSchema schema, int[] firstValues, int[] secondValues,
+        ParquetWriterOptions options)
+    {
+        using var destination = new MemoryStream();
+        var writer = schema.CreateWriter(destination, options);
+        var first = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        var second = writer.CreateSerializedColumn<int>(schema.LeafColumns[1]);
+        first.Serialize(firstValues);
+        second.Serialize(secondValues);
+        var rowGroup = writer.StartRowGroup();
+        rowGroup.Write(first);
+        rowGroup.Write(second);
         writer.CloseFile();
         return destination.ToArray();
     }

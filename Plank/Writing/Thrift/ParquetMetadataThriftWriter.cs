@@ -367,6 +367,9 @@ static class ParquetMetadataThriftWriter
 
         writer.WriteFieldI64(2, totalUncompressedSize);
         writer.WriteFieldI64(3, checked((long)rowCount));
+        var sortingColumns = sourceMetadata.RowGroupSortingColumns(sourceRowGroupOrdinal);
+        if (!sortingColumns.IsEmpty)
+            WriteSortingColumns(ref writer, sortingColumns);
         if (columns.Length != 0)
             writer.WriteFieldI64(5, GetColumnChunkStartOffset(relocatedMetadata[0]));
         writer.WriteFieldI64(6, totalCompressedSize);
