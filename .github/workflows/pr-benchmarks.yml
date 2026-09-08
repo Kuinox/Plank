@@ -1,345 +1,55 @@
-name: PR benchmarks
-
+name: Focused PR regression audit
 on:
-  issue_comment:
-    types: [created]
   workflow_dispatch:
-    inputs:
-      pr_number:
-        description: PR number (including forks; overrides base_ref and head_ref)
-        type: string
-      base_ref:
-        description: Plank base branch, tag, or SHA
-        default: master
-        type: string
-      head_ref:
-        description: Plank head branch, tag, or SHA
-        default: master
-        type: string
-      iterations:
-        description: BenchmarkDotNet measured iterations
-        default: 100
-        type: number
-
 permissions:
   contents: read
-
-env:
-  DOTNET_CLI_TELEMETRY_OPTOUT: 1
-  DOTNET_NOLOGO: 1
-  # First-use protocol: one process per case, no operation before sample 1.
-  BENCHMARK_WARMUPS: 0
-  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 100 }}
-
 jobs:
-  resolve-request:
-    name: Resolve benchmark request
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.issue.pull_request && github.event.comment.body == '/benchmark')
+  audit:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    outputs:
-      approved: ${{ steps.request.outputs.approved }}
-      pr_number: ${{ steps.request.outputs.pr_number }}
-      base_sha: ${{ steps.request.outputs.base_sha }}
-      head_sha: ${{ steps.request.outputs.head_sha }}
-      head_repo: ${{ steps.request.outputs.head_repo }}
-    steps:
-      - name: Authorize request and pin revisions
-        id: request
-        uses: actions/github-script@v9
-        env:
-          PR_NUMBER: ${{ inputs.pr_number }}
-          BASE_REF: ${{ inputs.base_ref || 'master' }}
-          HEAD_REF: ${{ inputs.head_ref || github.sha }}
-        with:
-          script: |
-            const isComment = context.eventName === 'issue_comment';
-            const number = isComment ? String(context.issue.number) : process.env.PR_NUMBER;
-            if (isComment && (!context.payload.issue?.pull_request ||
-                context.payload.comment?.body !== '/benchmark')) return;
-
-            if (number && !/^[1-9][0-9]*$/.test(number)) {
-              throw new Error('PR number must be a positive integer.');
-            }
-            const pr = number ? (await github.rest.pulls.get({
-              ...context.repo, pull_number: Number(number),
-            })).data : null;
-            if (pr && (pr.state !== 'open' || pr.base.ref !== 'master' || !pr.head.repo)) {
-              core.notice('Benchmarks require an open PR targeting master with an available head repository.');
-              return;
-            }
-
-            if (isComment) {
-              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
-                ...context.repo, username: context.actor,
-              });
-              if (!['admin', 'maintain', 'write'].includes(data.permission)) {
-                await github.rest.issues.createComment({
-                  ...context.repo, issue_number: pr.number,
-                  body: 'Benchmark requested. A maintainer with write access can review the current PR commit and post `/benchmark` to start it. New commits need a new request.',
-                });
-                return;
-              }
-            }
-
-            const resolve = async ref => (await github.rest.repos.getCommit({
-              ...context.repo, ref,
-            })).data.sha;
-            const base = pr ? pr.base.sha : await resolve(process.env.BASE_REF);
-            const head = pr ? pr.head.sha : await resolve(process.env.HEAD_REF);
-            core.setOutput('pr_number', pr?.number || '');
-            core.setOutput('base_sha', base);
-            core.setOutput('head_sha', head);
-            core.setOutput('head_repo', pr?.head.repo.full_name || `${context.repo.owner}/${context.repo.repo}`);
-            if (pr) {
-              const url = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-              await github.rest.issues.createComment({
-                ...context.repo, issue_number: pr.number,
-                body: `Benchmark started for \`${head}\` against \`${base}\`. [Follow the run](${url}); the comparison will be posted here when it succeeds.`,
-              });
-            }
-            core.setOutput('approved', 'true');
-
-  resolve-plank-lab:
-    name: Resolve latest Plank-Lab
-    needs: resolve-request
-    if: needs.resolve-request.outputs.approved == 'true'
-    runs-on: ubuntu-latest
-    outputs:
-      sha: ${{ steps.revision.outputs.sha }}
-
-    steps:
-      - name: Check out latest Plank-Lab
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          repository: Kuinox/Plank-Lab
-          ref: master
-          path: plank-lab
-
-      - name: Record Plank-Lab revision
-        id: revision
-        shell: bash
-        run: echo "sha=$(git -C plank-lab rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-  benchmark:
-    name: ${{ matrix.suite_label }} · ${{ matrix.operation }}
-    needs: [resolve-request, resolve-plank-lab]
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    # Only approved requests can cancel expensive jobs for the same PR.
-    concurrency:
-      group: ${{ github.workflow }}-${{ needs.resolve-request.outputs.pr_number || github.ref }}-${{ matrix.suite }}-${{ matrix.operation }}
-      cancel-in-progress: true
+    timeout-minutes: 30
     env:
-      BASE_REF: ${{ needs.resolve-request.outputs.base_sha }}
-      HEAD_REF: ${{ needs.resolve-request.outputs.head_sha }}
-    strategy:
-      fail-fast: false
-      matrix:
-        operation: [Read, Write]
-        suite: [Synthetic, Real]
-        include:
-          - suite: Synthetic
-            suite_label: Synthetic
-          - suite: Real
-            suite_label: Real-world
-
+      DOTNET_EnableAVX512F: '0'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
     steps:
-      - name: Check out Plank-Lab for base
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
-          persist-credentials: false
           repository: Kuinox/Plank-Lab
-          ref: ${{ needs.resolve-plank-lab.outputs.sha }}
-          path: lab-base
-
-      - name: Check out Plank-Lab for head
-        uses: actions/checkout@v7
-        with:
+          ref: 2d9c6091428015312957ed602a8f1472430927c7
+          path: lab-source
           persist-credentials: false
-          repository: Kuinox/Plank-Lab
-          ref: ${{ needs.resolve-plank-lab.outputs.sha }}
-          path: lab-head
-
-      - name: Check out Plank base into Plank-Lab
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          ref: ${{ env.BASE_REF }}
-          path: lab-base/library/Plank
-
-      - name: Check out Plank head into Plank-Lab
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          repository: ${{ needs.resolve-request.outputs.head_repo }}
-          ref: ${{ env.HEAD_REF }}
-          path: lab-head/library/Plank
-
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-
-      - name: Restore and build both Plank-Lab copies
+      - name: Prepare exact revisions and build
         shell: bash
         run: |
-          dotnet restore lab-base/Plank.Benchmarks/Plank.Benchmarks.csproj \
-            --configfile lab-base/library/Plank/NuGet.config
-          dotnet build lab-base/Plank.Benchmarks/Plank.Benchmarks.csproj \
-            --configuration Release --no-restore
-          dotnet restore lab-head/Plank.Benchmarks/Plank.Benchmarks.csproj \
-            --configfile lab-head/library/Plank/NuGet.config
-          dotnet build lab-head/Plank.Benchmarks/Plank.Benchmarks.csproj \
-            --configuration Release --no-restore
-
-      - name: Download Plank-Lab's real-world input
-        if: matrix.suite == 'Real'
+          mkdir results
+          lscpu > results/cpu.txt
+          git clone --no-checkout https://github.com/Kuinox/Plank.git library-source
+          for pair in base:510878c23d6eeaf762d1fba7f32a12bc896766cc pr93:aaa9f86d8ff53df404ba351762ad9a80aa50d7e0 pr94:f055378118fa1e45257a0c8d083608eadf5e24f3; do
+            variant="${pair%%:*}"
+            sha="${pair#*:}"
+            mkdir "lab-$variant"
+            git -C lab-source archive HEAD | tar -x -C "lab-$variant"
+            rmdir "lab-$variant/library/Plank"
+            git -C library-source worktree add --detach "$GITHUB_WORKSPACE/lab-$variant/library/Plank" "$sha"
+            dotnet build "lab-$variant/Plank.Benchmarks/Plank.Benchmarks.csproj" -c Release > "results/build-$variant.log" 2>&1
+          done
+      - name: Sequential matched and unchanged-base controls
         shell: bash
         run: |
-          curl --fail --location --retry 5 \
-            --output "$RUNNER_TEMP/yellow_tripdata_2024-01.parquet" \
-            https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet
-          echo "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510  $RUNNER_TEMP/yellow_tripdata_2024-01.parquet" \
-            | sha256sum --check
-
-      - name: Run Plank-Lab matrix for base and head
-        shell: bash
-        env:
-          OPERATION: ${{ matrix.operation }}
-          SUITE: ${{ matrix.suite }}
-        run: |
-          results="$RUNNER_TEMP/plank-lab-results"
-          mkdir -p "$results"
-
-          run_benchmark() {
-            local variant="$1"
-            local pass="$2"
-            local lab="$GITHUB_WORKSPACE/lab-$variant"
-            local harness="$lab/Plank.Benchmarks/bin/Release/net10.0/Plank.Benchmarks.dll"
+          index=0
+          for variant in base pr93 pr94 base pr94 pr93 base base; do
+            index=$((index+1))
             (
-              cd "$lab"
-              dotnet "$harness" --published \
-                --filter "*$SUITE*PlankBenchmarks.$OPERATION" \
-                --warmupCount "$BENCHMARK_WARMUPS" \
-                --iterationCount "$BENCHMARK_ITERATIONS" \
-                --data-file "$RUNNER_TEMP/yellow_tripdata_2024-01.parquet"
-            ) | tee "$results/$SUITE-$OPERATION-$variant-$pass.log"
-          }
-
-          run_benchmark base 1
-          run_benchmark head 1
-          run_benchmark head 2
-          run_benchmark base 2
-
-      - name: Upload Plank-Lab logs
-        uses: actions/upload-artifact@v7
+              cd "lab-$variant"
+              dotnet Plank.Benchmarks/bin/Release/net10.0/Plank.Benchmarks.dll --published \
+                --filter '*SyntheticInt32ByteStreamSplitPlankBenchmarks.Write' '*SyntheticInt32PlainPlankBenchmarks.Write' \
+                --iterationCount 100 --warmupCount 0
+            ) > "results/pass-$index-$variant.log" 2>&1
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: plank-lab-${{ matrix.suite }}-${{ matrix.operation }}
-          path: ${{ runner.temp }}/plank-lab-results/*.log
-          if-no-files-found: error
-
-  report:
-    name: Publish comparison
-    needs: [resolve-request, resolve-plank-lab, benchmark]
-    if: ${{ !cancelled() && needs.benchmark.result == 'success' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    env:
-      BASE_REF: ${{ needs.resolve-request.outputs.base_sha }}
-      HEAD_REF: ${{ needs.resolve-request.outputs.head_sha }}
-      PR_NUMBER: ${{ needs.resolve-request.outputs.pr_number }}
-
-    steps:
-      - name: Check out reporting code
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          # Never execute PR-provided reporting code with a write token.
-          ref: ${{ github.sha }}
-
-      - name: Check out Plank-Lab matrix
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          repository: Kuinox/Plank-Lab
-          ref: ${{ needs.resolve-plank-lab.outputs.sha }}
-          path: plank-lab
-
-      - name: Download benchmark logs
-        uses: actions/download-artifact@v8
-        with:
-          pattern: plank-lab-*
-          path: benchmark-results
-          merge-multiple: true
-
-      - name: Test and build report
-        shell: bash
-        run: |
-          python -m unittest discover \
-            --start-directory .github/scripts/tests \
-            --pattern 'test_*.py' \
-            --verbose
-          python .github/scripts/plank_lab_benchmark_report.py \
-            --results benchmark-results \
-            --matrix plank-lab/Plank.Benchmarks/Published/Cases/matrix.json \
-            --output benchmark-comment.md \
-            --summary benchmark-summary.md \
-            --base-sha "$BASE_REF" \
-            --head-sha "$HEAD_REF" \
-            --plank-lab-sha "${{ needs.resolve-plank-lab.outputs.sha }}" \
-            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          cat benchmark-summary.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload comparison report
-        uses: actions/upload-artifact@v7
-        with:
-          name: plank-benchmark-report
-          path: |
-            benchmark-comment.md
-            benchmark-summary.md
-
-      - name: Create or update PR comment
-        if: needs.resolve-request.outputs.pr_number != ''
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const fs = require('fs');
-            const issue_number = Number(process.env.PR_NUMBER);
-            const { data: pr } = await github.rest.pulls.get({
-              ...context.repo, pull_number: issue_number,
-            });
-            if (pr.state !== 'open' || pr.head.sha !== process.env.HEAD_REF) {
-              core.notice('PR changed or closed; the comparison remains available in the run artifacts.');
-              return;
-            }
-            const marker = '<!-- plank-pr-benchmark-comparison -->';
-            const body = fs.readFileSync('benchmark-comment.md', 'utf8');
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              ...context.repo,
-              issue_number,
-              per_page: 100,
-            });
-            const previous = comments.find(comment =>
-              comment.user?.type === 'Bot' && comment.body?.includes(marker));
-
-            if (previous) {
-              await github.rest.issues.updateComment({
-                ...context.repo,
-                comment_id: previous.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                ...context.repo,
-                issue_number,
-                body,
-              });
-            }
+          name: focused-regression-audit
+          path: results
