@@ -11,22 +11,23 @@ internal sealed class DeltaBinaryPackedDecoderTests
     [Test]
     public void ConstantInt64DeltasPreserveWrappingTailsAndBatchBoundaries()
     {
-        foreach (var count in new[] { 1, 2, 4, 5, 31, 32, 33, 34, 128, 129, 130, 257 })
+        foreach (var (blockSize, miniBlocks) in new[] { (128, 1), (128, 2), (128, 4), (256, 4), (256, 8), (512, 16) })
+        foreach (var count in new[] { 1, 2, 4, 5, 31, 32, 33, 34, 128, 129, 130, 257, 513 })
         foreach (var delta in new[] { 0L, 37L, -37L, long.MinValue, long.MaxValue })
         {
             var payload = new List<byte>();
-            WriteUnsignedVarIntReference(128, payload);
-            WriteUnsignedVarIntReference(4, payload);
+            WriteUnsignedVarIntReference((ulong)blockSize, payload);
+            WriteUnsignedVarIntReference((ulong)miniBlocks, payload);
             WriteUnsignedVarIntReference((ulong)count, payload);
             const long firstValue = long.MaxValue - 3;
             WriteUnsignedVarIntReference(unchecked((ulong)((firstValue << 1) ^ (firstValue >> 63))), payload);
             var expected = new long[count];
             expected[0] = firstValue;
             for (var i = 1; i < count; i++) expected[i] = unchecked(expected[i - 1] + delta);
-            for (var i = 1; i < count; i += 128)
+            for (var i = 1; i < count; i += blockSize)
             {
                 WriteUnsignedVarIntReference(unchecked((ulong)((delta << 1) ^ (delta >> 63))), payload);
-                payload.AddRange(new byte[4]); // No residual bits: every value advances by minDelta.
+                payload.AddRange(new byte[miniBlocks]); // No residual bits: every value advances by minDelta.
             }
             var bytes = payload.ToArray();
             var decoded = new long[count + 2];

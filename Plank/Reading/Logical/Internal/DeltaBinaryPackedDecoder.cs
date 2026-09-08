@@ -1031,15 +1031,26 @@ static class DeltaBinaryPackedDecoder
         BlockLayout layout, ref long previous)
     {
         var index = 0;
-        Span<byte> bitWidthStorage = stackalloc byte[MaxMiniBlockCount];
-        var bitWidths = bitWidthStorage[..layout.MiniBlockCount];
         Span<long> adjustedDeltas = Avx2.IsSupported ? stackalloc long[MiniBlockChunk] : default;
 
         while (index < destination.Length)
         {
             var minDelta = reader.ReadZigZagInt64();
+            var bitWidths = reader.ReadBytesWithLookahead(layout.MiniBlockCount, lookahead: 0);
+            var combinedBitWidth = 0;
             for (var i = 0; i < bitWidths.Length; i++)
-                bitWidths[i] = reader.ReadByte();
+            {
+                combinedBitWidth |= bitWidths[i];
+            }
+
+            if (combinedBitWidth == 0)
+            {
+                var count = Math.Min(checked(layout.MiniBlockCount * layout.MiniBlockSize),
+                    destination.Length - index);
+                DecodeConstantInt64DeltaBlock(destination.Slice(index, count), minDelta, ref previous);
+                index += count;
+                continue;
+            }
 
             for (var miniBlock = 0; miniBlock < bitWidths.Length && index < destination.Length; miniBlock++)
             {
@@ -1182,6 +1193,31 @@ static class DeltaBinaryPackedDecoder
         previous = values.GetElement(Vector256<long>.Count - 1);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static void DecodeConstantInt64DeltaBlock(Span<long> destination, long delta, ref long previous)
+    {
+        var index = 0;
+        if (Avx2.IsSupported)
+        {
+            var offsets = Vector256.Create(delta, unchecked(delta * 2),
+                unchecked(delta * 3), unchecked(delta * 4));
+            var values = offsets + Vector256.Create(previous);
+            var step = Vector256.Create(unchecked(delta * Vector256<long>.Count));
+            ref var target = ref MemoryMarshal.GetReference(destination);
+            for (; index <= destination.Length - Vector256<long>.Count; index += Vector256<long>.Count)
+            {
+                values.StoreUnsafe(ref target, (nuint)index);
+                values += step;
+            }
+            previous = unchecked(previous + delta * index);
+        }
+        for (; index < destination.Length; index++)
+        {
+            previous = unchecked(previous + delta);
+            destination[index] = previous;
+        }
+    }
+
     static void DecodeInt64MiniBlockVectorized(ReadOnlySpan<byte> packed, int bitWidth, long minDelta,
         ref long previous, Span<long> adjustedDeltas, Span<long> destination)
     {
@@ -1258,6 +1294,7 @@ static class DeltaBinaryPackedDecoder
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeInt64MiniBlock(ReadOnlySpan<byte> packed, int bitWidth, long minDelta,
         ref long previous, Span<long> destination)
     {
@@ -1272,29 +1309,15 @@ static class DeltaBinaryPackedDecoder
         }
 
         var mask = (1UL << bitWidth) - 1;
-        var packedByteCount = bitWidth * PackedBytesPerBitWidth;
-        var byteOffset = 0;
-        ulong bitBuffer = 0;
-        var bufferedBits = 0;
+        var bitOffset = 0;
         for (var i = 0; i < destination.Length; i++)
         {
-            if (bufferedBits < bitWidth)
-            {
-                var bytesToLoad = Math.Min((64 - bufferedBits) / 8,
-                    packedByteCount - byteOffset);
-                var loaded = ReadPackedWord(packed, byteOffset);
-                if (bytesToLoad < sizeof(ulong))
-                    loaded &= (1UL << (bytesToLoad * 8)) - 1;
-                bitBuffer |= loaded << bufferedBits;
-                byteOffset += bytesToLoad;
-                bufferedBits += bytesToLoad * 8;
-            }
-
-            var delta = bitBuffer & mask;
-            bitBuffer >>= bitWidth;
-            bufferedBits -= bitWidth;
+            // This decoder receives at most 56-bit fields, so a value and its
+            // intra-byte offset always fit in one unaligned 64-bit load.
+            var delta = (ReadPackedWord(packed, bitOffset >> 3) >> (bitOffset & 7)) & mask;
             previous = unchecked(previous + minDelta + (long)delta);
             destination[i] = previous;
+            bitOffset += bitWidth;
         }
     }
 
