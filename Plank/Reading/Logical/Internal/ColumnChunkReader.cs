@@ -1081,7 +1081,7 @@ static partial class ColumnChunkReader
 
     static bool HasCanonicalNullableDoubleLayout()
     {
-        if (Unsafe.SizeOf<double?>() != 2 * sizeof(long))
+        if (!NullableInt64HasCanonicalLayout || Unsafe.SizeOf<double?>() != 2 * sizeof(long))
             return false;
         const long bits = 0x1234_5678_9abc_def0;
         double?[] probe = [BitConverter.Int64BitsToDouble(bits)];
