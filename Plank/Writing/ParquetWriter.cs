@@ -249,7 +249,7 @@ public sealed class ParquetWriter : IDisposable
             using var copyBuffer = _options.BufferPool.Rent(64 * 1024);
             for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroupOrdinal++)
                 if (metadata.RowGroups[rowGroupOrdinal].RowCount != 0)
-                    ImportRowGroup(source, metadata, rowGroupOrdinal, copyBuffer.Span);
+                    ImportRowGroup(source, reader.PhysicalReader, metadata, rowGroupOrdinal, copyBuffer.Span);
         }
         catch
         {
@@ -656,9 +656,8 @@ public sealed class ParquetWriter : IDisposable
             throw new NotSupportedException($"The {name} exceeds the supported stream offset range.");
     }
 
-    void ImportRowGroup(IParquetReadSource source, Reading.Physical.ParquetFileMetadata sourceMetadata,
-        int rowGroupOrdinal,
-        Span<byte> copyBuffer)
+    void ImportRowGroup(IParquetReadSource source, Reading.Physical.ParquetFileReader physicalReader,
+        Reading.Physical.ParquetFileMetadata sourceMetadata, int rowGroupOrdinal, Span<byte> copyBuffer)
     {
         var rowGroup = sourceMetadata.RowGroups[rowGroupOrdinal];
         for (var columnOrdinal = 0; columnOrdinal < rowGroup.ColumnCount; columnOrdinal++)
@@ -682,6 +681,26 @@ public sealed class ParquetWriter : IDisposable
         {
             var sourceChunk = sourceMetadata.ColumnChunk(rowGroupOrdinal, columnOrdinal);
             ref var importedChunk = ref OpenRowGroupColumnMetadata[columnOrdinal];
+            if (sourceChunk.HasBloomFilter)
+            {
+                importedChunk.BloomFilterOffset = FileOffset;
+                if (sourceChunk.BloomFilterLength != 0)
+                {
+                    importedChunk.BloomFilterLength = sourceChunk.BloomFilterLength;
+                    CopyRange(source, sourceChunk.BloomFilterOffset, sourceChunk.BloomFilterLength, copyBuffer);
+                }
+                else
+                {
+                    using var bloomFilter = physicalReader.OpenBloomFilter(rowGroupOrdinal, columnOrdinal);
+                    SerializedFileMetadata.Reset();
+                    ParquetMetadataThriftWriter.WriteBloomFilterHeader(ref SerializedFileMetadata,
+                        bloomFilter.BitsetSizeBytes);
+                    importedChunk.BloomFilterLength = checked((uint)(SerializedFileMetadata.WrittenLength +
+                        bloomFilter.BitsetSizeBytes));
+                    WriteBuffer(ref SerializedFileMetadata);
+                    WriteBytes(bloomFilter.Bitset);
+                }
+            }
             if (sourceChunk.ColumnIndexLength != 0)
             {
                 importedChunk.ColumnIndexOffset = FileOffset;
