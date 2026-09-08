@@ -886,6 +886,12 @@ static class ParquetMetadataThriftWriter
             writer.WriteFieldI64(14, relocated.BloomFilterOffset);
             writer.WriteFieldI32(15, checked((int)relocated.BloomFilterLength));
         }
+        if (source.GeospatialStatisticsLength > 0)
+        {
+            writer.WriteFieldHeader(17, CompactType.Struct);
+            writer.WriteRaw(sourceFooter.Slice(source.GeospatialStatisticsOffset,
+                source.GeospatialStatisticsLength));
+        }
         writer.EndStruct(previousMetadata);
 
         if (relocated.OffsetIndexLength > 0)
@@ -1305,6 +1311,9 @@ static class ParquetMetadataThriftWriter
 
         internal void WriteRaw(ref BufferWriter source)
             => _buffer.CopyFrom(ref source);
+
+        internal void WriteRaw(scoped ReadOnlySpan<byte> source)
+            => _buffer.Write(source);
 
         void WriteI16(int value)
             => WriteVarInt32(EncodeZigZag32(value));

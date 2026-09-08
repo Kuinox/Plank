@@ -4,12 +4,53 @@ using System.Text;
 using Plank.Reading;
 using Plank.Reading.Physical;
 using Plank.Schema;
+using Plank.Tests.Reading.ParquetTesting;
 using Plank.Writing;
 
 namespace Plank.Tests.Writer;
 
 internal sealed class MergeFileTests
 {
+    [Test]
+    public void PreservesGeospatialStatisticsForEachImportedRowGroup()
+    {
+        var sourceBytes = ParquetTestingCorpus.ReadAllBytes("data/geospatial/geospatial.parquet");
+        using var discoverySource = new MemoryReadSource(sourceBytes);
+        using var discovery = new Plank.Reading.Logical.ParquetReader();
+        discovery.Reset(discoverySource);
+
+        using var destination = new MemoryParquetSource();
+        using var first = new MemoryReadSource(sourceBytes);
+        var merger = discovery.Schema.CreateMerger(first, destination);
+        using (var second = new MemoryReadSource(sourceBytes))
+            merger.AppendFile(second);
+        merger.CloseFile();
+
+        using var source = new MemoryStream(sourceBytes, writable: false);
+        using var sourceReader = new ParquetFileReader();
+        sourceReader.Reset(source);
+        using var merged = new MemoryStream(destination.ToArray(), writable: false);
+        using var mergedReader = new ParquetFileReader();
+        mergedReader.Reset(merged);
+        var sourceMetadata = sourceReader.Metadata;
+        var mergedMetadata = mergedReader.Metadata;
+        for (var copy = 0; copy < 2; copy++)
+            for (var rowGroup = 0; rowGroup < sourceMetadata.RowGroupCount; rowGroup++)
+                for (var column = 0; column < sourceMetadata.ColumnCount; column++)
+                {
+                    var sourceChunk = sourceMetadata.ColumnChunk(rowGroup, column);
+                    var importedChunk = mergedMetadata.ColumnChunk(
+                        copy * sourceMetadata.RowGroupCount + rowGroup, column);
+                    var expected = sourceMetadata.FooterBytes.Slice(sourceChunk.GeospatialStatisticsOffset,
+                        sourceChunk.GeospatialStatisticsLength);
+                    var actual = mergedMetadata.FooterBytes.Slice(importedChunk.GeospatialStatisticsOffset,
+                        importedChunk.GeospatialStatisticsLength);
+                    if (!expected.SequenceEqual(actual))
+                        throw new InvalidOperationException(
+                            $"Geospatial statistics changed for imported row group {rowGroup}, column {column}.");
+                }
+    }
+
     [Test]
     public async Task PreservesSortingColumnsForEachImportedRowGroup()
     {
