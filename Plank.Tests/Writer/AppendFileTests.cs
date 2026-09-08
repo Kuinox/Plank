@@ -9,6 +9,248 @@ namespace Plank.Tests.Writer;
 internal sealed class AppendFileTests
 {
     [Test]
+    [Arguments(false, 0)]
+    [Arguments(true, 0)]
+    [Arguments(false, 1)]
+    [Arguments(true, 1)]
+    [Arguments(false, 2)]
+    [Arguments(true, 2)]
+    [Arguments(false, 3)]
+    [Arguments(true, 3)]
+    public async Task AppendingToLatestChecksIncomingOrderAndBoundary(bool descending, int scenario)
+    {
+        var path = NewPath();
+        try
+        {
+            var schema = CreateSchema(ParquetPhysicalType.Int32);
+            var sorting = new ParquetSortingColumn(0, descending: descending);
+            var options = new ParquetWriterOptions { SortingColumns = [sorting] };
+            int[] first = descending ? [4, 2] : [1, 3];
+            int[] appended = scenario switch
+            {
+                0 => descending ? [3, 1] : [2, 4], // Sorted input, wrong boundary.
+                1 => descending ? [1, 2] : [4, 3], // Correct boundary, unsorted input.
+                2 => descending ? [2, 1] : [3, 4], // Equal boundary, sorted input.
+                _ => []
+            };
+            using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                var writer = schema.CreateWriter(stream, options);
+                WriteRowGroup(writer, schema, first);
+                WriteRowGroup(writer, schema, first);
+                writer.CloseFile();
+            }
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var writer = schema.CreateAppender(stream, new ParquetAppendOptions
+                {
+                    AppendToLatestRowGroup = true,
+                    WriterOptions = options
+                });
+                WriteRowGroup(writer, schema, appended);
+                WriteRowGroup(writer, schema, first);
+                writer.CloseFile();
+            }
+            await Assert.That(ReadValues(path, schema))
+                .IsEquivalentTo(first.Concat(first).Concat(appended).Concat(first).ToArray());
+            using var reader = new ParquetFileReader();
+            using var readStream = File.OpenRead(path);
+            reader.Reset(readStream);
+            await Assert.That(reader.Metadata.RowGroupCount).IsEqualTo(3);
+            await Assert.That(reader.Metadata.RowGroupSortingColumns(0).ToArray())
+                .IsEquivalentTo(new[] { sorting });
+            await Assert.That(reader.Metadata.RowGroupSortingColumns(1).Length).IsEqualTo(scenario >= 2 ? 1 : 0);
+            await Assert.That(reader.Metadata.RowGroupSortingColumns(2).ToArray())
+                .IsEquivalentTo(new[] { sorting });
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(2)]
+    public async Task AppendingChecksLexicographicKeysInDeclaredOrder(int scenario)
+    {
+        var path = NewPath();
+        try
+        {
+            var schema = new ParquetSchema([
+                ColumnDefinition.RequiredLeaf("Sequence", ParquetPhysicalType.Int32),
+                ColumnDefinition.RequiredLeaf("Id", ParquetPhysicalType.Int32)
+            ]);
+            var sorting = new[] { new ParquetSortingColumn(1), new ParquetSortingColumn(0, descending: true) };
+            using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                var writer = schema.CreateWriter(stream, new ParquetWriterOptions { SortingColumns = [.. sorting] });
+                WriteTwoColumns(writer, schema, [20, 10], [1, 1]);
+                writer.CloseFile();
+            }
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var writer = schema.CreateAppender(stream, new ParquetAppendOptions { AppendToLatestRowGroup = true });
+                int[] sequence = scenario switch { 0 => [5, 100, 90], 1 => [15, 100, 90], _ => [5, 90, 100] };
+                WriteTwoColumns(writer, schema, sequence, [1, 2, 2]);
+                writer.CloseFile();
+            }
+            using var reader = new ParquetFileReader();
+            using var readStream = File.OpenRead(path);
+            reader.Reset(readStream);
+            await Assert.That(reader.Metadata.RowGroupCount).IsEqualTo(1);
+            await Assert.That(reader.Metadata.RowGroups[0].RowCount).IsEqualTo(5UL);
+            await Assert.That(reader.Metadata.RowGroupSortingColumns(0).ToArray())
+                .IsEquivalentTo(scenario == 0 ? sorting : []);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    static void WriteTwoColumns(ParquetWriter writer, ParquetSchema schema, int[] sequence, int[] ids)
+    {
+        var first = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        var second = writer.CreateSerializedColumn<int>(schema.LeafColumns[1]);
+        first.Serialize(sequence);
+        second.Serialize(ids);
+        var group = writer.StartRowGroup();
+        group.Write(first);
+        group.Write(second);
+    }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(false, true)]
+    [Arguments(true, false)]
+    [Arguments(true, true)]
+    public async Task AppendingHonorsNullPlacementIndependentlyOfDirection(bool descending, bool nullsFirst)
+    {
+        var schema = new ParquetSchema([ColumnDefinition.OptionalLeaf("Value", ParquetPhysicalType.Int32)]);
+        var sorting = new ParquetSortingColumn(0, descending, nullsFirst);
+        int?[] numbers = descending ? [3, 2] : [2, 3];
+        int?[] nulls = [null, null];
+        await CheckAppendedSorting(schema, sorting, nullsFirst ? nulls : numbers,
+            nullsFirst ? numbers : nulls, true).ConfigureAwait(false);
+        await CheckAppendedSorting(schema, sorting, nullsFirst ? numbers : nulls,
+            nullsFirst ? nulls : numbers, false).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task AppendingUsesUnsignedIntegerOrder()
+    {
+        var schema = new ParquetSchema([ColumnDefinition.RequiredLeaf("Value", ParquetPhysicalType.Int32,
+            logicalType: new LogicalType.Int(32, isSigned: false))]);
+        await CheckAppendedSorting<int>(schema, new ParquetSortingColumn(0), [int.MaxValue], [int.MinValue], true).ConfigureAwait(false);
+        await CheckAppendedSorting<int>(schema, new ParquetSortingColumn(0), [int.MinValue], [int.MaxValue], false).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task AppendingUsesUtf8StringOrder()
+    {
+        var schema = new ParquetSchema([ColumnDefinition.RequiredLeaf("Value", ParquetPhysicalType.ByteArray,
+            logicalType: new LogicalType.String())]);
+        // UTF-16 ordinal comparison puts the surrogate pair before U+E000; UTF-8 does not.
+        await CheckAppendedSorting<string>(schema, new ParquetSortingColumn(0), ["\uE000"], ["\U00010000"], true).ConfigureAwait(false);
+        await CheckAppendedSorting<string>(schema, new ParquetSortingColumn(0), ["\U00010000"], ["\uE000"], false).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task AppendingDropsAmbiguousFloatingOrder()
+    {
+        var schema = CreateSchema(ParquetPhysicalType.Double);
+        await CheckAppendedSorting<double>(schema, new ParquetSortingColumn(0), [1], [2, 3], true).ConfigureAwait(false);
+        await CheckAppendedSorting<double>(schema, new ParquetSortingColumn(0), [1], [double.NaN], false).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task AppendingDoesNotInventAnOrderForRetainedRows()
+    {
+        var schema = CreateSchema(ParquetPhysicalType.Int32);
+        var ascending = new ParquetSortingColumn(0);
+        await CheckAppendedSorting<int>(schema, ascending, [3, 1], [4, 5], false,
+            sourceOptions: new ParquetWriterOptions(),
+            appendWriterOptions: new ParquetWriterOptions { SortingColumns = [ascending] }).ConfigureAwait(false);
+        await CheckAppendedSorting<int>(schema, ascending, [1, 3], [2, 1], false,
+            appendWriterOptions: new ParquetWriterOptions { SortingColumns = [new ParquetSortingColumn(0, descending: true)] }).ConfigureAwait(false);
+    }
+
+    static async Task CheckAppendedSorting<T>(ParquetSchema schema, ParquetSortingColumn sorting,
+        T[] retained, T[] incoming, bool expectedSorting,
+        ParquetWriterOptions? sourceOptions = null, ParquetWriterOptions? appendWriterOptions = null)
+    {
+        var path = NewPath();
+        try
+        {
+            using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                var writer = schema.CreateWriter(stream, sourceOptions ?? new ParquetWriterOptions { SortingColumns = [sorting] });
+                var column = writer.CreateSerializedColumn<T>(schema.LeafColumns[0]);
+                column.Serialize(retained);
+                writer.StartRowGroup().Write(column);
+                writer.CloseFile();
+            }
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var writer = schema.CreateAppender(stream, new ParquetAppendOptions
+                {
+                    AppendToLatestRowGroup = true,
+                    WriterOptions = appendWriterOptions ?? ParquetWriterOptions.Default
+                });
+                var column = writer.CreateSerializedColumn<T>(schema.LeafColumns[0]);
+                column.Serialize(incoming);
+                writer.StartRowGroup().Write(column);
+                writer.CloseFile();
+            }
+            using var reader = new ParquetFileReader();
+            using var readStream = File.OpenRead(path);
+            reader.Reset(readStream);
+            await Assert.That(reader.Metadata.RowGroupCount).IsEqualTo(1);
+            await Assert.That(reader.Metadata.RowGroups[0].RowCount).IsEqualTo((ulong)(retained.Length + incoming.Length));
+            await Assert.That(reader.Metadata.RowGroupSortingColumns(0).Length).IsEqualTo(expectedSorting ? 1 : 0);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task ClosingWithoutAppendingPreservesSortingDeclaration()
+    {
+        var path = NewPath();
+        try
+        {
+            var schema = CreateSchema(ParquetPhysicalType.Int32);
+            var sorting = new ParquetSortingColumn(0);
+            WriteNewFile(path, schema, [1, 3], new ParquetWriterOptions { SortingColumns = [sorting] });
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var writer = schema.CreateAppender(stream, new ParquetAppendOptions
+                {
+                    AppendToLatestRowGroup = true
+                });
+                writer.CloseFile();
+            }
+            using var reader = new ParquetFileReader();
+            using var readStream = File.OpenRead(path);
+            reader.Reset(readStream);
+            await Assert.That(reader.Metadata.RowGroupSortingColumns(0).ToArray())
+                .IsEquivalentTo(new[] { sorting });
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Test]
     public async Task AppendsValuesToLatestRowGroup()
     {
         var path = NewPath();

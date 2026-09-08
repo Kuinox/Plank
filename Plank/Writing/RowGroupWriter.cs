@@ -174,6 +174,7 @@ public sealed class RowGroupWriter
 
         if (!state.BloomFilterBitset.IsEmpty)
             _serializedColumnsByOrdinal[columnOrdinal] = state;
+        _writer.LatestSortingOrder?.Record(columnOrdinal, serialized.AppendSortingComparisons);
         state.Consume();
         _nextColumnOrdinal++;
         if (_nextColumnOrdinal != (uint)_writer.ColumnCount)
