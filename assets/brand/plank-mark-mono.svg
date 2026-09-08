@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Plank</title>
+  <desc id="desc">A letter P assembled from four interlocking data planks.</desc>
+  <g fill="#13201c">
+    <rect x="7" y="6" width="12" height="52" rx="2.5"/>
+    <rect x="23" y="6" width="23" height="12" rx="2.5"/>
+    <rect x="45" y="10" width="12" height="30" rx="2.5"/>
+    <rect x="23" y="34" width="24" height="12" rx="2.5"/>
+  </g>
+</svg>
