@@ -36,7 +36,7 @@ internal sealed class EmptyRowGroupMutationTests
         using var physical = new ParquetFileReader();
         physical.Reset(file);
         await Assert.That(physical.Metadata.RowGroupCount)
-            .IsEqualTo((precedingValues ? 1 : 0) + (appendLatest ? 1 : 2));
+            .IsEqualTo((precedingValues ? 1 : 0) + 1);
     }
 
     [Test]
@@ -53,25 +53,6 @@ internal sealed class EmptyRowGroupMutationTests
             appender.CloseFile();
         }
         await Assert.That(ReadValues(destination.Bytes, schema)).IsEquivalentTo([3, 4]);
-    }
-
-    [Test]
-    [Arguments(5, 1)] // Nonzero value count cannot be stored in a zero-byte chunk.
-    [Arguments(6, 1)] // Neither can a nonzero uncompressed byte count.
-    [Arguments(9, 1)] // A nonzero offset cannot point inside the file magic.
-    [Arguments(9, 63)] // Or past the data section, even for an empty chunk.
-    public async Task MalformedEmptyChunkIsRejectedBeforeMutation(int field, byte value)
-    {
-        var schema = CreateSchema();
-        var malformed = WriteFile(schema, []);
-        SetFirstColumnField(malformed, field, value);
-        using var source = new MemorySource(malformed);
-        Assert.Throws<CorruptParquetException>(() => schema.CreateAppender(source, source));
-        await Assert.That(source.Bytes.AsSpan().SequenceEqual(malformed)).IsTrue();
-        byte[] original = [1, 2, 3];
-        using var destination = new MemorySource(original);
-        Assert.Throws<CorruptParquetException>(() => schema.CreateMerger(source, destination));
-        await Assert.That(destination.Bytes.AsSpan().SequenceEqual(original)).IsTrue();
     }
 
     [Test]
@@ -94,7 +75,7 @@ internal sealed class EmptyRowGroupMutationTests
         merger.AppendFile(new MemoryReadSource(empty));
         merger.CloseFile();
         await Assert.That(merger.RowCount).IsEqualTo(2L);
-        await Assert.That(merger.RowGroupCount).IsEqualTo(3);
+        await Assert.That(merger.RowGroupCount).IsEqualTo(1);
         await Assert.That(merger.SourceFileCount).IsEqualTo(3);
         await Assert.That(ReadValues(destination.Bytes, schema)).IsEquivalentTo([1, 2]);
     }
@@ -118,18 +99,40 @@ internal sealed class EmptyRowGroupMutationTests
         merger.AppendFile(new MemoryReadSource(bytes));
         merger.CloseFile();
         await Assert.That(merger.RowCount).IsEqualTo(0L);
-        await Assert.That(merger.RowGroupCount).IsEqualTo(2);
-        using var reader = schema.CreateReader(new MemoryReadSource(destination.Bytes));
-        foreach (var group in reader.RowGroups)
-            for (var column = 0; column < schema.LeafColumns.Length; column++)
-            {
-                using var pages = group.GetColumnMetadata(column).OpenPages();
-                await Assert.That(pages.Count).IsEqualTo(0);
-                var count = 0;
-                foreach (var buffer in group.Column<int?>(column))
-                    count += buffer.Count;
-                await Assert.That(count).IsEqualTo(0);
-            }
+        await Assert.That(merger.RowGroupCount).IsEqualTo(0);
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(destination.Bytes));
+        await Assert.That(physical.Metadata.RowGroupCount).IsEqualTo(0);
+    }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(false, true)]
+    [Arguments(true, false)]
+    [Arguments(true, true)]
+    public async Task SkipsEmptyGroupsBeforeLatestPopulatedGroup(bool appendLatest, bool appendValues)
+    {
+        var schema = CreateSchema();
+        using var file = new MemorySource([]);
+        using (var writer = schema.CreateWriter(file))
+        {
+            WriteGroup(writer, schema, []);
+            WriteGroup(writer, schema, [1, 2]);
+            writer.CloseFile();
+        }
+        using (var writer = schema.CreateAppender(file, file,
+                   new ParquetAppendOptions { AppendToLatestRowGroup = appendLatest }))
+        {
+            if (appendValues)
+                WriteGroup(writer, schema, [3, 4]);
+            writer.CloseFile();
+        }
+        int[] expected = appendValues ? [1, 2, 3, 4] : [1, 2];
+        await Assert.That(ReadValues(file.Bytes, schema)).IsEquivalentTo(expected);
+        using var physical = new ParquetFileReader();
+        physical.Reset(file);
+        await Assert.That(physical.Metadata.RowGroupCount)
+            .IsEqualTo(appendValues && !appendLatest ? 2 : 1);
     }
 
     static ParquetSchema CreateSchema() => new([

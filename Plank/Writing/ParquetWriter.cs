@@ -248,7 +248,8 @@ public sealed class ParquetWriter : IDisposable
         {
             using var copyBuffer = _options.BufferPool.Rent(64 * 1024);
             for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroupOrdinal++)
-                ImportRowGroup(source, metadata, rowGroupOrdinal, copyBuffer.Span);
+                if (metadata.RowGroups[rowGroupOrdinal].RowCount != 0)
+                    ImportRowGroup(source, metadata, rowGroupOrdinal, copyBuffer.Span);
         }
         catch
         {
@@ -266,7 +267,7 @@ public sealed class ParquetWriter : IDisposable
             _createdBy = importedCreatedBy;
             _keyValueMetadata = importedKeyValueMetadata;
         }
-        return (metadata.RowGroupCount, importedRowCount);
+        return (_rowGroupCount - rowGroupCountBeforeImport, importedRowCount);
     }
 
     public RowGroupWriter StartRowGroup()
@@ -469,7 +470,8 @@ public sealed class ParquetWriter : IDisposable
         MutationSchemaValidator.Validate(_schema, metadata);
         _ = ValidateImport(metadata, ColumnCount);
 
-        var appendLatest = appendOptions.AppendToLatestRowGroup && metadata.RowGroupCount > 0;
+        var appendLatest = appendOptions.AppendToLatestRowGroup && metadata.RowGroupCount > 0 &&
+            metadata.RowGroups[metadata.RowGroupCount - 1].RowCount != 0;
         var retainedRowGroupCount = metadata.RowGroupCount - (appendLatest ? 1 : 0);
         if (appendLatest)
         {
@@ -486,9 +488,13 @@ public sealed class ParquetWriter : IDisposable
 
         SerializedRowGroupsMetadata.Reset();
         long totalRowCount = 0;
+        var nonEmptyRowGroupCount = 0;
         for (var i = 0; i < retainedRowGroupCount; i++)
         {
             var rowGroup = metadata.RowGroups[i];
+            if (rowGroup.RowCount == 0)
+                continue;
+            nonEmptyRowGroupCount++;
             var relativeOffset = checked((int)(rowGroup.MetadataOffset - metadata.FooterOffset));
             SerializedRowGroupsMetadata.Write(metadata.FooterBytes.Slice(relativeOffset, rowGroup.MetadataLength));
             totalRowCount = checked(totalRowCount + checked((long)rowGroup.RowCount));
@@ -507,7 +513,7 @@ public sealed class ParquetWriter : IDisposable
 
         _destination = destination;
         _fileClosed = false;
-        _rowGroupCount = retainedRowGroupCount;
+        _rowGroupCount = nonEmptyRowGroupCount;
         _totalRowCount = totalRowCount;
         _rowGroupOpen = false;
         FileOffset = checked((long)metadata.FooterOffset);
@@ -528,12 +534,7 @@ public sealed class ParquetWriter : IDisposable
         var latestOrdinal = metadata.RowGroupCount - 1;
         var replacementOffset = metadata.FooterOffset;
         for (var column = 0; column < metadata.RowGroups[latestOrdinal].ColumnCount; column++)
-        {
-            var chunk = metadata.ColumnChunk(latestOrdinal, column);
-            // A chunk with no pages may use zero as its absent data-page offset.
-            if (chunk.TotalCompressedSize != 0)
-                replacementOffset = Math.Min(replacementOffset, chunk.ChunkOffset);
-        }
+            replacementOffset = Math.Min(replacementOffset, metadata.ColumnChunk(latestOrdinal, column).ChunkOffset);
 
         // RowGroup.file_offset is advisory, not a safe truncation boundary. Other writers may also place
         // earlier groups' indexes or Bloom filters after the latest group's pages. Keep the original data
@@ -610,31 +611,25 @@ public sealed class ParquetWriter : IDisposable
         for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroupOrdinal++)
         {
             var rowGroup = metadata.RowGroups[rowGroupOrdinal];
+            // Empty groups are omitted, so none of their chunks will be read or relocated.
+            if (rowGroup.RowCount == 0)
+                continue;
             if (rowGroup.ColumnCount != columnCount)
                 throw new CorruptParquetException(
                     $"Row group {rowGroupOrdinal} has {rowGroup.ColumnCount} columns; expected {columnCount}.");
             rowCount = checked(rowCount + checked((long)rowGroup.RowCount));
             for (var columnOrdinal = 0; columnOrdinal < rowGroup.ColumnCount; columnOrdinal++)
-                ValidateImportChunk(metadata.ColumnChunk(rowGroupOrdinal, columnOrdinal), metadata.FooterOffset,
-                    rowGroup.RowCount);
+                ValidateImportChunk(metadata.ColumnChunk(rowGroupOrdinal, columnOrdinal), metadata.FooterOffset);
         }
 
         return rowCount;
     }
 
-    static void ValidateImportChunk(Reading.Physical.ParquetColumnChunkInfo chunk, ulong footerOffset, ulong rowCount)
+    static void ValidateImportChunk(Reading.Physical.ParquetColumnChunkInfo chunk, ulong footerOffset)
     {
-        var empty = rowCount == 0 && chunk.ValueCount == 0;
-        var noPages = empty && chunk.TotalCompressedSize == 0 && chunk.TotalUncompressedSize == 0 &&
-            chunk.DictionaryPageOffset == 0;
-        // Empty groups may have no pages at all (Plank), or only a dictionary page
-        // with data_page_offset = 0 (Arrow). Neither implies a corrupt data range.
-        if (!noPages || chunk.ChunkOffset != 0)
-            ValidateImportRange(chunk.ChunkOffset, chunk.TotalCompressedSize, footerOffset, "column chunk",
-                allowEmpty: noPages);
+        ValidateImportRange(chunk.ChunkOffset, chunk.TotalCompressedSize, footerOffset, "column chunk");
         var chunkEnd = checked(chunk.ChunkOffset + chunk.TotalCompressedSize);
-        if (!noPages && !(empty && chunk.DataPageOffset == 0) &&
-            (chunk.DataPageOffset < chunk.ChunkOffset || chunk.DataPageOffset >= chunkEnd))
+        if (chunk.DataPageOffset < chunk.ChunkOffset || chunk.DataPageOffset >= chunkEnd)
             throw new CorruptParquetException("Column data page offset is outside its column chunk.");
         if (chunk.DictionaryPageOffset != 0 &&
             (chunk.DictionaryPageOffset < chunk.ChunkOffset || chunk.DictionaryPageOffset >= chunkEnd))
@@ -651,10 +646,9 @@ public sealed class ParquetWriter : IDisposable
         }
     }
 
-    static void ValidateImportRange(ulong offset, ulong length, ulong footerOffset, string name,
-        bool allowEmpty = false)
+    static void ValidateImportRange(ulong offset, ulong length, ulong footerOffset, string name)
     {
-        if (length == 0 && !allowEmpty || offset < (ulong)_fileMagic.Length || offset > footerOffset ||
+        if (length == 0 || offset < (ulong)_fileMagic.Length || offset > footerOffset ||
             length > footerOffset - offset)
             throw new CorruptParquetException(
                 $"The {name} at offset {offset} with length {length} is outside the source data section.");
@@ -675,9 +669,7 @@ public sealed class ParquetWriter : IDisposable
             var destinationChunkOffset = FileOffset;
             var relocation = checked(destinationChunkOffset - checked((long)sourceChunk.ChunkOffset));
             CopyRange(source, sourceChunk.ChunkOffset, sourceChunk.TotalCompressedSize, copyBuffer);
-            importedChunk.DataPageOffset = sourceChunk.TotalCompressedSize == 0
-                ? destinationChunkOffset
-                : RelocateOffset(sourceChunk.DataPageOffset, relocation);
+            importedChunk.DataPageOffset = RelocateOffset(sourceChunk.DataPageOffset, relocation);
             importedChunk.DictionaryPageOffset = RelocateOffset(sourceChunk.DictionaryPageOffset, relocation);
             importedChunk.ValueCount = checked((long)sourceChunk.ValueCount);
             importedChunk.TotalUncompressedSize = checked((long)sourceChunk.TotalUncompressedSize);
