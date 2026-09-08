@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Text;
 using Plank.Reading;
@@ -48,6 +49,45 @@ internal sealed class MergeFileTests
                         throw new InvalidOperationException(
                             $"Geospatial statistics changed for imported row group {rowGroup}, column {column}.");
                 }
+    }
+
+    [Test]
+    public async Task PreservesSortingColumnsForEachImportedRowGroup()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("Id", ParquetPhysicalType.Int32),
+            ColumnDefinition.RequiredLeaf("Sequence", ParquetPhysicalType.Int32)
+        ]);
+        var first = WriteTwoColumnFile(schema, [1, 2], [20, 10], new ParquetWriterOptions
+        {
+            SortingColumns =
+            [
+                new ParquetSortingColumn(0),
+                new ParquetSortingColumn(1, descending: true, nullsFirst: true)
+            ]
+        });
+        var second = WriteTwoColumnFile(schema, [4, 3], [30, 40], new ParquetWriterOptions
+        {
+            SortingColumns = [new ParquetSortingColumn(0, descending: true, nullsFirst: false)]
+        });
+
+        using var destination = new MemoryParquetSource();
+        var merger = schema.CreateMerger(new MemoryReadSource(first), destination);
+        merger.AppendFile(new MemoryReadSource(second));
+        merger.CloseFile();
+
+        using var stream = new MemoryStream(destination.ToArray(), writable: false);
+        using var reader = new ParquetFileReader();
+        reader.Reset(stream);
+        var firstSorting = reader.Metadata.RowGroupSortingColumns(0).ToArray();
+        var secondSorting = reader.Metadata.RowGroupSortingColumns(1).ToArray();
+        await Assert.That(firstSorting.Length).IsEqualTo(2);
+        await Assert.That(firstSorting[0]).IsEqualTo(new ParquetSortingColumn(0));
+        await Assert.That(firstSorting[1]).IsEqualTo(new ParquetSortingColumn(1,
+            descending: true, nullsFirst: true));
+        await Assert.That(secondSorting.Length).IsEqualTo(1);
+        await Assert.That(secondSorting[0]).IsEqualTo(new ParquetSortingColumn(0,
+            descending: true, nullsFirst: false));
     }
 
     [Test]
@@ -132,6 +172,72 @@ internal sealed class MergeFileTests
     }
 
     [Test]
+    public async Task MergesBloomFiltersAndPageIndexes()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("Value", ParquetPhysicalType.Int32,
+                new ColumnOptions(bloomFilter: new ParquetBloomFilterOptions
+                {
+                    ExpectedDistinctValueCount = 8
+                }))
+        ]);
+        var options = new ParquetWriterOptions
+        {
+            WritePageIndexes = true,
+            TargetDataPageSizeBytes = 16
+        };
+        var first = RemoveBloomFilterLength(WriteFile(schema, [10, 20], options));
+        var second = WriteFile(schema, [30, 40], options);
+        var firstBloom = ReadBloomBitset(first, 0);
+        var secondBloom = ReadBloomBitset(second, 0);
+        var firstSnapshot = first.ToArray();
+        var secondSnapshot = second.ToArray();
+
+        using (var source = new ParquetFileReader())
+        {
+            source.Reset(new MemoryReadSource(first));
+            await Assert.That(source.Metadata.ColumnChunk(0, 0).HasBloomFilter).IsTrue();
+            await Assert.That(source.Metadata.ColumnChunk(0, 0).BloomFilterLength).IsEqualTo(0U);
+        }
+
+        using var destination = new MemoryParquetSource();
+        var merger = schema.CreateMerger(new MemoryReadSource(first), destination);
+        merger.AppendFile(new MemoryReadSource(second));
+        merger.CloseFile();
+
+        await Assert.That(first.AsSpan().SequenceEqual(firstSnapshot)).IsTrue();
+        await Assert.That(second.AsSpan().SequenceEqual(secondSnapshot)).IsTrue();
+        var mergedBytes = destination.ToArray();
+        using var merged = new MemoryStream(mergedBytes, writable: false);
+        using var reader = new ParquetFileReader();
+        reader.Reset(merged);
+        await Assert.That(reader.Metadata.RowGroupCount).IsEqualTo(2);
+        for (var rowGroupOrdinal = 0; rowGroupOrdinal < 2; rowGroupOrdinal++)
+        {
+            var chunk = reader.Metadata.ColumnChunk(rowGroupOrdinal, 0);
+            await Assert.That(chunk.HasBloomFilter).IsTrue();
+            await Assert.That(chunk.BloomFilterLength).IsGreaterThan(0U);
+            await Assert.That(chunk.ColumnIndexLength).IsGreaterThan(0U);
+            await Assert.That(chunk.OffsetIndexLength).IsGreaterThan(0U);
+        }
+        await Assert.That(ReadBloomBitset(mergedBytes, 0).AsSpan().SequenceEqual(firstBloom)).IsTrue();
+        await Assert.That(ReadBloomBitset(mergedBytes, 1).AsSpan().SequenceEqual(secondBloom)).IsTrue();
+        using var firstFilter = reader.OpenBloomFilter(0, 0);
+        using var secondFilter = reader.OpenBloomFilter(1, 0);
+        await Assert.That(firstFilter.MightContain(10)).IsTrue();
+        await Assert.That(secondFilter.MightContain(40)).IsTrue();
+        await Assert.That(ReadValues(mergedBytes, schema)).IsEquivalentTo([10, 20, 30, 40]);
+        using var logicalReader = schema.CreateReader(new MemoryReadSource(mergedBytes));
+        for (var rowGroupOrdinal = 0; rowGroupOrdinal < 2; rowGroupOrdinal++)
+        {
+            using var pages = logicalReader.RowGroups[rowGroupOrdinal].GetColumnMetadata(0).OpenPages();
+            await Assert.That(pages.Count).IsGreaterThan(0);
+            await Assert.That(pages[0].Offset)
+                .IsEqualTo(reader.Metadata.ColumnChunk(rowGroupOrdinal, 0).DataPageOffset);
+        }
+    }
+
+    [Test]
     public async Task MergeInPlaceAppendsSourceFile()
     {
         var schema = CreateSchema(ParquetPhysicalType.Int32);
@@ -206,6 +312,22 @@ internal sealed class MergeFileTests
         return destination.ToArray();
     }
 
+    static byte[] WriteTwoColumnFile(ParquetSchema schema, int[] firstValues, int[] secondValues,
+        ParquetWriterOptions options)
+    {
+        using var destination = new MemoryStream();
+        var writer = schema.CreateWriter(destination, options);
+        var first = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        var second = writer.CreateSerializedColumn<int>(schema.LeafColumns[1]);
+        first.Serialize(firstValues);
+        second.Serialize(secondValues);
+        var rowGroup = writer.StartRowGroup();
+        rowGroup.Write(first);
+        rowGroup.Write(second);
+        writer.CloseFile();
+        return destination.ToArray();
+    }
+
     static byte[] ReadChunkBytes(byte[] bytes, int rowGroupOrdinal)
     {
         using var stream = new MemoryStream(bytes, writable: false);
@@ -216,6 +338,63 @@ internal sealed class MergeFileTests
         stream.Position = checked((long)chunk.ChunkOffset);
         stream.ReadExactly(chunkBytes);
         return chunkBytes;
+    }
+
+    static byte[] ReadBloomBitset(byte[] bytes, int rowGroupOrdinal)
+    {
+        using var stream = new MemoryStream(bytes, writable: false);
+        using var reader = new ParquetFileReader();
+        reader.Reset(stream);
+        using var bloomFilter = reader.OpenBloomFilter(rowGroupOrdinal, 0);
+        return bloomFilter.Bitset.ToArray();
+    }
+
+    static byte[] RemoveBloomFilterLength(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes, writable: false);
+        using var reader = new ParquetFileReader();
+        reader.Reset(stream);
+        var metadata = reader.Metadata;
+        var footer = bytes.AsSpan(checked((int)metadata.FooterOffset), checked((int)metadata.FooterLength)).ToArray();
+
+        for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroupOrdinal++)
+        {
+            var chunk = metadata.ColumnChunk(rowGroupOrdinal, 0);
+            var offset = EncodeCompactInteger(checked((long)chunk.BloomFilterOffset));
+            var length = EncodeCompactInteger(chunk.BloomFilterLength);
+            var pattern = new byte[checked(2 + offset.Length + length.Length)];
+            pattern[0] = 0x26; // Field 14, compact I64, two fields after statistics.
+            offset.CopyTo(pattern.AsSpan(1));
+            pattern[1 + offset.Length] = 0x15; // Field 15, compact I32, one-field delta.
+            length.CopyTo(pattern.AsSpan(2 + offset.Length));
+            var patternOffset = footer.AsSpan().IndexOf(pattern);
+            if (patternOffset < 0)
+                throw new InvalidOperationException("The fixture's Bloom-filter metadata fields were not found.");
+            var lengthFieldOffset = checked(patternOffset + 1 + offset.Length);
+            footer = [.. footer.AsSpan(0, lengthFieldOffset),
+                .. footer.AsSpan(lengthFieldOffset + 1 + length.Length)];
+        }
+
+        var result = new byte[checked((int)metadata.FooterOffset + footer.Length + 8)];
+        bytes.AsSpan(0, checked((int)metadata.FooterOffset)).CopyTo(result);
+        footer.CopyTo(result.AsSpan(checked((int)metadata.FooterOffset)));
+        BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(result.Length - 8), checked((uint)footer.Length));
+        "PAR1"u8.CopyTo(result.AsSpan(result.Length - 4));
+        return result;
+    }
+
+    static byte[] EncodeCompactInteger(long value)
+    {
+        var encoded = checked((ulong)value * 2);
+        Span<byte> result = stackalloc byte[10];
+        var length = 0;
+        do
+        {
+            result[length++] = (byte)((encoded & 0x7f) | (encoded > 0x7f ? 0x80UL : 0UL));
+            encoded >>= 7;
+        }
+        while (encoded != 0);
+        return result[..length].ToArray();
     }
 
     static int[] ReadValues(byte[] bytes, ParquetSchema schema)

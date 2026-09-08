@@ -248,7 +248,8 @@ public sealed class ParquetWriter : IDisposable
         {
             using var copyBuffer = _options.BufferPool.Rent(64 * 1024);
             for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroupOrdinal++)
-                ImportRowGroup(source, metadata, rowGroupOrdinal, copyBuffer.Span);
+                if (metadata.RowGroups[rowGroupOrdinal].RowCount != 0)
+                    ImportRowGroup(source, reader.PhysicalReader, metadata, rowGroupOrdinal, copyBuffer.Span);
         }
         catch
         {
@@ -266,7 +267,7 @@ public sealed class ParquetWriter : IDisposable
             _createdBy = importedCreatedBy;
             _keyValueMetadata = importedKeyValueMetadata;
         }
-        return (metadata.RowGroupCount, importedRowCount);
+        return (_rowGroupCount - rowGroupCountBeforeImport, importedRowCount);
     }
 
     public RowGroupWriter StartRowGroup()
@@ -469,7 +470,8 @@ public sealed class ParquetWriter : IDisposable
         MutationSchemaValidator.Validate(_schema, metadata);
         _ = ValidateImport(metadata, ColumnCount);
 
-        var appendLatest = appendOptions.AppendToLatestRowGroup && metadata.RowGroupCount > 0;
+        var appendLatest = appendOptions.AppendToLatestRowGroup && metadata.RowGroupCount > 0 &&
+            metadata.RowGroups[metadata.RowGroupCount - 1].RowCount != 0;
         var retainedRowGroupCount = metadata.RowGroupCount - (appendLatest ? 1 : 0);
         if (appendLatest)
         {
@@ -486,9 +488,13 @@ public sealed class ParquetWriter : IDisposable
 
         SerializedRowGroupsMetadata.Reset();
         long totalRowCount = 0;
+        var nonEmptyRowGroupCount = 0;
         for (var i = 0; i < retainedRowGroupCount; i++)
         {
             var rowGroup = metadata.RowGroups[i];
+            if (rowGroup.RowCount == 0)
+                continue;
+            nonEmptyRowGroupCount++;
             var relativeOffset = checked((int)(rowGroup.MetadataOffset - metadata.FooterOffset));
             SerializedRowGroupsMetadata.Write(metadata.FooterBytes.Slice(relativeOffset, rowGroup.MetadataLength));
             totalRowCount = checked(totalRowCount + checked((long)rowGroup.RowCount));
@@ -507,7 +513,7 @@ public sealed class ParquetWriter : IDisposable
 
         _destination = destination;
         _fileClosed = false;
-        _rowGroupCount = retainedRowGroupCount;
+        _rowGroupCount = nonEmptyRowGroupCount;
         _totalRowCount = totalRowCount;
         _rowGroupOpen = false;
         FileOffset = checked((long)metadata.FooterOffset);
@@ -605,6 +611,9 @@ public sealed class ParquetWriter : IDisposable
         for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroupOrdinal++)
         {
             var rowGroup = metadata.RowGroups[rowGroupOrdinal];
+            // Empty groups are omitted, so none of their chunks will be read or relocated.
+            if (rowGroup.RowCount == 0)
+                continue;
             if (rowGroup.ColumnCount != columnCount)
                 throw new CorruptParquetException(
                     $"Row group {rowGroupOrdinal} has {rowGroup.ColumnCount} columns; expected {columnCount}.");
@@ -647,9 +656,8 @@ public sealed class ParquetWriter : IDisposable
             throw new NotSupportedException($"The {name} exceeds the supported stream offset range.");
     }
 
-    void ImportRowGroup(IParquetReadSource source, Reading.Physical.ParquetFileMetadata sourceMetadata,
-        int rowGroupOrdinal,
-        Span<byte> copyBuffer)
+    void ImportRowGroup(IParquetReadSource source, Reading.Physical.ParquetFileReader physicalReader,
+        Reading.Physical.ParquetFileMetadata sourceMetadata, int rowGroupOrdinal, Span<byte> copyBuffer)
     {
         var rowGroup = sourceMetadata.RowGroups[rowGroupOrdinal];
         for (var columnOrdinal = 0; columnOrdinal < rowGroup.ColumnCount; columnOrdinal++)
@@ -673,6 +681,26 @@ public sealed class ParquetWriter : IDisposable
         {
             var sourceChunk = sourceMetadata.ColumnChunk(rowGroupOrdinal, columnOrdinal);
             ref var importedChunk = ref OpenRowGroupColumnMetadata[columnOrdinal];
+            if (sourceChunk.HasBloomFilter)
+            {
+                importedChunk.BloomFilterOffset = FileOffset;
+                if (sourceChunk.BloomFilterLength != 0)
+                {
+                    importedChunk.BloomFilterLength = sourceChunk.BloomFilterLength;
+                    CopyRange(source, sourceChunk.BloomFilterOffset, sourceChunk.BloomFilterLength, copyBuffer);
+                }
+                else
+                {
+                    using var bloomFilter = physicalReader.OpenBloomFilter(rowGroupOrdinal, columnOrdinal);
+                    SerializedFileMetadata.Reset();
+                    ParquetMetadataThriftWriter.WriteBloomFilterHeader(ref SerializedFileMetadata,
+                        bloomFilter.BitsetSizeBytes);
+                    importedChunk.BloomFilterLength = checked((uint)(SerializedFileMetadata.WrittenLength +
+                        bloomFilter.BitsetSizeBytes));
+                    WriteBuffer(ref SerializedFileMetadata);
+                    WriteBytes(bloomFilter.Bitset);
+                }
+            }
             if (sourceChunk.ColumnIndexLength != 0)
             {
                 importedChunk.ColumnIndexOffset = FileOffset;

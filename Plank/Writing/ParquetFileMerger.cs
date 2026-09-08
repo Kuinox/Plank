@@ -108,11 +108,17 @@ public sealed class ParquetFileMerger
         _reader.Reset(source);
         var metadata = _reader.PhysicalReader.Metadata;
         long rowCount = 0;
+        var rowGroupCount = 0;
         for (var i = 0; i < metadata.RowGroupCount; i++)
+        {
+            if (metadata.RowGroups[i].RowCount == 0)
+                continue;
+            rowGroupCount++;
             rowCount = checked(rowCount + checked((long)metadata.RowGroups[i].RowCount));
+        }
 
         SourceFileCount = 1;
-        RowGroupCount = metadata.RowGroupCount;
+        RowGroupCount = rowGroupCount;
         RowCount = rowCount;
     }
 
