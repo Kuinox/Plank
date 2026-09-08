@@ -1,4 +1,6 @@
-# Plank
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Kuinox/Plank/master/assets/brand/plank-lockup.svg" width="320" alt="Plank">
+</p>
 
 Plank is a high-performance Parquet reader and writer for .NET.
 

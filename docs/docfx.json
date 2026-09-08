@@ -32,13 +32,16 @@
     "output": "_site",
     "template": [
       "default",
-      "modern"
+      "modern",
+      "plank-template"
     ],
     "globalMetadata": {
       "_appName": "Plank",
-      "_appTitle": "Plank Documentation",
+      "_appTitle": "Plank docs",
+      "_appLogoPath": "logo.svg",
+      "_appFaviconPath": "logo.svg",
+      "_appFooter": "<span class=\"plank-footer-links\"><a href=\"https://github.com/Kuinox/Plank\">GitHub</a><a href=\"https://www.nuget.org/packages/Plank\">NuGet</a><a href=\"https://github.com/Kuinox/Plank/blob/master/LICENSE\">MIT</a></span>",
       "_enableSearch": true,
-      "_disableContribution": true,
       "titleSuffix": "Plank"
     }
   }

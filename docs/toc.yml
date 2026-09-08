@@ -1,10 +1,28 @@
-- name: Overview
+- name: Get started
   href: index.md
 - name: Schema
   href: articles/schema.md
 - name: Reading
   href: articles/reading/index.md
+  items:
+    - name: Row API
+      href: articles/reading/rows.md
+    - name: Logical columns
+      href: articles/reading/logical.md
+    - name: Physical files
+      href: articles/reading/physical.md
 - name: Writing
   href: articles/writing/index.md
+  items:
+    - name: Datasets
+      href: articles/writing/datasets.md
+    - name: Row API
+      href: articles/writing/rows.md
+    - name: Logical columns
+      href: articles/writing/logical.md
+    - name: Physical files
+      href: articles/writing/physical.md
 - name: API reference
   href: api/
+- name: Benchmarks
+  href: benchmarks.md

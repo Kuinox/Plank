@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 284 80" role="img" aria-labelledby="title desc">
+  <title id="title">Plank</title>
+  <desc id="desc">Plank logo: a modular P and the Plank wordmark.</desc>
+  <style>
+    .wordmark { fill: #13201c; }
+    @media (prefers-color-scheme: dark) { .wordmark { fill: #f6f2e9; } }
+  </style>
+  <g transform="translate(8 8)">
+    <rect width="64" height="64" rx="14" fill="#13201c"/>
+    <rect x="11" y="10" width="11" height="44" rx="2.5" fill="#f6f2e9"/>
+    <rect x="26" y="10" width="20" height="11" rx="2.5" fill="#66d0b0"/>
+    <rect x="43" y="14" width="11" height="24" rx="2.5" fill="#66d0b0"/>
+    <rect x="26" y="31" width="20" height="11" rx="2.5" fill="#d85c35"/>
+  </g>
+  <text class="wordmark" x="90" y="57" font-family="Space Grotesk, Inter, ui-sans-serif, system-ui, sans-serif" font-size="52" font-weight="650" letter-spacing="-2.6">Plank</text>
+</svg>
