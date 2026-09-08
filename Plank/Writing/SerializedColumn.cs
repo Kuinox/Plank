@@ -41,6 +41,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     readonly LeafColumn _leafColumn;
     readonly Column _column;
     T[]? _retainedValues;
+    internal sbyte[]? AppendSortingComparisons { get; private set; }
     object? _dictionaryState;
     ParquetBuffer _statisticsMinValueBuffer;
     ParquetBuffer _statisticsMaxValueBuffer;
@@ -111,7 +112,10 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var combined = new T[checked(retainedValues.Length + values.Length)];
             retainedValues.CopyTo(combined, 0);
             values.CopyTo(combined.AsSpan(retainedValues.Length));
+            var comparisons = _owner.LatestSortingOrder?.CompareIncoming(
+                _column, checked((int)_owner.GetColumnOrdinal(_leafColumn)), retainedValues, values);
             SerializeValues(combined.AsSpan());
+            AppendSortingComparisons = comparisons;
             return;
         }
 
@@ -1501,6 +1505,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     internal void Consume()
     {
+        AppendSortingComparisons = null;
         HasPendingData = false;
         _bloomFilterRetained = _bloomFilterByteLength != 0;
         MapRowShapes = null;

@@ -27,7 +27,12 @@ public sealed class ParquetWriter : IDisposable
     internal readonly ParquetDataPageVersion DataPageVersion;
     internal readonly ResolvedCompression[] ColumnCompressionsByOrdinal;
     internal readonly bool WritePageIndexes;
-    internal readonly ParquetSortingColumn[] SortingColumns;
+    readonly ParquetSortingColumn[] _sortingColumns;
+    internal ReadOnlySpan<ParquetSortingColumn> SortingColumns
+        => _replacingLatestRowGroup
+            ? LatestSortingOrder is { } order ? order.GetVerifiedColumns() : []
+            : _sortingColumns;
+    internal AppendSortingOrder? LatestSortingOrder { get; private set; }
     internal readonly bool WritePageCrc;
     internal readonly ColumnChunkMetadata[] OpenRowGroupColumnMetadata;
     readonly RowGroupWriter _rowGroupWriter;
@@ -111,7 +116,7 @@ public sealed class ParquetWriter : IDisposable
         DataPageVersion = _options.DataPageVersion;
         ColumnCompressionsByOrdinal = ResolveColumnCompressions(ColumnsByOrdinal, _options);
         WritePageIndexes = _options.WritePageIndexes;
-        SortingColumns = ValidateSortingColumns(_options.SortingColumns, ColumnCount);
+        _sortingColumns = ValidateSortingColumns(_options.SortingColumns, ColumnCount);
         WritePageCrc = _options.WritePageCrc;
         OpenRowGroupColumnMetadata = ColumnCount == 0 ? [] : new ColumnChunkMetadata[ColumnCount];
         _rowGroupWriter = new RowGroupWriter(this);
@@ -443,6 +448,7 @@ public sealed class ParquetWriter : IDisposable
         _totalRowCount = 0;
         _rowGroupOpen = false;
         _latestRowGroupValues = null;
+        LatestSortingOrder = null;
         _latestRowGroupMetadata = null;
         _replacingLatestRowGroup = false;
         FileOffset = 0;
@@ -478,6 +484,10 @@ public sealed class ParquetWriter : IDisposable
             var latestOrdinal = metadata.RowGroupCount - 1;
             var latestPhysical = metadata.RowGroups[latestOrdinal];
             _latestRowGroupValues = LatestRowGroupValues.Read(reader.RowGroups[latestOrdinal], ColumnsByOrdinal);
+            var sourceSorting = metadata.RowGroupSortingColumns(latestOrdinal).ToArray();
+            // A different requested order is not established for the retained rows.
+            LatestSortingOrder = new AppendSortingOrder(
+                _sortingColumns.Length == 0 || _sortingColumns.SequenceEqual(sourceSorting) ? sourceSorting : []);
             var latestRelativeOffset = checked((int)(latestPhysical.MetadataOffset - metadata.FooterOffset));
             _latestRowGroupMetadata = metadata.FooterBytes
                 .Slice(latestRelativeOffset, latestPhysical.MetadataLength).ToArray();
@@ -578,6 +588,7 @@ public sealed class ParquetWriter : IDisposable
         FileOffset = _originalFooterOffset;
         _latestRowGroupMetadata = null;
         _latestRowGroupValues = null;
+        LatestSortingOrder = null;
     }
 
     static string? DecodeCreatedBy(Reading.Physical.ParquetFileMetadata metadata)
@@ -782,6 +793,7 @@ public sealed class ParquetWriter : IDisposable
         if (_replacingLatestRowGroup)
         {
             _latestRowGroupValues = null;
+            LatestSortingOrder = null;
             _replacingLatestRowGroup = false;
         }
     }
