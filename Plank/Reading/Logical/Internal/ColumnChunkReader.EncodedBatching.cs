@@ -1067,6 +1067,7 @@ static partial class ColumnChunkReader
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static int DecodeNullableInt64DictionaryNarrowRleBatch(ReadOnlySpan<byte> payload,
         ReadOnlySpan<long> dictionary, Span<long?> destination, int targetCount,
         ref RleBatchState state)
@@ -1115,6 +1116,7 @@ static partial class ColumnChunkReader
         return written;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void FillNullableInt64(Span<long?> destination, long value)
     {
         ref var target = ref Unsafe.As<long?, long>(ref MemoryMarshal.GetReference(destination));
@@ -1126,6 +1128,7 @@ static partial class ColumnChunkReader
             destination[index] = value;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static unsafe void DecodeNullableInt64DictionarySmall(ReadOnlySpan<byte> payload,
         int bitWidth, ReadOnlySpan<long> dictionary, Span<long?> destination)
     {
@@ -1401,6 +1404,7 @@ static partial class ColumnChunkReader
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void EnsureRleRun(ReadOnlySpan<byte> payload, ref RleBatchState state)
     {
         if (state.RunRemaining != 0)
