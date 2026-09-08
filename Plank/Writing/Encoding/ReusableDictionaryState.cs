@@ -97,6 +97,7 @@ sealed class ReusableDictionaryState<T>
         _mapEnabled = true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int GetOrAddIndex(T value)
     {
         if (!_mapEnabled)
@@ -104,40 +105,41 @@ sealed class ReusableDictionaryState<T>
 
         var hash = HashKey(value);
         var tag = (uint)((hash >> 24) | 0x80);
+        var table = _table;
+        var mask = table.Length - 1;
+        var slot = hash & mask;
         while (true)
         {
-            var table = _table;
-            var mask = table.Length - 1;
-            var slot = hash & mask;
-            while (true)
+            var entry = table[slot];
+            if (entry == 0)
+                return AddNewIndex(value, tag, slot);
+
+            if (entry >> 24 == tag)
             {
-                var entry = table[slot];
-                if (entry == 0)
-                    break;
-
-                if (entry >> 24 == tag)
-                {
-                    var existingIndex = (int)(entry & 0x00FFFFFFu) - 1;
-                    if (KeysEqual(_values[existingIndex], value))
-                        return existingIndex;
-                }
-
-                slot = (slot + 1) & mask;
+                var existingIndex = (int)(entry & 0x00FFFFFFu) - 1;
+                if (KeysEqual(_values[existingIndex], value))
+                    return existingIndex;
             }
 
-            if (_count >= _threshold)
-            {
-                Resize();
-                continue;
-            }
-
-            var index = _count;
-            _values[index] = value;
-            _count++;
-            table[slot] = (tag << 24) | (uint)(index + 1);
-            _touched[_touchedCount++] = slot;
-            return index;
+            slot = (slot + 1) & mask;
         }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    int AddNewIndex(T value, uint tag, int slot)
+    {
+        if (_count >= _threshold)
+        {
+            Resize();
+            return GetOrAddIndex(value);
+        }
+
+        var index = _count;
+        _values[index] = value;
+        _count++;
+        _table[slot] = (tag << 24) | (uint)(index + 1);
+        _touched[_touchedCount++] = slot;
+        return index;
     }
 
     public ReadOnlySpan<T> AsSpan() => _values.AsSpan(0, _count);
