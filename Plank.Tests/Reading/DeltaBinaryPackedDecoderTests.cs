@@ -618,6 +618,9 @@ internal sealed class DeltaBinaryPackedDecoderTests
                 DeltaBinaryPackedEncoding.WriteInt32(values, ref writer);
                 var payload = new byte[writer.WrittenLength];
                 writer.CopyTo(payload);
+                if (!payload.AsSpan().SequenceEqual(EncodeInt32Reference(values)))
+                    throw new InvalidOperationException(
+                        $"Int32 writer bytes differ from the maximum-based reference for width {bitWidth} and count {count}.");
                 var decoded = new int[values.Length];
 
                 var consumed = DeltaBinaryPackedDecoder.ReadInt32(payload, decoded);
@@ -651,6 +654,9 @@ internal sealed class DeltaBinaryPackedDecoderTests
                 DeltaBinaryPackedEncoding.WriteInt64(values, ref writer);
                 var payload = new byte[writer.WrittenLength];
                 writer.CopyTo(payload);
+                if (!payload.AsSpan().SequenceEqual(EncodeInt64Reference(values)))
+                    throw new InvalidOperationException(
+                        $"Int64 writer bytes differ from the maximum-based reference for width {bitWidth} and count {count}.");
                 var decoded = new long[values.Length];
 
                 var consumed = DeltaBinaryPackedDecoder.ReadInt64(payload, decoded);

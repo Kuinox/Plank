@@ -298,10 +298,10 @@ static class DeltaBinaryPackedEncoding
         return Math.Min(lower.GetElement(0), lower.GetElement(1));
     }
 
-    static ulong GetMaximum(Vector256<ulong> values)
+    static ulong CombineBits(Vector256<ulong> values)
     {
-        var lower = Vector128.Max(values.GetLower(), values.GetUpper());
-        return Math.Max(lower.GetElement(0), lower.GetElement(1));
+        var combined = values.GetLower() | values.GetUpper();
+        return combined.GetElement(0) | combined.GetElement(1);
     }
 
     static long GetMinimum(Vector512<long> values)
@@ -766,6 +766,8 @@ static class DeltaBinaryPackedEncoding
         }
     }
 
+    // The highest set bit of the combined residual bits is the highest set bit
+    // of their maximum. OR therefore gives the same packed width without max comparisons.
     static uint NormalizeDeltasVectorized(ref long deltas, long minDelta, out int packedByteCount)
     {
         uint bitWidths = 0;
@@ -774,16 +776,16 @@ static class DeltaBinaryPackedEncoding
         for (var block = 0; block < MiniBlockCount; block++)
         {
             var start = block * MiniBlockSize;
-            var vectorMax = Vector512<ulong>.Zero;
+            var vectorBits = Vector512<ulong>.Zero;
             for (var i = 0; i < MiniBlockSize; i += Vector512<long>.Count)
             {
                 var delta = Vector512.LoadUnsafe(ref deltas, (nuint)(start + i));
                 var normalized = Vector512.Subtract(delta, vectorMinDelta).AsUInt64();
                 normalized.AsInt64().StoreUnsafe(ref deltas, (nuint)(start + i));
-                vectorMax = Vector512.Max(vectorMax, normalized);
+                vectorBits |= normalized;
             }
 
-            var width = EncodingPrimitives.GetBitWidth(GetMaximum(vectorMax));
+            var width = EncodingPrimitives.GetBitWidth(CombineBits(vectorBits));
             bitWidths |= (uint)width << (block * 8);
             packedByteCount += width * 4;
         }
@@ -801,16 +803,16 @@ static class DeltaBinaryPackedEncoding
         for (var block = 0; block < MiniBlockCount; block++)
         {
             var start = block * MiniBlockSize;
-            var vectorMax = Vector256<ulong>.Zero;
+            var vectorBits = Vector256<ulong>.Zero;
             for (var i = 0; i < MiniBlockSize; i += Vector256<long>.Count)
             {
                 var delta = Vector256.LoadUnsafe(ref deltas, (nuint)(start + i));
                 var normalized = Vector256.Subtract(delta, vectorMinDelta).AsUInt64();
                 normalized.AsInt64().StoreUnsafe(ref deltas, (nuint)(start + i));
-                vectorMax = Vector256.Max(vectorMax, normalized);
+                vectorBits |= normalized;
             }
 
-            var width = EncodingPrimitives.GetBitWidth(GetMaximum(vectorMax));
+            var width = EncodingPrimitives.GetBitWidth(CombineBits(vectorBits));
             bitWidths |= (uint)width << (block * 8);
             packedByteCount += width * 4;
         }
@@ -825,17 +827,16 @@ static class DeltaBinaryPackedEncoding
         for (var block = 0; block < MiniBlockCount; block++)
         {
             var start = block * MiniBlockSize;
-            ulong max = 0;
+            ulong combinedBits = 0;
             for (var i = 0; i < MiniBlockSize; i++)
             {
                 ref var delta = ref Unsafe.Add(ref deltas, start + i);
                 var normalized = (ulong)(delta - minDelta);
-                if (normalized > max)
-                    max = normalized;
+                combinedBits |= normalized;
                 delta = (long)normalized;
             }
 
-            var width = EncodingPrimitives.GetBitWidth(max);
+            var width = EncodingPrimitives.GetBitWidth(combinedBits);
             bitWidths |= (uint)width << (block * 8);
             packedByteCount += width * 4;
         }
@@ -843,12 +844,8 @@ static class DeltaBinaryPackedEncoding
         return bitWidths;
     }
 
-    static ulong GetMaximum(Vector512<ulong> values)
-    {
-        var lowerWidth = Vector256.Max(values.GetLower(), values.GetUpper());
-        var lowestWidth = Vector128.Max(lowerWidth.GetLower(), lowerWidth.GetUpper());
-        return Math.Max(lowestWidth.GetElement(0), lowestWidth.GetElement(1));
-    }
+    static ulong CombineBits(Vector512<ulong> values)
+        => CombineBits(values.GetLower() | values.GetUpper());
 
     internal static void WritePackedUnsignedValues(ReadOnlySpan<long> values, int bitWidth, ref BufferWriter writer)
     {
