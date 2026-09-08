@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
@@ -1186,8 +1187,23 @@ static class DeltaBinaryPackedDecoder
     {
         if (bitWidth == 0)
         {
-            adjustedDeltas[..destination.Length].Fill(minDelta);
-            ReconstructInt64MiniBlock(adjustedDeltas[..destination.Length], ref previous, destination);
+            var index = 0;
+            var offsets = Vector256.Create(minDelta, unchecked(minDelta * 2),
+                unchecked(minDelta * 3), unchecked(minDelta * 4));
+            var values = offsets + Vector256.Create(previous);
+            var step = Vector256.Create(unchecked(minDelta * Vector256<long>.Count));
+            ref var destinationStart = ref MemoryMarshal.GetReference(destination);
+            for (; index <= destination.Length - Vector256<long>.Count; index += Vector256<long>.Count)
+            {
+                values.StoreUnsafe(ref destinationStart, (nuint)index);
+                values += step;
+            }
+            previous = unchecked(previous + minDelta * index);
+            for (; index < destination.Length; index++)
+            {
+                previous = unchecked(previous + minDelta);
+                destination[index] = previous;
+            }
             return;
         }
 

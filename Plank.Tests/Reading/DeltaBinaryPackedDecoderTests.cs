@@ -9,6 +9,46 @@ namespace Plank.Tests.Reading;
 internal sealed class DeltaBinaryPackedDecoderTests
 {
     [Test]
+    public void ConstantInt64DeltasPreserveWrappingTailsAndBatchBoundaries()
+    {
+        foreach (var count in new[] { 1, 2, 4, 5, 31, 32, 33, 34, 128, 129, 130, 257 })
+        foreach (var delta in new[] { 0L, 37L, -37L, long.MinValue, long.MaxValue })
+        {
+            var payload = new List<byte>();
+            WriteUnsignedVarIntReference(128, payload);
+            WriteUnsignedVarIntReference(4, payload);
+            WriteUnsignedVarIntReference((ulong)count, payload);
+            const long firstValue = long.MaxValue - 3;
+            WriteUnsignedVarIntReference(unchecked((ulong)((firstValue << 1) ^ (firstValue >> 63))), payload);
+            var expected = new long[count];
+            expected[0] = firstValue;
+            for (var i = 1; i < count; i++) expected[i] = unchecked(expected[i - 1] + delta);
+            for (var i = 1; i < count; i += 128)
+            {
+                WriteUnsignedVarIntReference(unchecked((ulong)((delta << 1) ^ (delta >> 63))), payload);
+                payload.AddRange(new byte[4]); // No residual bits: every value advances by minDelta.
+            }
+            var bytes = payload.ToArray();
+            var decoded = new long[count + 2];
+            decoded[0] = decoded[^1] = 123456789;
+            var consumed = DeltaBinaryPackedDecoder.ReadInt64(bytes, decoded.AsSpan(1, count));
+            if (consumed != bytes.Length || !decoded.AsSpan(1, count).SequenceEqual(expected)
+                || decoded[0] != 123456789 || decoded[^1] != 123456789)
+                throw new InvalidOperationException($"Constant delta {delta}, count {count} failed.");
+            var batch = DeltaBinaryPackedDecoder.StartBatch(bytes, count);
+            var batched = new long[count];
+            while (batch.Active)
+            {
+                var length = batch.NextBatchCount(64);
+                DeltaBinaryPackedDecoder.ReadInt64Batch(bytes,
+                    batched.AsSpan(batch.ValuesRead, length), ref batch);
+            }
+            if (!batched.SequenceEqual(expected) || batch.Offset != bytes.Length)
+                throw new InvalidOperationException($"Batched constant delta {delta}, count {count} failed.");
+        }
+    }
+
+    [Test]
     public void UnusedMiniBlockWidthsDoNotConsumeTheNextStream()
     {
         // Two values: 0, 1. Only the first of four mini-blocks has payload.
