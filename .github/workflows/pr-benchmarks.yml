@@ -32,6 +32,7 @@ jobs:
             mkdir "lab-$variant"
             git -C lab-source archive HEAD | tar -x -C "lab-$variant"
             rmdir "lab-$variant/library/Plank"
+            git -C library-source fetch origin "$sha"
             git -C library-source worktree add --detach "$GITHUB_WORKSPACE/lab-$variant/library/Plank" "$sha"
             dotnet build "lab-$variant/Plank.Benchmarks/Plank.Benchmarks.csproj" -c Release > "results/build-$variant.log" 2>&1
           done
