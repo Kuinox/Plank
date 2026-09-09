@@ -911,6 +911,7 @@ static partial class ColumnChunkReader
         return produced;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeBooleanRleBatch(ReadOnlySpan<byte> payload, Span<bool> destination,
         ref RleBatchState state)
     {
@@ -946,6 +947,7 @@ static partial class ColumnChunkReader
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeDictionaryRleBatch<T>(ReadOnlySpan<byte> payload,
         ReadOnlySpan<T> dictionary, Span<T> destination, ref RleBatchState state)
     {
@@ -982,6 +984,7 @@ static partial class ColumnChunkReader
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeNullableInt32DictionaryRleBatch(ReadOnlySpan<byte> payload,
         ReadOnlySpan<int> dictionary, Span<int?> destination, ref RleBatchState state)
     {
@@ -1018,6 +1021,7 @@ static partial class ColumnChunkReader
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeNullableInt32DictionaryNarrowRleBatch(ReadOnlySpan<byte> payload,
         ReadOnlySpan<int> dictionary, Span<int?> destination, ref RleBatchState state)
     {
@@ -1067,6 +1071,7 @@ static partial class ColumnChunkReader
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static int DecodeNullableInt64DictionaryNarrowRleBatch(ReadOnlySpan<byte> payload,
         ReadOnlySpan<long> dictionary, Span<long?> destination, int targetCount,
         ref RleBatchState state)
@@ -1365,6 +1370,7 @@ static partial class ColumnChunkReader
             .AsUInt64().StoreUnsafe(ref target, (nuint)(valueIndex + 4));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeDictionaryRleIndexesBatch(ReadOnlySpan<byte> payload,
         int dictionaryLength, Span<int> destination, ref RleBatchState state)
     {
