@@ -66,6 +66,41 @@ class PlankLabBenchmarkReportTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "non-Plank"):
                 report.load_comparisons(root, matrix)
 
+    def test_row_and_column_results_are_kept_separate(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            matrix = self.write_matrix(root)
+            self.write_passes(root, "base", [10.0, 10.0], [20.0, 20.0])
+            self.write_passes(root, "head", [8.0, 8.0], [22.0, 22.0])
+            originals = {}
+            for path in root.glob("*.log"):
+                row_text = path.read_text()
+                originals[path] = row_text
+                column_text = row_text.replace("PlankBenchmarks", "ColumnPlankBenchmarks")
+                column_text = column_text.replace("10000000.00 ns", "30000000.00 ns")
+                path.write_text(row_text + column_text)
+            comparisons, processors = report.load_comparisons(root, matrix)
+            self.assertEqual(4, len(comparisons))
+            plain = {item.workload: item for item in comparisons
+                     if item.encoding == "plain"}
+            self.assertEqual(10, plain["row"].base_ms)
+            self.assertEqual(30, plain["column"].base_ms)
+            body = report.build_report(comparisons, processors, "a", "b", "c", "url")
+            self.assertIn("Synthetic · Row · Read", body)
+            self.assertIn("Synthetic · Column · Read", body)
+            for path in root.glob("*-head-*.log"):
+                path.write_text(originals[path])
+            with self.assertRaisesRegex(ValueError, "Missing base or head"):
+                report.load_comparisons(root, matrix)
+
+    def test_empty_benchmark_log_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            matrix = self.write_matrix(root)
+            (root / "Synthetic-Read-base-1.log").write_text("Build failed")
+            with self.assertRaisesRegex(ValueError, "contains no Plank-Lab benchmarks"):
+                report.load_comparisons(root, matrix)
+
     @staticmethod
     def write_matrix(root: Path) -> Path:
         path = root / "matrix.json"
