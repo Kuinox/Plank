@@ -56,6 +56,7 @@ class Comparison:
     base_stddev_ms: float
     head_stddev_ms: float
     delta_percent: float
+    workload: str = "row"
 
     @property
     def noise_window_ms(self) -> float:
@@ -80,9 +81,14 @@ class Comparison:
 
 def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[Comparison], list[str]]:
     matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    # Lab generates column adapters from the same matrix with a Column suffix.
+    matrix = [dict(item, workload="row") for item in matrix] + [
+        dict(item, stem=item["stem"] + "Column", id=item["id"] + "-column", workload="column")
+        for item in matrix
+    ]
     by_stem = {item["stem"]: item for item in matrix}
     samples: dict[tuple[str, str, str, str], list[float]] = {}
-    configurations: set[tuple[str, str]] = set()
+    configurations: set[tuple[str, str, str]] = set()
     processors: set[str] = set()
     seen_logs: set[tuple[str, str, str, str]] = set()
 
@@ -97,7 +103,6 @@ def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[C
         suite_filter, expected_operation, variant, pass_number = name.groups()
         suite = "synthetic" if suite_filter == "Synthetic" else "real-world"
         operation = expected_operation.lower()
-        configurations.add((suite, operation))
         log_key = (suite, operation, variant, pass_number)
         if log_key in seen_logs:
             raise ValueError(f"Duplicate benchmark pass {log_key}.")
@@ -124,6 +129,7 @@ def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[C
                 item = by_stem[stem]
                 if item["suite"] != suite or measured_operation != expected_operation:
                     raise ValueError(f"{path.name} contains a benchmark outside its matrix cell.")
+                configurations.add((suite, operation, item["workload"]))
                 current = (suite, operation, item["id"], variant)
                 continue
 
@@ -133,9 +139,12 @@ def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[C
                 samples.setdefault(current, []).append(
                     float(value) * UNIT_TO_MILLISECONDS[unit])
 
+        if current is None:
+            raise ValueError(f"{path.name} contains no Plank-Lab benchmarks.")
+
     comparisons: list[Comparison] = []
-    for suite, operation in sorted(configurations):
-        for item in (entry for entry in matrix if entry["suite"] == suite):
+    for suite, operation, workload in sorted(configurations):
+        for item in (entry for entry in matrix if entry["suite"] == suite and entry["workload"] == workload):
             base_key = (suite, operation, item["id"], "base")
             head_key = (suite, operation, item["id"], "head")
             if base_key not in samples or head_key not in samples:
@@ -150,6 +159,7 @@ def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[C
             data_type = item["dataTypes"][0] if len(item["dataTypes"]) == 1 else "Complete"
             comparisons.append(Comparison(
                 suite=suite,
+                workload=workload,
                 operation=operation,
                 case_id=item["id"],
                 label=item["label"],
@@ -176,9 +186,9 @@ def result_badge(item: Comparison) -> str:
     return f"⚪ {sign}{magnitude}"
 
 
-def render_matrix(comparisons: list[Comparison], suite: str, operation: str) -> str:
+def render_matrix(comparisons: list[Comparison], suite: str, operation: str, workload: str = "row") -> str:
     selected = [item for item in comparisons
-                if item.suite == suite and item.operation == operation]
+                if item.suite == suite and item.operation == operation and item.workload == workload]
     rows: list[str] = []
     for item in selected:
         if item.data_type not in rows:
@@ -187,7 +197,7 @@ def render_matrix(comparisons: list[Comparison], suite: str, operation: str) -> 
                  if any(item.encoding == encoding for item in selected)]
     by_cell = {(item.data_type, item.encoding): item for item in selected}
     lines = [
-        f"#### {SUITE_LABELS[suite]} · {operation.title()}",
+        f"#### {SUITE_LABELS[suite]} · {workload.title()} · {operation.title()}",
         "",
         "| Data type | " + " | ".join(ENCODING_LABELS[value] for value in encodings) + " |",
         "|---|" + "---:|" * len(encodings),
@@ -214,9 +224,9 @@ def chart_label(item: Comparison) -> str:
     return f"{data_types.get(item.data_type, item.data_type)}-{encodings[item.encoding]}"
 
 
-def render_chart(comparisons: list[Comparison], suite: str, operation: str) -> str:
+def render_chart(comparisons: list[Comparison], suite: str, operation: str, workload: str = "row") -> str:
     selected = [item for item in comparisons
-                if item.suite == suite and item.operation == operation]
+                if item.suite == suite and item.operation == operation and item.workload == workload]
     ratios = [round(item.head_ms / item.base_ms * 100.0, 1) for item in selected]
     lower_noise = [round(max(0.0, 100.0 - item.noise_window_percent), 1)
                    for item in selected]
@@ -252,7 +262,7 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
     noise = len(comparisons) - faster - slower
     configurations = []
     for item in comparisons:
-        key = (item.suite, item.operation)
+        key = (item.suite, item.operation, item.workload)
         if key not in configurations:
             configurations.append(key)
 
@@ -277,11 +287,11 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         "advisory.",
         "",
     ]
-    for suite, operation in configurations:
+    for suite, operation, workload in configurations:
         sections.extend([
-            render_matrix(comparisons, suite, operation),
+            render_matrix(comparisons, suite, operation, workload),
             "",
-            render_chart(comparisons, suite, operation),
+            render_chart(comparisons, suite, operation, workload),
             "",
         ])
 
@@ -289,13 +299,13 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         "<details>",
         "<summary>Exact median latency</summary>",
         "",
-        "| Suite | Operation | Case | Encoding | Shape | Base | PR | Noise window | Change |",
-        "|---|---|---|---|---|---:|---:|---:|---:|",
+        "| Suite | Workload | Operation | Case | Encoding | Shape | Base | PR | Noise window | Change |",
+        "|---|---|---|---|---|---|---:|---:|---:|---:|",
     ]
     for item in comparisons:
         shape = f"{item.row_count:,} rows × {item.column_count} columns"
         details.append(
-            f"| {SUITE_LABELS[item.suite]} | {item.operation.title()} | {item.label} | "
+            f"| {SUITE_LABELS[item.suite]} | {item.workload.title()} | {item.operation.title()} | {item.label} | "
             f"{ENCODING_LABELS[item.encoding]} | {shape} | "
             f"{item.base_ms:.3f} ms | {item.head_ms:.3f} ms | "
             f"±{item.noise_window_percent:.1f}% | {result_badge(item)} |")
