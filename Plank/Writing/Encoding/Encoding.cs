@@ -1055,6 +1055,87 @@ static class Encoding
         return false;
     }
 
+    internal static bool TryEncodeOptionalPlainDateTime(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<DateTime?> values, LogicalType.Timestamp timestamp, PageStrategyContext strategyContext,
+        PageList pages, ParquetDataPageVersion dataPageVersion, LeafProjectionInfo leafProjectionInfo)
+    {
+        if (column.Options.Repetition != ParquetRepetition.Optional
+            || column.PhysicalType != ParquetPhysicalType.Int64
+            || leafProjectionInfo.MaxDefinitionLevel != 1 || leafProjectionInfo.MaxRepetitionLevel != 0
+            || EncodingKindResolver.GetDataEncodingKind(column) != EncodingKind.Plain
+            || strategyContext.Strategy is not DefaultStrategy
+            || strategyContext.Strategy.GetDictionaryMode() != DictionaryMode.Disabled
+            || !strategyContext.Strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytesUnsigned))
+            return false;
+
+        var converter = new TimestampConversion.DateTimeConverter(timestamp);
+        var targetPageBytes = checked((int)targetPageBytesUnsigned);
+        pages.Clear();
+        if (values.IsEmpty)
+            return true;
+
+        // One byte per row for levels, plus eight per present value, matches the optional page sizer.
+        var capacity = Math.Min(values.Length, Math.Max(1, targetPageBytes / sizeof(long)));
+        var rented = bufferWriters.RentScratch<long>(checked((uint)capacity));
+        try
+        {
+            var denseValues = ParquetBuffer.AsSpan<long>(rented, capacity);
+            var rowsWritten = 0;
+            while (rowsWritten < values.Length)
+            {
+                var pageStart = rowsWritten;
+                var pageIndex = AddNewDataPage(bufferWriters, pages);
+                ref var page = ref pages[pageIndex];
+                var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
+                    ref page.Content);
+                var definitionStart = page.Content.WrittenLength;
+                var pageBytes = 0;
+                var presentCount = 0;
+                var currentLevel = -1;
+                var currentRunLength = 0;
+                while (rowsWritten < values.Length)
+                {
+                    var value = values[rowsWritten];
+                    var level = value.HasValue ? 1 : 0;
+                    var rowBytes = level == 1 ? sizeof(long) + 1 : 1;
+                    if (rowsWritten > pageStart && rowBytes > targetPageBytes - pageBytes)
+                        break;
+
+                    if (value.HasValue)
+                        denseValues[presentCount++] = converter.Convert(value.GetValueOrDefault());
+                    if (currentLevel == level)
+                        currentRunLength++;
+                    else
+                    {
+                        if (currentRunLength > 0)
+                            EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref page.Content);
+                        currentLevel = level;
+                        currentRunLength = 1;
+                    }
+                    rowsWritten++;
+                    pageBytes = checked(pageBytes + rowBytes);
+                }
+
+                EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref page.Content);
+                var definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref page.Content);
+                var pageRowCount = rowsWritten - pageStart;
+                var nullCount = pageRowCount - presentCount;
+                var statistics = presentCount == 0
+                    ? ColumnStatistics.Empty(nullCount)
+                    : PlainEncoding.WriteInt64PageWithStatistics(denseValues[..presentCount],
+                        ref page.Content).WithNullCount(nullCount);
+                WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
+                    EncodingKind.Plain);
+                page.Statistics = statistics;
+            }
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rented);
+        }
+        return true;
+    }
+
     static void EncodeOptionalPlainPrimitivePages<T, TPageWriter>(BufferWriterFactory bufferWriters,
         ReadOnlySpan<T?> values, int targetPageBytes, PageList pages, ParquetDataPageVersion dataPageVersion)
         where T : struct

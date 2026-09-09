@@ -101,6 +101,38 @@ static class TimestampConversion
         };
     }
 
+    internal readonly struct DateTimeConverter
+    {
+        readonly DateTimeKind _expectedKind;
+        readonly ulong _magic;
+        readonly int _shift;
+        readonly long _epoch;
+
+        internal DateTimeConverter(LogicalType.Timestamp timestamp)
+        {
+            _expectedKind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+            (_magic, _shift, _epoch) = timestamp.Unit switch
+            {
+                TimeUnit.Millis => (MillisMagic, MillisShift, EpochMillis),
+                TimeUnit.Micros => (MicrosMagic, MicrosShift, EpochMicros),
+                TimeUnit.Nanos => (0UL, 0, 0L),
+                _ => throw new ArgumentOutOfRangeException("unit", timestamp.Unit,
+                    "Time unit must be a defined TimeUnit value.")
+            };
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal long Convert(DateTime value)
+        {
+            if (value.Kind != _expectedKind)
+                throw new InvalidOperationException(
+                    $"DateTime values must have kind '{_expectedKind}', got '{value.Kind}'.");
+            return _magic == 0
+                ? checked((value.Ticks - DateTime.UnixEpoch.Ticks) * 100)
+                : ScaleTicks((ulong)value.Ticks, _magic, _shift, _epoch);
+        }
+    }
+
     static void ConvertScaled(ReadOnlySpan<DateTime> values, Span<long> destination,
         DateTimeKind expectedKind, ulong magic, int shift, long epoch)
     {
