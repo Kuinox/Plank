@@ -3486,6 +3486,42 @@ static partial class ColumnChunkReader
                 decoded.StoreUnsafe(ref values, i);
             }
         }
+        else if (Vector128.IsHardwareAccelerated)
+        {
+            // Cross-platform 128-bit path for hosts without AVX2 - notably ARM64, which has no
+            // 256-bit vector and would otherwise run the scalar loop below. Widen-then-shift-or is
+            // the portable spelling of an interleave (vpmovzxbw/vpsllw/vpor on SSE, ushll/shl/orr
+            // on AdvSimd): lanes 0/1 zip into 16-bit halves, lanes 2/3 into the other halves, and
+            // the two zip again into the finished 32-bit values.
+            var vectorCount = (nuint)Vector128<byte>.Count;
+            for (; length - i >= vectorCount; i += vectorCount)
+            {
+                var v0 = Vector128.LoadUnsafe(ref lane0, sourceOffset + i);
+                var v1 = Vector128.LoadUnsafe(ref lane1, sourceOffset + i);
+                var v2 = Vector128.LoadUnsafe(ref lane2, sourceOffset + i);
+                var v3 = Vector128.LoadUnsafe(ref lane3, sourceOffset + i);
+                var lowHalvesLower = Vector128.WidenLower(v0) |
+                    Vector128.ShiftLeft(Vector128.WidenLower(v1), 8);
+                var lowHalvesUpper = Vector128.WidenUpper(v0) |
+                    Vector128.ShiftLeft(Vector128.WidenUpper(v1), 8);
+                var highHalvesLower = Vector128.WidenLower(v2) |
+                    Vector128.ShiftLeft(Vector128.WidenLower(v3), 8);
+                var highHalvesUpper = Vector128.WidenUpper(v2) |
+                    Vector128.ShiftLeft(Vector128.WidenUpper(v3), 8);
+                (Vector128.WidenLower(lowHalvesLower) |
+                    Vector128.ShiftLeft(Vector128.WidenLower(highHalvesLower), 16))
+                    .StoreUnsafe(ref values, i);
+                (Vector128.WidenUpper(lowHalvesLower) |
+                    Vector128.ShiftLeft(Vector128.WidenUpper(highHalvesLower), 16))
+                    .StoreUnsafe(ref values, i + 4);
+                (Vector128.WidenLower(lowHalvesUpper) |
+                    Vector128.ShiftLeft(Vector128.WidenLower(highHalvesUpper), 16))
+                    .StoreUnsafe(ref values, i + 8);
+                (Vector128.WidenUpper(lowHalvesUpper) |
+                    Vector128.ShiftLeft(Vector128.WidenUpper(highHalvesUpper), 16))
+                    .StoreUnsafe(ref values, i + 12);
+            }
+        }
 
         for (; i < length; i++)
             Unsafe.Add(ref values, i) =
@@ -3571,6 +3607,55 @@ static partial class ColumnChunkReader
                 decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane7, sourceOffset + i))
                     .AsUInt64(), 56);
                 decoded.StoreUnsafe(ref values, i);
+            }
+        }
+        else if (Vector128.IsHardwareAccelerated)
+        {
+            // Cross-platform 128-bit path (ARM64 AdvSimd, pre-AVX2 x86). Same widen-then-shift-or
+            // interleave ladder as the Int32 decoder, one level deeper: 8 byte lanes zip to 16-bit,
+            // then to 32-bit, then to the finished 64-bit values.
+            const nuint vectorCount = 8;
+            for (; length - i >= vectorCount; i += vectorCount)
+            {
+                var lowLow = LoadLowerUInt64(ref lane0, sourceOffset + i);
+                var lowHigh = LoadLowerUInt64(ref lane1, sourceOffset + i);
+                var midLow = LoadLowerUInt64(ref lane2, sourceOffset + i);
+                var midHigh = LoadLowerUInt64(ref lane3, sourceOffset + i);
+                var upperLow = LoadLowerUInt64(ref lane4, sourceOffset + i);
+                var upperHigh = LoadLowerUInt64(ref lane5, sourceOffset + i);
+                var topLow = LoadLowerUInt64(ref lane6, sourceOffset + i);
+                var topHigh = LoadLowerUInt64(ref lane7, sourceOffset + i);
+
+                var bytes01 = Vector128.WidenLower(lowLow) |
+                    Vector128.ShiftLeft(Vector128.WidenLower(lowHigh), 8);
+                var bytes23 = Vector128.WidenLower(midLow) |
+                    Vector128.ShiftLeft(Vector128.WidenLower(midHigh), 8);
+                var bytes45 = Vector128.WidenLower(upperLow) |
+                    Vector128.ShiftLeft(Vector128.WidenLower(upperHigh), 8);
+                var bytes67 = Vector128.WidenLower(topLow) |
+                    Vector128.ShiftLeft(Vector128.WidenLower(topHigh), 8);
+
+                var words0123Lower = Vector128.WidenLower(bytes01) |
+                    Vector128.ShiftLeft(Vector128.WidenLower(bytes23), 16);
+                var words0123Upper = Vector128.WidenUpper(bytes01) |
+                    Vector128.ShiftLeft(Vector128.WidenUpper(bytes23), 16);
+                var words4567Lower = Vector128.WidenLower(bytes45) |
+                    Vector128.ShiftLeft(Vector128.WidenLower(bytes67), 16);
+                var words4567Upper = Vector128.WidenUpper(bytes45) |
+                    Vector128.ShiftLeft(Vector128.WidenUpper(bytes67), 16);
+
+                (Vector128.WidenLower(words0123Lower) |
+                    Vector128.ShiftLeft(Vector128.WidenLower(words4567Lower), 32))
+                    .StoreUnsafe(ref values, i);
+                (Vector128.WidenUpper(words0123Lower) |
+                    Vector128.ShiftLeft(Vector128.WidenUpper(words4567Lower), 32))
+                    .StoreUnsafe(ref values, i + 2);
+                (Vector128.WidenLower(words0123Upper) |
+                    Vector128.ShiftLeft(Vector128.WidenLower(words4567Upper), 32))
+                    .StoreUnsafe(ref values, i + 4);
+                (Vector128.WidenUpper(words0123Upper) |
+                    Vector128.ShiftLeft(Vector128.WidenUpper(words4567Upper), 32))
+                    .StoreUnsafe(ref values, i + 6);
             }
         }
 

@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -110,28 +111,32 @@ static partial class ColumnChunkReader
         {
             var typed = MemoryMarshal.Cast<T, DateTime>(destination);
             var index = typed.Length;
-            if (typeof(TUnit) == typeof(MicrosTimestamp) && Avx2.IsSupported)
+            // Vector<T> is the widest hardware vector the host actually accelerates: 256 bits on
+            // AVX2, 128 bits on ARM64 AdvSimd. One body therefore serves both, and the x86 codegen
+            // is identical to the Vector256 form it replaces (vpcmpgtq/vpsllq/vpaddq/vpor).
+            if (typeof(TUnit) == typeof(MicrosTimestamp) && Vector.IsHardwareAccelerated)
             {
                 ref var sourceStart = ref MemoryMarshal.GetReference(raw);
                 ref var destinationStart = ref Unsafe.As<DateTime, ulong>(
                     ref MemoryMarshal.GetReference(typed));
-                var minimum = Vector256.Create(MicrosTimestamp.Minimum);
-                var maximum = Vector256.Create(MicrosTimestamp.Maximum);
-                var epoch = Vector256.Create(DateTime.UnixEpoch.Ticks);
+                var minimum = new Vector<long>(MicrosTimestamp.Minimum);
+                var maximum = new Vector<long>(MicrosTimestamp.Maximum);
+                var epoch = new Vector<long>(DateTime.UnixEpoch.Ticks);
                 var kindProbe = new DateTime(0, kind);
-                var kindBits = Vector256.Create(Unsafe.As<DateTime, ulong>(ref kindProbe));
-                while (index >= Vector256<long>.Count)
+                var kindBits = new Vector<ulong>(Unsafe.As<DateTime, ulong>(ref kindProbe));
+                while (index >= Vector<long>.Count)
                 {
-                    var next = index - Vector256<long>.Count;
-                    var source = Vector256.LoadUnsafe(ref sourceStart, (nuint)next);
+                    var next = index - Vector<long>.Count;
+                    var source = Vector.LoadUnsafe(ref sourceStart, (nuint)next);
                     // Check before scaling; invalid lanes retain the scalar corruption check.
-                    var invalid = Avx2.CompareGreaterThan(minimum, source) |
-                        Avx2.CompareGreaterThan(source, maximum);
-                    if (Avx2.MoveMask(invalid.AsByte()) != 0)
+                    var invalid = Vector.GreaterThan(minimum, source) |
+                        Vector.GreaterThan(source, maximum);
+                    if (invalid != Vector<long>.Zero)
                         break;
-                    var scaled = Avx2.ShiftLeftLogical(source.AsUInt64(), 3).AsInt64() +
-                        Avx2.ShiftLeftLogical(source.AsUInt64(), 1).AsInt64();
-                    ((scaled + epoch).AsUInt64() | kindBits).StoreUnsafe(
+                    var unsigned = Vector.AsVectorUInt64(source);
+                    var scaled = Vector.AsVectorInt64(
+                        Vector.ShiftLeft(unsigned, 3) + Vector.ShiftLeft(unsigned, 1));
+                    (Vector.AsVectorUInt64(scaled + epoch) | kindBits).StoreUnsafe(
                         ref destinationStart, (nuint)next);
                     index = next;
                 }

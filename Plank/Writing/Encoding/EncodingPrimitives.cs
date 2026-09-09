@@ -2,7 +2,6 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
-using System.Runtime.Intrinsics.X86;
 using Plank.Schema;
 
 namespace Plank.Writing.Encoding;
@@ -241,18 +240,22 @@ static class EncodingPrimitives
 
             valueIndex = vectorValueCount * Vector256<byte>.Count;
         }
-        else if (Sse2.IsSupported)
+        else if (BitConverter.IsLittleEndian && Vector128.IsHardwareAccelerated && Vector128<byte>.IsSupported)
         {
-            var simdValueCount = sourceBytes.Length & ~15;
-            for (; valueIndex < simdValueCount; valueIndex += 16)
+            // Cross-platform 128-bit tail: SSE2 on pre-AVX2 x86 and AdvSimd on ARM64, which has no
+            // 256-bit vector and would otherwise fall all the way through to the scalar loop.
+            var vectorValueCount = sourceBytes.Length / Vector128<byte>.Count;
+            ref var source = ref MemoryMarshal.GetReference(sourceBytes);
+            for (var i = 0; i < vectorValueCount; i++)
             {
-                var chunk = MemoryMarshal.Read<Vector128<byte>>(sourceBytes[valueIndex..]);
-                var gtZero = Sse2.CompareGreaterThan(chunk.AsSByte(), Vector128<sbyte>.Zero);
-                var mask = Sse2.MoveMask(gtZero);
-                destination[byteIndex] = (byte)mask;
-                destination[byteIndex + 1] = (byte)(mask >> 8);
-                byteIndex += 2;
+                var isFalse = Vector128.Equals(Vector128.LoadUnsafe(ref source), Vector128<byte>.Zero);
+                var mask = (ushort)~isFalse.ExtractMostSignificantBits();
+                Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
+                byteIndex += sizeof(ushort);
+                source = ref Unsafe.Add(ref source, Vector128<byte>.Count);
             }
+
+            valueIndex = vectorValueCount * Vector128<byte>.Count;
         }
 
         for (; byteIndex < fullByteCount; byteIndex++)
