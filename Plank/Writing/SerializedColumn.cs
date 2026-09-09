@@ -733,6 +733,25 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeNullableDateTime(ReadOnlySpan<DateTime?> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
+        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        if (HasPendingData)
+            throw new InvalidOperationException(
+                "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
+        if (_column.Options.BloomFilter is null
+            && Plank.Writing.Encoding.Encoding.TryEncodeOptionalPlainDateTime(_owner.BufferWriters, _column,
+                values, timestamp, _owner.GetPageStrategyContext(columnOrdinal), Pages, _owner.DataPageVersion,
+                _owner.ColumnProjectionInfosByOrdinal[columnOrdinal]))
+        {
+            ColumnOrdinal = columnOrdinal;
+            RowCount = checked((uint)values.Length);
+            HasPendingData = true;
+            _bloomFilterByteLength = 0;
+            if (values.IsEmpty)
+                Statistics = ColumnStatistics.Empty(0);
+            else if (!TryAssignPrimitiveColumnStatisticsFromPages<long>())
+                throw new InvalidOperationException("Fused optional timestamp pages did not contain complete statistics.");
+            return;
+        }
         var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
         try
         {
