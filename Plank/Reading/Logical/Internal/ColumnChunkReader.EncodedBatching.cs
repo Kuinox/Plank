@@ -947,7 +947,7 @@ static partial class ColumnChunkReader
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    // Keep tiered PGO here: it inlines the large generic literal decoder.
     static void DecodeDictionaryRleBatch<T>(ReadOnlySpan<byte> payload,
         ReadOnlySpan<T> dictionary, Span<T> destination, ref RleBatchState state)
     {
