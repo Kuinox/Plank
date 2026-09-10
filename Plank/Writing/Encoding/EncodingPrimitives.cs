@@ -225,37 +225,28 @@ static class EncodingPrimitives
 
             valueIndex = vectorValueCount * Vector512<byte>.Count;
         }
-        else if (BitConverter.IsLittleEndian && Vector256.IsHardwareAccelerated && Vector256<byte>.IsSupported)
+        else if (BitConverter.IsLittleEndian && Vector.IsHardwareAccelerated && Vector<byte>.IsSupported)
         {
-            var vectorValueCount = sourceBytes.Length / Vector256<byte>.Count;
+            var vectorValueCount = sourceBytes.Length / Vector<byte>.Count;
             ref var source = ref MemoryMarshal.GetReference(sourceBytes);
             for (var i = 0; i < vectorValueCount; i++)
             {
-                var isFalse = Vector256.Equals(Vector256.LoadUnsafe(ref source), Vector256<byte>.Zero);
-                var mask = (uint)~isFalse.ExtractMostSignificantBits();
-                Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
-                byteIndex += sizeof(uint);
-                source = ref Unsafe.Add(ref source, Vector256<byte>.Count);
+                var isFalse = Vector.Equals(Vector.LoadUnsafe(ref source), Vector<byte>.Zero);
+                if (Vector<byte>.Count == Vector256<byte>.Count)
+                {
+                    var mask = ~isFalse.AsVector256().ExtractMostSignificantBits();
+                    Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
+                    byteIndex += sizeof(uint);
+                }
+                else
+                {
+                    var mask = (ushort)~isFalse.AsVector128().ExtractMostSignificantBits();
+                    Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
+                    byteIndex += sizeof(ushort);
+                }
+                source = ref Unsafe.Add(ref source, Vector<byte>.Count);
             }
-
-            valueIndex = vectorValueCount * Vector256<byte>.Count;
-        }
-        else if (BitConverter.IsLittleEndian && Vector128.IsHardwareAccelerated && Vector128<byte>.IsSupported)
-        {
-            // Cross-platform 128-bit tail: SSE2 on pre-AVX2 x86 and AdvSimd on ARM64, which has no
-            // 256-bit vector and would otherwise fall all the way through to the scalar loop.
-            var vectorValueCount = sourceBytes.Length / Vector128<byte>.Count;
-            ref var source = ref MemoryMarshal.GetReference(sourceBytes);
-            for (var i = 0; i < vectorValueCount; i++)
-            {
-                var isFalse = Vector128.Equals(Vector128.LoadUnsafe(ref source), Vector128<byte>.Zero);
-                var mask = (ushort)~isFalse.ExtractMostSignificantBits();
-                Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
-                byteIndex += sizeof(ushort);
-                source = ref Unsafe.Add(ref source, Vector128<byte>.Count);
-            }
-
-            valueIndex = vectorValueCount * Vector128<byte>.Count;
+            valueIndex = vectorValueCount * Vector<byte>.Count;
         }
 
         for (; byteIndex < fullByteCount; byteIndex++)

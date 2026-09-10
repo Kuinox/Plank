@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -932,36 +933,19 @@ static partial class ColumnChunkReader
     {
         System.Diagnostics.Debug.Assert(source.Length == destination.Length);
         var index = 0;
-        if (allowVector && NullableInt32HasCanonicalLayout && Avx2.IsSupported &&
-            destination.Length >= Vector256<ulong>.Count)
+        if (allowVector && NullableInt32HasCanonicalLayout && Vector.IsHardwareAccelerated &&
+            destination.Length >= Vector<uint>.Count)
         {
-            ref var sourceStart = ref MemoryMarshal.GetReference(source);
-            ref var destinationStart = ref Unsafe.As<int?, ulong>(ref MemoryMarshal.GetReference(destination));
-            var present = Vector256.Create(1UL);
-            for (; index <= source.Length - Vector256<ulong>.Count; index += Vector256<ulong>.Count)
-            {
-                var values = Avx2.ConvertToVector256Int64(
-                    Vector128.LoadUnsafe(ref sourceStart, (nuint)index)).AsUInt64();
-                var nullable = Vector256.ShiftLeft(values, 32) | present;
-                nullable.StoreUnsafe(ref destinationStart, (nuint)index);
-            }
-        }
-        else if (allowVector && NullableInt32HasCanonicalLayout && Vector128.IsHardwareAccelerated &&
-            destination.Length >= Vector128<uint>.Count)
-        {
-            // Cross-platform 128-bit path for ARM64 and pre-AVX2 x86. The value only has to reach the
-            // high half of each 64-bit slot, so zero-extending widening is enough - the shift discards
-            // whatever the low half held, which is why this matches the sign-extending AVX2 path.
             ref var sourceStart = ref Unsafe.As<int, uint>(ref MemoryMarshal.GetReference(source));
             ref var destinationStart = ref Unsafe.As<int?, ulong>(ref MemoryMarshal.GetReference(destination));
-            var present = Vector128.Create(1UL);
-            for (; index <= source.Length - Vector128<uint>.Count; index += Vector128<uint>.Count)
+            var present = new Vector<ulong>(1UL);
+            for (; index <= source.Length - Vector<uint>.Count; index += Vector<uint>.Count)
             {
-                var raw = Vector128.LoadUnsafe(ref sourceStart, (nuint)index);
-                (Vector128.ShiftLeft(Vector128.WidenLower(raw), 32) | present)
+                var raw = Vector.LoadUnsafe(ref sourceStart, (nuint)index);
+                (Vector.ShiftLeft(Vector.WidenLower(raw), 32) | present)
                     .StoreUnsafe(ref destinationStart, (nuint)index);
-                (Vector128.ShiftLeft(Vector128.WidenUpper(raw), 32) | present)
-                    .StoreUnsafe(ref destinationStart, (nuint)index + (nuint)Vector128<ulong>.Count);
+                (Vector.ShiftLeft(Vector.WidenUpper(raw), 32) | present)
+                    .StoreUnsafe(ref destinationStart, (nuint)index + (nuint)Vector<ulong>.Count);
             }
         }
 
@@ -3696,76 +3680,52 @@ static partial class ColumnChunkReader
                 decoded.StoreUnsafe(ref values, i);
             }
         }
-        else if (Avx2.IsSupported)
+        else if (Vector.IsHardwareAccelerated)
         {
-            var vectorCount = (nuint)Vector256<ulong>.Count;
+            // Interleave the eight byte lanes at the native vector width, widening
+            // into 16-bit halves, then 32-bit words, then 64-bit values.
+            var vectorCount = (nuint)(Vector<byte>.Count / 2);
             for (; length - i >= vectorCount; i += vectorCount)
             {
-                var decoded = Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane0, sourceOffset + i)).AsUInt64();
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane1, sourceOffset + i))
-                    .AsUInt64(), 8);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane2, sourceOffset + i))
-                    .AsUInt64(), 16);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane3, sourceOffset + i))
-                    .AsUInt64(), 24);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane4, sourceOffset + i))
-                    .AsUInt64(), 32);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane5, sourceOffset + i))
-                    .AsUInt64(), 40);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane6, sourceOffset + i))
-                    .AsUInt64(), 48);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane7, sourceOffset + i))
-                    .AsUInt64(), 56);
-                decoded.StoreUnsafe(ref values, i);
-            }
-        }
-        else if (Vector128.IsHardwareAccelerated)
-        {
-            // Cross-platform 128-bit path (ARM64 AdvSimd, pre-AVX2 x86). Same widen-then-shift-or
-            // interleave ladder as the Int32 decoder, one level deeper: 8 byte lanes zip to 16-bit,
-            // then to 32-bit, then to the finished 64-bit values.
-            const nuint vectorCount = 8;
-            for (; length - i >= vectorCount; i += vectorCount)
-            {
-                var lowLow = LoadLowerUInt64(ref lane0, sourceOffset + i);
-                var lowHigh = LoadLowerUInt64(ref lane1, sourceOffset + i);
-                var midLow = LoadLowerUInt64(ref lane2, sourceOffset + i);
-                var midHigh = LoadLowerUInt64(ref lane3, sourceOffset + i);
-                var upperLow = LoadLowerUInt64(ref lane4, sourceOffset + i);
-                var upperHigh = LoadLowerUInt64(ref lane5, sourceOffset + i);
-                var topLow = LoadLowerUInt64(ref lane6, sourceOffset + i);
-                var topHigh = LoadLowerUInt64(ref lane7, sourceOffset + i);
+                var lowLow = LoadLowerByteVector(ref lane0, sourceOffset + i);
+                var lowHigh = LoadLowerByteVector(ref lane1, sourceOffset + i);
+                var midLow = LoadLowerByteVector(ref lane2, sourceOffset + i);
+                var midHigh = LoadLowerByteVector(ref lane3, sourceOffset + i);
+                var upperLow = LoadLowerByteVector(ref lane4, sourceOffset + i);
+                var upperHigh = LoadLowerByteVector(ref lane5, sourceOffset + i);
+                var topLow = LoadLowerByteVector(ref lane6, sourceOffset + i);
+                var topHigh = LoadLowerByteVector(ref lane7, sourceOffset + i);
 
-                var bytes01 = Vector128.WidenLower(lowLow) |
-                    Vector128.ShiftLeft(Vector128.WidenLower(lowHigh), 8);
-                var bytes23 = Vector128.WidenLower(midLow) |
-                    Vector128.ShiftLeft(Vector128.WidenLower(midHigh), 8);
-                var bytes45 = Vector128.WidenLower(upperLow) |
-                    Vector128.ShiftLeft(Vector128.WidenLower(upperHigh), 8);
-                var bytes67 = Vector128.WidenLower(topLow) |
-                    Vector128.ShiftLeft(Vector128.WidenLower(topHigh), 8);
+                var bytes01 = Vector.WidenLower(lowLow) |
+                    Vector.ShiftLeft(Vector.WidenLower(lowHigh), 8);
+                var bytes23 = Vector.WidenLower(midLow) |
+                    Vector.ShiftLeft(Vector.WidenLower(midHigh), 8);
+                var bytes45 = Vector.WidenLower(upperLow) |
+                    Vector.ShiftLeft(Vector.WidenLower(upperHigh), 8);
+                var bytes67 = Vector.WidenLower(topLow) |
+                    Vector.ShiftLeft(Vector.WidenLower(topHigh), 8);
 
-                var words0123Lower = Vector128.WidenLower(bytes01) |
-                    Vector128.ShiftLeft(Vector128.WidenLower(bytes23), 16);
-                var words0123Upper = Vector128.WidenUpper(bytes01) |
-                    Vector128.ShiftLeft(Vector128.WidenUpper(bytes23), 16);
-                var words4567Lower = Vector128.WidenLower(bytes45) |
-                    Vector128.ShiftLeft(Vector128.WidenLower(bytes67), 16);
-                var words4567Upper = Vector128.WidenUpper(bytes45) |
-                    Vector128.ShiftLeft(Vector128.WidenUpper(bytes67), 16);
+                var words0123Lower = Vector.WidenLower(bytes01) |
+                    Vector.ShiftLeft(Vector.WidenLower(bytes23), 16);
+                var words0123Upper = Vector.WidenUpper(bytes01) |
+                    Vector.ShiftLeft(Vector.WidenUpper(bytes23), 16);
+                var words4567Lower = Vector.WidenLower(bytes45) |
+                    Vector.ShiftLeft(Vector.WidenLower(bytes67), 16);
+                var words4567Upper = Vector.WidenUpper(bytes45) |
+                    Vector.ShiftLeft(Vector.WidenUpper(bytes67), 16);
 
-                (Vector128.WidenLower(words0123Lower) |
-                    Vector128.ShiftLeft(Vector128.WidenLower(words4567Lower), 32))
+                (Vector.WidenLower(words0123Lower) |
+                    Vector.ShiftLeft(Vector.WidenLower(words4567Lower), 32))
                     .StoreUnsafe(ref values, i);
-                (Vector128.WidenUpper(words0123Lower) |
-                    Vector128.ShiftLeft(Vector128.WidenUpper(words4567Lower), 32))
-                    .StoreUnsafe(ref values, i + 2);
-                (Vector128.WidenLower(words0123Upper) |
-                    Vector128.ShiftLeft(Vector128.WidenLower(words4567Upper), 32))
-                    .StoreUnsafe(ref values, i + 4);
-                (Vector128.WidenUpper(words0123Upper) |
-                    Vector128.ShiftLeft(Vector128.WidenUpper(words4567Upper), 32))
-                    .StoreUnsafe(ref values, i + 6);
+                (Vector.WidenUpper(words0123Lower) |
+                    Vector.ShiftLeft(Vector.WidenUpper(words4567Lower), 32))
+                    .StoreUnsafe(ref values, i + (nuint)Vector<ulong>.Count);
+                (Vector.WidenLower(words0123Upper) |
+                    Vector.ShiftLeft(Vector.WidenLower(words4567Upper), 32))
+                    .StoreUnsafe(ref values, i + (nuint)(Vector<ulong>.Count * 2));
+                (Vector.WidenUpper(words0123Upper) |
+                    Vector.ShiftLeft(Vector.WidenUpper(words4567Upper), 32))
+                    .StoreUnsafe(ref values, i + (nuint)(Vector<ulong>.Count * 3));
             }
         }
 
@@ -3779,6 +3739,15 @@ static partial class ColumnChunkReader
                 ((ulong)Unsafe.Add(ref lane5, sourceOffset + i) << 40) |
                 ((ulong)Unsafe.Add(ref lane6, sourceOffset + i) << 48) |
                 ((ulong)Unsafe.Add(ref lane7, sourceOffset + i) << 56);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static Vector<byte> LoadLowerByteVector(ref byte source, nuint offset)
+    {
+        // Read only the half consumed by WidenLower, including at the payload boundary.
+        if (Vector<byte>.Count == Vector256<byte>.Count)
+            return Vector128.LoadUnsafe(ref source, offset).ToVector256Unsafe().AsVector();
+        return LoadLowerUInt64(ref source, offset).AsVector();
     }
 
     static bool TryDecodeByteStreamSplitSliceIntoNative<T>(ReadOnlySpan<byte> payload, Column column,
