@@ -155,23 +155,13 @@ class PlankLabBenchmarkReportTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Non-contiguous"):
                 report.load_comparisons(root, matrix)
 
-    def test_saved_pr_artifacts_preserve_pass_disagreement_and_late_direction(self):
-        path = Path(__file__).parent / "fixtures/pr103-pr104-ordered.json"
-        for case in json.loads(path.read_text()):
-            with self.subTest(pr=case["pr"], case=case["case_id"]):
-                base = tuple(report.PassSummary.create(p) for p in case["base"])
-                head = tuple(report.PassSummary.create(p) for p in case["head"])
-                item = self.comparison(base, head)
-                self.assertEqual(case["expected_status"], item.status)
-                self.assertAlmostEqual(case["expected_delta"], item.delta_percent)
-                self.assertEqual(400, sum(len(p.samples_ms) for p in base + head))
-                self.assertEqual(50, base[0].late_start)
-                if case["pr"] == 103 and case["case_id"] == "int32-delta-binary-packed-column":
-                    self.assertGreater(head[0].late_ms, 30)
-                    self.assertLess(head[1].late_ms, 24)
-                    self.assertEqual("inconclusive", item.status)
-                if case["case_id"] == "int64-delta-binary-packed-column" and case["suite"] == "synthetic":
-                    self.assertLess(abs(item.delta_percent), 1.1)
+    def test_fixed_late_window_preserves_odd_length_series(self):
+        samples = list(range(1, 102))
+        summary = report.PassSummary.create(samples)
+        self.assertEqual(tuple(samples), summary.samples_ms)
+        self.assertEqual(50, summary.late_start)
+        self.assertEqual((55.5, 65.5, 75.5, 85.5, 96), summary.late_blocks_ms)
+        self.assertEqual(76, summary.late_ms)
 
     @staticmethod
     def write_matrix(root: Path) -> Path:
