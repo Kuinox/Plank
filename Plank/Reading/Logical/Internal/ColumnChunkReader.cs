@@ -1106,8 +1106,10 @@ static partial class ColumnChunkReader
         ReadOnlySpan<TValue> physical, Span<TValue?> destination)
         where TValue : struct
     {
+        // ExpandAllPresentInt64Batch now vectorises at 128 bits as well as 256, so this dispatch no
+        // longer needs AVX2 to be worth taking.
         if (typeof(TValue) == typeof(double) && NullableDoubleHasCanonicalLayout &&
-            Avx2.IsSupported && physical.Length == definitions.Length &&
+            Vector128.IsHardwareAccelerated && physical.Length == definitions.Length &&
             definitions.IndexOf((byte)0) < 0)
         {
             ExpandAllPresentInt64Batch(
