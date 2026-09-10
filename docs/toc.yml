@@ -22,6 +22,8 @@
       href: articles/writing/logical.md
     - name: Physical files
       href: articles/writing/physical.md
+- name: Startup performance
+  href: articles/startup-performance.md
 - name: API reference
   href: api/
 - name: Benchmarks
