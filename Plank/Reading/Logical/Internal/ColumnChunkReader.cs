@@ -1889,7 +1889,8 @@ static partial class ColumnChunkReader
                 var source = Vector256.LoadUnsafe(ref rawStart, (nuint)next);
                 var invalid = Vector256.GreaterThan(minimum, source) |
                     Vector256.GreaterThan(source, maximum);
-                if (invalid != Vector256<long>.Zero)
+                // Preserve the AVX2 mask test; vector equality emits a slower vptest here.
+                if (Avx2.MoveMask(invalid.AsByte()) != 0)
                     break;
 
                 var scaled = Vector256.ShiftLeft(source.AsUInt64(), 3).AsInt64() +

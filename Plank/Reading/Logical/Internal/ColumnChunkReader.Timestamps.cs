@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using Plank.Schema;
 
 namespace Plank.Reading.Logical.Internal;
@@ -110,9 +111,8 @@ static partial class ColumnChunkReader
         {
             var typed = MemoryMarshal.Cast<T, DateTime>(destination);
             var index = typed.Length;
-            // Vector<T> is the widest hardware vector the host actually accelerates: 256 bits on
-            // AVX2, 128 bits on ARM64 AdvSimd. One body therefore serves both, and the x86 codegen
-            // is identical to the Vector256 form it replaces (vpcmpgtq/vpsllq/vpaddq/vpor).
+            // Vector<T> selects 256 bits under AVX2 and 128 bits under ARM64 AdvSimd.
+            // One body serves both while preserving the Vector256 scaling operations on AVX2.
             if (typeof(TUnit) == typeof(MicrosTimestamp) && Vector.IsHardwareAccelerated)
             {
                 ref var sourceStart = ref MemoryMarshal.GetReference(raw);
@@ -130,7 +130,12 @@ static partial class ColumnChunkReader
                     // Check before scaling; invalid lanes retain the scalar corruption check.
                     var invalid = Vector.GreaterThan(minimum, source) |
                         Vector.GreaterThan(source, maximum);
-                    if (invalid != Vector<long>.Zero)
+                    // Preserve the AVX2 mask extraction: vector equality emits vptest,
+                    // which slows this loop on the measured AVX2 path.
+                    if (Avx2.IsSupported
+                        ? Avx2.MoveMask(
+                            Unsafe.As<Vector<long>, Vector256<byte>>(ref invalid)) != 0
+                        : invalid != Vector<long>.Zero)
                         break;
                     var unsigned = Vector.AsVectorUInt64(source);
                     var scaled = Vector.AsVectorInt64(
