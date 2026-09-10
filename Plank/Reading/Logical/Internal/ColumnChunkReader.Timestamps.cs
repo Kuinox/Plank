@@ -2,7 +2,6 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
-using System.Runtime.Intrinsics.X86;
 using Plank.Schema;
 
 namespace Plank.Reading.Logical.Internal;
@@ -132,9 +131,8 @@ static partial class ColumnChunkReader
                         Vector.GreaterThan(source, maximum);
                     // Preserve the AVX2 mask extraction: vector equality emits vptest,
                     // which slows this loop on the measured AVX2 path.
-                    if (Avx2.IsSupported
-                        ? Avx2.MoveMask(
-                            Unsafe.As<Vector<long>, Vector256<byte>>(ref invalid)) != 0
+                    if (Vector<byte>.Count == Vector256<byte>.Count
+                        ? invalid.AsVector256().AsByte().ExtractMostSignificantBits() != 0
                         : invalid != Vector<long>.Zero)
                         break;
                     var unsigned = Vector.AsVectorUInt64(source);
