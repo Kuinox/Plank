@@ -44,10 +44,13 @@ internal sealed class EncodedPageBatchingTests
     }
 
     [Test]
+    [Arguments(1)]
     [Arguments(2)]
     [Arguments(3)]
+    [Arguments(7)]
     [Arguments(247)]
     [Arguments(260)]
+    [Arguments(2047)]
     public void LargeDenseOptionalInt32DictionaryBatchesCommonBitWidths(int distinctCount)
     {
         var expected = new int?[180_003];

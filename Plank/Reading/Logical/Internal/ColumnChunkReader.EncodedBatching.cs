@@ -984,6 +984,9 @@ static partial class ColumnChunkReader
         }
     }
 
+    // Keep run parsing and the hot literal/fill operations in these nullable batch loops.
+    // AggressiveOptimization compiles without tiered PGO; helper calls here otherwise lose
+    // the profile-guided inlining that the Tier1 versions receive.
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeNullableInt32DictionaryRleBatch(ReadOnlySpan<byte> payload,
         ReadOnlySpan<int> dictionary, Span<int?> destination, ref RleBatchState state)
@@ -991,7 +994,33 @@ static partial class ColumnChunkReader
         var written = 0;
         while (written < destination.Length)
         {
-            EnsureRleRun(payload, ref state);
+            if (state.RunRemaining == 0)
+            {
+                var runPayload = payload[state.Offset..];
+                var before = runPayload.Length;
+                var header = ReadUnsignedVarInt(ref runPayload);
+                state.Offset += before - runPayload.Length;
+                state.LiteralRun = (header & 1U) != 0;
+                var runCount = header >> 1;
+                if (runCount == 0)
+                    throw new CorruptParquetException("RLE run length must be positive.");
+                if (state.LiteralRun)
+                {
+                    if (runCount > uint.MaxValue / 8)
+                        throw new CorruptParquetException(
+                            $"RLE literal run group count {runCount} is too large.");
+                    state.RunRemaining = runCount * 8;
+                }
+                else
+                {
+                    state.RunRemaining = runCount;
+                    var byteWidth = (state.BitWidth + 7) >> 3;
+                    runPayload = payload[state.Offset..];
+                    before = runPayload.Length;
+                    state.RepeatedValue = byteWidth == 0 ? 0 : ReadLittleEndian(ref runPayload, byteWidth);
+                    state.Offset += before - runPayload.Length;
+                }
+            }
             var pageRemaining = state.ValueCount - state.ValuesRead;
             if (!state.LiteralRun)
             {
@@ -1011,9 +1040,52 @@ static partial class ColumnChunkReader
             var countToConsume = Math.Min(checked((uint)encodedValues), state.RunRemaining);
             var countToExpose = Math.Min(checked((int)countToConsume), remaining);
             var bytes = checked((int)(countToConsume / 8) * state.BitWidth);
-            RequireRleBytes(payload, state.Offset, bytes);
-            DecodeNullableInt32DictionaryLiteral(payload.Slice(state.Offset, bytes),
-                state.BitWidth, dictionary, destination.Slice(written, countToExpose));
+            if ((uint)state.Offset > (uint)payload.Length || payload.Length - state.Offset < bytes)
+                throw new CorruptParquetException(
+                    $"RLE literal group claims {bytes} bytes but only " +
+                    $"{Math.Max(0, payload.Length - state.Offset)} remain.");
+            var literalPayload = payload.Slice(state.Offset, bytes);
+            var bitWidth = state.BitWidth;
+            var literalTarget = destination.Slice(written, countToExpose);
+            if (bitWidth == 0)
+            {
+                ValidateDictionaryIndex(0, dictionary.Length);
+                literalTarget.Fill(dictionary[0]);
+            }
+            else
+            {
+                if (NullableInt32HasCanonicalLayout && Avx2.IsSupported &&
+                    bitWidth is 8 or 9 && literalTarget.Length >= 8)
+                {
+                    var literalVectorizedLength = literalTarget.Length & ~7;
+                    if (bitWidth == 8)
+                        DecodeNullableInt32DictionaryBytes(literalPayload, dictionary,
+                            literalTarget[..literalVectorizedLength]);
+                    else
+                        DecodeNullableInt32DictionaryNineBit(literalPayload, dictionary,
+                            literalTarget[..literalVectorizedLength]);
+                    literalPayload = literalPayload[(literalVectorizedLength / 8 * bitWidth)..];
+                    literalTarget = literalTarget[literalVectorizedLength..];
+                }
+
+                var mask = bitWidth == 32 ? ulong.MaxValue : (1UL << bitWidth) - 1UL;
+                ulong bitBuffer = 0;
+                var bufferedBits = 0;
+                var literalPayloadIndex = 0;
+                for (var i = 0; i < literalTarget.Length; i++)
+                {
+                    while (bufferedBits < bitWidth)
+                    {
+                        bitBuffer |= (ulong)literalPayload[literalPayloadIndex++] << bufferedBits;
+                        bufferedBits += 8;
+                    }
+                    var dictionaryIndex = (int)(bitBuffer & mask);
+                    bitBuffer >>= bitWidth;
+                    bufferedBits -= bitWidth;
+                    ValidateDictionaryIndex(dictionaryIndex, dictionary.Length);
+                    literalTarget[i] = dictionary[dictionaryIndex];
+                }
+            }
             state.Offset += bytes;
             state.RunRemaining -= countToConsume;
             state.ValuesRead += countToExpose;
@@ -1022,13 +1094,39 @@ static partial class ColumnChunkReader
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    static void DecodeNullableInt32DictionaryNarrowRleBatch(ReadOnlySpan<byte> payload,
+    static unsafe void DecodeNullableInt32DictionaryNarrowRleBatch(ReadOnlySpan<byte> payload,
         ReadOnlySpan<int> dictionary, Span<int?> destination, ref RleBatchState state)
     {
         var written = 0;
         while (written < destination.Length)
         {
-            EnsureRleRun(payload, ref state);
+            if (state.RunRemaining == 0)
+            {
+                var runPayload = payload[state.Offset..];
+                var before = runPayload.Length;
+                var header = ReadUnsignedVarInt(ref runPayload);
+                state.Offset += before - runPayload.Length;
+                state.LiteralRun = (header & 1U) != 0;
+                var runCount = header >> 1;
+                if (runCount == 0)
+                    throw new CorruptParquetException("RLE run length must be positive.");
+                if (state.LiteralRun)
+                {
+                    if (runCount > uint.MaxValue / 8)
+                        throw new CorruptParquetException(
+                            $"RLE literal run group count {runCount} is too large.");
+                    state.RunRemaining = runCount * 8;
+                }
+                else
+                {
+                    state.RunRemaining = runCount;
+                    var byteWidth = (state.BitWidth + 7) >> 3;
+                    runPayload = payload[state.Offset..];
+                    before = runPayload.Length;
+                    state.RepeatedValue = byteWidth == 0 ? 0 : ReadLittleEndian(ref runPayload, byteWidth);
+                    state.Offset += before - runPayload.Length;
+                }
+            }
             var pageRemaining = state.ValueCount - state.ValuesRead;
             if (!state.LiteralRun)
             {
@@ -1048,21 +1146,77 @@ static partial class ColumnChunkReader
             var countToConsume = Math.Min(checked((uint)encodedValues), state.RunRemaining);
             var countToExpose = Math.Min(checked((int)countToConsume), remaining);
             var bytes = checked((int)(countToConsume / 8) * state.BitWidth);
-            RequireRleBytes(payload, state.Offset, bytes);
+            if ((uint)state.Offset > (uint)payload.Length || payload.Length - state.Offset < bytes)
+                throw new CorruptParquetException(
+                    $"RLE literal group claims {bytes} bytes but only " +
+                    $"{Math.Max(0, payload.Length - state.Offset)} remain.");
             var literal = payload.Slice(state.Offset, bytes);
             var vectorizedLength = countToExpose & ~7;
             var target = destination.Slice(written, countToExpose);
             if (state.BitWidth == 1)
-                DecodeNullableInt32DictionaryBits(literal, dictionary,
-                    target[..vectorizedLength]);
+            {
+                ref var source = ref MemoryMarshal.GetReference(literal);
+                ref var nullableTarget = ref Unsafe.As<int?, ulong>(ref MemoryMarshal.GetReference(target));
+                var maximumIndex = Vector256.Create(dictionary.Length - 1);
+                fixed (int* dictionaryPointer = dictionary)
+                {
+                    for (var valueIndex = 0; valueIndex < vectorizedLength; valueIndex += 8)
+                    {
+                        var decodedIndexes = Avx2.ConvertToVector256Int32(Vector128.CreateScalar(
+                            Bmi2.X64.ParallelBitDeposit(Unsafe.Add(ref source, valueIndex >> 3),
+                                0x0101_0101_0101_0101UL)).AsByte());
+                        if (dictionary.Length != 2)
+                            ValidateNullableInt32DictionaryIndexes(decodedIndexes, dictionary.Length,
+                                maximumIndex);
+                        var values = Avx2.GatherVector256(dictionaryPointer, decodedIndexes, sizeof(int));
+                        StoreNullableInt32Values(values, ref nullableTarget, valueIndex);
+                    }
+                }
+            }
             else
-                DecodeNullableInt32DictionaryPairs(literal, dictionary,
-                    target[..vectorizedLength]);
+            {
+                ref var source = ref MemoryMarshal.GetReference(literal);
+                ref var nullableTarget = ref Unsafe.As<int?, ulong>(ref MemoryMarshal.GetReference(target));
+                var maximumIndex = Vector256.Create(dictionary.Length - 1);
+                fixed (int* dictionaryPointer = dictionary)
+                {
+                    for (var valueIndex = 0; valueIndex < vectorizedLength; valueIndex += 8)
+                    {
+                        var packed = Unsafe.ReadUnaligned<ushort>(
+                            ref Unsafe.Add(ref source, valueIndex >> 2));
+                        var decodedIndexes = Avx2.ConvertToVector256Int32(Vector128.CreateScalar(
+                            Bmi2.X64.ParallelBitDeposit(packed,
+                                0x0303_0303_0303_0303UL)).AsByte());
+                        ValidateNullableInt32DictionaryIndexes(decodedIndexes, dictionary.Length,
+                            maximumIndex);
+                        var values = Avx2.GatherVector256(dictionaryPointer, decodedIndexes, sizeof(int));
+                        StoreNullableInt32Values(values, ref nullableTarget, valueIndex);
+                    }
+                }
+            }
             if (vectorizedLength != countToExpose)
             {
                 var vectorBytes = vectorizedLength / 8 * state.BitWidth;
-                DecodeNullableInt32DictionaryLiteral(literal[vectorBytes..], state.BitWidth,
-                    dictionary, target[vectorizedLength..]);
+                var literalPayload = literal[vectorBytes..];
+                var bitWidth = state.BitWidth;
+                var literalTarget = target[vectorizedLength..];
+                var mask = bitWidth == 32 ? ulong.MaxValue : (1UL << bitWidth) - 1UL;
+                ulong bitBuffer = 0;
+                var bufferedBits = 0;
+                var literalPayloadIndex = 0;
+                for (var i = 0; i < literalTarget.Length; i++)
+                {
+                    while (bufferedBits < bitWidth)
+                    {
+                        bitBuffer |= (ulong)literalPayload[literalPayloadIndex++] << bufferedBits;
+                        bufferedBits += 8;
+                    }
+                    var dictionaryIndex = (int)(bitBuffer & mask);
+                    bitBuffer >>= bitWidth;
+                    bufferedBits -= bitWidth;
+                    ValidateDictionaryIndex(dictionaryIndex, dictionary.Length);
+                    literalTarget[i] = dictionary[dictionaryIndex];
+                }
             }
             state.Offset += bytes;
             state.RunRemaining -= countToConsume;
@@ -1079,15 +1233,48 @@ static partial class ColumnChunkReader
         var written = 0;
         while (written < targetCount)
         {
-            EnsureRleRun(payload, ref state);
+            if (state.RunRemaining == 0)
+            {
+                var runPayload = payload[state.Offset..];
+                var before = runPayload.Length;
+                var header = ReadUnsignedVarInt(ref runPayload);
+                state.Offset += before - runPayload.Length;
+                state.LiteralRun = (header & 1U) != 0;
+                var runCount = header >> 1;
+                if (runCount == 0)
+                    throw new CorruptParquetException("RLE run length must be positive.");
+                if (state.LiteralRun)
+                {
+                    if (runCount > uint.MaxValue / 8)
+                        throw new CorruptParquetException(
+                            $"RLE literal run group count {runCount} is too large.");
+                    state.RunRemaining = runCount * 8;
+                }
+                else
+                {
+                    state.RunRemaining = runCount;
+                    var byteWidth = (state.BitWidth + 7) >> 3;
+                    runPayload = payload[state.Offset..];
+                    before = runPayload.Length;
+                    state.RepeatedValue = byteWidth == 0 ? 0 : ReadLittleEndian(ref runPayload, byteWidth);
+                    state.Offset += before - runPayload.Length;
+                }
+            }
             var pageRemaining = state.ValueCount - state.ValuesRead;
             if (!state.LiteralRun)
             {
                 ValidateDictionaryIndex(state.RepeatedValue, dictionary.Length);
                 var count = (int)Math.Min(state.RunRemaining,
                     checked((uint)Math.Min(targetCount - written, pageRemaining)));
-                FillNullableInt64(destination.Slice(written, count),
-                    dictionary[state.RepeatedValue]);
+                var repeatedTarget = destination.Slice(written, count);
+                var repeatedValue = dictionary[state.RepeatedValue];
+                ref var nullableTarget = ref Unsafe.As<long?, long>(ref MemoryMarshal.GetReference(repeatedTarget));
+                var packed = Vector256.Create(1L, repeatedValue, 1L, repeatedValue);
+                var index = 0;
+                for (; index <= repeatedTarget.Length - 2; index += 2)
+                    packed.StoreUnsafe(ref nullableTarget, (nuint)(index * 2));
+                if (index != repeatedTarget.Length)
+                    repeatedTarget[index] = repeatedValue;
                 state.RunRemaining -= checked((uint)count);
                 state.ValuesRead += count;
                 written += count;
@@ -1100,7 +1287,10 @@ static partial class ColumnChunkReader
             var countToConsume = Math.Min(checked((uint)encodedValues), state.RunRemaining);
             var countToExpose = Math.Min(checked((int)countToConsume), pageRemaining);
             var bytes = checked((int)(countToConsume / 8) * state.BitWidth);
-            RequireRleBytes(payload, state.Offset, bytes);
+            if ((uint)state.Offset > (uint)payload.Length || payload.Length - state.Offset < bytes)
+                throw new CorruptParquetException(
+                    $"RLE literal group claims {bytes} bytes but only " +
+                    $"{Math.Max(0, payload.Length - state.Offset)} remain.");
             var literal = payload.Slice(state.Offset, bytes);
             var vectorizedLength = countToExpose & ~7;
             var target = destination.Slice(written, countToExpose);
@@ -1118,17 +1308,6 @@ static partial class ColumnChunkReader
             written += countToExpose;
         }
         return written;
-    }
-
-    static void FillNullableInt64(Span<long?> destination, long value)
-    {
-        ref var target = ref Unsafe.As<long?, long>(ref MemoryMarshal.GetReference(destination));
-        var packed = Vector256.Create(1L, value, 1L, value);
-        var index = 0;
-        for (; index <= destination.Length - 2; index += 2)
-            packed.StoreUnsafe(ref target, (nuint)(index * 2));
-        if (index != destination.Length)
-            destination[index] = value;
     }
 
     static unsafe void DecodeNullableInt64DictionarySmall(ReadOnlySpan<byte> payload,
@@ -1205,96 +1384,6 @@ static partial class ColumnChunkReader
             bufferedBits -= bitWidth;
             ValidateDictionaryIndex(dictionaryIndex, dictionary.Length);
             destination[i] = dictionary[dictionaryIndex];
-        }
-    }
-
-    static unsafe void DecodeNullableInt32DictionaryLiteral(ReadOnlySpan<byte> payload,
-        int bitWidth, ReadOnlySpan<int> dictionary, Span<int?> destination)
-    {
-        if (bitWidth == 0)
-        {
-            ValidateDictionaryIndex(0, dictionary.Length);
-            destination.Fill(dictionary[0]);
-            return;
-        }
-
-        if (NullableInt32HasCanonicalLayout && Avx2.IsSupported &&
-            bitWidth is 8 or 9 && destination.Length >= 8)
-        {
-            var vectorizedLength = destination.Length & ~7;
-            if (bitWidth == 8)
-                DecodeNullableInt32DictionaryBytes(payload, dictionary,
-                    destination[..vectorizedLength]);
-            else
-                DecodeNullableInt32DictionaryNineBit(payload, dictionary,
-                    destination[..vectorizedLength]);
-            payload = payload[(vectorizedLength / 8 * bitWidth)..];
-            destination = destination[vectorizedLength..];
-            if (destination.IsEmpty)
-                return;
-        }
-
-        var mask = bitWidth == 32 ? ulong.MaxValue : (1UL << bitWidth) - 1UL;
-        ulong bitBuffer = 0;
-        var bufferedBits = 0;
-        var payloadIndex = 0;
-        for (var i = 0; i < destination.Length; i++)
-        {
-            while (bufferedBits < bitWidth)
-            {
-                bitBuffer |= (ulong)payload[payloadIndex++] << bufferedBits;
-                bufferedBits += 8;
-            }
-            var dictionaryIndex = (int)(bitBuffer & mask);
-            bitBuffer >>= bitWidth;
-            bufferedBits -= bitWidth;
-            ValidateDictionaryIndex(dictionaryIndex, dictionary.Length);
-            destination[i] = dictionary[dictionaryIndex];
-        }
-    }
-
-    static unsafe void DecodeNullableInt32DictionaryBits(ReadOnlySpan<byte> payload,
-        ReadOnlySpan<int> dictionary, Span<int?> destination)
-    {
-        ref var source = ref MemoryMarshal.GetReference(payload);
-        ref var target = ref Unsafe.As<int?, ulong>(ref MemoryMarshal.GetReference(destination));
-        var maximumIndex = Vector256.Create(dictionary.Length - 1);
-        fixed (int* dictionaryPointer = dictionary)
-        {
-            for (var valueIndex = 0; valueIndex < destination.Length; valueIndex += 8)
-            {
-                var decodedIndexes = Avx2.ConvertToVector256Int32(Vector128.CreateScalar(
-                    Bmi2.X64.ParallelBitDeposit(Unsafe.Add(ref source, valueIndex >> 3),
-                        0x0101_0101_0101_0101UL)).AsByte());
-                if (dictionary.Length != 2)
-                    ValidateNullableInt32DictionaryIndexes(decodedIndexes, dictionary.Length,
-                        maximumIndex);
-                var values = Avx2.GatherVector256(dictionaryPointer, decodedIndexes, sizeof(int));
-                StoreNullableInt32Values(values, ref target, valueIndex);
-            }
-        }
-    }
-
-    static unsafe void DecodeNullableInt32DictionaryPairs(ReadOnlySpan<byte> payload,
-        ReadOnlySpan<int> dictionary, Span<int?> destination)
-    {
-        ref var source = ref MemoryMarshal.GetReference(payload);
-        ref var target = ref Unsafe.As<int?, ulong>(ref MemoryMarshal.GetReference(destination));
-        var maximumIndex = Vector256.Create(dictionary.Length - 1);
-        fixed (int* dictionaryPointer = dictionary)
-        {
-            for (var valueIndex = 0; valueIndex < destination.Length; valueIndex += 8)
-            {
-                var packed = Unsafe.ReadUnaligned<ushort>(
-                    ref Unsafe.Add(ref source, valueIndex >> 2));
-                var decodedIndexes = Avx2.ConvertToVector256Int32(Vector128.CreateScalar(
-                    Bmi2.X64.ParallelBitDeposit(packed,
-                        0x0303_0303_0303_0303UL)).AsByte());
-                ValidateNullableInt32DictionaryIndexes(decodedIndexes, dictionary.Length,
-                    maximumIndex);
-                var values = Avx2.GatherVector256(dictionaryPointer, decodedIndexes, sizeof(int));
-                StoreNullableInt32Values(values, ref target, valueIndex);
-            }
         }
     }
 
