@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using Plank.Reading;
 using Plank.Reading.Physical;
 using Plank.Reading.Logical;
+using Plank.RowApi;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
@@ -21,6 +22,14 @@ internal sealed class ReaderAllocationTests
         // This class is NotInParallel, and each test warms its buffers afterwards.
         DefaultParquetBufferPool.Shared.Trim();
     }
+
+    // Measure decoding on the calling thread. Waiting for background workers can
+    // lazily allocate ManualResetEventSlim's lock after warmup, and worker decoding
+    // allocations are invisible to GetAllocatedBytesForCurrentThread.
+    static readonly RowReaderOptions _allocationReaderOptions = new()
+    {
+        Execution = new() { WorkerCount = 1 }
+    };
 
     // Snappier 1.3.1 creates per-operation decompressor state. Remove this budget when its reusable API ships.
     const long ManagedSnappyAllocationBudget = 80;
@@ -512,7 +521,7 @@ internal sealed class ReaderAllocationTests
         {
             var bytes = File.ReadAllBytes(path);
             var source = new MemoryReadSource(bytes);
-            using var reader = ReaderAllocationRowSchema.CreateRowReader(source);
+            using var reader = ReaderAllocationRowSchema.CreateRowReader(source, options: _allocationReaderOptions);
             for (var i = 0; i < 8; i++)
             {
                 reader.Reset(source);
@@ -550,7 +559,7 @@ internal sealed class ReaderAllocationTests
         {
             var bytes = File.ReadAllBytes(path);
             var source = new MemoryReadSource(bytes);
-            using var reader = ReaderAllocationBinaryRowSchema.CreateRowReader(source);
+            using var reader = ReaderAllocationBinaryRowSchema.CreateRowReader(source, options: _allocationReaderOptions);
             for (var i = 0; i < 8; i++)
             {
                 reader.Reset(source);
