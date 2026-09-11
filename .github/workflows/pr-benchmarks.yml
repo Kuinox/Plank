@@ -141,13 +141,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        operation: [Read, Write]
-        suite: [Synthetic, Real]
+        operation: [Mixed]
+        suite: [Focused]
         include:
-          - suite: Synthetic
-            suite_label: Synthetic
-          - suite: Real
-            suite_label: Real-world
+          - suite: Focused
+            suite_label: PR104 reported regressions
 
     steps:
       - name: Check out Plank-Lab for base
@@ -199,7 +197,6 @@ jobs:
             --configuration Release --no-restore
 
       - name: Download Plank-Lab's real-world input
-        if: matrix.suite == 'Real'
         shell: bash
         run: |
           curl --fail --location --retry 5 \
@@ -225,7 +222,7 @@ jobs:
             (
               cd "$lab"
               dotnet "$harness" --published \
-                --filter "*$SUITE*PlankBenchmarks.$OPERATION" \
+                --filter '*RealInt64DeltaBinaryPackedColumnPlankBenchmarks.Read' '*RealInt64ByteStreamSplitColumnPlankBenchmarks.Read' '*RealTimestampsByteStreamSplitColumnPlankBenchmarks.Read' '*RealDoublesByteStreamSplitColumnPlankBenchmarks.Read' '*RealDoublesByteStreamSplitPlankBenchmarks.Read' '*RealTimestampsDeltaBinaryPackedColumnPlankBenchmarks.Write' '*SyntheticInt64ByteStreamSplitColumnPlankBenchmarks.Read' '*SyntheticTimestampByteStreamSplitColumnPlankBenchmarks.Read' '*SyntheticDoubleByteStreamSplitColumnPlankBenchmarks.Read' '*SyntheticStringPlainColumnPlankBenchmarks.Read' '*SyntheticStringDictionaryColumnPlankBenchmarks.Read' '*SyntheticInt64ByteStreamSplitPlankBenchmarks.Read' '*SyntheticTimestampByteStreamSplitPlankBenchmarks.Read' '*SyntheticDoubleByteStreamSplitPlankBenchmarks.Read' '*SyntheticInt32DictionaryColumnPlankBenchmarks.Write' \
                 --warmupCount "$BENCHMARK_WARMUPS" \
                 --iterationCount "$BENCHMARK_ITERATIONS" \
                 --data-file "$RUNNER_TEMP/yellow_tripdata_2024-01.parquet"
