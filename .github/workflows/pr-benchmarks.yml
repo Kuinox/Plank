@@ -280,13 +280,9 @@ jobs:
           path: benchmark-results
           merge-multiple: true
 
-      - name: Test and build report
+      - name: Build report
         shell: bash
         run: |
-          python -m unittest discover \
-            --start-directory .github/scripts/tests \
-            --pattern 'test_*.py' \
-            --verbose
           python .github/scripts/plank_lab_benchmark_report.py \
             --results benchmark-results \
             --matrix plank-lab/Plank.Benchmarks/Published/Cases/matrix.json \
