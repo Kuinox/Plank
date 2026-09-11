@@ -244,7 +244,8 @@ jobs:
   report:
     name: Publish comparison
     needs: [resolve-request, resolve-plank-lab, benchmark]
-    if: ${{ !cancelled() && needs.benchmark.result == 'success' }}
+    # Focused logs are analyzed separately; the full-matrix report requires all cases.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
