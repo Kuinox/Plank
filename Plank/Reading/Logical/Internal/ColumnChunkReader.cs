@@ -3680,6 +3680,31 @@ static partial class ColumnChunkReader
                 decoded.StoreUnsafe(ref values, i);
             }
         }
+        else if (Avx2.IsSupported)
+        {
+            // Keep direct byte-to-64-bit widening on AVX2: the staged portable
+            // interleave regresses BSS reads on EPYC 7763 despite gains on Zen 4.
+            var vectorCount = (nuint)Vector256<ulong>.Count;
+            for (; length - i >= vectorCount; i += vectorCount)
+            {
+                var decoded = Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane0, sourceOffset + i)).AsUInt64();
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane1, sourceOffset + i))
+                    .AsUInt64(), 8);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane2, sourceOffset + i))
+                    .AsUInt64(), 16);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane3, sourceOffset + i))
+                    .AsUInt64(), 24);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane4, sourceOffset + i))
+                    .AsUInt64(), 32);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane5, sourceOffset + i))
+                    .AsUInt64(), 40);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane6, sourceOffset + i))
+                    .AsUInt64(), 48);
+                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane7, sourceOffset + i))
+                    .AsUInt64(), 56);
+                decoded.StoreUnsafe(ref values, i);
+            }
+        }
         else if (Vector.IsHardwareAccelerated)
         {
             // Interleave the eight byte lanes at the native vector width, widening
