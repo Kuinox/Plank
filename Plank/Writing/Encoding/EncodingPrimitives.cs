@@ -225,9 +225,9 @@ static class EncodingPrimitives
 
             valueIndex = vectorValueCount * Vector512<byte>.Count;
         }
-        else if (BitConverter.IsLittleEndian && System.Runtime.Intrinsics.Arm.AdvSimd.IsSupported)
+        else if (BitConverter.IsLittleEndian && Vector128.IsHardwareAccelerated && !Vector256.IsHardwareAccelerated)
         {
-            // Fixed-width portable packing recovers ARM64 RLE throughput; keep the measured x64 path below.
+            // Use fixed-width packing on 128-bit SIMD platforms; retain the wider paths below.
             var vectorValueCount = sourceBytes.Length / Vector128<byte>.Count;
             ref var source = ref MemoryMarshal.GetReference(sourceBytes);
             for (var i = 0; i < vectorValueCount; i++)
