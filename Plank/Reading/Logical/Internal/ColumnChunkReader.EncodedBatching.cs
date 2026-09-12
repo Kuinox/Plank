@@ -1337,7 +1337,7 @@ static partial class ColumnChunkReader
                 var indexes = Avx2.ConvertToVector256Int32(Vector128.Create(
                     Bmi2.X64.ParallelBitDeposit(packed, laneMask),
                     Bmi2.X64.ParallelBitDeposit(packed >> (bitWidth * 4), laneMask)).AsUInt16());
-                if (Avx2.MoveMask(Avx2.CompareGreaterThan(indexes, maximumIndex).AsByte()) != 0)
+                if (Vector256.GreaterThan(indexes, maximumIndex) != Vector256<int>.Zero)
                 {
                     for (var lane = 0; lane < 8; lane++)
                         ValidateDictionaryIndex(indexes.GetElement(lane), dictionary.Length);
@@ -1440,8 +1440,8 @@ static partial class ColumnChunkReader
     static void ValidateNullableInt32DictionaryIndexes(Vector256<int> indexes,
         int dictionaryLength, Vector256<int> maximumIndex)
     {
-        var invalid = Avx2.CompareGreaterThan(indexes, maximumIndex);
-        if (Avx.TestZ(invalid, invalid))
+        var invalid = Vector256.GreaterThan(indexes, maximumIndex);
+        if (invalid == Vector256<int>.Zero)
             return;
         for (var lane = 0; lane < 8; lane++)
             ValidateDictionaryIndex(indexes.GetElement(lane), dictionaryLength);
