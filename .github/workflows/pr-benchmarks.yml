@@ -27,6 +27,7 @@ permissions:
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   DOTNET_NOLOGO: 1
+  DOTNET_PROCESSOR_COUNT: 4
   # First-use protocol: one process per case, no operation before sample 1.
   BENCHMARK_WARMUPS: 0
   BENCHMARK_ITERATIONS: ${{ inputs.iterations || 100 }}
@@ -118,7 +119,7 @@ jobs:
         with:
           persist-credentials: false
           repository: Kuinox/Plank-Lab
-          ref: master
+          ref: d13142e05571c74ab9ec7c57e5fbe9e77f223d66
           path: plank-lab
 
       - name: Record Plank-Lab revision
@@ -222,7 +223,7 @@ jobs:
             (
               cd "$lab"
               dotnet "$harness" --published \
-                --filter '*RealInt64DeltaBinaryPackedColumnPlankBenchmarks.Read' '*RealInt64ByteStreamSplitColumnPlankBenchmarks.Read' '*RealTimestampsByteStreamSplitColumnPlankBenchmarks.Read' '*RealDoublesByteStreamSplitColumnPlankBenchmarks.Read' '*RealDoublesByteStreamSplitPlankBenchmarks.Read' '*RealTimestampsDeltaBinaryPackedColumnPlankBenchmarks.Write' '*SyntheticInt64ByteStreamSplitColumnPlankBenchmarks.Read' '*SyntheticTimestampByteStreamSplitColumnPlankBenchmarks.Read' '*SyntheticDoubleByteStreamSplitColumnPlankBenchmarks.Read' '*SyntheticStringPlainColumnPlankBenchmarks.Read' '*SyntheticStringDictionaryColumnPlankBenchmarks.Read' '*SyntheticInt64ByteStreamSplitPlankBenchmarks.Read' '*SyntheticTimestampByteStreamSplitPlankBenchmarks.Read' '*SyntheticDoubleByteStreamSplitPlankBenchmarks.Read' '*SyntheticInt32DictionaryColumnPlankBenchmarks.Write' \
+                --filter '*RealInt64ByteStreamSplitColumnPlankBenchmarks.Read' '*RealDoublesDictionaryPlankBenchmarks.Read' '*RealTimestampsDeltaBinaryPackedColumnPlankBenchmarks.Write' '*RealTaxiDictionaryPlankBenchmarks.Write' '*SyntheticStringDeltaByteArrayColumnPlankBenchmarks.Read' '*SyntheticBooleanPlainPlankBenchmarks.Read' \
                 --warmupCount "$BENCHMARK_WARMUPS" \
                 --iterationCount "$BENCHMARK_ITERATIONS" \
                 --data-file "$RUNNER_TEMP/yellow_tripdata_2024-01.parquet"
