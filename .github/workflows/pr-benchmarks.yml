@@ -301,8 +301,6 @@ jobs:
           path: |
             benchmark-comment.md
             benchmark-summary.md
-            benchmark-comment.json
-            benchmark-comment-diagnostics.md
 
       - name: Create or update PR comment
         if: needs.resolve-request.outputs.pr_number != ''
