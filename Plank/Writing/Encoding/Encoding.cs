@@ -1240,21 +1240,30 @@ static class Encoding
         }
     }
 
+    /// <summary>
+    /// Reports whether every row of an optional DOUBLE column carries a present definition level.
+    /// A canonical <see cref="Nullable{T}"/> of a 64-bit payload is a one-byte present flag at offset 0 followed by
+    /// the payload at offset 8, so a vector of four <see cref="long"/> lanes covers two rows with the flag words in
+    /// lanes 0 and 2. Masking those two lanes and comparing them where they already sit needs no cross-lane permute
+    /// to gather the flags together first, and uses only platform-neutral <see cref="Vector256"/> operators.
+    /// </summary>
     static bool AreAllNullableDoubleValuesPresent(ReadOnlySpan<double?> values)
     {
         ref var nullableSource = ref MemoryMarshal.GetReference(values);
         ref var source = ref Unsafe.As<double?, long>(ref nullableSource);
-        var expectedFlags = Vector256.Create(1L);
         var valueIndex = 0;
-        for (; values.Length - valueIndex >= 4; valueIndex += 4)
+        if (Vector256.IsHardwareAccelerated)
         {
-            var first = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
-            var second = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 4));
-            var firstFlags = Avx2.Permute4x64(first, 0x88);
-            var secondFlags = Avx2.Permute4x64(second, 0x88);
-            var flags = Avx2.And(Avx2.Permute2x128(firstFlags, secondFlags, 0x20), Vector256.Create(0xffL));
-            if (Avx2.MoveMask(Avx2.CompareEqual(flags, expectedFlags).AsByte()) != -1)
-                return false;
+            // Only the low byte of a flag word is meaningful; the other seven bytes are struct padding.
+            var flagMask = Vector256.Create(0xffL, 0L, 0xffL, 0L);
+            var expectedFlags = Vector256.Create(1L, 0L, 1L, 0L);
+            for (; values.Length - valueIndex >= 4; valueIndex += 4)
+            {
+                var first = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
+                var second = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 4));
+                if ((((first ^ expectedFlags) | (second ^ expectedFlags)) & flagMask) != Vector256<long>.Zero)
+                    return false;
+            }
         }
 
         for (; valueIndex < values.Length; valueIndex++)
@@ -1263,19 +1272,29 @@ static class Encoding
         return true;
     }
 
+    /// <summary>
+    /// Reports whether every row of an optional INT32 column carries a present definition level. A canonical
+    /// <see cref="Nullable{T}"/> of a 32-bit payload puts the present flag in the even <see cref="int"/> lanes and
+    /// the payload in the odd ones, so masking the even lanes in place replaces the gather-then-compare permute.
+    /// </summary>
     static bool AreAllNullableInt32ValuesPresent(ReadOnlySpan<int?> values)
     {
         ref var nullableSource = ref MemoryMarshal.GetReference(values);
         ref var source = ref Unsafe.As<int?, int>(ref nullableSource);
-        var flagIndexes = Vector256.Create(0, 2, 4, 6, 0, 2, 4, 6);
-        var expectedFlags = Vector256.Create(1);
         var valueIndex = 0;
-        for (; values.Length - valueIndex >= 4; valueIndex += 4)
+        if (Vector256.IsHardwareAccelerated)
         {
-            var rows = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
-            var flags = Avx2.PermuteVar8x32(rows, flagIndexes);
-            if (Avx2.MoveMask(Avx2.CompareEqual(flags, expectedFlags).AsByte()) != -1)
-                return false;
+            // As before the whole 32-bit flag word is compared against 1: a canonical present flag leaves the
+            // three padding bytes zero, so a row whose padding is not zero simply falls back to the general path.
+            var flagMask = Vector256.Create(-1, 0, -1, 0, -1, 0, -1, 0);
+            var expectedFlags = Vector256.Create(1, 0, 1, 0, 1, 0, 1, 0);
+            for (; values.Length - valueIndex >= 8; valueIndex += 8)
+            {
+                var first = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
+                var second = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 8));
+                if ((((first ^ expectedFlags) | (second ^ expectedFlags)) & flagMask) != Vector256<int>.Zero)
+                    return false;
+            }
         }
 
         for (; valueIndex < values.Length; valueIndex++)
@@ -1485,21 +1504,23 @@ static class Encoding
             : ColumnStatistics.Empty(0);
     }
 
+    /// <inheritdoc cref="AreAllNullableDoubleValuesPresent" />
     static bool AreAllNullableInt64ValuesPresent(ReadOnlySpan<long?> values)
     {
         ref var nullableSource = ref MemoryMarshal.GetReference(values);
         ref var source = ref Unsafe.As<long?, long>(ref nullableSource);
-        var expectedFlags = Vector256.Create(1L);
         var valueIndex = 0;
-        for (; values.Length - valueIndex >= 4; valueIndex += 4)
+        if (Vector256.IsHardwareAccelerated)
         {
-            var first = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
-            var second = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 4));
-            var firstFlags = Avx2.Permute4x64(first, 0x88);
-            var secondFlags = Avx2.Permute4x64(second, 0x88);
-            var flags = Avx2.And(Avx2.Permute2x128(firstFlags, secondFlags, 0x20), Vector256.Create(0xffL));
-            if (Avx2.MoveMask(Avx2.CompareEqual(flags, expectedFlags).AsByte()) != -1)
-                return false;
+            var flagMask = Vector256.Create(0xffL, 0L, 0xffL, 0L);
+            var expectedFlags = Vector256.Create(1L, 0L, 1L, 0L);
+            for (; values.Length - valueIndex >= 4; valueIndex += 4)
+            {
+                var first = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
+                var second = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 4));
+                if ((((first ^ expectedFlags) | (second ^ expectedFlags)) & flagMask) != Vector256<long>.Zero)
+                    return false;
+            }
         }
 
         for (; valueIndex < values.Length; valueIndex++)
