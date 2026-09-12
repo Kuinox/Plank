@@ -1197,7 +1197,8 @@ static class DeltaBinaryPackedDecoder
     static void DecodeConstantInt64DeltaBlock(Span<long> destination, long delta, ref long previous)
     {
         var index = 0;
-        if (Avx2.IsSupported)
+        // The body was already written in portable Vector256 calls; only the gate was x86-specific.
+        if (Vector256.IsHardwareAccelerated)
         {
             var offsets = Vector256.Create(delta, unchecked(delta * 2),
                 unchecked(delta * 3), unchecked(delta * 4));
@@ -1205,6 +1206,18 @@ static class DeltaBinaryPackedDecoder
             var step = Vector256.Create(unchecked(delta * Vector256<long>.Count));
             ref var target = ref MemoryMarshal.GetReference(destination);
             for (; index <= destination.Length - Vector256<long>.Count; index += Vector256<long>.Count)
+            {
+                values.StoreUnsafe(ref target, (nuint)index);
+                values += step;
+            }
+            previous = unchecked(previous + delta * index);
+        }
+        else if (Vector128.IsHardwareAccelerated)
+        {
+            var values = Vector128.Create(delta, unchecked(delta * 2)) + Vector128.Create(previous);
+            var step = Vector128.Create(unchecked(delta * Vector128<long>.Count));
+            ref var target = ref MemoryMarshal.GetReference(destination);
+            for (; index <= destination.Length - Vector128<long>.Count; index += Vector128<long>.Count)
             {
                 values.StoreUnsafe(ref target, (nuint)index);
                 values += step;
