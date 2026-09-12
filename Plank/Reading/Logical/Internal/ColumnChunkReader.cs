@@ -1090,9 +1090,9 @@ static partial class ColumnChunkReader
         ReadOnlySpan<TValue> physical, Span<TValue?> destination)
         where TValue : struct
     {
-        // ExpandAllPresentInt64Batch now vectorises at 128 bits as well as 256, so this dispatch no
-        // longer needs AVX2 to be worth taking.
-        if (typeof(TValue) == typeof(double) && NullableDoubleHasCanonicalLayout &&
+        // All-present 64-bit values share the canonical nullable layout and SIMD expansion.
+        if (((typeof(TValue) == typeof(double) && NullableDoubleHasCanonicalLayout) ||
+             (typeof(TValue) == typeof(long) && NullableInt64HasCanonicalLayout)) &&
             Vector128.IsHardwareAccelerated && physical.Length == definitions.Length &&
             definitions.IndexOf((byte)0) < 0)
         {
@@ -1113,6 +1113,10 @@ static partial class ColumnChunkReader
 
     internal static void ScatterNullableDoubleBatchForTesting(ReadOnlySpan<byte> definitions,
         ReadOnlySpan<double> physical, Span<double?> destination)
+        => ScatterNullableFixedWidthBatch(definitions, physical, destination);
+
+    internal static void ScatterNullableInt64BatchForTesting(ReadOnlySpan<byte> definitions,
+        ReadOnlySpan<long> physical, Span<long?> destination)
         => ScatterNullableFixedWidthBatch(definitions, physical, destination);
 
     static bool HasCanonicalNullableDoubleLayout()
