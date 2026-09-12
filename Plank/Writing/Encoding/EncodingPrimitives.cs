@@ -225,6 +225,23 @@ static class EncodingPrimitives
 
             valueIndex = vectorValueCount * Vector512<byte>.Count;
         }
+        else if (BitConverter.IsLittleEndian && System.Runtime.Intrinsics.Arm.AdvSimd.IsSupported)
+        {
+            // Fixed-width portable packing recovers ARM64 RLE throughput; keep the measured x64 path below.
+            var vectorValueCount = sourceBytes.Length / Vector128<byte>.Count;
+            ref var source = ref MemoryMarshal.GetReference(sourceBytes);
+            for (var i = 0; i < vectorValueCount; i++)
+            {
+                var isFalse = Vector128.Equals(Vector128.LoadUnsafe(ref source), Vector128<byte>.Zero);
+                var mask = (ushort)~isFalse.ExtractMostSignificantBits();
+                Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
+                byteIndex += sizeof(ushort);
+                source = ref Unsafe.Add(ref source, Vector128<byte>.Count);
+            }
+
+            valueIndex = vectorValueCount * Vector128<byte>.Count;
+        }
+
         else if (BitConverter.IsLittleEndian && Vector.IsHardwareAccelerated && Vector<byte>.IsSupported)
         {
             var vectorValueCount = sourceBytes.Length / Vector<byte>.Count;
