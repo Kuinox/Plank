@@ -185,6 +185,15 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Require original Zen 3 CPU
+        shell: bash
+        run: |
+          lscpu
+          if ! lscpu | grep -q 'EPYC 7763'; then
+            echo 'Not the original CPU; do not run a misleading replacement comparison.'
+            exit 1
+          fi
+
       - name: Restore and build both Plank-Lab copies
         shell: bash
         run: |
