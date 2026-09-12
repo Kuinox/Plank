@@ -3680,33 +3680,66 @@ static partial class ColumnChunkReader
                 decoded.StoreUnsafe(ref values, i);
             }
         }
-        else if (Avx2.IsSupported)
-        {
-            // Keep direct byte-to-64-bit widening on AVX2: the staged portable
-            // interleave regresses BSS reads on EPYC 7763 despite gains on Zen 4.
-            var vectorCount = (nuint)Vector256<ulong>.Count;
-            for (; length - i >= vectorCount; i += vectorCount)
-            {
-                var decoded = Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane0, sourceOffset + i)).AsUInt64();
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane1, sourceOffset + i))
-                    .AsUInt64(), 8);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane2, sourceOffset + i))
-                    .AsUInt64(), 16);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane3, sourceOffset + i))
-                    .AsUInt64(), 24);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane4, sourceOffset + i))
-                    .AsUInt64(), 32);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane5, sourceOffset + i))
-                    .AsUInt64(), 40);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane6, sourceOffset + i))
-                    .AsUInt64(), 48);
-                decoded |= Vector256.ShiftLeft(Avx2.ConvertToVector256Int64(LoadLowerUInt32(ref lane7, sourceOffset + i))
-                    .AsUInt64(), 56);
-                decoded.StoreUnsafe(ref values, i);
-            }
-        }
         else if (Vector.IsHardwareAccelerated)
         {
+            if (Vector256.IsHardwareAccelerated)
+            {
+                // Transpose 32 values independently within the two 128-bit lanes.
+                // Each result contains values k, k+1, k+16, k+17, so store its halves separately.
+                const nuint transposeCount = 32;
+                for (; length - i >= transposeCount; i += transposeCount)
+                {
+                    var x0 = Vector256.LoadUnsafe(ref lane0, sourceOffset + i);
+                    var x1 = Vector256.LoadUnsafe(ref lane1, sourceOffset + i);
+                    var x2 = Vector256.LoadUnsafe(ref lane2, sourceOffset + i);
+                    var x3 = Vector256.LoadUnsafe(ref lane3, sourceOffset + i);
+                    var x4 = Vector256.LoadUnsafe(ref lane4, sourceOffset + i);
+                    var x5 = Vector256.LoadUnsafe(ref lane5, sourceOffset + i);
+                    var x6 = Vector256.LoadUnsafe(ref lane6, sourceOffset + i);
+                    var x7 = Vector256.LoadUnsafe(ref lane7, sourceOffset + i);
+                    var b0l = InterleaveLow(x0, x1).AsUInt16();
+                    var b0h = InterleaveHigh(x0, x1).AsUInt16();
+                    var b1l = InterleaveLow(x2, x3).AsUInt16();
+                    var b1h = InterleaveHigh(x2, x3).AsUInt16();
+                    var b2l = InterleaveLow(x4, x5).AsUInt16();
+                    var b2h = InterleaveHigh(x4, x5).AsUInt16();
+                    var b3l = InterleaveLow(x6, x7).AsUInt16();
+                    var b3h = InterleaveHigh(x6, x7).AsUInt16();
+                    var w0ll = InterleaveLow(b0l, b1l).AsUInt32();
+                    var w0lh = InterleaveHigh(b0l, b1l).AsUInt32();
+                    var w0hl = InterleaveLow(b0h, b1h).AsUInt32();
+                    var w0hh = InterleaveHigh(b0h, b1h).AsUInt32();
+                    var w1ll = InterleaveLow(b2l, b3l).AsUInt32();
+                    var w1lh = InterleaveHigh(b2l, b3l).AsUInt32();
+                    var w1hl = InterleaveLow(b2h, b3h).AsUInt32();
+                    var w1hh = InterleaveHigh(b2h, b3h).AsUInt32();
+                    var output0 = InterleaveLow(w0ll, w1ll).AsUInt64();
+                    output0.GetLower().StoreUnsafe(ref values, i + 0);
+                    output0.GetUpper().StoreUnsafe(ref values, i + 16);
+                    var output2 = InterleaveHigh(w0ll, w1ll).AsUInt64();
+                    output2.GetLower().StoreUnsafe(ref values, i + 2);
+                    output2.GetUpper().StoreUnsafe(ref values, i + 18);
+                    var output4 = InterleaveLow(w0lh, w1lh).AsUInt64();
+                    output4.GetLower().StoreUnsafe(ref values, i + 4);
+                    output4.GetUpper().StoreUnsafe(ref values, i + 20);
+                    var output6 = InterleaveHigh(w0lh, w1lh).AsUInt64();
+                    output6.GetLower().StoreUnsafe(ref values, i + 6);
+                    output6.GetUpper().StoreUnsafe(ref values, i + 22);
+                    var output8 = InterleaveLow(w0hl, w1hl).AsUInt64();
+                    output8.GetLower().StoreUnsafe(ref values, i + 8);
+                    output8.GetUpper().StoreUnsafe(ref values, i + 24);
+                    var output10 = InterleaveHigh(w0hl, w1hl).AsUInt64();
+                    output10.GetLower().StoreUnsafe(ref values, i + 10);
+                    output10.GetUpper().StoreUnsafe(ref values, i + 26);
+                    var output12 = InterleaveLow(w0hh, w1hh).AsUInt64();
+                    output12.GetLower().StoreUnsafe(ref values, i + 12);
+                    output12.GetUpper().StoreUnsafe(ref values, i + 28);
+                    var output14 = InterleaveHigh(w0hh, w1hh).AsUInt64();
+                    output14.GetLower().StoreUnsafe(ref values, i + 14);
+                    output14.GetUpper().StoreUnsafe(ref values, i + 30);
+                }
+            }
+
             // Interleave the eight byte lanes at the native vector width, widening
             // into 16-bit halves, then 32-bit words, then 64-bit values.
             var vectorCount = (nuint)(Vector<byte>.Count / 2);
@@ -3765,6 +3798,65 @@ static partial class ColumnChunkReader
                 ((ulong)Unsafe.Add(ref lane6, sourceOffset + i) << 48) |
                 ((ulong)Unsafe.Add(ref lane7, sourceOffset + i) << 56);
     }
+
+    // Interleave within each 128-bit lane; invalid shuffle indices insert zeroes.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static Vector256<byte> InterleaveLow(Vector256<byte> a, Vector256<byte> b) =>
+        Vector256.Shuffle(a, Vector256.Create(
+            (byte)0, byte.MaxValue, (byte)1, byte.MaxValue, (byte)2, byte.MaxValue, (byte)3, byte.MaxValue,
+            (byte)4, byte.MaxValue, (byte)5, byte.MaxValue, (byte)6, byte.MaxValue, (byte)7, byte.MaxValue,
+            (byte)16, byte.MaxValue, (byte)17, byte.MaxValue, (byte)18, byte.MaxValue, (byte)19, byte.MaxValue,
+            (byte)20, byte.MaxValue, (byte)21, byte.MaxValue, (byte)22, byte.MaxValue, (byte)23, byte.MaxValue)) |
+        Vector256.Shuffle(b, Vector256.Create(
+            byte.MaxValue, (byte)0, byte.MaxValue, (byte)1, byte.MaxValue, (byte)2, byte.MaxValue, (byte)3,
+            byte.MaxValue, (byte)4, byte.MaxValue, (byte)5, byte.MaxValue, (byte)6, byte.MaxValue, (byte)7,
+            byte.MaxValue, (byte)16, byte.MaxValue, (byte)17, byte.MaxValue, (byte)18, byte.MaxValue, (byte)19,
+            byte.MaxValue, (byte)20, byte.MaxValue, (byte)21, byte.MaxValue, (byte)22, byte.MaxValue, (byte)23));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static Vector256<byte> InterleaveHigh(Vector256<byte> a, Vector256<byte> b) =>
+        Vector256.Shuffle(a, Vector256.Create(
+            (byte)8, byte.MaxValue, (byte)9, byte.MaxValue, (byte)10, byte.MaxValue, (byte)11, byte.MaxValue,
+            (byte)12, byte.MaxValue, (byte)13, byte.MaxValue, (byte)14, byte.MaxValue, (byte)15, byte.MaxValue,
+            (byte)24, byte.MaxValue, (byte)25, byte.MaxValue, (byte)26, byte.MaxValue, (byte)27, byte.MaxValue,
+            (byte)28, byte.MaxValue, (byte)29, byte.MaxValue, (byte)30, byte.MaxValue, (byte)31, byte.MaxValue)) |
+        Vector256.Shuffle(b, Vector256.Create(
+            byte.MaxValue, (byte)8, byte.MaxValue, (byte)9, byte.MaxValue, (byte)10, byte.MaxValue, (byte)11,
+            byte.MaxValue, (byte)12, byte.MaxValue, (byte)13, byte.MaxValue, (byte)14, byte.MaxValue, (byte)15,
+            byte.MaxValue, (byte)24, byte.MaxValue, (byte)25, byte.MaxValue, (byte)26, byte.MaxValue, (byte)27,
+            byte.MaxValue, (byte)28, byte.MaxValue, (byte)29, byte.MaxValue, (byte)30, byte.MaxValue, (byte)31));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static Vector256<ushort> InterleaveLow(Vector256<ushort> a, Vector256<ushort> b) =>
+        Vector256.Shuffle(a, Vector256.Create(
+            (ushort)0, ushort.MaxValue, (ushort)1, ushort.MaxValue, (ushort)2, ushort.MaxValue, (ushort)3, ushort.MaxValue,
+            (ushort)8, ushort.MaxValue, (ushort)9, ushort.MaxValue, (ushort)10, ushort.MaxValue, (ushort)11, ushort.MaxValue)) |
+        Vector256.Shuffle(b, Vector256.Create(
+            ushort.MaxValue, (ushort)0, ushort.MaxValue, (ushort)1, ushort.MaxValue, (ushort)2, ushort.MaxValue, (ushort)3,
+            ushort.MaxValue, (ushort)8, ushort.MaxValue, (ushort)9, ushort.MaxValue, (ushort)10, ushort.MaxValue, (ushort)11));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static Vector256<ushort> InterleaveHigh(Vector256<ushort> a, Vector256<ushort> b) =>
+        Vector256.Shuffle(a, Vector256.Create(
+            (ushort)4, ushort.MaxValue, (ushort)5, ushort.MaxValue, (ushort)6, ushort.MaxValue, (ushort)7, ushort.MaxValue,
+            (ushort)12, ushort.MaxValue, (ushort)13, ushort.MaxValue, (ushort)14, ushort.MaxValue, (ushort)15, ushort.MaxValue)) |
+        Vector256.Shuffle(b, Vector256.Create(
+            ushort.MaxValue, (ushort)4, ushort.MaxValue, (ushort)5, ushort.MaxValue, (ushort)6, ushort.MaxValue, (ushort)7,
+            ushort.MaxValue, (ushort)12, ushort.MaxValue, (ushort)13, ushort.MaxValue, (ushort)14, ushort.MaxValue, (ushort)15));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static Vector256<uint> InterleaveLow(Vector256<uint> a, Vector256<uint> b) =>
+        Vector256.Shuffle(a, Vector256.Create(
+            (uint)0, uint.MaxValue, (uint)1, uint.MaxValue, (uint)4, uint.MaxValue, (uint)5, uint.MaxValue)) |
+        Vector256.Shuffle(b, Vector256.Create(
+            uint.MaxValue, (uint)0, uint.MaxValue, (uint)1, uint.MaxValue, (uint)4, uint.MaxValue, (uint)5));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static Vector256<uint> InterleaveHigh(Vector256<uint> a, Vector256<uint> b) =>
+        Vector256.Shuffle(a, Vector256.Create(
+            (uint)2, uint.MaxValue, (uint)3, uint.MaxValue, (uint)6, uint.MaxValue, (uint)7, uint.MaxValue)) |
+        Vector256.Shuffle(b, Vector256.Create(
+            uint.MaxValue, (uint)2, uint.MaxValue, (uint)3, uint.MaxValue, (uint)6, uint.MaxValue, (uint)7));
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static Vector<byte> LoadLowerByteVector(ref byte source, nuint offset)

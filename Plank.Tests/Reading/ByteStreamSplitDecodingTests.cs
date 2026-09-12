@@ -31,6 +31,44 @@ internal sealed class ByteStreamSplitDecodingTests
         }
     }
 
+    delegate void DecodeUInt64Slice(ReadOnlySpan<byte> payload, int totalCount, int valueOffset,
+        Span<ulong> destination);
+
+    [Test]
+    public void UInt64SlicesPreserveBitsAndDestinationBoundaries()
+    {
+        var decoder = typeof(ParquetSchema).Assembly
+            .GetType("Plank.Reading.Logical.Internal.ColumnChunkReader", throwOnError: true)!
+            .GetMethod("DecodeByteStreamSplitUInt64Slice",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+            .CreateDelegate<DecodeUInt64Slice>();
+        const ulong sentinel = 0x123456789ABCDEF0UL;
+        var state = 0x9E3779B9u;
+        for (var count = 0; count <= 97; count++)
+        {
+            var payload = new byte[count * 8];
+            FillPseudoRandom(payload, ref state);
+            for (var offset = 0; offset <= count; offset++)
+            for (var length = 0; length <= count - offset; length++)
+            {
+                var destination = new ulong[length + 2];
+                Array.Fill(destination, sentinel);
+                decoder(payload, count, offset, destination.AsSpan(1, length));
+                if (destination[0] != sentinel || destination[^1] != sentinel)
+                    throw new InvalidOperationException("BYTE_STREAM_SPLIT slice overwrote its destination.");
+                for (var i = 0; i < length; i++)
+                {
+                    ulong expected = 0;
+                    for (var lane = 0; lane < 8; lane++)
+                        expected |= (ulong)payload[lane * count + offset + i] << (lane * 8);
+                    if (destination[i + 1] != expected)
+                        throw new InvalidOperationException(
+                            $"BYTE_STREAM_SPLIT slice differs at count={count}, offset={offset}, length={length}, i={i}.");
+                }
+            }
+        }
+    }
+
     static T[] RoundTrip<T>(ParquetPhysicalType physicalType, T[] values)
         where T : notnull
     {
