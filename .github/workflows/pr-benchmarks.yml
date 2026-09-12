@@ -18,7 +18,7 @@ on:
         type: string
       iterations:
         description: BenchmarkDotNet measured iterations
-        default: 100
+        default: 15
         type: number
 
 permissions:
@@ -27,9 +27,9 @@ permissions:
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   DOTNET_NOLOGO: 1
-  # First-use protocol: one process per case, no operation before sample 1.
-  BENCHMARK_WARMUPS: 0
-  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 100 }}
+  # PR-only warmed comparison; bare-metal Plank-Lab defaults are unchanged.
+  BENCHMARK_WARMUPS: 8
+  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 15 }}
 
 jobs:
   resolve-request:
@@ -224,7 +224,7 @@ jobs:
             local harness="$lab/Plank.Benchmarks/bin/Release/net10.0/Plank.Benchmarks.dll"
             (
               cd "$lab"
-              dotnet "$harness" --published \
+              dotnet "$harness" --published --pr-comparison \
                 --filter "*$SUITE*PlankBenchmarks.$OPERATION" \
                 --warmupCount "$BENCHMARK_WARMUPS" \
                 --iterationCount "$BENCHMARK_ITERATIONS" \
@@ -301,8 +301,6 @@ jobs:
           path: |
             benchmark-comment.md
             benchmark-summary.md
-            benchmark-comment.json
-            benchmark-comment-diagnostics.md
 
       - name: Create or update PR comment
         if: needs.resolve-request.outputs.pr_number != ''

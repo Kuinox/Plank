@@ -8,14 +8,13 @@ import json
 import math
 import re
 import statistics
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 
 MARKER = "<!-- plank-pr-benchmark-comparison -->"
 PLANK_CLASS_SUFFIX = "PlankBenchmarks"
-LATE_BLOCKS = 5
-MIN_BLOCK_SAMPLES = 5
+NOISE_STANDARD_DEVIATIONS = 3.0
 ENCODING_ORDER = [
     "plain",
     "rle",
@@ -37,32 +36,9 @@ ENCODING_LABELS = {
 SUITE_LABELS = {"synthetic": "Synthetic", "real-world": "Real-world"}
 LOG_NAME = re.compile(r"^(Synthetic|Real)-(Read|Write)-(base|head)-([12])\.log$")
 BENCHMARK = re.compile(r"^// Benchmark: ([A-Za-z0-9_]+)\.(Read|Write):")
-WORKLOAD_ACTUAL = re.compile(
-    r"^WorkloadActual\s+(\d+):\s+(\d+) op,\s+([\d.]+)\s+(ns|us|μs|ms|s),")
+WORKLOAD_RESULT = re.compile(
+    r"^WorkloadResult\s+\d+:\s+\d+ op,\s+([\d.]+)\s+(ns|us|μs|ms|s),")
 UNIT_TO_MILLISECONDS = {"ns": 1e-6, "us": 1e-3, "μs": 1e-3, "ms": 1.0, "s": 1e3}
-
-
-@dataclass(frozen=True)
-class PassSummary:
-    # Chronological, unfiltered per-operation measurements, including startup.
-    samples_ms: tuple[float, ...]
-    late_start: int
-    late_blocks_ms: tuple[float, ...]
-
-    @classmethod
-    def create(cls, samples: list[float]) -> PassSummary:
-        start = len(samples) // 2
-        tail = samples[start:]
-        blocks = ()
-        if len(tail) >= LATE_BLOCKS * MIN_BLOCK_SAMPLES:
-            blocks = tuple(statistics.median(tail[i * len(tail) // LATE_BLOCKS:
-                                                    (i + 1) * len(tail) // LATE_BLOCKS])
-                           for i in range(LATE_BLOCKS))
-        return cls(tuple(samples), start, blocks)
-
-    @property
-    def late_ms(self) -> float:
-        return statistics.median(self.samples_ms[self.late_start:])
 
 
 @dataclass(frozen=True)
@@ -75,44 +51,32 @@ class Comparison:
     encoding: str
     row_count: int
     column_count: int
-    base_passes: tuple[PassSummary, ...]
-    head_passes: tuple[PassSummary, ...]
+    base_ms: float
+    head_ms: float
+    base_stddev_ms: float
+    head_stddev_ms: float
+    delta_percent: float
     workload: str = "row"
 
     @property
-    def base_ms(self) -> float:
-        return statistics.median(p.late_ms for p in self.base_passes)
+    def noise_window_ms(self) -> float:
+        return NOISE_STANDARD_DEVIATIONS * (self.base_stddev_ms + self.head_stddev_ms)
 
     @property
-    def head_ms(self) -> float:
-        return statistics.median(p.late_ms for p in self.head_passes)
-
-    @property
-    def delta_percent(self) -> float:
-        return (self.head_ms / self.base_ms - 1) * 100
-
-    @property
-    def observed_range(self) -> tuple[float, float] | None:
-        passes = self.base_passes + self.head_passes
-        if any(not p.late_blocks_ms for p in passes):
-            return None
-        base = [v for p in self.base_passes for v in p.late_blocks_ms]
-        head = [v for p in self.head_passes for v in p.late_blocks_ms]
-        # All cross-pass and cross-block comparisons, not just convenient pairs.
-        # This is a descriptive envelope, NOT a confidence interval.
-        return ((min(head) / max(base) - 1) * 100,
-                (max(head) / min(base) - 1) * 100)
+    def noise_window_percent(self) -> float:
+        return self.noise_window_ms / self.base_ms * 100.0
 
     @property
     def status(self) -> str:
-        bounds = self.observed_range
-        if bounds is None:
-            return "insufficient"
-        if bounds[1] < 0:
+        base_low = self.base_ms - NOISE_STANDARD_DEVIATIONS * self.base_stddev_ms
+        base_high = self.base_ms + NOISE_STANDARD_DEVIATIONS * self.base_stddev_ms
+        head_low = self.head_ms - NOISE_STANDARD_DEVIATIONS * self.head_stddev_ms
+        head_high = self.head_ms + NOISE_STANDARD_DEVIATIONS * self.head_stddev_ms
+        if head_high < base_low:
             return "faster"
-        if bounds[0] > 0:
+        if head_low > base_high:
             return "slower"
-        return "inconclusive"
+        return "noise"
 
 
 def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[Comparison], list[str]]:
@@ -123,7 +87,7 @@ def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[C
         for item in matrix
     ]
     by_stem = {item["stem"]: item for item in matrix}
-    samples: dict[tuple[str, str, str, str, str], list[float]] = {}
+    samples: dict[tuple[str, str, str, str], list[float]] = {}
     configurations: set[tuple[str, str, str]] = set()
     processors: set[str] = set()
     seen_logs: set[tuple[str, str, str, str]] = set()
@@ -151,8 +115,7 @@ def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[C
                 r"\s+\d+(?:\.\d+)?GHz$", "", processor.group(1).strip(), flags=re.IGNORECASE)
             processors.add(processor_name)
 
-        current: tuple[str, str, str, str, str] | None = None
-        expected_counts = {}
+        current: tuple[str, str, str, str] | None = None
         for line in text.splitlines():
             benchmark = BENCHMARK.match(line)
             if benchmark:
@@ -167,45 +130,32 @@ def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[C
                 if item["suite"] != suite or measured_operation != expected_operation:
                     raise ValueError(f"{path.name} contains a benchmark outside its matrix cell.")
                 configurations.add((suite, operation, item["workload"]))
-                current = (suite, operation, item["id"], variant, pass_number)
-                if current in samples:
-                    raise ValueError(f"Duplicate benchmark {current}.")
-                samples[current] = []
-                count = re.search(r"IterationCount=(\d+)", line)
-                if count is None:
-                    raise ValueError(f"Missing IterationCount for {current}.")
-                expected_counts[current] = int(count.group(1))
+                current = (suite, operation, item["id"], variant)
                 continue
 
-            result = WORKLOAD_ACTUAL.match(line)
+            result = WORKLOAD_RESULT.match(line)
             if result and current is not None:
-                index, operations, value, unit = result.groups()
-                if int(index) != len(samples[current]) + 1:
-                    raise ValueError(f"Non-contiguous measurement order for {current}.")
-                if int(operations) <= 0:
-                    raise ValueError(f"Invalid operation count for {current}.")
-                milliseconds = float(value) * UNIT_TO_MILLISECONDS[unit] / int(operations)
-                if not math.isfinite(milliseconds) or milliseconds <= 0:
-                    raise ValueError(f"Invalid measurement for {current}.")
-                samples[current].append(milliseconds)
+                value, unit = result.groups()
+                samples.setdefault(current, []).append(
+                    float(value) * UNIT_TO_MILLISECONDS[unit])
 
-        for key, count in expected_counts.items():
-            if len(samples[key]) != count or count < 2:
-                raise ValueError(f"Incomplete measurements for {key}: expected {count}, got {len(samples[key])}.")
         if current is None:
             raise ValueError(f"{path.name} contains no Plank-Lab benchmarks.")
 
     comparisons: list[Comparison] = []
     for suite, operation, workload in sorted(configurations):
         for item in (entry for entry in matrix if entry["suite"] == suite and entry["workload"] == workload):
-            series = []
-            for variant in ("base", "head"):
-                keys = [(suite, operation, item["id"], variant, str(p)) for p in (1, 2)]
-                if any(key not in samples for key in keys):
-                    raise ValueError(f"Missing base or head pass for {suite}/{operation}/{item['id']}.")
-                series.append(tuple(PassSummary.create(samples[key]) for key in keys))
-            if len({len(p.samples_ms) for passes in series for p in passes}) != 1:
-                raise ValueError(f"Mismatched iteration counts for {item['id']}.")
+            base_key = (suite, operation, item["id"], "base")
+            head_key = (suite, operation, item["id"], "head")
+            if base_key not in samples or head_key not in samples:
+                raise ValueError(
+                    f"Missing base or head Plank-Lab samples for {suite}/{operation}/{item['id']}.")
+            base = samples[base_key]
+            head = samples[head_key]
+            if len(base) < 2 or len(head) < 2:
+                raise ValueError(f"Too few samples for {suite}/{operation}/{item['id']}.")
+            base_ms = statistics.median(base)
+            head_ms = statistics.median(head)
             data_type = item["dataTypes"][0] if len(item["dataTypes"]) == 1 else "Complete"
             comparisons.append(Comparison(
                 suite=suite,
@@ -217,22 +167,13 @@ def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[C
                 encoding=item["encoding"],
                 row_count=int(item["rowCount"]),
                 column_count=int(item["columnCount"]),
-                base_passes=series[0],
-                head_passes=series[1],
+                base_ms=base_ms,
+                head_ms=head_ms,
+                base_stddev_ms=statistics.stdev(base),
+                head_stddev_ms=statistics.stdev(head),
+                delta_percent=(head_ms / base_ms - 1.0) * 100.0,
             ))
     return comparisons, sorted(processors)
-
-
-def format_range(item: Comparison) -> str:
-    bounds = item.observed_range
-    return f"{bounds[0]:+.1f}% to {bounds[1]:+.1f}%" if bounds else "insufficient samples"
-
-
-def write_analysis(path: Path, comparisons: list[Comparison]) -> None:
-    path.write_text(json.dumps([
-        dict(asdict(item), status=item.status, delta_percent=item.delta_percent,
-             observed_range_percent=item.observed_range)
-        for item in comparisons], indent=2) + "\n", encoding="utf-8")
 
 
 def result_badge(item: Comparison) -> str:
@@ -287,18 +228,29 @@ def render_chart(comparisons: list[Comparison], suite: str, operation: str, work
     selected = [item for item in comparisons
                 if item.suite == suite and item.operation == operation and item.workload == workload]
     ratios = [round(item.head_ms / item.base_ms * 100.0, 1) for item in selected]
-    span = max(5, int(math.ceil((max(abs(v - 100) for v in ratios) + 1) / 5) * 5))
+    lower_noise = [round(max(0.0, 100.0 - item.noise_window_percent), 1)
+                   for item in selected]
+    upper_noise = [round(100.0 + item.noise_window_percent, 1) for item in selected]
+    movement = max(
+        max(abs(value - 100.0) for value in ratios),
+        max(item.noise_window_percent for item in selected),
+    )
+    span = max(5, int(math.ceil((movement + 1) / 5.0) * 5))
     labels = ", ".join(f'"{chart_label(item)}"' for item in selected)
     values = ", ".join(f"{value:g}" for value in ratios)
     baseline = ", ".join("100" for _ in selected)
+    lower_bound = ", ".join(f"{value:g}" for value in lower_noise)
+    upper_bound = ", ".join(f"{value:g}" for value in upper_noise)
     return "\n".join([
         "```mermaid",
         "xychart-beta horizontal",
-        '    title "Late-half runtime index"',
+        '    title "Runtime index with measured 3σ noise window"',
         f"    x-axis [{labels}]",
         f'    y-axis "Base = 100" {100 - span} --> {100 + span}',
         f"    bar [{values}]",
+        f"    line [{lower_bound}]",
         f"    line [{baseline}]",
+        f"    line [{upper_bound}]",
         "```",
     ])
 
@@ -307,7 +259,7 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
                  head_sha: str, plank_lab_sha: str, run_url: str) -> str:
     faster = sum(item.status == "faster" for item in comparisons)
     slower = sum(item.status == "slower" for item in comparisons)
-    inconclusive = len(comparisons) - faster - slower
+    noise = len(comparisons) - faster - slower
     configurations = []
     for item in comparisons:
         key = (item.suite, item.operation, item.workload)
@@ -324,21 +276,15 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         "`*PlankBenchmarks`—ParquetSharp and Parquet.NET are not measured.",
         "Each matrix slice ran base / PR / PR / base on one runner under BenchmarkDotNet.",
         "",
-        f"**{faster} consistently faster in late blocks · {inconclusive} inconclusive · {slower} consistently slower in late blocks**",
+        f"**{faster} faster · {noise} within noise · {slower} slower**",
         "",
-        "> Bars show the ratio of equally weighted per-pass late-half medians (base = 100). "
-        "Each pass keeps its first half as startup/tiering diagnostics; the fixed second half "
-        "is split into five consecutive, nearly equal blocks (at least five samples each).",
+        "> Chart guide: the lines around the 100 baseline show each case's measured 3σ noise "
+        "window. A bar endpoint below the lower line is faster; one above the upper line is slower.",
         "",
-        "> Color requires every PR late-block median to be below every base block median, "
-        "or every PR block above every base block, across both passes. Otherwise the result "
-        "is inconclusive, never evidence of equivalence. Short runs are insufficient. "
-        "The observed range includes all cross-pass block ratios; it is not a confidence interval.",
-        "",
-        "> These are descriptive late-run comparisons, not a significance test or proof of "
-        "steady-state throughput. Tiering can continue into the late half. Inspect the ordered "
-        "blocks and first-to-last block drift in the diagnostics artifact; only two process passes "
-        "cannot establish run-to-run uncertainty. Hosted-runner results remain advisory.",
+        "> Each noise window is derived from the standard deviation of all measured iterations "
+        "across both same-runner passes. A result is colored only when the base and PR median ±3σ "
+        "intervals do not overlap. Every percentage remains visible; hosted-runner results are "
+        "advisory.",
         "",
     ]
     for suite, operation, workload in configurations:
@@ -351,9 +297,9 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
 
     details = [
         "<details>",
-        "<summary>Late-half latency and observed block range</summary>",
+        "<summary>Exact median latency</summary>",
         "",
-        "| Suite | Workload | Operation | Case | Encoding | Shape | Base passes (ms) | PR passes (ms) | Observed change range | Change |",
+        "| Suite | Workload | Operation | Case | Encoding | Shape | Base | PR | Noise window | Change |",
         "|---|---|---|---|---|---|---:|---:|---:|---:|",
     ]
     for item in comparisons:
@@ -361,9 +307,8 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         details.append(
             f"| {SUITE_LABELS[item.suite]} | {item.workload.title()} | {item.operation.title()} | {item.label} | "
             f"{ENCODING_LABELS[item.encoding]} | {shape} | "
-            f"{item.base_passes[0].late_ms:.3f} / {item.base_passes[1].late_ms:.3f} | "
-            f"{item.head_passes[0].late_ms:.3f} / {item.head_passes[1].late_ms:.3f} | "
-            f"{format_range(item)} | {result_badge(item)} |")
+            f"{item.base_ms:.3f} ms | {item.head_ms:.3f} ms | "
+            f"±{item.noise_window_percent:.1f}% | {result_badge(item)} |")
     details.extend(["", "</details>", ""])
     sections.extend(details)
 
@@ -372,31 +317,8 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         f"Runners: {processor_text}.",
         f"[Workflow run, BenchmarkDotNet logs, and report artifact]({run_url})",
         "",
-        "<sub>🟢 faster · ⚪ inconclusive or insufficient; not equivalent · 🔴 slower.</sub>",
+        "<sub>🟢 faster · ⚪ measured 3σ noise windows overlap · 🔴 slower.</sub>",
     ])
-    return "\n".join(sections)
-
-
-def build_diagnostics(comparisons: list[Comparison]) -> str:
-    sections = []
-    sections.extend(["<details>", "<summary>Startup, pass variation, and ordered late blocks (ms)</summary>", "",
-                     "Each cell lists pass 1 / pass 2. Drift is last late-block median versus first; "
-                     "a small drift does not prove stationarity. Raw samples and block boundaries "
-                     "are retained in the analysis JSON artifact.", "",
-                     "| Case | Variant | First sample | First-half median | Late-half median | Late blocks (in order) | Drift |",
-                     "|---|---|---:|---:|---:|---|---:|"])
-    for item in comparisons:
-        for variant, passes in (("Base", item.base_passes), ("PR", item.head_passes)):
-            first = " / ".join(f"{p.samples_ms[0]:.3f}" for p in passes)
-            early = " / ".join(f"{statistics.median(p.samples_ms[:p.late_start]):.3f}" for p in passes)
-            late = " / ".join(f"{p.late_ms:.3f}" for p in passes)
-            blocks = " / ".join(", ".join(f"{v:.3f}" for v in p.late_blocks_ms) or "insufficient" for p in passes)
-            drift = " / ".join(f"{(p.late_blocks_ms[-1] / p.late_blocks_ms[0] - 1) * 100:+.1f}%"
-                               if p.late_blocks_ms else "—" for p in passes)
-            sections.append(f"| {item.suite}/{item.workload}/{item.operation}/{item.case_id} | {variant} | "
-                            f"{first} | {early} | {late} | {blocks} | {drift} |")
-    sections.extend(["", "</details>", ""])
-
     return "\n".join(sections)
 
 
@@ -406,7 +328,6 @@ def main() -> None:
     parser.add_argument("--matrix", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--summary", type=Path)
-    parser.add_argument("--analysis", type=Path)
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--plank-lab-sha", required=True)
@@ -416,9 +337,6 @@ def main() -> None:
     comparisons, processors = load_comparisons(args.results, args.matrix)
     report = build_report(
         comparisons, processors, args.base_sha, args.head_sha, args.plank_lab_sha, args.run_url)
-    args.output.with_name(args.output.stem + "-diagnostics.md").write_text(
-        build_diagnostics(comparisons) + "\n", encoding="utf-8")
-    write_analysis(args.analysis or args.output.with_suffix(".json"), comparisons)
     args.output.write_text(report + "\n", encoding="utf-8")
     if args.summary:
         args.summary.write_text(report.replace(MARKER + "\n", "") + "\n", encoding="utf-8")
