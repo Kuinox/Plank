@@ -8,7 +8,7 @@ import json
 import math
 import re
 import statistics
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 
@@ -16,6 +16,8 @@ MARKER = "<!-- plank-pr-benchmark-comparison -->"
 PLANK_CLASS_SUFFIX = "PlankBenchmarks"
 LATE_BLOCKS = 5
 MIN_BLOCK_SAMPLES = 5
+NOISE_STANDARD_DEVIATIONS = 3.0
+MAD_TO_STANDARD_DEVIATION = 1.4826
 ENCODING_ORDER = [
     "plain",
     "rle",
@@ -78,6 +80,7 @@ class Comparison:
     base_passes: tuple[PassSummary, ...]
     head_passes: tuple[PassSummary, ...]
     workload: str = "row"
+    noise_window_percent: float = 0.0
 
     @property
     def base_ms(self) -> float:
@@ -108,11 +111,34 @@ class Comparison:
         bounds = self.observed_range
         if bounds is None:
             return "insufficient"
-        if bounds[1] < 0:
+        if bounds[1] < -self.noise_window_percent:
             return "faster"
-        if bounds[0] > 0:
+        if bounds[0] > self.noise_window_percent:
             return "slower"
         return "inconclusive"
+
+
+def estimate_noise_window_percent(comparisons: list[Comparison]) -> float:
+    """Estimate same-revision runner noise from late pass-to-pass drift.
+
+    A benchmark pass is the independent unit here; individual iterations in a
+    pass are correlated by the process, JIT, and runner state. The robust MAD
+    estimate keeps one pathological case from defining the noise window.
+    """
+    drifts = []
+    for item in comparisons:
+        for passes in (item.base_passes, item.head_passes):
+            if len(passes) != 2:
+                continue
+            first, second = (pass_summary.late_ms for pass_summary in passes)
+            drifts.append((second / first - 1.0) * 100.0)
+    if len(drifts) < 2:
+        return 0.0
+
+    center = statistics.median(drifts)
+    mad = statistics.median(abs(value - center) for value in drifts)
+    robust_standard_deviation = MAD_TO_STANDARD_DEVIATION * mad
+    return abs(center) + NOISE_STANDARD_DEVIATIONS * robust_standard_deviation
 
 
 def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[Comparison], list[str]]:
@@ -220,6 +246,9 @@ def load_comparisons(results_directory: Path, matrix_path: Path) -> tuple[list[C
                 base_passes=series[0],
                 head_passes=series[1],
             ))
+    noise_window_percent = estimate_noise_window_percent(comparisons)
+    comparisons = [replace(item, noise_window_percent=noise_window_percent)
+                   for item in comparisons]
     return comparisons, sorted(processors)
 
 
@@ -287,18 +316,24 @@ def render_chart(comparisons: list[Comparison], suite: str, operation: str, work
     selected = [item for item in comparisons
                 if item.suite == suite and item.operation == operation and item.workload == workload]
     ratios = [round(item.head_ms / item.base_ms * 100.0, 1) for item in selected]
-    span = max(5, int(math.ceil((max(abs(v - 100) for v in ratios) + 1) / 5) * 5))
+    noise_window = selected[0].noise_window_percent if selected else 0.0
+    span = max(5, int(math.ceil((max(
+        max(abs(v - 100) for v in ratios), noise_window) + 1) / 5) * 5))
     labels = ", ".join(f'"{chart_label(item)}"' for item in selected)
     values = ", ".join(f"{value:g}" for value in ratios)
+    lower_noise = ", ".join(f"{max(0.0, 100.0 - noise_window):g}" for _ in selected)
     baseline = ", ".join("100" for _ in selected)
+    upper_noise = ", ".join(f"{100.0 + noise_window:g}" for _ in selected)
     return "\n".join([
         "```mermaid",
         "xychart-beta horizontal",
-        '    title "Late-half runtime index"',
+        '    title "Late-half runtime index with measured pass noise"',
         f"    x-axis [{labels}]",
         f'    y-axis "Base = 100" {100 - span} --> {100 + span}',
         f"    bar [{values}]",
+        f"    line [{lower_noise}]",
         f"    line [{baseline}]",
+        f"    line [{upper_noise}]",
         "```",
     ])
 
@@ -308,6 +343,7 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
     faster = sum(item.status == "faster" for item in comparisons)
     slower = sum(item.status == "slower" for item in comparisons)
     inconclusive = len(comparisons) - faster - slower
+    noise_window_percent = comparisons[0].noise_window_percent if comparisons else 0.0
     configurations = []
     for item in comparisons:
         key = (item.suite, item.operation, item.workload)
@@ -330,10 +366,14 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         "Each pass keeps its first half as startup/tiering diagnostics; the fixed second half "
         "is split into five consecutive, nearly equal blocks (at least five samples each).",
         "",
+        f"> The boundary lines show ±{noise_window_percent:.1f}% measured runner noise. "
+        "Noise is estimated from same-revision pass-to-pass late-median drift across the matrix "
+        "using three robust standard deviations (1.4826 × MAD).",
+        "",
         "> Color requires every PR late-block median to be below every base block median, "
-        "or every PR block above every base block, across both passes. Otherwise the result "
-        "is inconclusive, never evidence of equivalence. Short runs are insufficient. "
-        "The observed range includes all cross-pass block ratios; it is not a confidence interval.",
+        "or every PR block above every base block, across both passes, and the observed range "
+        "must clear the measured noise window. Otherwise the result is inconclusive, never "
+        "evidence of equivalence. The observed range is not a confidence interval.",
         "",
         "> These are descriptive late-run comparisons, not a significance test or proof of "
         "steady-state throughput. Tiering can continue into the late half. Inspect the ordered "
@@ -353,8 +393,8 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         "<details>",
         "<summary>Late-half latency and observed block range</summary>",
         "",
-        "| Suite | Workload | Operation | Case | Encoding | Shape | Base passes (ms) | PR passes (ms) | Observed change range | Change |",
-        "|---|---|---|---|---|---|---:|---:|---:|---:|",
+        "| Suite | Workload | Operation | Case | Encoding | Shape | Base passes (ms) | PR passes (ms) | Noise | Observed change range | Change |",
+        "|---|---|---|---|---|---|---:|---:|---:|---:|---:|",
     ]
     for item in comparisons:
         shape = f"{item.row_count:,} rows × {item.column_count} columns"
@@ -363,6 +403,7 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
             f"{ENCODING_LABELS[item.encoding]} | {shape} | "
             f"{item.base_passes[0].late_ms:.3f} / {item.base_passes[1].late_ms:.3f} | "
             f"{item.head_passes[0].late_ms:.3f} / {item.head_passes[1].late_ms:.3f} | "
+            f"±{item.noise_window_percent:.1f}% | "
             f"{format_range(item)} | {result_badge(item)} |")
     details.extend(["", "</details>", ""])
     sections.extend(details)
