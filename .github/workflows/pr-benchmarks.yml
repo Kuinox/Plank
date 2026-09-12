@@ -222,8 +222,10 @@ jobs:
             local harness="$lab/Plank.Benchmarks/bin/Release/net10.0/Plank.Benchmarks.dll"
             (
               cd "$lab"
+              export DOTNET_JitDisasm='Plank.Reading.Logical.Internal.ColumnChunkReader:* Plank.Reading.Logical.Internal.DeltaBinaryPackedDecoder:*'
+              export DOTNET_JitStdOutFile="$results/$variant-$pass.asm"
               dotnet "$harness" --published \
-                --filter '*RealInt64ByteStreamSplitColumnPlankBenchmarks.Read' '*RealDoublesDictionaryPlankBenchmarks.Read' '*RealTimestampsDeltaBinaryPackedColumnPlankBenchmarks.Write' '*RealTaxiDictionaryPlankBenchmarks.Write' '*SyntheticStringDeltaByteArrayColumnPlankBenchmarks.Read' '*SyntheticBooleanPlainPlankBenchmarks.Read' \
+                --filter '*SyntheticStringDeltaByteArrayColumnPlankBenchmarks.Read' \
                 --warmupCount "$BENCHMARK_WARMUPS" \
                 --iterationCount "$BENCHMARK_ITERATIONS" \
                 --data-file "$RUNNER_TEMP/yellow_tripdata_2024-01.parquet"
@@ -239,7 +241,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: plank-lab-${{ matrix.suite }}-${{ matrix.operation }}
-          path: ${{ runner.temp }}/plank-lab-results/*.log
+          path: ${{ runner.temp }}/plank-lab-results/*
           if-no-files-found: error
 
   report:
