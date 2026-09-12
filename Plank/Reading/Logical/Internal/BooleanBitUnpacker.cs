@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
-using System.Runtime.Intrinsics.X86;
 
 namespace Plank.Reading.Logical.Internal;
 
@@ -52,13 +51,8 @@ static class BooleanBitUnpacker
         ref var output = ref Unsafe.As<bool, byte>(ref MemoryMarshal.GetReference(destination));
         var index = 0;
 
-        if (Avx512BW.IsSupported && destination.Length >= Vector512<byte>.Count)
+        if (Vector512.IsHardwareAccelerated && destination.Length >= Vector512<byte>.Count)
         {
-            var spread = Vector512.Create(
-                (byte)0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
-                2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
-                4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
-                6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7);
             var bits = Vector512.Create(Vector128.Create(
                 (byte)1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128));
             var ones = Vector512.Create((byte)1);
@@ -66,9 +60,13 @@ static class BooleanBitUnpacker
             for (; index <= last; index += Vector512<byte>.Count)
             {
                 var packed = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, index >> 3));
-                // Shuffle is per 128-bit lane, and the broadcast puts all eight packed bytes in every
-                // lane, so lane n picks the two bytes its sixteen booleans come from.
-                var spreadBytes = Avx512BW.Shuffle(Vector512.Create(packed).AsByte(), spread);
+                // Constant indices select bytes within each 128-bit lane on AVX-512.
+                var spreadBytes = Vector512.ShuffleNative(Vector512.Create(packed).AsByte(),
+                    Vector512.Create(
+                        (byte)0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+                        18, 18, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19, 19, 19, 19, 19,
+                        36, 36, 36, 36, 36, 36, 36, 36, 37, 37, 37, 37, 37, 37, 37, 37,
+                        54, 54, 54, 54, 54, 54, 54, 54, 55, 55, 55, 55, 55, 55, 55, 55));
                 (Vector512.Equals(spreadBytes & bits, bits) & ones).StoreUnsafe(
                     ref Unsafe.Add(ref output, index));
             }
