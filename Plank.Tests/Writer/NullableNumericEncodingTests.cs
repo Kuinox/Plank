@@ -252,6 +252,53 @@ internal sealed class NullableNumericEncodingTests
             targetPageBytes: 1024);
     }
 
+    /// <summary>
+    /// Optional PLAIN INT32/INT64/DOUBLE pick an all-present fast path from a vectorized definition-level
+    /// predicate that inspects several rows per iteration. The dangerous failure is the predicate answering
+    /// "all present" while a null is in flight, which would silently drop the null from the definition levels, so
+    /// this walks a null across every position at every length that straddles the vector block boundaries and
+    /// requires the fused bytes to stay identical to the generic encoder's.
+    /// </summary>
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void FusedNullablePlainAllPresentDetectionHoldsAtEveryVectorAlignment(
+        ParquetDataPageVersion dataPageVersion)
+    {
+        for (var length = 0; length <= 20; length++)
+        {
+            // -1 has every byte set and 1 collides with the present flag, so a predicate that confused a payload
+            // lane for a flag lane would read "present" from the payload of the row it was meant to reject.
+            var int32Values = new int?[length];
+            var int64Values = new long?[length];
+            var doubleValues = new double?[length];
+            for (var i = 0; i < length; i++)
+            {
+                int32Values[i] = i switch { 0 => -1, 1 => 1, 2 => 0, _ => i * 7919 };
+                int64Values[i] = i switch { 0 => -1L, 1 => 1L, 2 => 0L, _ => i * 7919L };
+                doubleValues[i] = BitConverter.Int64BitsToDouble(int64Values[i]!.Value);
+            }
+
+            AssertAllPresentSweep(int32Values, ParquetPhysicalType.Int32, dataPageVersion);
+            AssertAllPresentSweep(int64Values, ParquetPhysicalType.Int64, dataPageVersion);
+            AssertAllPresentSweep(doubleValues, ParquetPhysicalType.Double, dataPageVersion);
+        }
+    }
+
+    static void AssertAllPresentSweep<TValue>(TValue?[] values, ParquetPhysicalType physicalType,
+        ParquetDataPageVersion dataPageVersion)
+        where TValue : struct
+    {
+        AssertFusedNullablePlainMatchesGeneric(values, physicalType, dataPageVersion, targetPageBytes: 1024);
+        for (var nullIndex = 0; nullIndex < values.Length; nullIndex++)
+        {
+            var present = values[nullIndex];
+            values[nullIndex] = null;
+            AssertFusedNullablePlainMatchesGeneric(values, physicalType, dataPageVersion, targetPageBytes: 1024);
+            values[nullIndex] = present;
+        }
+    }
+
     static void AssertFusedNullablePlainMatchesGeneric<TValue>(TValue?[] values,
         ParquetPhysicalType physicalType, ParquetDataPageVersion dataPageVersion, uint targetPageBytes = 90)
         where TValue : struct
