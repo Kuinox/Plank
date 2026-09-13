@@ -14,6 +14,8 @@ static class ByteStreamSplitEncoding
     /// </summary>
     const int MaxStackConvertedValues = 256;
 
+    const nuint Vector128ValuesPerIteration = 16;
+
     internal static void WriteValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
     {
@@ -291,7 +293,22 @@ static class ByteStreamSplitEncoding
     static void WriteUInt32Lanes(ReadOnlySpan<uint> values, Span<byte> destination)
         => WriteUInt32Lanes(values, destination, values.Length, destinationOffset: 0);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static void WriteUInt32Lanes(ReadOnlySpan<uint> values, Span<byte> destination, int laneStride,
+        int destinationOffset)
+    {
+        if (BitConverter.IsLittleEndian && values.Length >= (int)Vector128ValuesPerIteration &&
+            !Avx512F.IsSupported && !Avx2.IsSupported && Vector128.IsHardwareAccelerated)
+        {
+            WriteUInt32LanesPortable(values, destination, laneStride, destinationOffset);
+            return;
+        }
+
+        WriteUInt32LanesWideOrScalar(values, destination, laneStride, destinationOffset);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void WriteUInt32LanesWideOrScalar(ReadOnlySpan<uint> values, Span<byte> destination, int laneStride,
         int destinationOffset)
     {
         var count = values.Length;
@@ -335,7 +352,22 @@ static class ByteStreamSplitEncoding
     static void WriteUInt64Lanes(ReadOnlySpan<ulong> values, Span<byte> destination)
         => WriteUInt64Lanes(values, destination, values.Length, destinationOffset: 0);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static void WriteUInt64Lanes(ReadOnlySpan<ulong> values, Span<byte> destination, int laneStride,
+        int destinationOffset)
+    {
+        if (BitConverter.IsLittleEndian && values.Length >= (int)Vector128ValuesPerIteration &&
+            !Avx512F.IsSupported && !Avx2.IsSupported && Vector128.IsHardwareAccelerated)
+        {
+            WriteUInt64LanesPortable(values, destination, laneStride, destinationOffset);
+            return;
+        }
+
+        WriteUInt64LanesWideOrScalar(values, destination, laneStride, destinationOffset);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void WriteUInt64LanesWideOrScalar(ReadOnlySpan<ulong> values, Span<byte> destination, int laneStride,
         int destinationOffset)
     {
         var count = values.Length;
@@ -374,6 +406,59 @@ static class ByteStreamSplitEncoding
         else if (BitConverter.IsLittleEndian && Avx2.IsSupported)
             i = WriteUInt64LanesAvx2(ref source, ref lane0, ref lane1, ref lane2, ref lane3,
                 ref lane4, ref lane5, ref lane6, ref lane7, length);
+
+        for (; i < length; i++)
+        {
+            var value = Unsafe.Add(ref source, i);
+            Unsafe.Add(ref lane0, i) = (byte)value;
+            Unsafe.Add(ref lane1, i) = (byte)(value >> 8);
+            Unsafe.Add(ref lane2, i) = (byte)(value >> 16);
+            Unsafe.Add(ref lane3, i) = (byte)(value >> 24);
+            Unsafe.Add(ref lane4, i) = (byte)(value >> 32);
+            Unsafe.Add(ref lane5, i) = (byte)(value >> 40);
+            Unsafe.Add(ref lane6, i) = (byte)(value >> 48);
+            Unsafe.Add(ref lane7, i) = (byte)(value >> 56);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    static void WriteUInt32LanesPortable(ReadOnlySpan<uint> values, Span<byte> destination, int laneStride,
+        int destinationOffset)
+    {
+        ref var source = ref MemoryMarshal.GetReference(values);
+        ref var lane0 = ref Unsafe.Add(ref MemoryMarshal.GetReference(destination), destinationOffset);
+        ref var lane1 = ref Unsafe.Add(ref lane0, laneStride);
+        ref var lane2 = ref Unsafe.Add(ref lane1, laneStride);
+        ref var lane3 = ref Unsafe.Add(ref lane2, laneStride);
+        var length = (nuint)(uint)values.Length;
+        var i = WriteUInt32LanesVector128(ref source, ref lane0, ref lane1, ref lane2, ref lane3, length);
+
+        for (; i < length; i++)
+        {
+            var value = Unsafe.Add(ref source, i);
+            Unsafe.Add(ref lane0, i) = (byte)value;
+            Unsafe.Add(ref lane1, i) = (byte)(value >> 8);
+            Unsafe.Add(ref lane2, i) = (byte)(value >> 16);
+            Unsafe.Add(ref lane3, i) = (byte)(value >> 24);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    static void WriteUInt64LanesPortable(ReadOnlySpan<ulong> values, Span<byte> destination, int laneStride,
+        int destinationOffset)
+    {
+        ref var source = ref MemoryMarshal.GetReference(values);
+        ref var lane0 = ref Unsafe.Add(ref MemoryMarshal.GetReference(destination), destinationOffset);
+        ref var lane1 = ref Unsafe.Add(ref lane0, laneStride);
+        ref var lane2 = ref Unsafe.Add(ref lane1, laneStride);
+        ref var lane3 = ref Unsafe.Add(ref lane2, laneStride);
+        ref var lane4 = ref Unsafe.Add(ref lane3, laneStride);
+        ref var lane5 = ref Unsafe.Add(ref lane4, laneStride);
+        ref var lane6 = ref Unsafe.Add(ref lane5, laneStride);
+        ref var lane7 = ref Unsafe.Add(ref lane6, laneStride);
+        var length = (nuint)(uint)values.Length;
+        var i = WriteUInt64LanesVector128(ref source, ref lane0, ref lane1, ref lane2, ref lane3,
+            ref lane4, ref lane5, ref lane6, ref lane7, length);
 
         for (; i < length; i++)
         {
@@ -464,6 +549,114 @@ static class ByteStreamSplitEncoding
                 StoreGathered64(vector, control6, ref lane6, i);
                 StoreGathered64(vector, control7, ref lane7, i);
             }
+        }
+
+        return i;
+    }
+
+    /// <summary>
+    /// Portable 128-bit deinterleave for platforms without AVX2. Kept out of line so the existing
+    /// AVX-512 and AVX2 loops retain their code generation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    static nuint WriteUInt32LanesVector128(ref uint source, ref byte lane0, ref byte lane1, ref byte lane2,
+        ref byte lane3, nuint length)
+    {
+        nuint i = 0;
+        if (length < Vector128ValuesPerIteration)
+            return i;
+
+        var lastVector = length - Vector128ValuesPerIteration;
+        for (; i <= lastVector; i += Vector128ValuesPerIteration)
+        {
+            var values0 = Vector128.LoadUnsafe(ref source, i);
+            var values1 = Vector128.LoadUnsafe(ref source, i + 4);
+            var values2 = Vector128.LoadUnsafe(ref source, i + 8);
+            var values3 = Vector128.LoadUnsafe(ref source, i + 12);
+
+            var low01 = Vector128.Narrow(values0, values1);
+            var low23 = Vector128.Narrow(values2, values3);
+            var high01 = Vector128.Narrow(
+                Vector128.ShiftRightLogical(values0, 16), Vector128.ShiftRightLogical(values1, 16));
+            var high23 = Vector128.Narrow(
+                Vector128.ShiftRightLogical(values2, 16), Vector128.ShiftRightLogical(values3, 16));
+
+            Vector128.Narrow(low01, low23).StoreUnsafe(ref lane0, i);
+            Vector128.Narrow(
+                Vector128.ShiftRightLogical(low01, 8), Vector128.ShiftRightLogical(low23, 8))
+                .StoreUnsafe(ref lane1, i);
+            Vector128.Narrow(high01, high23).StoreUnsafe(ref lane2, i);
+            Vector128.Narrow(
+                Vector128.ShiftRightLogical(high01, 8), Vector128.ShiftRightLogical(high23, 8))
+                .StoreUnsafe(ref lane3, i);
+        }
+
+        return i;
+    }
+
+    /// <inheritdoc cref="WriteUInt32LanesVector128" />
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    static nuint WriteUInt64LanesVector128(ref ulong source, ref byte lane0, ref byte lane1, ref byte lane2,
+        ref byte lane3, ref byte lane4, ref byte lane5, ref byte lane6, ref byte lane7, nuint length)
+    {
+        nuint i = 0;
+        if (length < Vector128ValuesPerIteration)
+            return i;
+
+        var lastVector = length - Vector128ValuesPerIteration;
+        for (; i <= lastVector; i += Vector128ValuesPerIteration)
+        {
+            var values0 = Vector128.LoadUnsafe(ref source, i);
+            var values1 = Vector128.LoadUnsafe(ref source, i + 2);
+            var values2 = Vector128.LoadUnsafe(ref source, i + 4);
+            var values3 = Vector128.LoadUnsafe(ref source, i + 6);
+            var values4 = Vector128.LoadUnsafe(ref source, i + 8);
+            var values5 = Vector128.LoadUnsafe(ref source, i + 10);
+            var values6 = Vector128.LoadUnsafe(ref source, i + 12);
+            var values7 = Vector128.LoadUnsafe(ref source, i + 14);
+
+            var low32_01 = Vector128.Narrow(values0, values1);
+            var low32_23 = Vector128.Narrow(values2, values3);
+            var low32_45 = Vector128.Narrow(values4, values5);
+            var low32_67 = Vector128.Narrow(values6, values7);
+            var high32_01 = Vector128.Narrow(
+                Vector128.ShiftRightLogical(values0, 32), Vector128.ShiftRightLogical(values1, 32));
+            var high32_23 = Vector128.Narrow(
+                Vector128.ShiftRightLogical(values2, 32), Vector128.ShiftRightLogical(values3, 32));
+            var high32_45 = Vector128.Narrow(
+                Vector128.ShiftRightLogical(values4, 32), Vector128.ShiftRightLogical(values5, 32));
+            var high32_67 = Vector128.Narrow(
+                Vector128.ShiftRightLogical(values6, 32), Vector128.ShiftRightLogical(values7, 32));
+
+            var low16_0 = Vector128.Narrow(low32_01, low32_23);
+            var low16_1 = Vector128.Narrow(low32_45, low32_67);
+            var mid16_0 = Vector128.Narrow(
+                Vector128.ShiftRightLogical(low32_01, 16), Vector128.ShiftRightLogical(low32_23, 16));
+            var mid16_1 = Vector128.Narrow(
+                Vector128.ShiftRightLogical(low32_45, 16), Vector128.ShiftRightLogical(low32_67, 16));
+            var high16_0 = Vector128.Narrow(high32_01, high32_23);
+            var high16_1 = Vector128.Narrow(high32_45, high32_67);
+            var top16_0 = Vector128.Narrow(
+                Vector128.ShiftRightLogical(high32_01, 16), Vector128.ShiftRightLogical(high32_23, 16));
+            var top16_1 = Vector128.Narrow(
+                Vector128.ShiftRightLogical(high32_45, 16), Vector128.ShiftRightLogical(high32_67, 16));
+
+            Vector128.Narrow(low16_0, low16_1).StoreUnsafe(ref lane0, i);
+            Vector128.Narrow(
+                Vector128.ShiftRightLogical(low16_0, 8), Vector128.ShiftRightLogical(low16_1, 8))
+                .StoreUnsafe(ref lane1, i);
+            Vector128.Narrow(mid16_0, mid16_1).StoreUnsafe(ref lane2, i);
+            Vector128.Narrow(
+                Vector128.ShiftRightLogical(mid16_0, 8), Vector128.ShiftRightLogical(mid16_1, 8))
+                .StoreUnsafe(ref lane3, i);
+            Vector128.Narrow(high16_0, high16_1).StoreUnsafe(ref lane4, i);
+            Vector128.Narrow(
+                Vector128.ShiftRightLogical(high16_0, 8), Vector128.ShiftRightLogical(high16_1, 8))
+                .StoreUnsafe(ref lane5, i);
+            Vector128.Narrow(top16_0, top16_1).StoreUnsafe(ref lane6, i);
+            Vector128.Narrow(
+                Vector128.ShiftRightLogical(top16_0, 8), Vector128.ShiftRightLogical(top16_1, 8))
+                .StoreUnsafe(ref lane7, i);
         }
 
         return i;
