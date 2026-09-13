@@ -435,6 +435,26 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
+    public void WriteInt32MatchesReferenceAcrossPortableVectorBoundaries()
+    {
+        int[] counts = [2, 3, 4, 5, 7, 8, 9, 126, 127, 128, 129, 130, 255, 256, 257];
+        foreach (var count in counts)
+        {
+            var values = new int[count];
+            for (var i = 0; i < values.Length; i++)
+                values[i] = (i % 4) switch
+                {
+                    0 => int.MinValue,
+                    1 => int.MaxValue,
+                    2 => unchecked(i * 0x5A17C9E3),
+                    _ => unchecked(-i * 0x27D4EB2D)
+                };
+
+            AssertEncodedBytes(values, EncodeInt32Reference(values), chunkSize: 7);
+        }
+    }
+
+    [Test]
     public void WriteInt32PackingDispatchMatchesReferenceAcrossMixedMiniBlockWidths()
     {
         int[] counts = [33, 127, 128, 129, 257];
@@ -475,7 +495,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
     [Test]
     public void WriteInt64MatchesReferenceAcrossBlockBoundaries()
     {
-        int[] counts = [0, 1, 2, 7, 8, 9, 31, 32, 33, 127, 128, 129, 257];
+        int[] counts = [0, 1, 2, 3, 4, 5, 7, 8, 9, 31, 32, 33, 126, 127, 128, 129, 130, 255, 256, 257];
         foreach (var count in counts)
         {
             var values = new long[count];
