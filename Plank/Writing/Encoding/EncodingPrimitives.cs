@@ -2,7 +2,6 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
-using System.Runtime.Intrinsics.X86;
 using Plank.Schema;
 
 namespace Plank.Writing.Encoding;
@@ -226,33 +225,45 @@ static class EncodingPrimitives
 
             valueIndex = vectorValueCount * Vector512<byte>.Count;
         }
-        else if (BitConverter.IsLittleEndian && Vector256.IsHardwareAccelerated && Vector256<byte>.IsSupported)
+        else if (BitConverter.IsLittleEndian && Vector128.IsHardwareAccelerated && !Vector256.IsHardwareAccelerated)
         {
-            var vectorValueCount = sourceBytes.Length / Vector256<byte>.Count;
+            // Use fixed-width packing on 128-bit SIMD platforms; retain the wider paths below.
+            var vectorValueCount = sourceBytes.Length / Vector128<byte>.Count;
             ref var source = ref MemoryMarshal.GetReference(sourceBytes);
             for (var i = 0; i < vectorValueCount; i++)
             {
-                var isFalse = Vector256.Equals(Vector256.LoadUnsafe(ref source), Vector256<byte>.Zero);
-                var mask = (uint)~isFalse.ExtractMostSignificantBits();
+                var isFalse = Vector128.Equals(Vector128.LoadUnsafe(ref source), Vector128<byte>.Zero);
+                var mask = (ushort)~isFalse.ExtractMostSignificantBits();
                 Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
-                byteIndex += sizeof(uint);
-                source = ref Unsafe.Add(ref source, Vector256<byte>.Count);
+                byteIndex += sizeof(ushort);
+                source = ref Unsafe.Add(ref source, Vector128<byte>.Count);
             }
 
-            valueIndex = vectorValueCount * Vector256<byte>.Count;
+            valueIndex = vectorValueCount * Vector128<byte>.Count;
         }
-        else if (Sse2.IsSupported)
+
+        else if (BitConverter.IsLittleEndian && Vector.IsHardwareAccelerated && Vector<byte>.IsSupported)
         {
-            var simdValueCount = sourceBytes.Length & ~15;
-            for (; valueIndex < simdValueCount; valueIndex += 16)
+            var vectorValueCount = sourceBytes.Length / Vector<byte>.Count;
+            ref var source = ref MemoryMarshal.GetReference(sourceBytes);
+            for (var i = 0; i < vectorValueCount; i++)
             {
-                var chunk = MemoryMarshal.Read<Vector128<byte>>(sourceBytes[valueIndex..]);
-                var gtZero = Sse2.CompareGreaterThan(chunk.AsSByte(), Vector128<sbyte>.Zero);
-                var mask = Sse2.MoveMask(gtZero);
-                destination[byteIndex] = (byte)mask;
-                destination[byteIndex + 1] = (byte)(mask >> 8);
-                byteIndex += 2;
+                var isFalse = Vector.Equals(Vector.LoadUnsafe(ref source), Vector<byte>.Zero);
+                if (Vector<byte>.Count == Vector256<byte>.Count)
+                {
+                    var mask = ~isFalse.AsVector256().ExtractMostSignificantBits();
+                    Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
+                    byteIndex += sizeof(uint);
+                }
+                else
+                {
+                    var mask = (ushort)~isFalse.AsVector128().ExtractMostSignificantBits();
+                    Unsafe.WriteUnaligned(ref destination[byteIndex], mask);
+                    byteIndex += sizeof(ushort);
+                }
+                source = ref Unsafe.Add(ref source, Vector<byte>.Count);
             }
+            valueIndex = vectorValueCount * Vector<byte>.Count;
         }
 
         for (; byteIndex < fullByteCount; byteIndex++)
