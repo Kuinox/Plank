@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Runtime.InteropServices;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.Encoding;
@@ -10,6 +12,11 @@ internal sealed class ByteStreamSplitEncodingTests
     static readonly Column Int64Column = new("value", ParquetPhysicalType.Int64);
     static readonly Column FloatColumn = new("value", ParquetPhysicalType.Float);
     static readonly Column DoubleColumn = new("value", ParquetPhysicalType.Double);
+
+    delegate void WriteUInt32Slice(ReadOnlySpan<uint> values, Span<byte> destination, int laneStride,
+        int destinationOffset);
+    delegate void WriteUInt64Slice(ReadOnlySpan<ulong> values, Span<byte> destination, int laneStride,
+        int destinationOffset);
 
     [Test]
     public void NumericBitPatternsHaveExactByteStreamLayout()
@@ -71,6 +78,27 @@ internal sealed class ByteStreamSplitEncodingTests
     }
 
     [Test]
+    public void NumericLaneSlicesPreserveOffsetsTailsAndUntouchedBytes()
+    {
+        var writeUInt32 = GetLaneWriter<WriteUInt32Slice>(typeof(uint));
+        var writeUInt64 = GetLaneWriter<WriteUInt64Slice>(typeof(ulong));
+        var state = 0x9E3779B9u;
+        for (var count = 0; count <= 97; count++)
+        {
+            for (var offset = 0; offset <= count; offset++)
+            for (var length = 0; length <= count - offset; length++)
+            {
+                var uintValues = new uint[length];
+                var ulongValues = new ulong[length];
+                FillPseudoRandom(MemoryMarshal.AsBytes(uintValues.AsSpan()), ref state);
+                FillPseudoRandom(MemoryMarshal.AsBytes(ulongValues.AsSpan()), ref state);
+                AssertLaneSlice(uintValues, count, offset, 4, writeUInt32);
+                AssertLaneSlice(ulongValues, count, offset, 8, writeUInt64);
+            }
+        }
+    }
+
+    [Test]
     public void AlternateIntegerRepresentationsZeroExtendAndPreserveBits()
     {
         byte[] byteValues = [0x00, 0x80, 0xFF];
@@ -105,7 +133,11 @@ internal sealed class ByteStreamSplitEncodingTests
     public void DecimalsSplitTheirUnscaledIntegerCarrier()
     {
         // Beyond MaxStackConvertedValues so adjacent conversion chunks and lane offsets are covered.
-        int[] lengths = [0, 1, 3, 33, 256, 257, 512];
+        int[] lengths =
+        [
+            0, 1, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65,
+            255, 256, 257, 271, 272, 273, 511, 512, 513
+        ];
         foreach (var length in lengths)
         {
             var int32Column = DecimalColumn(ParquetPhysicalType.Int32, precision: 9, scale: 2);
@@ -131,6 +163,43 @@ internal sealed class ByteStreamSplitEncodingTests
 
     static Column DecimalColumn(ParquetPhysicalType physicalType, int precision, int scale)
         => new("value", physicalType, logicalType: new LogicalType.Decimal(precision, scale));
+
+    static TDelegate GetLaneWriter<TDelegate>(Type elementType)
+        where TDelegate : Delegate
+        => typeof(ByteStreamSplitEncoding)
+            .GetMethod(elementType == typeof(uint) ? "WriteUInt32Lanes" : "WriteUInt64Lanes",
+                BindingFlags.Static | BindingFlags.NonPublic, binder: null,
+                types:
+                [
+                    elementType == typeof(uint) ? typeof(ReadOnlySpan<uint>) : typeof(ReadOnlySpan<ulong>),
+                    typeof(Span<byte>), typeof(int), typeof(int)
+                ], modifiers: null)!
+            .CreateDelegate<TDelegate>();
+
+    static void AssertLaneSlice<T>(T[] values, int laneStride, int destinationOffset, int byteWidth,
+        Delegate writer)
+        where T : unmanaged
+    {
+        const byte Sentinel = 0xA5;
+        var actual = new byte[checked(laneStride * byteWidth + 2)];
+        Array.Fill(actual, Sentinel);
+        var expected = (byte[])actual.Clone();
+        var destination = actual.AsSpan(1, actual.Length - 2);
+
+        if (typeof(T) == typeof(uint))
+            ((WriteUInt32Slice)writer)(MemoryMarshal.Cast<T, uint>(values), destination, laneStride,
+                destinationOffset);
+        else
+            ((WriteUInt64Slice)writer)(MemoryMarshal.Cast<T, ulong>(values), destination, laneStride,
+                destinationOffset);
+
+        var bytes = MemoryMarshal.AsBytes(values.AsSpan());
+        for (var lane = 0; lane < byteWidth; lane++)
+            for (var i = 0; i < values.Length; i++)
+                expected[1 + lane * laneStride + destinationOffset + i] = bytes[i * byteWidth + lane];
+
+        AssertEqual(expected, actual);
+    }
 
     [Test]
     public void LargeDecimalCarrierConversionDoesNotAllocate()
