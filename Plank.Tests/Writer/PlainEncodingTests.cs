@@ -77,6 +77,83 @@ internal sealed class PlainEncodingTests
     }
 
     [Test]
+    public void AllPresentNullableInt32ValuesPreservePayloadStatisticsAndCanariesAcrossVectorBoundaries()
+    {
+        int[] lengths = [0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129,
+            255, 256, 257];
+        foreach (var sourceOffset in Enumerable.Range(0, 8))
+        foreach (var destinationOffset in Enumerable.Range(0, 16))
+        foreach (var length in lengths)
+        {
+            var storage = new int?[sourceOffset + length + 8];
+            for (var i = 0; i < storage.Length; i++)
+                storage[i] = i switch
+                {
+                    0 => int.MinValue,
+                    1 => int.MaxValue,
+                    2 => -1,
+                    3 => 1,
+                    _ => unchecked(i * 7919 + int.MinValue)
+                };
+            var values = storage.AsSpan(sourceOffset, length);
+
+            const byte canary = 0xA5;
+            var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 4_096, 4_096);
+            try
+            {
+                var writable = writer.GetSpan(4_096);
+                writable.Fill(canary);
+                writer.Advance(destinationOffset);
+
+                var statistics = PlainEncoding.WriteAllPresentOptionalInt32PageWithStatistics(values, ref writer);
+                var expectedLength = checked(destinationOffset + length * sizeof(int));
+                if (writer.WrittenLength != expectedLength)
+                    throw new InvalidOperationException(
+                        $"Nullable Int32 writer length differs at source offset {sourceOffset}, destination offset "
+                        + $"{destinationOffset}, length {length}: expected {expectedLength}, got {writer.WrittenLength}.");
+
+                for (var i = 0; i < destinationOffset; i++)
+                    if (writable[i] != canary)
+                        throw new InvalidOperationException("Nullable Int32 writer changed the prefix canary.");
+                for (var i = 0; i < length; i++)
+                {
+                    var actual = BinaryPrimitives.ReadInt32LittleEndian(
+                        writable.Slice(destinationOffset + i * sizeof(int), sizeof(int)));
+                    if (actual != values[i])
+                        throw new InvalidOperationException(
+                            $"Nullable Int32 payload differs at row {i}, source offset {sourceOffset}, "
+                            + $"destination offset {destinationOffset}, length {length}.");
+                }
+                for (var i = expectedLength; i < expectedLength + 32; i++)
+                    if (writable[i] != canary)
+                        throw new InvalidOperationException("Nullable Int32 writer changed the suffix canary.");
+
+                if (!statistics.HasStatistics || statistics.NullCount != 0)
+                    throw new InvalidOperationException("Nullable Int32 writer returned invalid statistics metadata.");
+                if (length > 0)
+                {
+                    var expectedMin = values[0]!.Value;
+                    var expectedMax = expectedMin;
+                    for (var i = 1; i < values.Length; i++)
+                    {
+                        expectedMin = Math.Min(expectedMin, values[i]!.Value);
+                        expectedMax = Math.Max(expectedMax, values[i]!.Value);
+                    }
+                    if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Int32
+                        || statistics.MinBits != expectedMin || statistics.MaxBits != expectedMax)
+                        throw new InvalidOperationException(
+                            $"Nullable Int32 statistics differ at source offset {sourceOffset}, destination offset "
+                            + $"{destinationOffset}, length {length}.");
+                }
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+        }
+    }
+
+    [Test]
     public void BinaryAndOptionalBinaryValuesMatchLengthPrefixedParquetBytes()
     {
         byte[][] required = [[], [0x11], [0x22, 0x33, 0x44], Enumerable.Range(0, 129).Select(static i => (byte)i).ToArray()];

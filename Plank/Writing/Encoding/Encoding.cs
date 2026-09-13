@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 using System.Threading;
 using Plank.Schema;
@@ -1015,7 +1016,8 @@ static class Encoding
         if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int))
         {
             var intValues = Unsafe.As<ReadOnlySpan<T?>, ReadOnlySpan<int?>>(ref values);
-            if (BitConverter.IsLittleEndian && HasCanonicalNullableInt32Layout && Avx2.IsSupported
+            if (BitConverter.IsLittleEndian && HasCanonicalNullableInt32Layout
+                && (Avx2.IsSupported || AdvSimd.IsSupported)
                 && AreAllNullableInt32ValuesPresent(intValues))
             {
                 EncodeAllPresentOptionalPlainPrimitivePages<int, Int32PlainPageWriter>(bufferWriters,
@@ -1277,7 +1279,7 @@ static class Encoding
     /// <see cref="Nullable{T}"/> of a 32-bit payload puts the present flag in the even <see cref="int"/> lanes and
     /// the payload in the odd ones, so masking the even lanes in place replaces the gather-then-compare permute.
     /// </summary>
-    static bool AreAllNullableInt32ValuesPresent(ReadOnlySpan<int?> values)
+    internal static bool AreAllNullableInt32ValuesPresent(ReadOnlySpan<int?> values)
     {
         ref var nullableSource = ref MemoryMarshal.GetReference(values);
         ref var source = ref Unsafe.As<int?, int>(ref nullableSource);
@@ -1293,6 +1295,18 @@ static class Encoding
                 var first = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
                 var second = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 8));
                 if ((((first ^ expectedFlags) | (second ^ expectedFlags)) & flagMask) != Vector256<int>.Zero)
+                    return false;
+            }
+        }
+        else if (AdvSimd.IsSupported)
+        {
+            var flagMask = Vector128.Create(-1, 0, -1, 0);
+            var expectedFlags = Vector128.Create(1, 0, 1, 0);
+            for (; values.Length - valueIndex >= 4; valueIndex += 4)
+            {
+                var first = Vector128.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
+                var second = Vector128.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 4));
+                if ((((first ^ expectedFlags) | (second ^ expectedFlags)) & flagMask) != Vector128<int>.Zero)
                     return false;
             }
         }

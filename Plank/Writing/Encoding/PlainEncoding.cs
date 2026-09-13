@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 using Plank.Schema;
 
@@ -376,7 +377,7 @@ static class PlainEncoding
             return ColumnStatistics.Empty(0);
 
         var destination = MemoryMarshal.Cast<byte, int>(writer.GetSpan(byteCount)[..byteCount]);
-        if (values.Length >= Vector256<int>.Count)
+        if (Avx2.IsSupported && values.Length >= Vector256<int>.Count)
         {
             ref var nullableSource = ref MemoryMarshal.GetReference(values);
             ref var source = ref Unsafe.As<int?, int>(ref nullableSource);
@@ -390,6 +391,26 @@ static class PlainEncoding
                 var firstValues = Avx2.PermuteVar8x32(firstRows, valueIndexes);
                 var secondValues = Avx2.PermuteVar8x32(secondRows, valueIndexes);
                 Avx2.Permute2x128(firstValues, secondValues, 0x20)
+                    .StoreUnsafe(ref target, checked((nuint)valueIndex));
+            }
+
+            for (; valueIndex < values.Length; valueIndex++)
+                destination[valueIndex] = values[valueIndex]!.Value;
+        }
+        else if (AdvSimd.IsSupported && values.Length >= Vector128<int>.Count)
+        {
+            ref var nullableSource = ref MemoryMarshal.GetReference(values);
+            ref var source = ref Unsafe.As<int?, int>(ref nullableSource);
+            ref var target = ref MemoryMarshal.GetReference(destination);
+            var valueIndexes = Vector128.Create(1, 3, 0, 0);
+            var valueIndex = 0;
+            for (; values.Length - valueIndex >= 4; valueIndex += 4)
+            {
+                var firstRows = Vector128.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
+                var secondRows = Vector128.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 4));
+                var firstValues = Vector128.Shuffle(firstRows, valueIndexes);
+                var secondValues = Vector128.Shuffle(secondRows, valueIndexes);
+                Vector128.Create(firstValues.GetLower(), secondValues.GetLower())
                     .StoreUnsafe(ref target, checked((nuint)valueIndex));
             }
 

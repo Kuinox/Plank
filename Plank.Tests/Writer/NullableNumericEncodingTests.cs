@@ -4,6 +4,7 @@ using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
 using ParquetDataPageVersion = Plank.Writing.ParquetDataPageVersion;
+using WriterEncoding = Plank.Writing.Encoding.Encoding;
 
 namespace Plank.Tests.Writer;
 
@@ -282,6 +283,41 @@ internal sealed class NullableNumericEncodingTests
             AssertAllPresentSweep(int32Values, ParquetPhysicalType.Int32, dataPageVersion);
             AssertAllPresentSweep(int64Values, ParquetPhysicalType.Int64, dataPageVersion);
             AssertAllPresentSweep(doubleValues, ParquetPhysicalType.Double, dataPageVersion);
+        }
+    }
+
+    [Test]
+    public void NullableInt32AllPresentProbeHandlesOffsetsVectorBoundariesAndEveryNullPosition()
+    {
+        for (var sourceOffset = 0; sourceOffset < 8; sourceOffset++)
+        {
+            for (var length = 0; length <= 65; length++)
+            {
+                var storage = new int?[sourceOffset + length + 8];
+                for (var i = 0; i < storage.Length; i++)
+                    storage[i] = i switch
+                    {
+                        0 => -1,
+                        1 => 1,
+                        2 => 0,
+                        _ => unchecked(i * 7919 + int.MinValue)
+                    };
+
+                var values = storage.AsSpan(sourceOffset, length);
+                if (!WriterEncoding.AreAllNullableInt32ValuesPresent(values))
+                    throw new InvalidOperationException(
+                        $"All-present nullable Int32 probe failed at offset {sourceOffset}, length {length}.");
+
+                for (var nullIndex = 0; nullIndex < length; nullIndex++)
+                {
+                    var present = values[nullIndex];
+                    values[nullIndex] = null;
+                    if (WriterEncoding.AreAllNullableInt32ValuesPresent(values))
+                        throw new InvalidOperationException(
+                            $"Nullable Int32 probe missed null {nullIndex} at offset {sourceOffset}, length {length}.");
+                    values[nullIndex] = present;
+                }
+            }
         }
     }
 
