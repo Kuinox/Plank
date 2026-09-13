@@ -18,7 +18,7 @@ on:
         type: string
       iterations:
         description: BenchmarkDotNet measured iterations
-        default: 30
+        default: 50
         type: number
 
 permissions:
@@ -27,12 +27,11 @@ permissions:
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   DOTNET_NOLOGO: 1
-  # PR comparisons use fully optimized code from the first invocation and
-  # blocking GC. This avoids tier-promotion and background-GC transitions on
-  # hosted runners while the two independent passes still expose runner noise.
-  BENCHMARK_WARMUPS: 4
-  # Thirty measurements give each drift diagnostic block ten samples.
-  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 30 }}
+  # A long warmup settles the benchmark before one base -> PR measurement pair.
+  # Tiered compilation remains disabled and GC remains blocking in Plank-Lab.
+  BENCHMARK_WARMUPS: 20
+  # Fifty measurements give each within-process drift block 16 or 17 samples.
+  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 50 }}
 
 jobs:
   resolve-request:
@@ -237,8 +236,6 @@ jobs:
 
           run_benchmark base 1
           run_benchmark head 1
-          run_benchmark head 2
-          run_benchmark base 2
 
       - name: Upload Plank-Lab logs
         uses: actions/upload-artifact@v7

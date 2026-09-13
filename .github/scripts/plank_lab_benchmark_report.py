@@ -37,7 +37,7 @@ ENCODING_LABELS = {
     "byte_stream_split": "Byte stream split",
 }
 SUITE_LABELS = {"synthetic": "Synthetic", "real-world": "Real-world"}
-LOG_NAME = re.compile(r"^(Synthetic|Real)-(Read|Write)-(base|head)-([12])\.log$")
+LOG_NAME = re.compile(r"^(Synthetic|Real)-(Read|Write)-(base|head)-1\.log$")
 BENCHMARK = re.compile(r"^// Benchmark: ([A-Za-z0-9_]+)\.(Read|Write):")
 WORKLOAD_ACTUAL = re.compile(
     r"^WorkloadActual\s+(\d+):\s+(\d+) op,\s+([\d.]+)\s+(ns|us|μs|ms|s),")
@@ -98,11 +98,6 @@ class Comparison:
         return (self.head_ms / self.base_ms - 1) * 100
 
     @property
-    def repeat_percent(self) -> float:
-        return max((max(p.median_ms for p in passes) / min(p.median_ms for p in passes) - 1) * 100
-                   for passes in (self.base_passes, self.head_passes))
-
-    @property
     def drift_percent(self) -> float:
         return max(p.drift_percent for p in self.base_passes + self.head_passes)
 
@@ -110,7 +105,7 @@ class Comparison:
     def status(self) -> str:
         if any(len(p.samples_ms) < MIN_SAMPLES for p in self.base_passes + self.head_passes):
             return "insufficient"
-        if max(self.repeat_percent, self.drift_percent) > STABILITY_PERCENT:
+        if self.drift_percent > STABILITY_PERCENT:
             return "unstable"
         # Every process interval must separate in the same direction. These are
         # descriptive median +/- 3 SD envelopes, not confidence intervals.
@@ -148,7 +143,8 @@ def load_comparisons(results_directory: Path, matrix_path: Path,
         name = LOG_NAME.match(path.name)
         if name is None:
             raise ValueError(f"Unexpected benchmark log name '{path.name}'.")
-        suite_filter, expected_operation, variant, pass_number = name.groups()
+        suite_filter, expected_operation, variant = name.groups()
+        pass_number = "1"
         suite = "synthetic" if suite_filter == "Synthetic" else "real-world"
         operation = expected_operation.lower()
         log_key = (suite, operation, variant, pass_number)
@@ -204,9 +200,9 @@ def load_comparisons(results_directory: Path, matrix_path: Path,
         if current is None:
             raise ValueError(f"{path.name} contains no Plank-Lab benchmarks.")
 
-    expected_logs = {(suite, operation, variant, str(p))
+    expected_logs = {(suite, operation, variant, "1")
                      for suite in SUITE_LABELS for operation in ("read", "write")
-                     for variant in ("base", "head") for p in (1, 2)}
+                     for variant in ("base", "head")}
     if seen_logs != expected_logs:
         raise ValueError(f"Incomplete benchmark matrix; missing logs: {sorted(expected_logs - seen_logs)}.")
 
@@ -223,7 +219,7 @@ def load_comparisons(results_directory: Path, matrix_path: Path,
         for item in (entry for entry in matrix if entry["suite"] == suite and entry["workload"] == workload):
             series = []
             for variant in ("base", "head"):
-                keys = [(suite, operation, item["id"], variant, str(p)) for p in (1, 2)]
+                keys = [(suite, operation, item["id"], variant, "1")]
                 if any(key not in samples for key in keys):
                     raise ValueError(f"Missing base or head pass for {suite}/{operation}/{item['id']}.")
                 series.append(tuple(PassSummary(tuple(samples[key]), configurations_by_pass[key],
@@ -310,7 +306,7 @@ def render_chart(comparisons: list[Comparison], suite: str, operation: str, work
     return "\n".join([
         "```mermaid",
         "xychart-beta horizontal",
-        '    title "Runtime index (equal process weights)"',
+        '    title "Runtime index"',
         f"    x-axis [{labels}]",
         f'    y-axis "Base = 100" 0 --> {upper}',
         f"    bar [{values}]",
@@ -339,20 +335,20 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         f"This runs the [Plank-Lab published matrix]"
         f"(https://github.com/Kuinox/Plank-Lab/tree/{plank_lab_sha}) and filters execution to "
         "`*PlankBenchmarks`—ParquetSharp and Parquet.NET are not measured.",
-        "Each matrix slice ran base / PR / PR / base on one runner under BenchmarkDotNet.",
+        "Each matrix slice ran one base process followed by one PR process on the same runner under BenchmarkDotNet.",
         "",
         f"**{faster} faster · {inconclusive} inconclusive · {unstable} unstable/insufficient · {slower} slower**",
         "",
-        "> Bars compare the means of the two independent process medians. All ordered "
-        "WorkloadActual samples are retained, normalized per operation. No pass is pooled or dropped. "
+        "> Bars compare the base and PR process medians. All ordered WorkloadActual samples are "
+        "retained and normalized per operation. "
         "Charts share a 0–200 scale, expanded together only for ratios above 200.",
         "",
-        f"> 🟠 flags more than {STABILITY_PERCENT:g}% variation between same-code process medians "
-        "or between three consecutive measurement-block medians within any process; fewer than "
+        f"> 🟠 flags more than {STABILITY_PERCENT:g}% variation between three consecutive "
+        "measurement-block medians within either process; fewer than "
         f"{MIN_SAMPLES} samples per process are insufficient. This tolerance is diagnostic, not a significance test.",
         "",
-        "> Otherwise, color requires every base process median ±3 SD envelope to separate from "
-        "every PR envelope in the same direction. These are descriptive envelopes, not confidence "
+        "> Otherwise, color requires the base process median ±3 SD envelope to separate from "
+        "the PR envelope. These are descriptive envelopes, not confidence "
         "intervals. Inconclusive does not mean equivalent. Hosted-runner results remain advisory.",
         "",
     ]
@@ -368,7 +364,7 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         "<details>",
         "<summary>Process medians and stability diagnostics</summary>",
         "",
-        "| Suite | Workload | Operation | Case | Encoding | Shape | Base passes (ms) | PR passes (ms) | Repeat / drift | Change |",
+        "| Suite | Workload | Operation | Case | Encoding | Shape | Base median (ms) | PR median (ms) | Drift | Change |",
         "|---|---|---|---|---|---|---:|---:|---:|---:|",
     ]
     for item in comparisons:
@@ -378,7 +374,7 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
             f"{ENCODING_LABELS[item.encoding]} | {shape} | "
             f"{' / '.join(f'{p.median_ms:.3f}' for p in item.base_passes)} | "
             f"{' / '.join(f'{p.median_ms:.3f}' for p in item.head_passes)} | "
-            f"{item.repeat_percent:.1f}% / {item.drift_percent:.1f}% | {result_badge(item)} |")
+            f"{item.drift_percent:.1f}% | {result_badge(item)} |")
     details.extend(["", "</details>", ""])
     sections.extend(details)
 
@@ -409,7 +405,6 @@ def main() -> None:
     report = build_report(
         comparisons, processors, args.base_sha, args.head_sha, args.plank_lab_sha, args.run_url)
     analysis = [dict(asdict(item), status=item.status, delta_percent=item.delta_percent,
-                     repeat_percent=item.repeat_percent,
                      drift_percent=item.drift_percent if math.isfinite(item.drift_percent) else None)
                 for item in comparisons]
     args.output.with_suffix(".json").write_text(json.dumps(analysis, indent=2, allow_nan=False) + "\n", encoding="utf-8")
