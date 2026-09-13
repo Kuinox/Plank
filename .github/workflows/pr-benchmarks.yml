@@ -18,7 +18,7 @@ on:
         type: string
       iterations:
         description: BenchmarkDotNet measured iterations
-        default: 20
+        default: 30
         type: number
 
 permissions:
@@ -31,7 +31,8 @@ env:
   # blocking GC. This avoids tier-promotion and background-GC transitions on
   # hosted runners while the two independent passes still expose runner noise.
   BENCHMARK_WARMUPS: 4
-  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 20 }}
+  # Thirty measurements give each drift diagnostic block ten samples.
+  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 30 }}
 
 jobs:
   resolve-request:
@@ -222,22 +223,33 @@ jobs:
           run_benchmark() {
             local variant="$1"
             local pass="$2"
+            local benchmark_class="$3"
             local lab="$GITHUB_WORKSPACE/lab-$variant"
             local harness="$lab/Plank.Benchmarks/bin/Release/net10.0/Plank.Benchmarks.dll"
             (
               cd "$lab"
               dotnet "$harness" --published --pr-comparison \
-                --filter "*$SUITE*PlankBenchmarks.$OPERATION" \
+                --filter "*${benchmark_class}PlankBenchmarks.$OPERATION" \
                 --warmupCount "$BENCHMARK_WARMUPS" \
                 --iterationCount "$BENCHMARK_ITERATIONS" \
                 --data-file "$RUNNER_TEMP/yellow_tripdata_2024-01.parquet"
-            ) | tee "$results/$SUITE-$OPERATION-$variant-$pass.log"
+            ) | tee -a "$results/$SUITE-$OPERATION-$variant-$pass.log"
           }
 
-          run_benchmark base 1
-          run_benchmark head 1
-          run_benchmark head 2
-          run_benchmark base 2
+          # Keep matching base/head measurements adjacent. A whole-slice pass
+          # can otherwise separate the same case by many minutes of runner
+          # load, temperature, and frequency changes.
+          mapfile -t benchmark_classes < <(
+            jq -r --arg suite "$SUITE" \
+              '.[] | select(.stem | startswith($suite)) | .stem, (.stem + "Column")' \
+              "$GITHUB_WORKSPACE/lab-base/Plank.Benchmarks/Published/Cases/matrix.json"
+          )
+          for benchmark_class in "${benchmark_classes[@]}"; do
+            run_benchmark base 1 "$benchmark_class"
+            run_benchmark head 1 "$benchmark_class"
+            run_benchmark head 2 "$benchmark_class"
+            run_benchmark base 2 "$benchmark_class"
+          done
 
       - name: Upload Plank-Lab logs
         uses: actions/upload-artifact@v7
