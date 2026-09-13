@@ -41,6 +41,8 @@ LOG_NAME = re.compile(r"^(Synthetic|Real)-(Read|Write)-(base|head)-1\.log$")
 BENCHMARK = re.compile(r"^// Benchmark: ([A-Za-z0-9_]+)\.(Read|Write):")
 WORKLOAD_ACTUAL = re.compile(
     r"^WorkloadActual\s+(\d+):\s+(\d+) op,\s+([\d.]+)\s+(ns|us|μs|ms|s),")
+MEASUREMENT_PLAN = re.compile(
+    r"^// PR measurement plan: (\d+) iterations, ([\d.]+) ms calibration median, (\d+) ms target$")
 UNIT_TO_MILLISECONDS = {"ns": 1e-6, "us": 1e-3, "μs": 1e-3, "ms": 1.0, "s": 1e3}
 
 
@@ -49,6 +51,7 @@ class PassSummary:
     samples_ms: tuple[float, ...]
     configuration: str
     prewarm: str | None
+    measurement_plan: str | None
 
     @property
     def median_ms(self) -> float:
@@ -131,6 +134,7 @@ def load_comparisons(results_directory: Path, matrix_path: Path,
     configurations_by_pass = {}
     expected_counts = {}
     prewarm = {}
+    measurement_plans = {}
     configurations: set[tuple[str, str, str]] = set()
     processors: set[str] = set()
     seen_logs: set[tuple[str, str, str, str]] = set()
@@ -187,6 +191,16 @@ def load_comparisons(results_directory: Path, matrix_path: Path,
 
             if current is not None and line.startswith("// PR prewarm:"):
                 prewarm[current] = line
+            plan = MEASUREMENT_PLAN.match(line)
+            if plan and current is not None:
+                if current in measurement_plans:
+                    raise ValueError(f"Duplicate measurement plan for {current}.")
+                planned_count, calibration_milliseconds, target_milliseconds = plan.groups()
+                if (int(planned_count) < MIN_SAMPLES or float(calibration_milliseconds) <= 0 or
+                        int(target_milliseconds) <= 0):
+                    raise ValueError(f"Invalid measurement plan for {current}.")
+                expected_counts[current] = int(planned_count)
+                measurement_plans[current] = line
             result = WORKLOAD_ACTUAL.match(line)
             if result and current is not None:
                 index, operations, value, unit = result.groups()
@@ -213,6 +227,8 @@ def load_comparisons(results_directory: Path, matrix_path: Path,
                 raise ValueError(f"Missing or insufficient timed prewarm for {key}.")
         if len(values) != expected_counts[key] or len(values) < 2:
             raise ValueError(f"Incomplete measurements for {key}: expected {expected_counts[key]}, got {len(values)}.")
+    if measurement_plans and measurement_plans.keys() != samples.keys():
+        raise ValueError("Measurement plans are missing from one or more benchmark cases.")
 
     comparisons: list[Comparison] = []
     for suite, operation, workload in sorted(configurations):
@@ -223,9 +239,7 @@ def load_comparisons(results_directory: Path, matrix_path: Path,
                 if any(key not in samples for key in keys):
                     raise ValueError(f"Missing base or head pass for {suite}/{operation}/{item['id']}.")
                 series.append(tuple(PassSummary(tuple(samples[key]), configurations_by_pass[key],
-                                                prewarm.get(key)) for key in keys))
-            if len({len(p.samples_ms) for passes in series for p in passes}) != 1:
-                raise ValueError(f"Mismatched iteration counts for {item['id']}.")
+                                                prewarm.get(key), measurement_plans.get(key)) for key in keys))
             data_type = item["dataTypes"][0] if len(item["dataTypes"]) == 1 else "Complete"
             comparisons.append(Comparison(
                 suite=suite,
@@ -321,6 +335,9 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
     slower = sum(item.status == "slower" for item in comparisons)
     unstable = sum(item.status in ("unstable", "insufficient") for item in comparisons)
     inconclusive = len(comparisons) - faster - slower - unstable
+    adaptive_measurements = any(
+        summary.measurement_plan is not None
+        for item in comparisons for passes in (item.base_passes, item.head_passes) for summary in passes)
     configurations = []
     for item in comparisons:
         key = (item.suite, item.operation, item.workload)
@@ -339,8 +356,11 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         "",
         f"**{faster} faster · {inconclusive} inconclusive · {unstable} unstable/insufficient · {slower} slower**",
         "",
-        "> Bars compare the base and PR process medians. All ordered WorkloadActual samples are "
-        "retained and normalized per operation. "
+        ("> Bars compare the base and PR process medians. Each case is calibrated independently "
+         "and receives enough ordered WorkloadActual samples for its target measurement time. "
+         if adaptive_measurements else
+         "> Bars compare the base and PR process medians. ")
+        + "All ordered WorkloadActual samples are retained and normalized per operation. "
         "Charts share a 0–200 scale, expanded together only for ratios above 200.",
         "",
         f"> 🟠 flags more than {STABILITY_PERCENT:g}% variation between three consecutive "
@@ -364,8 +384,8 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
         "<details>",
         "<summary>Process medians and stability diagnostics</summary>",
         "",
-        "| Suite | Workload | Operation | Case | Encoding | Shape | Base median (ms) | PR median (ms) | Drift | Change |",
-        "|---|---|---|---|---|---|---:|---:|---:|---:|",
+        "| Suite | Workload | Operation | Case | Encoding | Shape | Base median (ms) | PR median (ms) | Samples (base / PR) | Drift | Change |",
+        "|---|---|---|---|---|---|---:|---:|---:|---:|---:|",
     ]
     for item in comparisons:
         shape = f"{item.row_count:,} rows × {item.column_count} columns"
@@ -374,6 +394,8 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
             f"{ENCODING_LABELS[item.encoding]} | {shape} | "
             f"{' / '.join(f'{p.median_ms:.3f}' for p in item.base_passes)} | "
             f"{' / '.join(f'{p.median_ms:.3f}' for p in item.head_passes)} | "
+            f"{' / '.join(str(len(p.samples_ms)) for p in item.base_passes)} / "
+            f"{' / '.join(str(len(p.samples_ms)) for p in item.head_passes)} | "
             f"{item.drift_percent:.1f}% | {result_badge(item)} |")
     details.extend(["", "</details>", ""])
     sections.extend(details)
