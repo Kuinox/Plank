@@ -246,6 +246,16 @@ static class PlainEncoding
                 halves.Upper.StoreUnsafe(ref destinationValues, valueIndex + (nuint)Vector256<uint>.Count);
             }
         }
+        else if (Vector128.IsHardwareAccelerated && length >= (nuint)Vector128<ushort>.Count)
+        {
+            var vectorCount = (nuint)Vector128<ushort>.Count;
+            for (; length - valueIndex >= vectorCount; valueIndex += vectorCount)
+            {
+                var halves = Vector128.Widen(Vector128.LoadUnsafe(ref source, valueIndex));
+                halves.Lower.StoreUnsafe(ref destinationValues, valueIndex);
+                halves.Upper.StoreUnsafe(ref destinationValues, valueIndex + (nuint)Vector128<uint>.Count);
+            }
+        }
 
         for (; valueIndex < length; valueIndex++)
             Unsafe.Add(ref destinationValues, valueIndex) = Unsafe.Add(ref source, valueIndex);
