@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -932,18 +933,19 @@ static partial class ColumnChunkReader
     {
         System.Diagnostics.Debug.Assert(source.Length == destination.Length);
         var index = 0;
-        if (allowVector && NullableInt32HasCanonicalLayout && Avx2.IsSupported &&
-            destination.Length >= Vector256<ulong>.Count)
+        if (allowVector && NullableInt32HasCanonicalLayout && Vector.IsHardwareAccelerated &&
+            destination.Length >= Vector<uint>.Count)
         {
-            ref var sourceStart = ref MemoryMarshal.GetReference(source);
+            ref var sourceStart = ref Unsafe.As<int, uint>(ref MemoryMarshal.GetReference(source));
             ref var destinationStart = ref Unsafe.As<int?, ulong>(ref MemoryMarshal.GetReference(destination));
-            var present = Vector256.Create(1UL);
-            for (; index <= source.Length - Vector256<ulong>.Count; index += Vector256<ulong>.Count)
+            var present = new Vector<ulong>(1UL);
+            for (; index <= source.Length - Vector<uint>.Count; index += Vector<uint>.Count)
             {
-                var values = Avx2.ConvertToVector256Int64(
-                    Vector128.LoadUnsafe(ref sourceStart, (nuint)index)).AsUInt64();
-                var nullable = Vector256.ShiftLeft(values, 32) | present;
-                nullable.StoreUnsafe(ref destinationStart, (nuint)index);
+                var raw = Vector.LoadUnsafe(ref sourceStart, (nuint)index);
+                (Vector.ShiftLeft(Vector.WidenLower(raw), 32) | present)
+                    .StoreUnsafe(ref destinationStart, (nuint)index);
+                (Vector.ShiftLeft(Vector.WidenUpper(raw), 32) | present)
+                    .StoreUnsafe(ref destinationStart, (nuint)index + (nuint)Vector<ulong>.Count);
             }
         }
 
@@ -976,9 +978,41 @@ static partial class ColumnChunkReader
                 upper.StoreUnsafe(ref destinationStart, (nuint)(index * 2 + 4));
             }
         }
+        else if (allowVector && NullableDateTimeHasCanonicalLayout && Vector128.IsHardwareAccelerated &&
+            destination.Length >= Vector128<ulong>.Count)
+        {
+            ref var sourceStart = ref Unsafe.As<DateTime, ulong>(ref MemoryMarshal.GetReference(source));
+            ref var destinationStart = ref Unsafe.As<DateTime?, ulong>(ref MemoryMarshal.GetReference(destination));
+            for (; index <= source.Length - Vector128<ulong>.Count; index += Vector128<ulong>.Count)
+                StoreNullablePairs(Vector128.LoadUnsafe(ref sourceStart, (nuint)index),
+                    ref destinationStart, (nuint)(index * 2));
+        }
 
         for (; index < source.Length; index++)
             destination[index] = source[index];
+    }
+
+    /// <summary>
+    /// Portable form of the present-word/value-word interleave the canonical nullable layout wants,
+    /// for hosts without AVX2. <see cref="Vector128.Shuffle{T}(Vector128{T}, Vector128{byte})"/> zeroes
+    /// every lane whose control byte is out of range - which both <c>pshufb</c> and AdvSimd <c>tbl</c>
+    /// already do - so each half comes back with the value in the high slot and nothing in the low one,
+    /// and the present word is simply OR'd in.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void StoreNullablePairs(Vector128<ulong> values, ref ulong destination, nuint offset)
+    {
+        const byte Drop = 0x80;
+        var present = Vector128.Create(1UL, 0UL);
+        var lowerControl = Vector128.Create(
+            Drop, Drop, Drop, Drop, Drop, Drop, Drop, Drop, 0, 1, 2, 3, 4, 5, 6, 7);
+        var upperControl = Vector128.Create(
+            Drop, Drop, Drop, Drop, Drop, Drop, Drop, Drop, 8, 9, 10, 11, 12, 13, 14, 15);
+        var bytes = values.AsByte();
+        (Vector128.Shuffle(bytes, lowerControl).AsUInt64() | present)
+            .StoreUnsafe(ref destination, offset);
+        (Vector128.Shuffle(bytes, upperControl).AsUInt64() | present)
+            .StoreUnsafe(ref destination, offset + (nuint)Vector128<ulong>.Count);
     }
 
     static bool HasCanonicalNullableInt32Layout()
@@ -1056,8 +1090,10 @@ static partial class ColumnChunkReader
         ReadOnlySpan<TValue> physical, Span<TValue?> destination)
         where TValue : struct
     {
-        if (typeof(TValue) == typeof(double) && NullableDoubleHasCanonicalLayout &&
-            Avx2.IsSupported && physical.Length == definitions.Length &&
+        // All-present 64-bit values share the canonical nullable layout and SIMD expansion.
+        if (((typeof(TValue) == typeof(double) && NullableDoubleHasCanonicalLayout) ||
+             (typeof(TValue) == typeof(long) && NullableInt64HasCanonicalLayout)) &&
+            Vector128.IsHardwareAccelerated && physical.Length == definitions.Length &&
             definitions.IndexOf((byte)0) < 0)
         {
             ExpandAllPresentInt64Batch(
@@ -1077,6 +1113,10 @@ static partial class ColumnChunkReader
 
     internal static void ScatterNullableDoubleBatchForTesting(ReadOnlySpan<byte> definitions,
         ReadOnlySpan<double> physical, Span<double?> destination)
+        => ScatterNullableFixedWidthBatch(definitions, physical, destination);
+
+    internal static void ScatterNullableInt64BatchForTesting(ReadOnlySpan<byte> definitions,
+        ReadOnlySpan<long> physical, Span<long?> destination)
         => ScatterNullableFixedWidthBatch(definitions, physical, destination);
 
     static bool HasCanonicalNullableDoubleLayout()
@@ -1529,6 +1569,26 @@ static partial class ColumnChunkReader
                 index = next;
             }
         }
+        else if (allowVector && NullableInt64HasCanonicalLayout && Vector128.IsHardwareAccelerated)
+        {
+            ref var sourceStart = ref Unsafe.As<long, ulong>(ref MemoryMarshal.GetReference(source));
+            ref var destinationStart = ref Unsafe.As<long?, ulong>(
+                ref MemoryMarshal.GetReference(destination));
+
+            while ((index & (Vector128<ulong>.Count - 1)) != 0)
+            {
+                index--;
+                destination[index] = source[index];
+            }
+
+            while (index != 0)
+            {
+                var next = index - Vector128<ulong>.Count;
+                StoreNullablePairs(Vector128.LoadUnsafe(ref sourceStart, (nuint)next),
+                    ref destinationStart, (nuint)(next * 2));
+                index = next;
+            }
+        }
 
         while (index != 0)
         {
@@ -1815,13 +1875,14 @@ static partial class ColumnChunkReader
             {
                 var next = index - Vector256<long>.Count;
                 var source = Vector256.LoadUnsafe(ref rawStart, (nuint)next);
-                var invalid = Avx2.CompareGreaterThan(minimum, source) |
-                    Avx2.CompareGreaterThan(source, maximum);
-                if (Avx2.MoveMask(invalid.AsByte()) != 0)
+                var invalid = Vector256.GreaterThan(minimum, source) |
+                    Vector256.GreaterThan(source, maximum);
+                // Preserve the AVX2 mask test; vector equality emits a slower vptest here.
+                if (invalid.AsByte().ExtractMostSignificantBits() != 0)
                     break;
 
-                var scaled = Avx2.ShiftLeftLogical(source.AsUInt64(), 3).AsInt64() +
-                    Avx2.ShiftLeftLogical(source.AsUInt64(), 1).AsInt64();
+                var scaled = Vector256.ShiftLeft(source.AsUInt64(), 3).AsInt64() +
+                    Vector256.ShiftLeft(source.AsUInt64(), 1).AsInt64();
                 var dateData = (scaled + epoch).AsUInt64() | kindBits;
                 var even = Avx2.UnpackLow(present, dateData);
                 var odd = Avx2.UnpackHigh(present, dateData);
@@ -1830,6 +1891,43 @@ static partial class ColumnChunkReader
                     .StoreUnsafe(ref destinationStart, (nuint)(next * 2));
                 Avx2.Permute2x128(even.AsInt64(), odd.AsInt64(), 0x31).AsUInt64()
                     .StoreUnsafe(ref destinationStart, (nuint)(next * 2 + Vector256<ulong>.Count));
+                index = next;
+            }
+        }
+        else if (typeof(TUnit) == typeof(MicrosTimestamp) && NullableDateTimeHasCanonicalLayout &&
+            Vector128.IsHardwareAccelerated)
+        {
+            // Cross-platform 128-bit form of the branch above, for ARM64 and pre-AVX2 x86. Same
+            // validate-then-scale contract: the bounds check runs before the unchecked shifts, and a
+            // vector holding any out-of-range lane falls out to the scalar loop's corruption check.
+            ref var rawStart = ref MemoryMarshal.GetReference(raw);
+            ref var destinationStart = ref Unsafe.As<DateTime?, ulong>(
+                ref MemoryMarshal.GetReference(destination));
+            var minimum = Vector128.Create(MicrosTimestamp.Minimum);
+            var maximum = Vector128.Create(MicrosTimestamp.Maximum);
+            var epoch = Vector128.Create(DateTime.UnixEpoch.Ticks);
+            var kindProbe = new DateTime(0, kind);
+            var kindBits = Vector128.Create(Unsafe.As<DateTime, ulong>(ref kindProbe));
+
+            while ((index & (Vector128<long>.Count - 1)) != 0)
+            {
+                index--;
+                destination[index] = new DateTime(TUnit.ToTicks(raw[index]), kind);
+            }
+
+            while (index != 0)
+            {
+                var next = index - Vector128<long>.Count;
+                var source = Vector128.LoadUnsafe(ref rawStart, (nuint)next);
+                var invalid = Vector128.GreaterThan(minimum, source) |
+                    Vector128.GreaterThan(source, maximum);
+                if (invalid != Vector128<long>.Zero)
+                    break;
+
+                var scaled = Vector128.ShiftLeft(source.AsUInt64(), 3).AsInt64() +
+                    Vector128.ShiftLeft(source.AsUInt64(), 1).AsInt64();
+                StoreNullablePairs((scaled + epoch).AsUInt64() | kindBits,
+                    ref destinationStart, (nuint)(next * 2));
                 index = next;
             }
         }
@@ -4033,7 +4131,7 @@ static partial class ColumnChunkReader
                 var indexes = Avx2.ConvertToVector256Int32(Vector128.Create(
                     Bmi2.X64.ParallelBitDeposit(lower, laneMask),
                     Bmi2.X64.ParallelBitDeposit(upper, laneMask)).AsUInt16());
-                if (Avx2.MoveMask(Avx2.CompareGreaterThan(indexes, maximumIndex).AsByte()) != 0)
+                if (Vector256.GreaterThan(indexes, maximumIndex) != Vector256<int>.Zero)
                 {
                     for (var lane = 0; lane < 8; lane++)
                         ValidateDictionaryIndex(indexes.GetElement(lane), dictionary.Length);
@@ -4090,7 +4188,7 @@ static partial class ColumnChunkReader
                 var indexes = Avx2.ConvertToVector256Int32(Vector128.Create(
                     Bmi2.X64.ParallelBitDeposit(lower, laneMask),
                     Bmi2.X64.ParallelBitDeposit(upper >> 4, laneMask)).AsUInt16());
-                if (Avx2.MoveMask(Avx2.CompareGreaterThan(indexes, maximumIndex).AsByte()) != 0)
+                if (Vector256.GreaterThan(indexes, maximumIndex) != Vector256<int>.Zero)
                 {
                     for (var lane = 0; lane < 8; lane++)
                         ValidateDictionaryIndex(indexes.GetElement(lane), dictionary.Length);
@@ -4175,7 +4273,7 @@ static partial class ColumnChunkReader
             var indexes = Avx2.ConvertToVector256Int32(Vector128.Create(
                 Bmi2.X64.ParallelBitDeposit(lower, laneMask),
                 Bmi2.X64.ParallelBitDeposit(upper >> 4, laneMask)).AsUInt16());
-            if (Avx2.MoveMask(Avx2.CompareGreaterThan(indexes, maximumIndex).AsByte()) != 0)
+            if (Vector256.GreaterThan(indexes, maximumIndex) != Vector256<int>.Zero)
             {
                 for (var lane = 0; lane < 8; lane++)
                     ValidateDictionaryIndex(indexes.GetElement(lane), dictionary.Length);
@@ -4240,7 +4338,7 @@ static partial class ColumnChunkReader
     static unsafe void GatherDictionaryInt64(Vector256<int> indexes, Vector256<int> maximumIndex,
         int dictionaryLength, long* dictionaryPointer, ref long target, int valueIndex)
     {
-        if (Avx2.MoveMask(Avx2.CompareGreaterThan(indexes, maximumIndex).AsByte()) != 0)
+        if (Vector256.GreaterThan(indexes, maximumIndex) != Vector256<int>.Zero)
         {
             for (var lane = 0; lane < 8; lane++)
                 ValidateDictionaryIndex(indexes.GetElement(lane), dictionaryLength);

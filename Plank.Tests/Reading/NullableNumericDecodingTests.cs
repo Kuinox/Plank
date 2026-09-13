@@ -12,6 +12,33 @@ namespace Plank.Tests.Reading;
 internal sealed class NullableNumericDecodingTests
 {
     [Test]
+    public void Int64ScatterPreservesNullsBitsTailsAndGuards()
+    {
+        long[] bits = [0, long.MinValue, long.MaxValue, -1, 1, 0x1234_5678_9abc_def0];
+        for (var length = 0; length <= 129; length++)
+        foreach (var nullPeriod in new[] { 0, 1, 2, 17 })
+        {
+            var definitions = new byte[length];
+            var expected = new long?[length];
+            for (var i = 0; i < length; i++)
+                if (nullPeriod == 0 || i % nullPeriod != 0)
+                {
+                    definitions[i] = 1;
+                    expected[i] = bits[i % bits.Length];
+                }
+            var physical = expected.Where(x => x.HasValue).Select(x => x.Value).ToArray();
+            var actual = Enumerable.Repeat<long?>(123, length + 2).ToArray();
+            ColumnChunkReader.ScatterNullableInt64BatchForTesting(definitions, physical,
+                actual.AsSpan(1, length));
+            if (actual[0] != 123 || actual[^1] != 123)
+                throw new InvalidOperationException("Int64 expansion overwrote a guard.");
+            for (var i = 0; i < length; i++)
+                if (actual[i + 1] != expected[i])
+                    throw new InvalidOperationException($"Int64 expansion changed value {i} of {length}.");
+        }
+    }
+
+    [Test]
     public void DoubleScatterPreservesNullsBitsTailsAndGuards()
     {
         long[] bits = [0, long.MinValue, 0x7ff0_0000_0000_0000, unchecked((long)0xfff0_0000_0000_0000UL),
