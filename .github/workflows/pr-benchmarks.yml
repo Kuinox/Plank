@@ -18,7 +18,7 @@ on:
         type: string
       iterations:
         description: BenchmarkDotNet measured iterations
-        default: 30
+        default: 20
         type: number
 
 permissions:
@@ -27,10 +27,11 @@ permissions:
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   DOTNET_NOLOGO: 1
-  # Lab prewarms each child for at least 32 iterations and 10 seconds, then
-  # runs these additional warmups. Bare-metal Lab defaults are unchanged.
-  BENCHMARK_WARMUPS: 8
-  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 30 }}
+  # PR comparisons use fully optimized code from the first invocation and
+  # blocking GC. This avoids tier-promotion and background-GC transitions on
+  # hosted runners while the two independent passes still expose runner noise.
+  BENCHMARK_WARMUPS: 4
+  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 20 }}
 
 jobs:
   resolve-request:
@@ -131,7 +132,7 @@ jobs:
     name: ${{ matrix.suite_label }} · ${{ matrix.operation }}
     needs: [resolve-request, resolve-plank-lab]
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
     # Only approved requests can cancel expensive jobs for the same PR.
     concurrency:
       group: ${{ github.workflow }}-${{ needs.resolve-request.outputs.pr_number || github.ref }}-${{ matrix.suite }}-${{ matrix.operation }}
@@ -286,7 +287,6 @@ jobs:
         run: |
           python .github/scripts/plank_lab_benchmark_report.py \
             --results benchmark-results \
-            --require-prewarm \
             --matrix plank-lab/Plank.Benchmarks/Published/Cases/matrix.json \
             --output benchmark-comment.md \
             --summary benchmark-summary.md \
