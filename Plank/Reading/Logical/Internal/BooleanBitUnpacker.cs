@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
-using System.Runtime.Intrinsics.X86;
 
 namespace Plank.Reading.Logical.Internal;
 
@@ -52,13 +51,8 @@ static class BooleanBitUnpacker
         ref var output = ref Unsafe.As<bool, byte>(ref MemoryMarshal.GetReference(destination));
         var index = 0;
 
-        if (Avx512BW.IsSupported && destination.Length >= Vector512<byte>.Count)
+        if (Vector512.IsHardwareAccelerated && destination.Length >= Vector512<byte>.Count)
         {
-            var spread = Vector512.Create(
-                (byte)0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
-                2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
-                4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
-                6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7);
             var bits = Vector512.Create(Vector128.Create(
                 (byte)1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128));
             var ones = Vector512.Create((byte)1);
@@ -66,18 +60,19 @@ static class BooleanBitUnpacker
             for (; index <= last; index += Vector512<byte>.Count)
             {
                 var packed = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, index >> 3));
-                // Shuffle is per 128-bit lane, and the broadcast puts all eight packed bytes in every
-                // lane, so lane n picks the two bytes its sixteen booleans come from.
-                var spreadBytes = Avx512BW.Shuffle(Vector512.Create(packed).AsByte(), spread);
+                // Constant indices select bytes within each 128-bit lane on AVX-512.
+                var spreadBytes = Vector512.ShuffleNative(Vector512.Create(packed).AsByte(),
+                    Vector512.Create(
+                        (byte)0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+                        18, 18, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19, 19, 19, 19, 19,
+                        36, 36, 36, 36, 36, 36, 36, 36, 37, 37, 37, 37, 37, 37, 37, 37,
+                        54, 54, 54, 54, 54, 54, 54, 54, 55, 55, 55, 55, 55, 55, 55, 55));
                 (Vector512.Equals(spreadBytes & bits, bits) & ones).StoreUnsafe(
                     ref Unsafe.Add(ref output, index));
             }
         }
-        else if (Avx2.IsSupported && destination.Length >= Vector256<byte>.Count)
+        else if (Vector256.IsHardwareAccelerated && destination.Length >= Vector256<byte>.Count)
         {
-            var spread = Vector256.Create(
-                (byte)0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
-                2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3);
             var bits = Vector256.Create(Vector128.Create(
                 (byte)1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128));
             var ones = Vector256.Create((byte)1);
@@ -85,8 +80,32 @@ static class BooleanBitUnpacker
             for (; index <= last; index += Vector256<byte>.Count)
             {
                 var packed = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref source, index >> 3));
-                var spreadBytes = Avx2.Shuffle(Vector256.Create(packed).AsByte(), spread);
-                (Avx2.CompareEqual(spreadBytes & bits, bits) & ones).StoreUnsafe(
+                // Keep the indices constant here so the JIT selects a lane-local shuffle.
+                var spreadBytes = Vector256.ShuffleNative(Vector256.Create(packed).AsByte(),
+                    Vector256.Create(
+                        (byte)0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+                        18, 18, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19, 19, 19, 19, 19));
+                (Vector256.Equals(spreadBytes & bits, bits) & ones).StoreUnsafe(
+                    ref Unsafe.Add(ref output, index));
+            }
+        }
+        else if (Vector128.IsHardwareAccelerated && destination.Length >= Vector128<byte>.Count)
+        {
+            // Cross-platform 128-bit form for ARM64 and pre-AVX2 x86, which otherwise expand a byte
+            // at a time through the lookup table below. Vector128.ShuffleNative is pshufb on x86 and tbl on
+            // AdvSimd; broadcasting the two packed bytes into every lane lets the control pick which
+            // of them each group of eight booleans comes from.
+            var spread = Vector128.Create(
+                (byte)0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1);
+            var bits = Vector128.Create(
+                (byte)1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128);
+            var ones = Vector128.Create((byte)1);
+            var last = destination.Length - Vector128<byte>.Count;
+            for (; index <= last; index += Vector128<byte>.Count)
+            {
+                var packed = Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref source, index >> 3));
+                var spreadBytes = Vector128.ShuffleNative(Vector128.Create(packed).AsByte(), spread);
+                (Vector128.Equals(spreadBytes & bits, bits) & ones).StoreUnsafe(
                     ref Unsafe.Add(ref output, index));
             }
         }
