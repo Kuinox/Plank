@@ -17,8 +17,12 @@ on:
         default: master
         type: string
       iterations:
-        description: BenchmarkDotNet measured iterations
-        default: 50
+        description: Minimum measured iterations per benchmark case
+        default: 15
+        type: number
+      measurement_time_ms:
+        description: Target total measured time per benchmark case
+        default: 500
         type: number
 
 permissions:
@@ -30,8 +34,10 @@ env:
   # A long warmup settles the benchmark before one base -> PR measurement pair.
   # Tiered compilation remains disabled and GC remains blocking in Plank-Lab.
   BENCHMARK_WARMUPS: 20
-  # Fifty measurements give each within-process drift block 16 or 17 samples.
-  BENCHMARK_ITERATIONS: ${{ inputs.iterations || 50 }}
+  # Each case gets enough iterations for the target measured duration, while
+  # retaining at least five samples in each of the three drift blocks.
+  BENCHMARK_MIN_ITERATIONS: ${{ inputs.iterations || 15 }}
+  BENCHMARK_MEASUREMENT_TIME_MS: ${{ inputs.measurement_time_ms || 500 }}
 
 jobs:
   resolve-request:
@@ -229,7 +235,8 @@ jobs:
               dotnet "$harness" --published --pr-comparison \
                 --filter "*$SUITE*PlankBenchmarks.$OPERATION" \
                 --warmupCount "$BENCHMARK_WARMUPS" \
-                --iterationCount "$BENCHMARK_ITERATIONS" \
+                --iterationCount "$BENCHMARK_MIN_ITERATIONS" \
+                --measurement-time-ms "$BENCHMARK_MEASUREMENT_TIME_MS" \
                 --data-file "$RUNNER_TEMP/yellow_tripdata_2024-01.parquet"
             ) | tee "$results/$SUITE-$OPERATION-$variant-$pass.log"
           }
