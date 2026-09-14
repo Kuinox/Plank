@@ -224,7 +224,6 @@ static class RleBitPackingHybridEncoding
                 index += Vector256<int>.Count;
             }
         }
-
         while (index < values.Length && Unsafe.Add(ref input, index) == value)
             index++;
         return index - start;
@@ -263,7 +262,6 @@ static class RleBitPackingHybridEncoding
                 index += Vector256<byte>.Count;
             }
         }
-
         while (index < values.Length && Unsafe.Add(ref input, index) == expectedValue)
             index++;
         return index - start;
@@ -300,6 +298,22 @@ static class RleBitPackingHybridEncoding
                 index += Vector256<byte>.Count;
             }
         }
+        if (Vector128.IsHardwareAccelerated && !Vector256.IsHardwareAccelerated && Vector128<byte>.IsSupported)
+        {
+            // Cross-platform 128-bit form for ARM64 and pre-AVX2 x86; wider paths above are unchanged.
+            var lastVectorStart = values.Length - Vector128<byte>.Count - 1;
+            while (index <= lastVectorStart)
+            {
+                var current = Vector128.LoadUnsafe(ref input, (nuint)index);
+                var next = Vector128.LoadUnsafe(ref input, (nuint)(index + 1));
+                if (Vector128.EqualsAny(current, next))
+                {
+                    var equalBits = Vector128.Equals(current, next).ExtractMostSignificantBits();
+                    return index - start + BitOperations.TrailingZeroCount(equalBits);
+                }
+                index += Vector128<byte>.Count;
+            }
+        }
 
         return index - start;
     }
@@ -334,6 +348,22 @@ static class RleBitPackingHybridEncoding
                 if (equalBits != 0)
                     return index - start + BitOperations.TrailingZeroCount(equalBits);
                 index += Vector256<int>.Count;
+            }
+        }
+        if (Vector128.IsHardwareAccelerated && !Vector256.IsHardwareAccelerated && Vector128<int>.IsSupported)
+        {
+            // Cross-platform 128-bit form for ARM64 and pre-AVX2 x86; wider paths above are unchanged.
+            var lastVectorStart = values.Length - Vector128<int>.Count - 1;
+            while (index <= lastVectorStart)
+            {
+                var current = Vector128.LoadUnsafe(ref input, (nuint)index);
+                var next = Vector128.LoadUnsafe(ref input, (nuint)(index + 1));
+                if (Vector128.EqualsAny(current, next))
+                {
+                    var equalBits = Vector128.Equals(current, next).ExtractMostSignificantBits();
+                    return index - start + BitOperations.TrailingZeroCount(equalBits);
+                }
+                index += Vector128<int>.Count;
             }
         }
 
