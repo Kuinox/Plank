@@ -1,4 +1,7 @@
+using System.Numerics;
+using System.Runtime.Intrinsics;
 using Plank.Writing;
+using Plank.Writing.Encoding;
 
 namespace Plank.Tests.Writer;
 
@@ -151,6 +154,45 @@ internal sealed class ColumnStatisticsMinMaxTests
                 $"Expected [0, {ulong.MaxValue}], got [{(ulong)uint64.MinBits}, {(ulong)uint64.MaxBits}].");
     }
 
+    [Test]
+    public void DirectScansAndFusedCopiesMatchAtEveryVectorBoundary()
+    {
+        int[] lengths = [1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65,
+            127, 128, 129, 255, 256, 257, 300, 1024];
+
+        foreach (var length in lengths)
+        {
+            VerifyScanAndCopy(CreateValues(length, i => (byte)(i * 73 + length), byte.MinValue, byte.MaxValue));
+            VerifyScanAndCopy(CreateValues(length, i => (ushort)(i * 4051 + length), ushort.MinValue,
+                ushort.MaxValue));
+            VerifyScanAndCopy(CreateValues(length, i => unchecked((int)((uint)i * 2654435761U + (uint)length)),
+                int.MinValue, int.MaxValue));
+            VerifyScanAndCopy(CreateValues(length, i => (uint)i * 2654435761U + (uint)length, uint.MinValue,
+                uint.MaxValue));
+            VerifyScanAndCopy(CreateValues(length,
+                i => unchecked((long)((ulong)i * 11400714819323198485UL + (ulong)length)), long.MinValue,
+                long.MaxValue));
+            VerifyScanAndCopy(CreateValues(length,
+                i => (ulong)i * 11400714819323198485UL + (ulong)length, ulong.MinValue, ulong.MaxValue));
+        }
+    }
+
+    [Test]
+    public void Vector128PlainPageWritersMatchExistingOutputAtEveryBoundary()
+    {
+        int[] lengths = [1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65,
+            127, 128, 129, 255, 256, 257, 300, 1024];
+
+        foreach (var length in lengths)
+        {
+            VerifyPlainWriters(CreateValues(length,
+                i => unchecked((int)((uint)i * 2654435761U + (uint)length)), int.MinValue, int.MaxValue));
+            VerifyPlainWriters(CreateValues(length,
+                i => unchecked((long)((ulong)i * 11400714819323198485UL + (ulong)length)), long.MinValue,
+                long.MaxValue));
+        }
+    }
+
     /// <summary>
     /// The scan seeds its accumulators from the first and last vectors, so an extreme sitting only in
     /// the overlap — or only in the very last element — still has to come out.
@@ -196,5 +238,116 @@ internal sealed class ColumnStatisticsMinMaxTests
             throw new InvalidOperationException(
                 $"{type} length {length}: expected [{min}, {max}], got "
                 + $"[{(int)statistics.MinBits}, {(int)statistics.MaxBits}].");
+    }
+
+    static T[] CreateValues<T>(int length, Func<int, T> valueFactory, T minimum, T maximum)
+    {
+        var values = new T[length];
+        for (var i = 0; i < length; i++)
+            values[i] = valueFactory(i);
+        if (length > 1)
+        {
+            values[length / 3] = maximum;
+            values[^1] = minimum;
+        }
+        return values;
+    }
+
+    static void VerifyScanAndCopy<T>(T[] values)
+        where T : struct, INumber<T>
+    {
+        T expectedMin = values[0], expectedMax = values[0];
+        foreach (var value in values)
+        {
+            if (value < expectedMin)
+                expectedMin = value;
+            if (value > expectedMax)
+                expectedMax = value;
+        }
+
+        MinMaxScan.Compute(values, out var computedMin, out var computedMax);
+        if (computedMin != expectedMin || computedMax != expectedMax)
+            throw new InvalidOperationException(
+                $"{typeof(T).Name} compute length {values.Length}: expected [{expectedMin}, {expectedMax}], "
+                + $"got [{computedMin}, {computedMax}].");
+
+        var destination = new T[values.Length + 3];
+        MinMaxScan.CopyAndCompute(values, destination, out var copiedMin, out var copiedMax);
+        if (!values.AsSpan().SequenceEqual(destination.AsSpan(0, values.Length)))
+            throw new InvalidOperationException(
+                $"{typeof(T).Name} copy length {values.Length}: destination differs from source.");
+        if (copiedMin != expectedMin || copiedMax != expectedMax)
+            throw new InvalidOperationException(
+                $"{typeof(T).Name} copy length {values.Length}: expected [{expectedMin}, {expectedMax}], "
+                + $"got [{copiedMin}, {copiedMax}].");
+
+        if (values.Length < Vector128<T>.Count * 4)
+            return;
+
+        MinMaxScan.ComputeVector128Bulk(values, out var portableMin, out var portableMax);
+        if (portableMin != expectedMin || portableMax != expectedMax)
+            throw new InvalidOperationException(
+                $"{typeof(T).Name} portable compute length {values.Length}: expected [{expectedMin}, "
+                + $"{expectedMax}], got [{portableMin}, {portableMax}].");
+
+        destination.AsSpan().Clear();
+        MinMaxScan.CopyAndComputeVector128Bulk(values, destination, out portableMin, out portableMax);
+        if (!values.AsSpan().SequenceEqual(destination.AsSpan(0, values.Length)))
+            throw new InvalidOperationException(
+                $"{typeof(T).Name} portable copy length {values.Length}: destination differs from source.");
+        if (portableMin != expectedMin || portableMax != expectedMax)
+            throw new InvalidOperationException(
+                $"{typeof(T).Name} portable copy length {values.Length}: expected [{expectedMin}, {expectedMax}], "
+                + $"got [{portableMin}, {portableMax}].");
+    }
+
+    static void VerifyPlainWriters(int[] values)
+    {
+        var capacity = checked((uint)(values.Length * sizeof(int) + 64));
+        var baselineWriter = new BufferWriter(DefaultParquetBufferPool.Shared, capacity, capacity);
+        var vectorWriter = new BufferWriter(DefaultParquetBufferPool.Shared, capacity, capacity);
+        try
+        {
+            var baseline = PlainEncoding.WriteInt32PageWithStatistics(values, ref baselineWriter);
+            var vector = PlainEncoding.WriteInt32PageWithVector128Statistics(values, ref vectorWriter);
+            AssertPlainWriterParity(values.Length, baseline, vector, baselineWriter, vectorWriter);
+        }
+        finally
+        {
+            baselineWriter.Dispose();
+            vectorWriter.Dispose();
+        }
+    }
+
+    static void VerifyPlainWriters(long[] values)
+    {
+        var capacity = checked((uint)(values.Length * sizeof(long) + 64));
+        var baselineWriter = new BufferWriter(DefaultParquetBufferPool.Shared, capacity, capacity);
+        var vectorWriter = new BufferWriter(DefaultParquetBufferPool.Shared, capacity, capacity);
+        try
+        {
+            var baseline = PlainEncoding.WriteInt64PageWithStatistics(values, ref baselineWriter);
+            var vector = PlainEncoding.WriteInt64PageWithVector128Statistics(values, ref vectorWriter);
+            AssertPlainWriterParity(values.Length, baseline, vector, baselineWriter, vectorWriter);
+        }
+        finally
+        {
+            baselineWriter.Dispose();
+            vectorWriter.Dispose();
+        }
+    }
+
+    static void AssertPlainWriterParity(int length, ColumnStatistics baseline, ColumnStatistics vector,
+        BufferWriter baselineWriter, BufferWriter vectorWriter)
+    {
+        if (baseline.MinBits != vector.MinBits || baseline.MaxBits != vector.MaxBits
+            || baseline.NullCount != vector.NullCount)
+            throw new InvalidOperationException(
+                $"PLAIN length {length}: baseline [{baseline.MinBits}, {baseline.MaxBits}] differs from "
+                + $"Vector128 [{vector.MinBits}, {vector.MaxBits}].");
+        if (!baselineWriter.TryGetSingleWrittenSpan(out var baselineBytes)
+            || !vectorWriter.TryGetSingleWrittenSpan(out var vectorBytes)
+            || !baselineBytes.SequenceEqual(vectorBytes))
+            throw new InvalidOperationException($"PLAIN length {length}: Vector128 output bytes differ.");
     }
 }

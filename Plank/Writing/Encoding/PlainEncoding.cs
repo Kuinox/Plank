@@ -1296,4 +1296,63 @@ static class PlainEncoding
         writer.Advance(offset);
     }
 
+    internal static ColumnStatistics WriteInt32PageWithVector128Statistics(ReadOnlySpan<int> values,
+        ref BufferWriter writer)
+    {
+        if (!CanUseInt32Vector128(values.Length))
+            return WriteInt32PageWithStatistics(values, ref writer);
+
+        var byteCount = checked(values.Length * sizeof(int));
+        var destinationBytes = writer.GetSpan(byteCount)[..byteCount];
+        int min;
+        int max;
+        if (BitConverter.IsLittleEndian)
+        {
+            MinMaxScan.CopyAndComputeVector128Bulk(values, MemoryMarshal.Cast<byte, int>(destinationBytes),
+                out min, out max);
+        }
+        else
+        {
+            for (var i = 0; i < values.Length; i++)
+                BinaryPrimitives.WriteInt32LittleEndian(destinationBytes[(i * sizeof(int))..], values[i]);
+            MinMaxScan.ComputeVector128Bulk(values, out min, out max);
+        }
+
+        writer.Advance(byteCount);
+        return ColumnStatistics.FromInt32(min, max, 0);
+    }
+
+    internal static ColumnStatistics WriteInt64PageWithVector128Statistics(ReadOnlySpan<long> values,
+        ref BufferWriter writer)
+    {
+        if (!CanUseInt64Vector128(values.Length))
+            return WriteInt64PageWithStatistics(values, ref writer);
+
+        var byteCount = checked(values.Length * sizeof(long));
+        var destinationBytes = writer.GetSpan(byteCount)[..byteCount];
+        long min;
+        long max;
+        if (BitConverter.IsLittleEndian)
+        {
+            MinMaxScan.CopyAndComputeVector128Bulk(values, MemoryMarshal.Cast<byte, long>(destinationBytes),
+                out min, out max);
+        }
+        else
+        {
+            for (var i = 0; i < values.Length; i++)
+                BinaryPrimitives.WriteInt64LittleEndian(destinationBytes[(i * sizeof(long))..], values[i]);
+            MinMaxScan.ComputeVector128Bulk(values, out min, out max);
+        }
+
+        writer.Advance(byteCount);
+        return ColumnStatistics.FromInt64(min, max, 0);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool CanUseInt32Vector128(int length)
+        => Vector128.IsHardwareAccelerated && length >= 256;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool CanUseInt64Vector128(int length)
+        => Vector128.IsHardwareAccelerated && length >= 256;
 }
