@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 using System.Threading;
 using Plank.Schema;
@@ -230,15 +231,26 @@ static class Encoding
 
         if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int))
         {
-            WritePlainPrimitiveDataPages<int, Int32PlainPageWriter>(bufferWriters,
-                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values), rowsPerPage, pages);
+            var intValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values);
+            if (AdvSimd.Arm64.IsSupported
+                && PlainEncoding.CanUseInt32Vector128(Math.Min(values.Length, rowsPerPage)))
+                WritePlainPrimitiveDataPages<int, ArmInt32PlainPageWriter>(bufferWriters, intValues, rowsPerPage,
+                    pages);
+            else
+                WritePlainPrimitiveDataPages<int, Int32PlainPageWriter>(bufferWriters, intValues, rowsPerPage, pages);
             return true;
         }
 
         if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(long))
         {
-            WritePlainPrimitiveDataPages<long, Int64PlainPageWriter>(bufferWriters,
-                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values), rowsPerPage, pages);
+            var longValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values);
+            if (AdvSimd.Arm64.IsSupported
+                && PlainEncoding.CanUseInt64Vector128(Math.Min(values.Length, rowsPerPage)))
+                WritePlainPrimitiveDataPages<long, ArmInt64PlainPageWriter>(bufferWriters, longValues, rowsPerPage,
+                    pages);
+            else
+                WritePlainPrimitiveDataPages<long, Int64PlainPageWriter>(bufferWriters, longValues, rowsPerPage,
+                    pages);
             return true;
         }
 
@@ -3770,4 +3782,15 @@ static class Encoding
         return false;
     }
 
+    readonly struct ArmInt32PlainPageWriter : IPlainPrimitivePageWriter<int>
+    {
+        public static ColumnStatistics Write(ReadOnlySpan<int> values, ref BufferWriter writer)
+            => PlainEncoding.WriteInt32PageWithVector128Statistics(values, ref writer);
+    }
+
+    readonly struct ArmInt64PlainPageWriter : IPlainPrimitivePageWriter<long>
+    {
+        public static ColumnStatistics Write(ReadOnlySpan<long> values, ref BufferWriter writer)
+            => PlainEncoding.WriteInt64PageWithVector128Statistics(values, ref writer);
+    }
 }
