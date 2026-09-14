@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Runtime.Intrinsics;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.Encoding;
@@ -73,6 +74,31 @@ internal sealed class PlainEncodingTests
 
             AssertEncoding(ParquetPhysicalType.Int32, byteValues, WriteByteAsInt32Values);
             AssertEncoding(ParquetPhysicalType.Int32, ushortValues, WriteUInt16AsInt32Values);
+        }
+    }
+
+    [Test]
+    public void WidenedUInt16ValuesPreserveDestinationBoundsAcrossEveryVectorAlignment()
+    {
+        int[] lengths = [.. Enumerable.Range(0, 34), 63, 64, 65, 127, 128, 129, 4_095, 4_096, 4_097];
+        var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 32 * 1024, 32 * 1024);
+        try
+        {
+            foreach (var length in lengths)
+            {
+                var ushortOffsets = length <= 33 ? Vector128<ushort>.Count : 4;
+                for (var sourceOffset = 0; sourceOffset < ushortOffsets; sourceOffset++)
+                {
+                    var source = new ushort[sourceOffset + length + 3];
+                    for (var i = 0; i < source.Length; i++)
+                        source[i] = unchecked((ushort)(i * 51_379 + 9_973));
+                    AssertWidenedUInt16EncodingPreservesBounds(source.AsSpan(sourceOffset, length), ref writer);
+                }
+            }
+        }
+        finally
+        {
+            writer.Dispose();
         }
     }
 
@@ -307,6 +333,43 @@ internal sealed class PlainEncodingTests
         var result = new byte[writer.WrittenLength];
         writer.CopyTo(result);
         return result;
+    }
+
+    static void AssertWidenedUInt16EncodingPreservesBounds(ReadOnlySpan<ushort> values, ref BufferWriter writer)
+    {
+        const int prefixLength = 13;
+        const int suffixLength = 64;
+        const byte unwrittenSentinel = 0xCD;
+        var byteCount = checked(values.Length * sizeof(int));
+
+        writer.Reset();
+        writer.GetSpan(prefixLength + byteCount + suffixLength)
+            [..(prefixLength + byteCount + suffixLength)].Fill(unwrittenSentinel);
+        writer.Write(Enumerable.Repeat((byte)0xA5, prefixLength).ToArray());
+        PlainEncoding.WriteValues(new Column("value", ParquetPhysicalType.Int32), values, ref writer);
+
+        if (writer.WrittenLength != prefixLength + byteCount)
+            throw new InvalidOperationException(
+                $"Widened UInt16 length {values.Length} wrote {writer.WrittenLength - prefixLength} bytes, "
+                + $"expected {byteCount}.");
+
+        var actual = new byte[writer.WrittenLength];
+        writer.CopyTo(actual);
+        if (!actual.AsSpan(0, prefixLength).SequenceEqual(Enumerable.Repeat((byte)0xA5, prefixLength).ToArray()))
+            throw new InvalidOperationException(
+                $"Widened UInt16 length {values.Length} overwrote the destination prefix.");
+
+        var expected = new byte[byteCount];
+        for (var i = 0; i < values.Length; i++)
+            BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(i * sizeof(int)), values[i]);
+        if (!actual.AsSpan(prefixLength).SequenceEqual(expected))
+            throw new InvalidOperationException(
+                $"Widened UInt16 bytes differ at length {values.Length}.");
+
+        if (!writer.GetSpan(suffixLength)[..suffixLength].SequenceEqual(
+                Enumerable.Repeat(unwrittenSentinel, suffixLength).ToArray()))
+            throw new InvalidOperationException(
+                $"Widened UInt16 length {values.Length} overwrote the destination suffix.");
     }
 
     static byte[] PackBooleans(ReadOnlySpan<bool> values)
