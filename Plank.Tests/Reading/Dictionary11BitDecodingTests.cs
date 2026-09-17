@@ -66,6 +66,21 @@ internal sealed class Dictionary11BitDecodingTests
     }
 
     [Test]
+    public void ElevenBitDecoderHandlesNonAlignedDictionaryLengths()
+    {
+        foreach (var length in new[] { 1_025, 2_047 })
+        {
+            var dictionary = Enumerable.Range(0, length).Select(i => (long)i * 19).ToArray();
+            foreach (var count in new[] { 7, 8, 9, 4_113 })
+            {
+                var indexes = Enumerable.Range(0, count).Select(i => i * 61 % length).ToArray();
+                indexes[^1] = length - 1;
+                AssertDecoded(dictionary, ParquetPhysicalType.Int64, EncodeLiteral(indexes, 11), indexes);
+            }
+        }
+    }
+
+    [Test]
     public void Int32LiteralDecoderReusesRepeatedDictionaryCyclesAndHandlesDifferentCycles()
     {
         var dictionary = Enumerable.Range(0, 2_048).Select(index => index * 17).ToArray();

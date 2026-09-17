@@ -4216,7 +4216,8 @@ static partial class ColumnChunkReader
                 return;
         }
 
-        if (bitWidth == 11 && destination.Length >= 8 && Avx2.IsSupported && Bmi2.X64.IsSupported)
+        if (bitWidth == 11 && destination.Length >= 8 &&
+            (Vector128.IsHardwareAccelerated || (Avx2.IsSupported && Bmi2.X64.IsSupported)))
         {
             var vectorizedLength = destination.Length & ~7;
             if (typeof(T) == typeof(int))
@@ -4360,6 +4361,11 @@ static partial class ColumnChunkReader
     static unsafe void DecodeDictionaryLiteralInt32Indexes11BitCore(ReadOnlySpan<byte> payload,
         ReadOnlySpan<int> dictionary, Span<int> destination)
     {
+        if (!Avx2.IsSupported || !Bmi2.X64.IsSupported)
+        {
+            DecodeDictionaryLiteral11BitPortable(payload, dictionary, destination);
+            return;
+        }
         const ulong laneMask = 0x07ff_07ff_07ff_07ffUL;
         ref var source = ref MemoryMarshal.GetReference(payload);
         ref var target = ref MemoryMarshal.GetReference(destination);
@@ -4446,6 +4452,11 @@ static partial class ColumnChunkReader
     static void DecodeDictionaryLiteralInt64Indexes11BitCore(ReadOnlySpan<byte> payload,
         ReadOnlySpan<long> dictionary, Span<long> destination)
     {
+        if (!Avx2.IsSupported || !Bmi2.X64.IsSupported)
+        {
+            DecodeDictionaryLiteral11BitPortable(payload, dictionary, destination);
+            return;
+        }
         const ulong laneMask = 0x07ff_07ff_07ff_07ffUL;
         ref var source = ref MemoryMarshal.GetReference(payload);
         ref var dictionaryStart = ref MemoryMarshal.GetReference(dictionary);
