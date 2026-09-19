@@ -72,6 +72,14 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
+    [Arguments(1)]
+    [Arguments(2)]
+    [Arguments(3)]
+    [Arguments(4)]
+    [Arguments(5)]
+    [Arguments(6)]
+    [Arguments(7)]
+    [Arguments(8)]
     [Arguments(9)]
     [Arguments(10)]
     [Arguments(11)]
@@ -80,7 +88,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
     [Arguments(14)]
     [Arguments(15)]
     [Arguments(16)]
-    public void ReadInt32WideResidualsPreserveLanesTailsAndWrapping(int bitWidth)
+    public void ReadIntegerResidualsPreserveLanesTailsAndWrapping(int bitWidth)
     {
         foreach (var count in new[] { 32, 33, 34, 128, 129, 130, 257 })
         foreach (var minDelta in new[] { -17L, int.MaxValue, long.MaxValue - ushort.MaxValue })
@@ -91,7 +99,9 @@ internal sealed class DeltaBinaryPackedDecoderTests
             WriteUnsignedVarIntReference((ulong)count, payload);
             WriteUnsignedVarIntReference((ulong)int.MaxValue * 2, payload);
             var expected = new int[count];
+            var expectedLongs = new long[count];
             expected[0] = int.MaxValue;
+            expectedLongs[0] = int.MaxValue;
             var previous = (long)expected[0];
             var random = new Random(bitWidth * 1000 + count);
             for (var first = 1; first < count; first += 128)
@@ -110,6 +120,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
                     {
                         previous = unchecked(previous + deltas[i]);
                         expected[first + i] = unchecked((int)previous);
+                        expectedLongs[first + i] = previous;
                     }
                 }
                 WriteDeltaBlockReference(deltas, minDelta, payload, Math.Min(128, count - first));
@@ -132,6 +143,22 @@ internal sealed class DeltaBinaryPackedDecoderTests
             }
             if (!batched.SequenceEqual(expected) || batchState.Offset != bytes.Length)
                 throw new InvalidOperationException($"Batched Int32 width {bitWidth}, count {count} failed.");
+            var longs = new long[count + 2];
+            longs[0] = longs[^1] = 123456789;
+            consumed = DeltaBinaryPackedDecoder.ReadInt64(bytes, longs.AsSpan(1, count));
+            if (consumed != bytes.Length || !longs.AsSpan(1, count).SequenceEqual(expectedLongs) ||
+                longs[0] != 123456789 || longs[^1] != 123456789)
+                throw new InvalidOperationException($"Int64 width {bitWidth}, count {count} failed.");
+            batchState = DeltaBinaryPackedDecoder.StartBatch(bytes, count);
+            var batchedLongs = new long[count];
+            while (batchState.Active)
+            {
+                var length = batchState.NextBatchCount(64);
+                DeltaBinaryPackedDecoder.ReadInt64Batch(bytes,
+                    batchedLongs.AsSpan(batchState.ValuesRead, length), ref batchState);
+            }
+            if (!batchedLongs.SequenceEqual(expectedLongs) || batchState.Offset != bytes.Length)
+                throw new InvalidOperationException($"Batched Int64 width {bitWidth}, count {count} failed.");
             foreach (var canonicalLayout in new[] { false, true })
             {
                 var nullable = new int?[count + 2];
@@ -140,6 +167,67 @@ internal sealed class DeltaBinaryPackedDecoderTests
                     nullable[0] is not null || nullable[^1] is not null)
                     throw new InvalidOperationException($"Nullable Int32 width {bitWidth}, count {count} failed.");
             }
+        }
+    }
+
+    [Test]
+    public void Avx2MiniBlocksPreserveEveryWidthWrappingAndExactInputBounds()
+    {
+        if (!System.Runtime.Intrinsics.X86.Avx2.IsSupported) return;
+
+        for (var width = 1; width <= 16; width++)
+        for (var padding = 0; padding <= 7; padding++)
+        foreach (var minDelta in new[] { 0L, -37L, long.MinValue, long.MaxValue })
+        {
+            var packed = new byte[width * 4 + padding];
+            packed.AsSpan(width * 4).Fill(0xff);
+            var random = new Random(width * 100 + padding);
+            var expected = new long[32];
+            var prior = long.MaxValue - 3;
+            for (var i = 0; i < 32; i++)
+            {
+                var residual = i switch
+                {
+                    0 => 0,
+                    31 => (1 << width) - 1,
+                    _ => random.Next(1 << width)
+                };
+                for (var bit = 0; bit < width; bit++)
+                    if ((residual & (1 << bit)) != 0)
+                    {
+                        var position = i * width + bit;
+                        packed[position / 8] |= (byte)(1 << (position % 8));
+                    }
+                prior = unchecked(prior + minDelta + residual);
+                expected[i] = prior;
+            }
+
+            var longs = new long[34];
+            var ints = new int[34];
+            var nullable = new int?[34];
+            longs[0] = longs[^1] = 123456789;
+            ints[0] = ints[^1] = 123456789;
+            var previous = long.MaxValue - 3;
+            DeltaBinaryPackedDecoder.DecodeInt64MiniBlockAvx2(packed, width, minDelta,
+                ref previous, longs.AsSpan(1, 32));
+            if (!longs.AsSpan(1, 32).SequenceEqual(expected) || previous != expected[^1] ||
+                longs[0] != 123456789 || longs[^1] != 123456789)
+                throw new InvalidOperationException($"Int64 AVX2 width {width}, padding {padding} failed.");
+
+            var expectedInts = expected.Select(static v => unchecked((int)v)).ToArray();
+            previous = long.MaxValue - 3;
+            DeltaBinaryPackedDecoder.DecodeInt32MiniBlockAvx2(packed, width, minDelta,
+                ref previous, ints.AsSpan(1, 32));
+            if (!ints.AsSpan(1, 32).SequenceEqual(expectedInts) ||
+                unchecked((int)previous) != expectedInts[^1] || ints[0] != 123456789 || ints[^1] != 123456789)
+                throw new InvalidOperationException($"Int32 AVX2 width {width}, padding {padding} failed.");
+
+            previous = long.MaxValue - 3;
+            DeltaBinaryPackedDecoder.DecodeNullableInt32MiniBlockAvx2(packed, width, minDelta,
+                ref previous, nullable.AsSpan(1, 32));
+            if (!nullable.AsSpan(1, 32).SequenceEqual(expectedInts.Select(static v => (int?)v).ToArray()) ||
+                unchecked((int)previous) != expectedInts[^1] || nullable[0] is not null || nullable[^1] is not null)
+                throw new InvalidOperationException($"Nullable Int32 AVX2 width {width}, padding {padding} failed.");
         }
     }
 
