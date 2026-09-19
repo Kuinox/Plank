@@ -14,7 +14,7 @@ results.
     id="plank-benchmarks"
     src="https://kuinox.github.io/Plank-Lab/?embed=docs"
     title="Plank performance benchmark matrix"
-    loading="lazy"
+    loading="eager"
     referrerpolicy="no-referrer"
     scrolling="no"
   ></iframe>

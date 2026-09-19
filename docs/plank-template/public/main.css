@@ -160,9 +160,11 @@ footer > .container-xxl {
   align-items: center;
   gap: 0.4rem;
   width: 100%;
+  min-width: 0;
 }
 
 #navbar .search {
+  min-width: 0;
   max-width: 23rem;
   margin-left: auto;
 }
@@ -853,10 +855,6 @@ body.plank-benchmarks-page article {
 .plank-benchmark-frame {
   width: 100%;
   margin-top: 1.6rem;
-  overflow: hidden;
-  border: 1px solid var(--plank-line);
-  border-radius: 0.4rem;
-  background: var(--plank-surface);
 }
 
 #plank-benchmarks {
@@ -875,6 +873,67 @@ body.plank-benchmarks-page article {
   }
 }
 
+/* The full navigation needs room for links, utilities, and search. */
+@media (max-width: 1199.98px) {
+  body > header {
+    height: auto;
+  }
+
+  #autocollapse {
+    width: 100%;
+  }
+  #autocollapse > .container-xxl {
+    flex-wrap: wrap !important;
+  }
+
+  #autocollapse [data-bs-target="#navpanel"] {
+    display: block !important;
+    margin-left: auto;
+  }
+
+  #autocollapse #navpanel {
+    flex-basis: 100%;
+    max-height: calc(100dvh - 4rem);
+    overflow-y: auto;
+  }
+
+  #autocollapse #navpanel.collapse:not(.show) {
+    display: none !important;
+  }
+
+  #autocollapse #navpanel.show {
+    display: block !important;
+  }
+
+  #autocollapse #navbar {
+    flex-direction: column;
+    align-items: stretch;
+    padding-top: 0.8rem;
+  }
+
+  #autocollapse #navbar .navbar-nav {
+    flex-direction: column;
+  }
+
+  #autocollapse #navbar .navbar-nav .dropdown-menu {
+    position: static;
+  }
+
+  #autocollapse #navbar form.search {
+    display: flex;
+    width: 100%;
+    max-width: none;
+    margin: 0.5rem 0;
+    order: 30;
+  }
+
+  #autocollapse #navbar form.icons {
+    align-self: flex-start;
+    margin: 0 0 0.5rem;
+    order: 40;
+  }
+}
+
 @media (max-width: 767.98px) {
   .navbar {
     min-height: 3.9rem;
@@ -883,16 +942,6 @@ body.plank-benchmarks-page article {
   .navbar-brand #logo {
     width: 2rem;
     height: 2rem;
-  }
-
-  #navbar {
-    align-items: stretch;
-    padding-top: 0.8rem;
-  }
-
-  #navbar .search {
-    max-width: none;
-    margin-left: 0;
   }
 
   article h1 {
