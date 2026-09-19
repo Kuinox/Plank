@@ -1052,7 +1052,8 @@ static class Encoding
         if (column.PhysicalType == ParquetPhysicalType.Double && typeof(T) == typeof(double))
         {
             var doubleValues = Unsafe.As<ReadOnlySpan<T?>, ReadOnlySpan<double?>>(ref values);
-            if (BitConverter.IsLittleEndian && HasCanonicalNullableDoubleLayout && Avx2.IsSupported
+            if (BitConverter.IsLittleEndian && HasCanonicalNullableDoubleLayout
+                && (Avx2.IsSupported || AdvSimd.IsSupported)
                 && AreAllNullableDoubleValuesPresent(doubleValues))
             {
                 EncodeAllPresentOptionalPlainPrimitivePages<double, DoublePlainPageWriter>(bufferWriters,
@@ -1275,6 +1276,18 @@ static class Encoding
                 var first = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
                 var second = Vector256.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 4));
                 if ((((first ^ expectedFlags) | (second ^ expectedFlags)) & flagMask) != Vector256<long>.Zero)
+                    return false;
+            }
+        }
+        else if (AdvSimd.IsSupported)
+        {
+            var flagMask = Vector128.Create(0xffL, 0L);
+            var expectedFlags = Vector128.Create(1L, 0L);
+            for (; values.Length - valueIndex >= 2; valueIndex += 2)
+            {
+                var first = Vector128.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
+                var second = Vector128.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 2));
+                if ((((first ^ expectedFlags) | (second ^ expectedFlags)) & flagMask) != Vector128<long>.Zero)
                     return false;
             }
         }
