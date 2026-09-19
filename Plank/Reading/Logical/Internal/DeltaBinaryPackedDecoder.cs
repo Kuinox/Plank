@@ -610,13 +610,46 @@ static class DeltaBinaryPackedDecoder
     // A group of 8 lanes spans exactly bitWidth bytes and is always byte-aligned at its own start
     // (group byte offset = groupIndex * bitWidth, and the outer loop only ever advances by whole
     // groups of 8 values). Splitting each group into two 4-lane halves (A: lanes 0-3, B: lanes 4-7)
-    // means the "start bit remainder" for each half only depends on bitWidth, not which group it
-    // is — so the shuffle/shift control vectors below can be built once per call instead of once
-    // per group. (An earlier version of this rebuilt them per group instead of hoisting them out;
-    // it measured roughly 20x slower — almost all the cost was in rebuilding the controls, not in
-    // the actual unpack.)
+    // means the "start bit remainder" for each half only depends on bitWidth, not which group it is.
+    //
+    // startBitRemainder only ever takes values 0-7 (it is a `& 7` result) and bitWidth only ranges
+    // 9-16 here, so there are only 64 possible (startBitRemainder, bitWidth) pairs — cheap enough to
+    // precompute once into a static table and look up by index instead of rebuilding on every call.
+    // An earlier version called the builder below directly from the hot path — "once per call"
+    // sounds hoisted, but each call only covers one 32-value mini-block (and the Int64 variant
+    // rebuilds per 4-lane group, i.e. up to 8 times per mini-block), so on real files with many
+    // mini-blocks this was still rebuilding the same handful of control vectors over and over. That
+    // measured as a severe regression in CI on real/synthetic data despite looking like a clear win
+    // in an isolated microbenchmark that amortized the rebuild cost across one huge fixed-bitWidth
+    // buffer — a calling-pattern mismatch between the microbenchmark and production, not a bad idea.
+    // (A version that rebuilt the controls per *group* instead of hoisting them at all measured
+    // roughly 20x slower still — almost all the cost was in rebuilding, not in the actual unpack.)
+    const int WideLaneControlBitWidths = 8; // bitWidth 9..16
+    const int WideLaneControlRemainders = 8; // startBitRemainder 0..7
+
+    static readonly (Vector128<byte> Shuffle, Vector128<uint> Shift)[] WideLaneControlTable =
+        BuildWideLaneControlTable();
+
+    static (Vector128<byte> Shuffle, Vector128<uint> Shift)[] BuildWideLaneControlTable()
+    {
+        var table = new (Vector128<byte>, Vector128<uint>)[WideLaneControlBitWidths * WideLaneControlRemainders];
+        for (var bitWidth = 9; bitWidth <= 16; bitWidth++)
+            for (var remainder = 0; remainder < WideLaneControlRemainders; remainder++)
+                table[WideLaneControlIndex(remainder, bitWidth)] =
+                    ComputeWideLaneControls(remainder, bitWidth);
+        return table;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static (Vector128<byte> Shuffle, Vector128<uint> Shift) BuildWideLaneControls(
+    static int WideLaneControlIndex(int startBitRemainder, int bitWidth)
+        => (bitWidth - 9) * WideLaneControlRemainders + startBitRemainder;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static (Vector128<byte> Shuffle, Vector128<uint> Shift) GetWideLaneControls(
+        int startBitRemainder, int bitWidth)
+        => WideLaneControlTable[WideLaneControlIndex(startBitRemainder, bitWidth)];
+
+    static (Vector128<byte> Shuffle, Vector128<uint> Shift) ComputeWideLaneControls(
         int startBitRemainder, int bitWidth)
     {
         Span<byte> shuffleIndices = stackalloc byte[16];
@@ -664,9 +697,9 @@ static class DeltaBinaryPackedDecoder
     {
         ref var destinationStart = ref destination[0];
         var mask = Vector128.Create((uint)((1UL << bitWidth) - 1));
-        var (shuffleA, shiftA) = BuildWideLaneControls(startBitRemainder: 0, bitWidth);
+        var (shuffleA, shiftA) = GetWideLaneControls(startBitRemainder: 0, bitWidth);
         var remainderB = (4 * bitWidth) & 7;
-        var (shuffleB, shiftB) = BuildWideLaneControls(remainderB, bitWidth);
+        var (shuffleB, shiftB) = GetWideLaneControls(remainderB, bitWidth);
         var byteOffsetBExtra = (4 * bitWidth) >> 3;
 
         for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
@@ -685,9 +718,9 @@ static class DeltaBinaryPackedDecoder
     {
         ref var destinationStart = ref Unsafe.As<int?, ulong>(ref destination[0]);
         var mask = Vector128.Create((uint)((1UL << bitWidth) - 1));
-        var (shuffleA, shiftA) = BuildWideLaneControls(startBitRemainder: 0, bitWidth);
+        var (shuffleA, shiftA) = GetWideLaneControls(startBitRemainder: 0, bitWidth);
         var remainderB = (4 * bitWidth) & 7;
-        var (shuffleB, shiftB) = BuildWideLaneControls(remainderB, bitWidth);
+        var (shuffleB, shiftB) = GetWideLaneControls(remainderB, bitWidth);
         var byteOffsetBExtra = (4 * bitWidth) >> 3;
 
         for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
@@ -1226,10 +1259,11 @@ static class DeltaBinaryPackedDecoder
     }
 
     // PDEP-free equivalent of the bitWidth 9-16 branch this function used to have — see the
-    // comment above BuildWideLaneControls for why. Each group here is exactly 4 lanes (Int64's
-    // native vector width), and unlike the Int32 groups above, a group's own start is not always
+    // comment above WideLaneControlTable for why this looks up precomputed controls instead of
+    // calling ComputeWideLaneControls directly. Each group here is exactly 4 lanes (Int64's native
+    // vector width), and unlike the Int32 groups above, a group's own start is not always
     // byte-aligned (4 lanes * bitWidth bits is not always a multiple of 8), so the lane controls
-    // are rebuilt per group from that group's actual bit remainder rather than hoisted once.
+    // differ per group — but the table lookup is still O(1), same as the byte-aligned Int32 case.
     static void DecodeInt64MiniBlockNoPdepWide(ReadOnlySpan<byte> packed, int bitWidth,
         long minDelta, ref long previous, Span<long> destination)
     {
@@ -1238,7 +1272,7 @@ static class DeltaBinaryPackedDecoder
         for (var index = 0; index < MiniBlockChunk; index += Vector256<long>.Count)
         {
             var bitOffset = index * bitWidth;
-            var (shuffle, shift) = BuildWideLaneControls(bitOffset & 7, bitWidth);
+            var (shuffle, shift) = GetWideLaneControls(bitOffset & 7, bitWidth);
             var fields = UnpackFourFieldsNoPdep(packed, bitOffset / 8, shuffle, shift, mask);
             var residuals = Avx2.ConvertToVector256Int64(fields);
             ReconstructFourInt64(residuals, minDelta, ref previous, ref destinationStart, index);
