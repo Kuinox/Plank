@@ -1215,6 +1215,29 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
         }
 
+        if (typeof(TValue) == typeof(long)
+            && _column.PhysicalType == ParquetPhysicalType.Int64
+            && strategyContext.Strategy is DefaultStrategy
+            && strategyContext.Strategy.GetDictionaryMode() == DictionaryMode.Maybe
+            && _owner.WritePageIndexes
+            && _column.Options.BloomFilter is null)
+        {
+            Pages.Clear();
+            var longValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<long?>>(ref values);
+            if (Plank.Writing.Encoding.Encoding.TryEncodeOptionalInt64Dictionary(
+                    _owner.BufferWriters, _column, longValues, strategyContext, Pages,
+                    _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
+                    GetOrCreateDictionaryState<long>(), out var dictionaryStatistics))
+            {
+                ColumnOrdinal = columnOrdinal;
+                RowCount = checked((uint)values.Length);
+                HasPendingData = true;
+                Statistics = dictionaryStatistics;
+                _bloomFilterByteLength = 0;
+                return;
+            }
+        }
+
         if (typeof(TValue) == typeof(bool) || typeof(TValue) == typeof(int) || typeof(TValue) == typeof(long)
             || typeof(TValue) == typeof(float) || typeof(TValue) == typeof(double))
         {
