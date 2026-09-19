@@ -180,6 +180,72 @@ internal sealed class PlainEncodingTests
     }
 
     [Test]
+    public void AllPresentNullableDoubleValuesPreserveBitsAndStatisticsAcrossVectorBoundaries()
+    {
+        int[] lengths = [1, 2, 3, 4, 7, 8, 31, 32, 33, 63, 64, 65, 127];
+        foreach (var sourceOffset in Enumerable.Range(0, 4))
+        foreach (var destinationOffset in Enumerable.Range(0, 4))
+        foreach (var length in lengths)
+        {
+            var storage = new double?[sourceOffset + length + 4];
+            for (var i = 0; i < storage.Length; i++)
+                storage[i] = i switch
+                {
+                    0 => double.MinValue,
+                    1 => -0.0d,
+                    2 => 1.25d,
+                    _ => unchecked((i * 7919 - 31) / 17d)
+                };
+            var values = storage.AsSpan(sourceOffset, length);
+
+            const byte canary = 0xA5;
+            var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 4_096, 4_096);
+            try
+            {
+                var writable = writer.GetSpan(4_096);
+                writable.Fill(canary);
+                writer.Advance(destinationOffset);
+
+                var statistics = PlainEncoding.WriteAllPresentOptionalDoublePageWithStatistics(values, ref writer);
+                var expectedLength = checked(destinationOffset + length * sizeof(double));
+                if (writer.WrittenLength != expectedLength)
+                    throw new InvalidOperationException("Nullable Double writer produced an unexpected length.");
+
+                for (var i = 0; i < length; i++)
+                {
+                    var actual = BinaryPrimitives.ReadInt64LittleEndian(
+                        writable.Slice(destinationOffset + i * sizeof(double), sizeof(double)));
+                    if (actual != BitConverter.DoubleToInt64Bits(values[i]!.Value))
+                        throw new InvalidOperationException($"Nullable Double payload differs at row {i}.");
+                }
+
+                for (var i = expectedLength; i < expectedLength + 32; i++)
+                    if (writable[i] != canary)
+                        throw new InvalidOperationException("Nullable Double writer changed the suffix canary.");
+
+                var expectedMin = values[0]!.Value;
+                var expectedMax = expectedMin;
+                for (var i = 1; i < values.Length; i++)
+                {
+                    if (values[i]!.Value < expectedMin)
+                        expectedMin = values[i]!.Value;
+                    if (values[i]!.Value > expectedMax)
+                        expectedMax = values[i]!.Value;
+                }
+                if (!statistics.HasStatistics || statistics.NullCount != 0
+                    || statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.Double
+                    || statistics.MinBits != BitConverter.DoubleToInt64Bits(expectedMin)
+                    || statistics.MaxBits != BitConverter.DoubleToInt64Bits(expectedMax))
+                    throw new InvalidOperationException("Nullable Double writer returned invalid statistics metadata.");
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+        }
+    }
+
+    [Test]
     public void BinaryAndOptionalBinaryValuesMatchLengthPrefixedParquetBytes()
     {
         byte[][] required = [[], [0x11], [0x22, 0x33, 0x44], Enumerable.Range(0, 129).Select(static i => (byte)i).ToArray()];

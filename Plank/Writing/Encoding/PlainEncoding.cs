@@ -527,10 +527,15 @@ static class PlainEncoding
         double min;
         double max;
         long nanCount;
-        if (values.Length >= Vector256<double>.Count * 4)
+        if (Avx2.IsSupported && values.Length >= Vector256<double>.Count * 4)
         {
             hasValue = ExtractOptionalDoubleValuesAndGetStatistics(values, destination,
                 out min, out max, out nanCount);
+        }
+        else if (AdvSimd.IsSupported && values.Length >= Vector128<double>.Count * 2)
+        {
+            ExtractOptionalDoubleValuesAdvSimd(values, destination);
+            hasValue = ColumnStatistics.TryGetDoubleMinMax(destination, out min, out max, out nanCount);
         }
         else
         {
@@ -540,6 +545,25 @@ static class PlainEncoding
         }
         writer.Advance(byteCount);
         return ColumnStatistics.FromDoubleAccumulation(min, max, 0, nanCount, hasValue);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static void ExtractOptionalDoubleValuesAdvSimd(ReadOnlySpan<double?> values, Span<double> destination)
+    {
+        ref var nullableSource = ref MemoryMarshal.GetReference(values);
+        ref var source = ref Unsafe.As<double?, long>(ref nullableSource);
+        ref var target = ref Unsafe.As<double, long>(ref MemoryMarshal.GetReference(destination));
+        var valueIndex = 0;
+        for (; values.Length - valueIndex >= 2; valueIndex += 2)
+        {
+            var first = Vector128.LoadUnsafe(ref source, checked((nuint)valueIndex * 2));
+            var second = Vector128.LoadUnsafe(ref source, checked((nuint)valueIndex * 2 + 2));
+            Vector128.Create(first.GetElement(1), second.GetElement(1))
+                .StoreUnsafe(ref target, checked((nuint)valueIndex));
+        }
+
+        for (; valueIndex < values.Length; valueIndex++)
+            Unsafe.Add(ref target, (nuint)valueIndex) = Unsafe.Add(ref source, checked((nuint)valueIndex * 2 + 1));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
