@@ -16,6 +16,26 @@ static class DeltaBinaryPackedDecoder
     const int PackedBytesPerBitWidth = MiniBlockChunk / 8;
     const int PackedWordLookahead = sizeof(ulong) - 1;
 
+    // AMD family 17h (Zen 1/2) implements PDEP in microcode. Instruction support
+    // alone must not select that path, including for fields smaller than a byte.
+    static readonly bool UsePdep = Bmi2.X64.IsSupported && !HasSlowPdep();
+
+    // Initialize the CPU choice before nested decode methods are compiled, so
+    // the JIT can fold the readonly flag and discard the unused kernel branch.
+    static DeltaBinaryPackedDecoder() { }
+
+    static bool HasSlowPdep()
+    {
+        if (!X86Base.IsSupported) return false;
+        var (_, ebx, ecx, edx) = X86Base.CpuId(0, 0);
+        if (ebx != 0x68747541 || edx != 0x69746e65 || ecx != 0x444d4163) // AuthenticAMD
+            return false;
+        var (eax, _, _, _) = X86Base.CpuId(1, 0);
+        var family = (eax >> 8) & 0xf;
+        if (family == 0xf) family += (eax >> 20) & 0xff;
+        return family == 0x17;
+    }
+
     // Bounds the stack buffer the per-block bit widths are read into. Writers in
     // the wild use 4; this is room to spare rather than a considered limit.
     const int MaxMiniBlockCount = 64;
@@ -410,6 +430,7 @@ static class DeltaBinaryPackedDecoder
     static void ReadInt32Blocks(ref DeltaBinaryPackedReader reader, Span<int> destination,
         BlockLayout layout, ref long previous)
     {
+        var usePdep = Avx2.IsSupported && UsePdep;
         var index = 0;
         Span<byte> bitWidthStorage = stackalloc byte[MaxMiniBlockCount];
         var bitWidths = bitWidthStorage[..layout.MiniBlockCount];
@@ -445,13 +466,15 @@ static class DeltaBinaryPackedDecoder
                     {
                         var packed = reader.ReadBytesWithLookahead(
                             bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
-                        if (Avx2.IsSupported && Bmi2.X64.IsSupported && bitWidth is > 0 and <= 8 &&
-                            count == MiniBlockChunk)
-                            DecodeInt32MiniBlockBmi2(packed, bitWidth, minDelta, ref previous,
-                                destination.Slice(index, count));
-                        else if (Avx2.IsSupported && bitWidth is > 8 and <= 16 && count == MiniBlockChunk)
-                            DecodeInt32MiniBlockNoPdepWide(packed, bitWidth, minDelta, ref previous,
-                                destination.Slice(index, count));
+                        if (Avx2.IsSupported && bitWidth is > 0 and <= 16 && count == MiniBlockChunk)
+                        {
+                            if (usePdep)
+                                DecodeInt32MiniBlockBmi2(packed, bitWidth, minDelta, ref previous,
+                                    destination.Slice(index, count));
+                            else
+                                DecodeInt32MiniBlockAvx2(packed, bitWidth, minDelta, ref previous,
+                                    destination.Slice(index, count));
+                        }
                         else if (Avx2.IsSupported && bitWidth <= 16)
                             DecodeInt32MiniBlockVectorized(packed, bitWidth, minDelta, ref previous,
                                 adjustedDeltas, destination.Slice(index, count));
@@ -489,6 +512,7 @@ static class DeltaBinaryPackedDecoder
         Span<int?> destination, BlockLayout layout, ref long previous,
         bool canonicalLayout)
     {
+        var usePdep = Avx2.IsSupported && UsePdep;
         var index = 0;
         Span<byte> bitWidthStorage = stackalloc byte[MaxMiniBlockCount];
         var bitWidths = bitWidthStorage[..layout.MiniBlockCount];
@@ -516,14 +540,16 @@ static class DeltaBinaryPackedDecoder
                     {
                         var packed = reader.ReadBytesWithLookahead(
                             bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
-                        if (canonicalLayout && Avx2.IsSupported && Bmi2.X64.IsSupported &&
-                            bitWidth is > 0 and <= 8 && count == MiniBlockChunk)
-                            DecodeNullableInt32MiniBlockBmi2(packed, bitWidth, minDelta,
-                                ref previous, destination.Slice(index, count));
-                        else if (canonicalLayout && Avx2.IsSupported && bitWidth is > 8 and <= 16 &&
+                        if (canonicalLayout && Avx2.IsSupported && bitWidth is > 0 and <= 16 &&
                             count == MiniBlockChunk)
-                            DecodeNullableInt32MiniBlockNoPdepWide(packed, bitWidth, minDelta,
-                                ref previous, destination.Slice(index, count));
+                        {
+                            if (usePdep)
+                                DecodeNullableInt32MiniBlockBmi2(packed, bitWidth, minDelta,
+                                    ref previous, destination.Slice(index, count));
+                            else
+                                DecodeNullableInt32MiniBlockAvx2(packed, bitWidth, minDelta,
+                                    ref previous, destination.Slice(index, count));
+                        }
                         else if (canonicalLayout && Avx2.IsSupported && bitWidth <= 16)
                             DecodeNullableInt32MiniBlockVectorized(packed, bitWidth, minDelta,
                                 ref previous, adjustedDeltas, destination.Slice(index, count));
@@ -547,191 +573,180 @@ static class DeltaBinaryPackedDecoder
         }
     }
 
-    // Handles bitWidth <= 8 only — callers route bitWidth 9-16 to
-    // DecodeInt32MiniBlockNoPdepWide instead (see the comment on BuildWideLaneControls for why).
+    // Each 128-bit half extracts four fields from one 64-bit word. Four fields
+    // occupy at most 64 bits, including the four-bit offset of odd-width upper
+    // halves. Thus no 16-byte input load or extra lookahead is needed.
+    static class Avx2UnpackControls
+    {
+        internal static readonly (Vector256<byte> Shuffle, Vector256<uint> Shift)[] Table = Create();
+
+        static (Vector256<byte>, Vector256<uint>)[] Create()
+        {
+            var table = new (Vector256<byte>, Vector256<uint>)[16];
+            Span<byte> shuffle = stackalloc byte[32];
+            Span<uint> shift = stackalloc uint[8];
+            for (var width = 1; width <= 16; width++)
+            {
+                for (var lane = 0; lane < 8; lane++)
+                {
+                    var bit = (lane & 3) * width + (lane >= 4 ? (4 * width) & 7 : 0);
+                    for (var b = 0; b < 4; b++)
+                        shuffle[lane * 4 + b] = (byte)((bit >> 3) + b);
+                    shift[lane] = (uint)(bit & 7);
+                }
+                table[width - 1] = (Vector256.Create((ReadOnlySpan<byte>)shuffle),
+                    Vector256.Create((ReadOnlySpan<uint>)shift));
+            }
+            return table;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static Vector256<int> UnpackEightAvx2(ReadOnlySpan<byte> packed, int offset, int upperOffset,
+        Vector256<byte> shuffle, Vector256<uint> shift, Vector256<uint> mask)
+    {
+        var lower = Vector128.CreateScalar(ReadPackedWord(packed, offset)).AsByte();
+        var upper = Vector128.CreateScalar(ReadPackedWord(packed, offset + upperOffset)).AsByte();
+        var fields = Avx2.Shuffle(Vector256.Create(lower, upper), shuffle).AsUInt32();
+        return (Avx2.ShiftRightLogicalVariable(fields, shift) & mask).AsInt32();
+    }
+
+    // Keep this alternate kernel out of the shared dispatcher: inlining it
+    // bloats the stack frame even on CPUs that take the PDEP branch.
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void DecodeInt32MiniBlockAvx2(ReadOnlySpan<byte> packed, int bitWidth,
+        long minDelta, ref long previous, Span<int> destination)
+    {
+        var (shuffle, shift) = Avx2UnpackControls.Table[bitWidth - 1];
+        var mask = Vector256.Create((1u << bitWidth) - 1);
+        var upperOffset = (4 * bitWidth) >> 3;
+        ref var target = ref destination[0];
+        for (var index = 0; index < MiniBlockChunk; index += 8)
+        {
+            var residuals = UnpackEightAvx2(packed, (index / 8) * bitWidth, upperOffset,
+                shuffle, shift, mask);
+            ReconstructEightInt32(residuals, minDelta, ref previous, ref target, index);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void DecodeNullableInt32MiniBlockAvx2(ReadOnlySpan<byte> packed, int bitWidth,
+        long minDelta, ref long previous, Span<int?> destination)
+    {
+        var (shuffle, shift) = Avx2UnpackControls.Table[bitWidth - 1];
+        var mask = Vector256.Create((1u << bitWidth) - 1);
+        var upperOffset = (4 * bitWidth) >> 3;
+        ref var target = ref Unsafe.As<int?, ulong>(ref destination[0]);
+        for (var index = 0; index < MiniBlockChunk; index += 8)
+        {
+            var residuals = UnpackEightAvx2(packed, (index / 8) * bitWidth, upperOffset,
+                shuffle, shift, mask);
+            ReconstructEightNullableInt32(residuals, minDelta, ref previous, ref target, index);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void DecodeInt64MiniBlockAvx2(ReadOnlySpan<byte> packed, int bitWidth,
+        long minDelta, ref long previous, Span<long> destination)
+    {
+        var (shuffle, shift) = Avx2UnpackControls.Table[bitWidth - 1];
+        var mask = Vector256.Create((1u << bitWidth) - 1);
+        var upperOffset = (4 * bitWidth) >> 3;
+        var lowerDelta = Vector256.Create(minDelta, unchecked(minDelta * 2),
+            unchecked(minDelta * 3), unchecked(minDelta * 4));
+        var upperDelta = Vector256.Create(unchecked(minDelta * 5), unchecked(minDelta * 6),
+            unchecked(minDelta * 7), unchecked(minDelta * 8));
+        ref var target = ref destination[0];
+        for (var index = 0; index < MiniBlockChunk; index += 8)
+        {
+            var residuals = UnpackEightAvx2(packed, (index / 8) * bitWidth, upperOffset,
+                shuffle, shift, mask);
+            // Eight unsigned 16-bit residuals sum to at most 524280. Sum them
+            // in Int32 lanes before widening, then add the wrapping Int64 terms.
+            residuals += Avx2.ShiftLeftLogical128BitLane(residuals.AsByte(), 4).AsInt32();
+            residuals += Avx2.ShiftLeftLogical128BitLane(residuals.AsByte(), 8).AsInt32();
+            residuals += Avx2.PermuteVar8x32(residuals, Vector256.Create(3)) &
+                Vector256.Create(0, 0, 0, 0, -1, -1, -1, -1);
+            var prior = Vector256.Create(previous);
+            var lower = Avx2.ConvertToVector256Int64(residuals.GetLower()) + lowerDelta + prior;
+            var upper = Avx2.ConvertToVector256Int64(residuals.GetUpper()) + upperDelta + prior;
+            lower.StoreUnsafe(ref target, (nuint)index);
+            upper.StoreUnsafe(ref target, (nuint)(index + 4));
+            previous = upper.GetElement(3);
+        }
+    }
+
     static void DecodeInt32MiniBlockBmi2(ReadOnlySpan<byte> packed, int bitWidth, long minDelta,
         ref long previous, Span<int> destination)
     {
         ref var destinationStart = ref destination[0];
 
-        var laneMask = 0x0101010101010101UL * ((1UL << bitWidth) - 1);
-        for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
+        if (bitWidth <= 8)
         {
-            // Eight packed fields occupy exactly bitWidth bytes. PDEP places each field in
-            // the low bits of a byte so two widening loads produce the Int64 delta lanes.
-            var packedWord = ReadPackedWord(packed, index * bitWidth / 8);
-            var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
-            var unpackedBytes = Vector128.CreateScalar(unpacked).AsByte();
-            var residuals = Avx2.ConvertToVector256Int32(unpackedBytes);
-            ReconstructEightInt32(residuals, minDelta, ref previous,
-                ref destinationStart, index);
+            var laneMask = 0x0101010101010101UL * ((1UL << bitWidth) - 1);
+            for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
+            {
+                // Eight packed fields occupy exactly bitWidth bytes. PDEP places each field in
+                // the low bits of a byte so two widening loads produce the Int64 delta lanes.
+                var packedWord = ReadPackedWord(packed, index * bitWidth / 8);
+                var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
+                var unpackedBytes = Vector128.CreateScalar(unpacked).AsByte();
+                var residuals = Avx2.ConvertToVector256Int32(unpackedBytes);
+                ReconstructEightInt32(residuals, minDelta, ref previous,
+                    ref destinationStart, index);
+            }
+        }
+        else
+        {
+            var laneMask = 0x0001000100010001UL * ((1UL << bitWidth) - 1);
+            for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
+            {
+                var bitOffset = index * bitWidth;
+                var lowerWord = ReadPackedWord(packed, bitOffset / 8) >> (bitOffset & 7);
+                var upperBitOffset = bitOffset + 4 * bitWidth;
+                var upperWord = ReadPackedWord(packed, upperBitOffset / 8) >> (upperBitOffset & 7);
+                var lower = Bmi2.X64.ParallelBitDeposit(lowerWord, laneMask);
+                var upper = Bmi2.X64.ParallelBitDeposit(upperWord, laneMask);
+                var residuals = Avx2.ConvertToVector256Int32(Vector128.Create(lower, upper).AsUInt16());
+                ReconstructEightInt32(residuals, minDelta, ref previous,
+                    ref destinationStart, index);
+            }
         }
     }
 
-    // Handles bitWidth <= 8 only — callers route bitWidth 9-16 to
-    // DecodeNullableInt32MiniBlockNoPdepWide instead.
     static void DecodeNullableInt32MiniBlockBmi2(ReadOnlySpan<byte> packed, int bitWidth,
         long minDelta, ref long previous, Span<int?> destination)
     {
         ref var destinationStart = ref Unsafe.As<int?, ulong>(ref destination[0]);
 
-        var laneMask = 0x0101010101010101UL * ((1UL << bitWidth) - 1);
-        for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
+        if (bitWidth <= 8)
         {
-            var packedWord = ReadPackedWord(packed, index * bitWidth / 8);
-            var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
-            var unpackedBytes = Vector128.CreateScalar(unpacked).AsByte();
-            var residuals = Avx2.ConvertToVector256Int32(unpackedBytes);
-            ReconstructEightNullableInt32(residuals, minDelta, ref previous,
-                ref destinationStart, index);
+            var laneMask = 0x0101010101010101UL * ((1UL << bitWidth) - 1);
+            for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
+            {
+                var packedWord = ReadPackedWord(packed, index * bitWidth / 8);
+                var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
+                var unpackedBytes = Vector128.CreateScalar(unpacked).AsByte();
+                var residuals = Avx2.ConvertToVector256Int32(unpackedBytes);
+                ReconstructEightNullableInt32(residuals, minDelta, ref previous,
+                    ref destinationStart, index);
+            }
         }
-    }
-
-    // ---- PDEP-free unpack for bit widths 9-16 ----
-    //
-    // Bmi2.X64.ParallelBitDeposit (PDEP) is microcoded on AMD Zen 1/Zen 2 (~18-300 cycles instead
-    // of the 1-3 it costs on Intel and Zen 3+), which regressed real-world delta-binary-packed
-    // reads by up to 10x on that hardware. Bmi2.X64.IsSupported only reports the instruction
-    // exists, not that it is fast, so every BMI2-capable CPU used to take the same path regardless.
-    //
-    // This replaces PDEP with a shuffle + variable-shift + mask unpack (the same technique used by
-    // FastPFOR/simdcomp-style bit-packing) that never touches BMI2. Measured against the PDEP path
-    // on the three machines reachable for this change (bit widths 9-16, the range this path
-    // handles): 27-30% faster on a Ryzen 9 7900X (Zen 4, where PDEP is already fast) and 17-19%
-    // faster on both an Intel Xeon E3-1230 v6 and Xeon E-2288G. Zen 1/Zen 2 itself (the actual
-    // regression host) was not reachable to measure directly; a kernel using zero BMI2 instructions
-    // structurally cannot hit that microcode tax, but this should still be confirmed for real once
-    // that hardware is available again.
-    //
-    // Bit widths <= 8 deliberately keep using the PDEP kernels above instead: PDEP is already cheap
-    // there on every CPU measured, and this replacement measured slower on both Xeons at bit widths
-    // 1-8 (up to ~1.6x), so widening this path to cover them would be a regression, not a fix.
-
-    // A group of 8 lanes spans exactly bitWidth bytes and is always byte-aligned at its own start
-    // (group byte offset = groupIndex * bitWidth, and the outer loop only ever advances by whole
-    // groups of 8 values). Splitting each group into two 4-lane halves (A: lanes 0-3, B: lanes 4-7)
-    // means the "start bit remainder" for each half only depends on bitWidth, not which group it is.
-    //
-    // startBitRemainder only ever takes values 0-7 (it is a `& 7` result) and bitWidth only ranges
-    // 9-16 here, so there are only 64 possible (startBitRemainder, bitWidth) pairs — cheap enough to
-    // precompute once into a static table and look up by index instead of rebuilding on every call.
-    // An earlier version called the builder below directly from the hot path — "once per call"
-    // sounds hoisted, but each call only covers one 32-value mini-block (and the Int64 variant
-    // rebuilds per 4-lane group, i.e. up to 8 times per mini-block), so on real files with many
-    // mini-blocks this was still rebuilding the same handful of control vectors over and over. That
-    // measured as a severe regression in CI on real/synthetic data despite looking like a clear win
-    // in an isolated microbenchmark that amortized the rebuild cost across one huge fixed-bitWidth
-    // buffer — a calling-pattern mismatch between the microbenchmark and production, not a bad idea.
-    // (A version that rebuilt the controls per *group* instead of hoisting them at all measured
-    // roughly 20x slower still — almost all the cost was in rebuilding, not in the actual unpack.)
-    const int WideLaneControlBitWidths = 8; // bitWidth 9..16
-    const int WideLaneControlRemainders = 8; // startBitRemainder 0..7
-
-    static readonly (Vector128<byte> Shuffle, Vector128<uint> Shift)[] WideLaneControlTable =
-        BuildWideLaneControlTable();
-
-    static (Vector128<byte> Shuffle, Vector128<uint> Shift)[] BuildWideLaneControlTable()
-    {
-        var table = new (Vector128<byte>, Vector128<uint>)[WideLaneControlBitWidths * WideLaneControlRemainders];
-        for (var bitWidth = 9; bitWidth <= 16; bitWidth++)
-            for (var remainder = 0; remainder < WideLaneControlRemainders; remainder++)
-                table[WideLaneControlIndex(remainder, bitWidth)] =
-                    ComputeWideLaneControls(remainder, bitWidth);
-        return table;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static int WideLaneControlIndex(int startBitRemainder, int bitWidth)
-        => (bitWidth - 9) * WideLaneControlRemainders + startBitRemainder;
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static (Vector128<byte> Shuffle, Vector128<uint> Shift) GetWideLaneControls(
-        int startBitRemainder, int bitWidth)
-        => WideLaneControlTable[WideLaneControlIndex(startBitRemainder, bitWidth)];
-
-    static (Vector128<byte> Shuffle, Vector128<uint> Shift) ComputeWideLaneControls(
-        int startBitRemainder, int bitWidth)
-    {
-        Span<byte> shuffleIndices = stackalloc byte[16];
-        Span<int> shiftAmounts = stackalloc int[4];
-        for (var lane = 0; lane < 4; lane++)
+        else
         {
-            var localBit = startBitRemainder + lane * bitWidth;
-            var byteOffset = localBit >> 3;
-            // A bitWidth <= 16 field starting at a bit offset up to 7 always fits in 3 bytes; the
-            // fourth is spare room for the shuffle/shift below and is masked away afterward.
-            shuffleIndices[4 * lane + 0] = (byte)(byteOffset + 0);
-            shuffleIndices[4 * lane + 1] = (byte)(byteOffset + 1);
-            shuffleIndices[4 * lane + 2] = (byte)(byteOffset + 2);
-            shuffleIndices[4 * lane + 3] = (byte)(byteOffset + 3);
-            shiftAmounts[lane] = localBit & 7;
-        }
-        return (Vector128.Create((ReadOnlySpan<byte>)shuffleIndices),
-            Vector128.Create(shiftAmounts[0], shiftAmounts[1], shiftAmounts[2], shiftAmounts[3])
-                .AsUInt32());
-    }
-
-    // A raw 16-byte unaligned load here would overread past the packed span's actual padding
-    // (ReadBytesWithLookahead only guarantees PackedWordLookahead=7 trailing bytes, not the 16 a
-    // full vector load needs at the high end of the 9-16 bit-width range). ReadPackedWord already
-    // safely clamps/zero-pads near the end of the span everywhere else in this file, so build the
-    // 16-byte source from two of its calls instead of one raw load. The bytes this pulls in beyond
-    // what BuildWideLaneControls actually selects are never read by the shuffle for any real lane.
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static Vector128<byte> LoadWideWindow(ReadOnlySpan<byte> packed, int byteOffset)
-        => Vector128.Create(ReadPackedWord(packed, byteOffset), ReadPackedWord(packed, byteOffset + 8))
-            .AsByte();
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static Vector128<int> UnpackFourFieldsNoPdep(ReadOnlySpan<byte> packed, int byteOffset,
-        Vector128<byte> shuffle, Vector128<uint> shift, Vector128<uint> mask)
-    {
-        var source = LoadWideWindow(packed, byteOffset);
-        var shuffled = Vector128.Shuffle(source, shuffle).AsUInt32();
-        var shiftedMasked = Avx2.ShiftRightLogicalVariable(shuffled, shift) & mask;
-        return shiftedMasked.AsInt32();
-    }
-
-    static void DecodeInt32MiniBlockNoPdepWide(ReadOnlySpan<byte> packed, int bitWidth,
-        long minDelta, ref long previous, Span<int> destination)
-    {
-        ref var destinationStart = ref destination[0];
-        var mask = Vector128.Create((uint)((1UL << bitWidth) - 1));
-        var (shuffleA, shiftA) = GetWideLaneControls(startBitRemainder: 0, bitWidth);
-        var remainderB = (4 * bitWidth) & 7;
-        var (shuffleB, shiftB) = GetWideLaneControls(remainderB, bitWidth);
-        var byteOffsetBExtra = (4 * bitWidth) >> 3;
-
-        for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
-        {
-            var groupByteOffset = (index / 8) * bitWidth;
-            var lower = UnpackFourFieldsNoPdep(packed, groupByteOffset, shuffleA, shiftA, mask);
-            var upper = UnpackFourFieldsNoPdep(packed, groupByteOffset + byteOffsetBExtra,
-                shuffleB, shiftB, mask);
-            var residuals = Vector256.Create(lower, upper);
-            ReconstructEightInt32(residuals, minDelta, ref previous, ref destinationStart, index);
-        }
-    }
-
-    static void DecodeNullableInt32MiniBlockNoPdepWide(ReadOnlySpan<byte> packed, int bitWidth,
-        long minDelta, ref long previous, Span<int?> destination)
-    {
-        ref var destinationStart = ref Unsafe.As<int?, ulong>(ref destination[0]);
-        var mask = Vector128.Create((uint)((1UL << bitWidth) - 1));
-        var (shuffleA, shiftA) = GetWideLaneControls(startBitRemainder: 0, bitWidth);
-        var remainderB = (4 * bitWidth) & 7;
-        var (shuffleB, shiftB) = GetWideLaneControls(remainderB, bitWidth);
-        var byteOffsetBExtra = (4 * bitWidth) >> 3;
-
-        for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
-        {
-            var groupByteOffset = (index / 8) * bitWidth;
-            var lower = UnpackFourFieldsNoPdep(packed, groupByteOffset, shuffleA, shiftA, mask);
-            var upper = UnpackFourFieldsNoPdep(packed, groupByteOffset + byteOffsetBExtra,
-                shuffleB, shiftB, mask);
-            var residuals = Vector256.Create(lower, upper);
-            ReconstructEightNullableInt32(residuals, minDelta, ref previous,
-                ref destinationStart, index);
+            var laneMask = 0x0001000100010001UL * ((1UL << bitWidth) - 1);
+            for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
+            {
+                var bitOffset = index * bitWidth;
+                var lowerWord = ReadPackedWord(packed, bitOffset / 8) >> (bitOffset & 7);
+                var upperBitOffset = bitOffset + 4 * bitWidth;
+                var upperWord = ReadPackedWord(packed, upperBitOffset / 8) >> (upperBitOffset & 7);
+                var lower = Bmi2.X64.ParallelBitDeposit(lowerWord, laneMask);
+                var upper = Bmi2.X64.ParallelBitDeposit(upperWord, laneMask);
+                var residuals = Avx2.ConvertToVector256Int32(Vector128.Create(lower, upper).AsUInt16());
+                ReconstructEightNullableInt32(residuals, minDelta, ref previous,
+                    ref destinationStart, index);
+            }
         }
     }
 
@@ -1151,6 +1166,7 @@ static class DeltaBinaryPackedDecoder
     static void ReadInt64Blocks(ref DeltaBinaryPackedReader reader, Span<long> destination,
         BlockLayout layout, ref long previous)
     {
+        var usePdep = Avx2.IsSupported && UsePdep;
         var index = 0;
         Span<long> adjustedDeltas = Avx2.IsSupported ? stackalloc long[MiniBlockChunk] : default;
 
@@ -1191,13 +1207,15 @@ static class DeltaBinaryPackedDecoder
                     {
                         var packed = reader.ReadBytesWithLookahead(
                             bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
-                        if (Avx2.IsSupported && Bmi2.X64.IsSupported && bitWidth is > 0 and <= 8 &&
-                            count == MiniBlockChunk)
-                            DecodeInt64MiniBlockBmi2(packed, bitWidth, minDelta, ref previous,
-                                destination.Slice(index, count));
-                        else if (Avx2.IsSupported && bitWidth is > 8 and <= 16 && count == MiniBlockChunk)
-                            DecodeInt64MiniBlockNoPdepWide(packed, bitWidth, minDelta, ref previous,
-                                destination.Slice(index, count));
+                        if (Avx2.IsSupported && bitWidth is > 0 and <= 16 && count == MiniBlockChunk)
+                        {
+                            if (usePdep)
+                                DecodeInt64MiniBlockBmi2(packed, bitWidth, minDelta, ref previous,
+                                    destination.Slice(index, count));
+                            else
+                                DecodeInt64MiniBlockAvx2(packed, bitWidth, minDelta, ref previous,
+                                    destination.Slice(index, count));
+                        }
                         else if (Avx2.IsSupported && bitWidth <= 16)
                             DecodeInt64MiniBlockVectorized(packed, bitWidth, minDelta, ref previous,
                                 adjustedDeltas, destination.Slice(index, count));
@@ -1221,61 +1239,56 @@ static class DeltaBinaryPackedDecoder
         }
     }
 
-    // Handles bitWidth <= 8 only — callers route bitWidth 9-16 to
-    // DecodeInt64MiniBlockNoPdepWide instead (see the comment above BuildWideLaneControls).
     static void DecodeInt64MiniBlockBmi2(ReadOnlySpan<byte> packed, int bitWidth, long minDelta,
         ref long previous, Span<long> destination)
     {
         ref var destinationStart = ref destination[0];
-        var laneMask = 0x0101010101010101UL * ((1UL << bitWidth) - 1);
-        var useBytePrefix = bitWidth <= 5;
-        var lowerMinDeltaPrefix = useBytePrefix
-            ? Vector256.Create(minDelta, unchecked(minDelta * 2), unchecked(minDelta * 3),
-                unchecked(minDelta * 4))
-            : default;
-        var upperMinDeltaPrefix = useBytePrefix
-            ? Vector256.Create(unchecked(minDelta * 5), unchecked(minDelta * 6),
-                unchecked(minDelta * 7), unchecked(minDelta * 8))
-            : default;
-        for (var index = 0; index < MiniBlockChunk; index += Vector256<long>.Count * 2)
+        if (bitWidth <= 8)
         {
-            // Eight packed fields occupy exactly bitWidth bytes. Deposit each field into
-            // a byte lane, widen the lanes, then reconstruct both prefix-sum vectors.
-            var packedWord = ReadPackedWord(packed, index * bitWidth / 8);
-            var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
-            if (useBytePrefix)
-                ReconstructEightNarrowInt64(unpacked, lowerMinDeltaPrefix,
-                    upperMinDeltaPrefix, ref previous, ref destinationStart, index);
-            else
+            var laneMask = 0x0101010101010101UL * ((1UL << bitWidth) - 1);
+            var useBytePrefix = bitWidth <= 5;
+            var lowerMinDeltaPrefix = useBytePrefix
+                ? Vector256.Create(minDelta, unchecked(minDelta * 2), unchecked(minDelta * 3),
+                    unchecked(minDelta * 4))
+                : default;
+            var upperMinDeltaPrefix = useBytePrefix
+                ? Vector256.Create(unchecked(minDelta * 5), unchecked(minDelta * 6),
+                    unchecked(minDelta * 7), unchecked(minDelta * 8))
+                : default;
+            for (var index = 0; index < MiniBlockChunk; index += Vector256<long>.Count * 2)
             {
-                var unpackedBytes = Vector128.CreateScalar(unpacked).AsByte();
-                var lower = Avx2.ConvertToVector256Int64(unpackedBytes);
-                var upper = Avx2.ConvertToVector256Int64(
-                    Sse2.ShiftRightLogical128BitLane(unpackedBytes, sizeof(uint)));
-                ReconstructEightInt64(lower, upper, minDelta, ref previous,
-                    ref destinationStart, index);
+                // Eight packed fields occupy exactly bitWidth bytes. Deposit each field into
+                // a byte lane, widen the lanes, then reconstruct both prefix-sum vectors.
+                var packedWord = ReadPackedWord(packed, index * bitWidth / 8);
+                var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
+                if (useBytePrefix)
+                    ReconstructEightNarrowInt64(unpacked, lowerMinDeltaPrefix,
+                        upperMinDeltaPrefix, ref previous, ref destinationStart, index);
+                else
+                {
+                    var unpackedBytes = Vector128.CreateScalar(unpacked).AsByte();
+                    var lower = Avx2.ConvertToVector256Int64(unpackedBytes);
+                    var upper = Avx2.ConvertToVector256Int64(
+                        Sse2.ShiftRightLogical128BitLane(unpackedBytes, sizeof(uint)));
+                    ReconstructEightInt64(lower, upper, minDelta, ref previous,
+                        ref destinationStart, index);
+                }
             }
         }
-    }
-
-    // PDEP-free equivalent of the bitWidth 9-16 branch this function used to have — see the
-    // comment above WideLaneControlTable for why this looks up precomputed controls instead of
-    // calling ComputeWideLaneControls directly. Each group here is exactly 4 lanes (Int64's native
-    // vector width), and unlike the Int32 groups above, a group's own start is not always
-    // byte-aligned (4 lanes * bitWidth bits is not always a multiple of 8), so the lane controls
-    // differ per group — but the table lookup is still O(1), same as the byte-aligned Int32 case.
-    static void DecodeInt64MiniBlockNoPdepWide(ReadOnlySpan<byte> packed, int bitWidth,
-        long minDelta, ref long previous, Span<long> destination)
-    {
-        ref var destinationStart = ref destination[0];
-        var mask = Vector128.Create((uint)((1UL << bitWidth) - 1));
-        for (var index = 0; index < MiniBlockChunk; index += Vector256<long>.Count)
+        else
         {
-            var bitOffset = index * bitWidth;
-            var (shuffle, shift) = GetWideLaneControls(bitOffset & 7, bitWidth);
-            var fields = UnpackFourFieldsNoPdep(packed, bitOffset / 8, shuffle, shift, mask);
-            var residuals = Avx2.ConvertToVector256Int64(fields);
-            ReconstructFourInt64(residuals, minDelta, ref previous, ref destinationStart, index);
+            var laneMask = 0x0001000100010001UL * ((1UL << bitWidth) - 1);
+            for (var index = 0; index < MiniBlockChunk; index += Vector256<long>.Count)
+            {
+                // Four fields may start between bytes. Align the first field, then deposit
+                // all four into UInt16 lanes before widening them to Int64.
+                var bitOffset = index * bitWidth;
+                var packedWord = ReadPackedWord(packed, bitOffset / 8) >> (bitOffset & 7);
+                var residuals = Avx2.ConvertToVector256Int64(
+                    Vector128.CreateScalar(Bmi2.X64.ParallelBitDeposit(packedWord, laneMask)).AsUInt16());
+                ReconstructFourInt64(residuals, minDelta, ref previous,
+                    ref destinationStart, index);
+            }
         }
     }
 
@@ -1334,6 +1347,14 @@ static class DeltaBinaryPackedDecoder
             var values = offsets + Vector256.Create(previous);
             var step = Vector256.Create(unchecked(delta * Vector256<long>.Count));
             ref var target = ref MemoryMarshal.GetReference(destination);
+            for (; index <= destination.Length - 2 * Vector256<long>.Count;
+                 index += 2 * Vector256<long>.Count)
+            {
+                values.StoreUnsafe(ref target, (nuint)index);
+                values += step;
+                values.StoreUnsafe(ref target, (nuint)(index + Vector256<long>.Count));
+                values += step;
+            }
             for (; index <= destination.Length - Vector256<long>.Count; index += Vector256<long>.Count)
             {
                 values.StoreUnsafe(ref target, (nuint)index);
