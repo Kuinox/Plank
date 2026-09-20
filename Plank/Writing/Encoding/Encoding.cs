@@ -18,6 +18,8 @@ static class Encoding
     const int SmallInt32DictionaryCount = 512;
     const int SmallInt64DictionaryMinimum = -128;
     const int SmallInt64DictionaryCount = 256;
+    const int SmallDoubleDictionaryCapacity = 512;
+    const int SmallDoubleDictionaryTableSize = 1024;
     static readonly bool HasCanonicalNullableInt64Layout = ProbeCanonicalNullableInt64Layout();
     static readonly bool HasCanonicalNullableDoubleLayout = ProbeCanonicalNullableDoubleLayout();
     static readonly bool HasCanonicalNullableInt32Layout = ProbeCanonicalNullableInt32Layout();
@@ -2318,7 +2320,7 @@ static class Encoding
     static bool TryWriteDictionaryPage<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
         PageStrategyContext strategyContext, PageList pages, ReusableDictionaryState<T> dictionaryState,
         out int dictionaryValueCount, out ParquetBuffer dictionaryIndexesBuffer,
-        LogicalType.Timestamp? timestamp = null)
+        LogicalType.Timestamp? timestamp = null, bool useSmallDoubleIndexes = false)
         where T : notnull
     {
         dictionaryValueCount = 0;
@@ -2362,6 +2364,21 @@ static class Encoding
                 BuildForcedRequiredByteArrayDictionaryIndexes(byteArrayValues, indexes,
                     Unsafe.As<ReusableDictionaryState<byte[]>>(dictionaryState), initialUniqueCapacity,
                     knownSortOrder, strategyContext);
+            }
+            else if (useSmallDoubleIndexes && typeof(T) == typeof(double)
+                     && knownSortOrder == DictionarySortOrder.Unsorted)
+            {
+                dictionaryState.Reset(initialUniqueCapacity, useMap: false);
+                var doubleValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<double>>(ref values);
+                if (!BuildSmallDoubleDictionaryIndexes(doubleValues, indexes,
+                        Unsafe.As<ReusableDictionaryState<double>>(dictionaryState), dictionaryMode, strategy))
+                {
+                    dictionaryPage.Header.Reset();
+                    dictionaryPage.Content.Reset();
+                    pages.RemoveLast();
+                    rentedIndexesBuffer.Dispose();
+                    return false;
+                }
             }
             else if (dictionaryMode == DictionaryMode.Forced
                      && knownSortOrder == DictionarySortOrder.Unsorted)
@@ -2613,6 +2630,68 @@ static class Encoding
             indexes[i] = dictionaryState.GetOrAddIndex(values[i]);
     }
 
+    static bool BuildSmallDoubleDictionaryIndexes(ReadOnlySpan<double> values, Span<int> indexes,
+        ReusableDictionaryState<double> dictionaryState, DictionaryMode dictionaryMode, IPageStrategy strategy)
+    {
+        Span<long> keys = stackalloc long[SmallDoubleDictionaryTableSize];
+        Span<int> slots = stackalloc int[SmallDoubleDictionaryTableSize];
+        slots.Fill(-1);
+        var nextDropCheckRow = dictionaryMode == DictionaryMode.Maybe
+            ? Math.Min(DictionaryDropCheckPeriodRows, values.Length)
+            : 0;
+
+        for (var i = 0; i < values.Length; i++)
+        {
+            var value = values[i];
+            if (dictionaryState.IsMapEnabled)
+            {
+                indexes[i] = dictionaryState.GetOrAddIndex(value);
+            }
+            else
+            {
+                var bits = BitConverter.DoubleToInt64Bits(value);
+                var hash = unchecked((uint)(bits ^ (bits >> 32)));
+                hash ^= hash >> 16;
+                hash *= 0x45d9f3bu;
+                hash ^= hash >> 16;
+                var slot = (int)(hash & (SmallDoubleDictionaryTableSize - 1));
+                while (slots[slot] >= 0 && keys[slot] != bits)
+                    slot = (slot + 1) & (SmallDoubleDictionaryTableSize - 1);
+
+                if (slots[slot] >= 0)
+                {
+                    indexes[i] = slots[slot];
+                }
+                else if (dictionaryState.Count < SmallDoubleDictionaryCapacity)
+                {
+                    var dictionaryIndex = dictionaryState.AddSortedUnique(value);
+                    keys[slot] = bits;
+                    slots[slot] = dictionaryIndex;
+                    indexes[i] = dictionaryIndex;
+                }
+                else
+                {
+                    dictionaryState.EnableMap();
+                    indexes[i] = dictionaryState.GetOrAddIndex(value);
+                }
+            }
+
+            // Match the generic builder: its first value is inserted before the loop, so a
+            // one-value batch never invokes the strategy's drop callback.
+            if (i == 0 || dictionaryMode != DictionaryMode.Maybe)
+                continue;
+            var rowsSeen = i + 1;
+            if (rowsSeen != nextDropCheckRow && rowsSeen != values.Length)
+                continue;
+            if (strategy.ShouldDropDictionary(checked((uint)dictionaryState.Count),
+                    checked((uint)values.Length), checked((uint)rowsSeen)))
+                return false;
+            nextDropCheckRow = Math.Min(values.Length, rowsSeen + DictionaryDropCheckPeriodRows);
+        }
+
+        return true;
+    }
+
     static void EncodeOptionalFlatValues<T, TSource>(BufferWriterFactory bufferWriters, Column column,
         ReadOnlySpan<TSource?> values,
         PageStrategyContext strategyContext, PageList pages, ParquetDataPageVersion dataPageVersion,
@@ -2625,7 +2704,8 @@ static class Encoding
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
         var useDictionary = TryWriteDictionaryPage(bufferWriters, column, denseValues, strategyContext, pages,
-            dictionaryState, out var dictionaryValueCount, out var dictionaryIndexesBuffer);
+            dictionaryState, out var dictionaryValueCount, out var dictionaryIndexesBuffer,
+            useSmallDoubleIndexes: true);
         var dictionaryIndexes = useDictionary && !dictionaryIndexesBuffer.IsEmpty
             ? MemoryMarshal.Cast<byte, int>(dictionaryIndexesBuffer.Span[..checked(denseValues.Length * sizeof(int))])
             : default;

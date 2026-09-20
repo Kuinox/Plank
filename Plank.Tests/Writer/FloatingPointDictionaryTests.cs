@@ -62,9 +62,36 @@ internal sealed class FloatingPointDictionaryTests
             BitConverter.Int64BitsToDouble(0x7FF8000000000002)
         };
 
-        var actual = RoundTripOptionalBatches(first, second);
+        var actual = RoundTripOptionalBatches(ForceDictionaryPageStrategy.Shared, first, second);
 
         AssertNullableBitsEqual([.. first, .. second], actual);
+    }
+
+    [Test]
+    public void OptionalDoubleDictionaryFallsBackAfterSmallIndexTableFills()
+    {
+        var first = new double?[] { 3, null, 1, 2, 3, 1 };
+        var second = Enumerable.Range(0, 700)
+            .Select(static value => value % 41 == 0 ? null : (double?)BitConverter.Int64BitsToDouble(value + 1L))
+            .Concat([0d, -0d, BitConverter.Int64BitsToDouble(1), BitConverter.Int64BitsToDouble(700)])
+            .ToArray();
+
+        var actual = RoundTripOptionalBatches(ForceDictionaryPageStrategy.Shared, first, second);
+
+        AssertNullableBitsEqual([.. first, .. second], actual);
+    }
+
+    [Test]
+    public async Task OptionalDoubleDictionaryPreservesSingleValueDropCheckSchedule()
+    {
+        var strategy = new RecordingMaybeDictionaryStrategy();
+        var first = new double?[] { 3, 1 };
+        var second = new double?[] { 2 };
+
+        var actual = RoundTripOptionalBatches(strategy, first, second);
+
+        AssertNullableBitsEqual([.. first, .. second], actual);
+        await Assert.That(strategy.RowsSeen).IsEquivalentTo([2u]);
     }
 
     static T[] RoundTrip<T>(T[] values, ParquetPhysicalType physicalType)
@@ -94,17 +121,18 @@ internal sealed class FloatingPointDictionaryTests
         return actual.ToArray();
     }
 
-    static double?[] RoundTripOptionalBatches(params double?[][] batches)
+    static double?[] RoundTripOptionalBatches(IPageStrategy pageStrategy, params double?[][] batches)
     {
         var schema = new ParquetSchema([
             ColumnDefinition.Leaf("value", ParquetPhysicalType.Double,
                 new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.RleDictionary]),
-                pageStrategy: ForceDictionaryPageStrategy.Shared)
+                pageStrategy: pageStrategy)
         ]);
         using var stream = new MemoryStream();
         var writer = schema.CreateWriter(stream, new ParquetWriterOptions
         {
-            Compression = CompressionKind.None
+            Compression = CompressionKind.None,
+            WritePageIndexes = true
         });
         var serialized = writer.CreateSerializedColumn<double?>(schema.LeafColumns[0]);
         foreach (var batch in batches)
@@ -121,6 +149,23 @@ internal sealed class FloatingPointDictionaryTests
             foreach (var buffer in rowGroup.Column<double?>(schema.LeafColumns[0]))
                 actual.AddRange(buffer.Values);
         return actual.ToArray();
+    }
+
+    sealed class RecordingMaybeDictionaryStrategy : IPageStrategy
+    {
+        public List<uint> RowsSeen { get; } = [];
+
+        public DictionaryMode GetDictionaryMode()
+            => DictionaryMode.Maybe;
+
+        public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen)
+        {
+            RowsSeen.Add(rowsSeen);
+            return false;
+        }
+
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten)
+            => totalRowCount - rowsWritten;
     }
 
     static void AssertBitsEqual(float[] expected, float[] actual)
