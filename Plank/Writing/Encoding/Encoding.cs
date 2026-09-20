@@ -1216,19 +1216,6 @@ static class Encoding
                                 presentIndex + DictionaryDropCheckPeriodRows);
                         }
 
-                        if (!hasColumnValue)
-                        {
-                            columnMin = value;
-                            columnMax = value;
-                            hasColumnValue = true;
-                        }
-                        else
-                        {
-                            if (value < columnMin)
-                                columnMin = value;
-                            if (value > columnMax)
-                                columnMax = value;
-                        }
                     }
                 }
                 rowsWritten = pageEnd;
@@ -1296,6 +1283,22 @@ static class Encoding
                 page.Statistics = pageHasValue
                     ? ColumnStatistics.FromInt64(pageMin, pageMax, nullCount)
                     : ColumnStatistics.Empty(nullCount);
+                if (pageHasValue)
+                {
+                    if (!hasColumnValue)
+                    {
+                        columnMin = pageMin;
+                        columnMax = pageMax;
+                        hasColumnValue = true;
+                    }
+                    else
+                    {
+                        if (pageMin < columnMin)
+                            columnMin = pageMin;
+                        if (pageMax > columnMax)
+                            columnMax = pageMax;
+                    }
+                }
                 if (rowsWritten <= pageStart)
                     throw new InvalidOperationException("Optional Int64 dictionary page made no progress.");
             }
