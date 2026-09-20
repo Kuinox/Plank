@@ -939,6 +939,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], GetOrCreateDictionaryState<TValue>());
         _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, densePresentValues,
             ref _bloomFilterBuffer);
+        if (TryAssignPrimitiveColumnStatisticsFromPages<TValue>())
+            return;
         if (TryAssignOptionalDenseInt64ColumnAndPageStatistics(densePresentValues, nullCount))
             return;
 

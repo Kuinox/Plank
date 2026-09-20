@@ -2717,6 +2717,8 @@ static class Encoding
 
                 WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
                     useDictionary ? dictionaryEncoding : dataEncoding);
+                if (useDictionary && typeof(T) == typeof(double))
+                    page.Statistics = ColumnStatistics.Create(column, pageDenseValues, nullCount);
                 denseOffset += presentRows;
             }
         }

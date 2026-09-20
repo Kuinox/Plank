@@ -479,6 +479,17 @@ internal sealed class NullableNumericEncodingTests
             optional.Serialize(optionalValues);
             AssertStatistics(required.Statistics, expectedRequiredStatistics, encoding, "required");
             AssertStatistics(optional.Statistics, expectedOptionalStatistics, encoding, "optional");
+            var optionalRowOffset = 0;
+            for (var pageIndex = 0; pageIndex < optional.Pages.Count; pageIndex++)
+            {
+                ref var page = ref optional.Pages[pageIndex];
+                if (page.Kind == PageKind.Dictionary)
+                    continue;
+                var expectedPageStatistics = ColumnStatistics.CreateOptional(schema.LeafColumns[1].Column,
+                    optionalValues.AsSpan(optionalRowOffset, checked((int)page.RowCount)));
+                AssertStatistics(page.Statistics, expectedPageStatistics, encoding, "optional page");
+                optionalRowOffset += checked((int)page.RowCount);
+            }
 
             var rowGroup = writer.StartRowGroup();
             rowGroup.Write(required);
