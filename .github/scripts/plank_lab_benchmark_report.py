@@ -37,6 +37,12 @@ ENCODING_LABELS = {
     "byte_stream_split": "Byte stream split",
 }
 SUITE_LABELS = {"synthetic": "Synthetic", "real-world": "Real-world"}
+WORKLOAD_ORDER = ("row", "column", "column-multi")
+WORKLOAD_LABELS = {
+    "row": "Row-oriented",
+    "column": "Column-oriented · 1 thread",
+    "column-multi": "Column-oriented · multithreaded",
+}
 LOG_NAME = re.compile(r"^(Synthetic|Real)-(Read|Write)-(base|head)-1\.log$")
 BENCHMARK = re.compile(r"^// Benchmark: ([A-Za-z0-9_]+)\.(Read|Write):")
 WORKLOAD_ACTUAL = re.compile(
@@ -125,10 +131,11 @@ def load_comparisons(results_directory: Path, matrix_path: Path,
                      require_prewarm: bool = False) -> tuple[list[Comparison], list[str]]:
     matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
     # Lab generates column adapters from the same matrix with a Column suffix.
-    matrix = [dict(item, workload="row") for item in matrix] + [
-        dict(item, stem=item["stem"] + "Column", id=item["id"] + "-column", workload="column")
-        for item in matrix
-    ]
+    matrix = ([dict(item, workload="row") for item in matrix]
+              + [dict(item, stem=item["stem"] + "Column",
+                      id=item["id"] + "-column", workload="column") for item in matrix]
+              + [dict(item, stem=item["stem"] + "ColumnMulti",
+                      id=item["id"] + "-column-multi", workload="column-multi") for item in matrix])
     by_stem = {item["stem"]: item for item in matrix}
     samples: dict[tuple[str, str, str, str, str], list[float]] = {}
     configurations_by_pass = {}
@@ -231,15 +238,23 @@ def load_comparisons(results_directory: Path, matrix_path: Path,
         raise ValueError("Measurement plans are missing from one or more benchmark cases.")
 
     comparisons: list[Comparison] = []
-    for suite, operation, workload in sorted(configurations):
+    for suite, operation, workload in sorted(
+            configurations, key=lambda value: (value[0], value[1], WORKLOAD_ORDER.index(value[2]))):
         for item in (entry for entry in matrix if entry["suite"] == suite and entry["workload"] == workload):
             series = []
             for variant in ("base", "head"):
                 keys = [(suite, operation, item["id"], variant, "1")]
+                if workload == "column-multi" and not any(
+                        (suite, operation, item["id"], candidate, "1") in samples
+                        for candidate in ("base", "head")):
+                    series = []
+                    break
                 if any(key not in samples for key in keys):
                     raise ValueError(f"Missing base or head pass for {suite}/{operation}/{item['id']}.")
                 series.append(tuple(PassSummary(tuple(samples[key]), configurations_by_pass[key],
                                                 prewarm.get(key), measurement_plans.get(key)) for key in keys))
+            if not series:
+                continue
             data_type = item["dataTypes"][0] if len(item["dataTypes"]) == 1 else "Complete"
             comparisons.append(Comparison(
                 suite=suite,
@@ -279,7 +294,7 @@ def render_matrix(comparisons: list[Comparison], suite: str, operation: str, wor
                  if any(item.encoding == encoding for item in selected)]
     by_cell = {(item.data_type, item.encoding): item for item in selected}
     lines = [
-        f"#### {SUITE_LABELS[suite]} · {workload.title()} · {operation.title()}",
+        f"#### {SUITE_LABELS[suite]} · {WORKLOAD_LABELS[workload]} · {operation.title()}",
         "",
         "| Data type | " + " | ".join(ENCODING_LABELS[value] for value in encodings) + " |",
         "|---|" + "---:|" * len(encodings),
@@ -390,7 +405,8 @@ def build_report(comparisons: list[Comparison], processors: list[str], base_sha:
     for item in comparisons:
         shape = f"{item.row_count:,} rows × {item.column_count} columns"
         details.append(
-            f"| {SUITE_LABELS[item.suite]} | {item.workload.title()} | {item.operation.title()} | {item.label} | "
+            f"| {SUITE_LABELS[item.suite]} | {WORKLOAD_LABELS[item.workload]} | "
+            f"{item.operation.title()} | {item.label} | "
             f"{ENCODING_LABELS[item.encoding]} | {shape} | "
             f"{' / '.join(f'{p.median_ms:.3f}' for p in item.base_passes)} | "
             f"{' / '.join(f'{p.median_ms:.3f}' for p in item.head_passes)} | "
