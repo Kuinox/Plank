@@ -1137,6 +1137,14 @@ static class Encoding
 
                 var pageIndex = AddNewDataPage(bufferWriters, pages);
                 ref var page = ref pages[pageIndex];
+                var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
+                    ref page.Content);
+                var definitionStart = page.Content.WrittenLength;
+                var currentLevel = -1;
+                var currentRunLength = 0;
+                var pageHasValue = false;
+                var pageMin = 0L;
+                var pageMax = 0L;
                 var pageEnd = checked(pageStart + pageRowCount);
                 for (var i = pageStart; i < pageEnd; i++)
                 {
@@ -1216,25 +1224,6 @@ static class Encoding
                                 presentIndex + DictionaryDropCheckPeriodRows);
                         }
 
-                    }
-                }
-                rowsWritten = pageEnd;
-
-                var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
-                    ref page.Content);
-                var definitionStart = page.Content.WrittenLength;
-                var currentLevel = -1;
-                var currentRunLength = 0;
-                var pageHasValue = false;
-                var pageMin = 0L;
-                var pageMax = 0L;
-                for (var i = pageStart; i < rowsWritten; i++)
-                {
-                    var nullableValue = values[i];
-                    var present = nullableValue.HasValue;
-                    if (present)
-                    {
-                        var value = nullableValue.GetValueOrDefault();
                         if (!pageHasValue)
                         {
                             pageMin = value;
@@ -1271,18 +1260,8 @@ static class Encoding
                         currentRunLength = 1;
                     }
                 }
+                rowsWritten = pageEnd;
 
-                EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref page.Content);
-                var definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref page.Content);
-                var pageBitWidth = Math.Max(1, EncodingPrimitives.GetBitWidthFromMaxValue(
-                    dictionaryState.Count <= 1 ? 0 : dictionaryState.Count - 1));
-                DictionaryIndexEncodingDispatcher.WriteIndexes(dictionaryEncoding,
-                    indexes[..pagePresentCount], pageBitWidth, ref page.Content);
-                WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
-                    dictionaryEncoding);
-                page.Statistics = pageHasValue
-                    ? ColumnStatistics.FromInt64(pageMin, pageMax, nullCount)
-                    : ColumnStatistics.Empty(nullCount);
                 if (pageHasValue)
                 {
                     if (!hasColumnValue)
@@ -1299,6 +1278,18 @@ static class Encoding
                             columnMax = pageMax;
                     }
                 }
+
+                EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref page.Content);
+                var definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref page.Content);
+                var pageBitWidth = Math.Max(1, EncodingPrimitives.GetBitWidthFromMaxValue(
+                    dictionaryState.Count <= 1 ? 0 : dictionaryState.Count - 1));
+                DictionaryIndexEncodingDispatcher.WriteIndexes(dictionaryEncoding,
+                    indexes[..pagePresentCount], pageBitWidth, ref page.Content);
+                WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
+                    dictionaryEncoding);
+                page.Statistics = pageHasValue
+                    ? ColumnStatistics.FromInt64(pageMin, pageMax, nullCount)
+                    : ColumnStatistics.Empty(nullCount);
                 if (rowsWritten <= pageStart)
                     throw new InvalidOperationException("Optional Int64 dictionary page made no progress.");
             }
