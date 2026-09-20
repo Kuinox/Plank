@@ -1069,6 +1069,242 @@ static class Encoding
         return false;
     }
 
+    /// <summary>
+    /// Writes the generic nullable Int64 dictionary path without row-group-sized value or index buffers.
+    /// A page-local index buffer is populated while the dictionary, levels, and statistics are built, then
+    /// encoded once. Different pages may use different dictionary bit widths as the dictionary grows.
+    /// </summary>
+    internal static bool TryEncodeOptionalInt64Dictionary(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<long?> values, PageStrategyContext strategyContext, PageList pages,
+        ParquetDataPageVersion dataPageVersion, LeafProjectionInfo leafProjectionInfo,
+        ReusableDictionaryState<long> dictionaryState, out ColumnStatistics statistics)
+    {
+        statistics = default;
+        if (values.IsEmpty
+            || column.Options.Repetition != ParquetRepetition.Optional
+            || column.PhysicalType != ParquetPhysicalType.Int64
+            || leafProjectionInfo.MaxDefinitionLevel != 1 || leafProjectionInfo.MaxRepetitionLevel != 0
+            || strategyContext.Strategy is not DefaultStrategy
+            || strategyContext.Strategy.GetDictionaryMode() != DictionaryMode.Maybe
+            || !strategyContext.Strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytesUnsigned))
+            return false;
+
+        var presentCount = 0;
+        for (var i = 0; i < values.Length; i++)
+            presentCount += values[i].HasValue ? 1 : 0;
+        if (presentCount == 0)
+            return false;
+
+        var targetPageBytes = checked((int)targetPageBytesUnsigned);
+        var dictionaryPageIndex = AddDictionaryPage(bufferWriters, pages);
+        var maximumPresentValuesPerPage = Math.Min(presentCount, Math.Max(1, targetPageBytes / 2));
+        var rentedIndexesBuffer = bufferWriters.RentScratch<int>(checked((uint)maximumPresentValuesPerPage));
+        try
+        {
+            var indexes = ParquetBuffer.AsSpan<int>(rentedIndexesBuffer, maximumPresentValuesPerPage);
+            var initialUniqueCapacity = Math.Max(256, presentCount / 2);
+            var knownSortOrder = (DictionarySortOrder)Volatile.Read(ref strategyContext.DictionarySortOrder);
+            dictionaryState.Reset(initialUniqueCapacity, knownSortOrder == DictionarySortOrder.Unsorted);
+
+            var previousValue = 0L;
+            var currentSortedIndex = 0;
+            var sortedDirection = knownSortOrder switch
+            {
+                DictionarySortOrder.Ascending => 1,
+                DictionarySortOrder.Descending => -1,
+                _ => 0
+            };
+            var nextDropCheckRow = Math.Min(DictionaryDropCheckPeriodRows, presentCount);
+            var presentIndex = 0;
+            var hasColumnValue = false;
+            var columnMin = 0L;
+            var columnMax = 0L;
+            var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
+            var rowsWritten = 0;
+            while (rowsWritten < values.Length)
+            {
+                var pageStart = rowsWritten;
+                var nullCount = 0;
+                var pagePresentCount = 0;
+                var estimatedPresentValueBytes = Math.Max(1,
+                    (EncodingPrimitives.GetBitWidthFromMaxValue(
+                        dictionaryState.Count <= 1 ? 0 : dictionaryState.Count - 1) + 7) / 8);
+                var maximumRowsPerPage = Math.Max(1, targetPageBytes / (1 + estimatedPresentValueBytes));
+                var pageRowCount = Math.Min(values.Length - pageStart, maximumRowsPerPage);
+
+                var pageIndex = AddNewDataPage(bufferWriters, pages);
+                ref var page = ref pages[pageIndex];
+                var pageEnd = checked(pageStart + pageRowCount);
+                for (var i = pageStart; i < pageEnd; i++)
+                {
+                    var nullableValue = values[i];
+                    var present = nullableValue.HasValue;
+                    if (present)
+                    {
+                        var value = nullableValue.GetValueOrDefault();
+                        int dictionaryIndex;
+                        if (presentIndex == 0)
+                        {
+                            dictionaryIndex = dictionaryState.AddFirst(value);
+                        }
+                        else if (!dictionaryState.IsMapEnabled)
+                        {
+                            if (value == previousValue)
+                            {
+                                dictionaryIndex = currentSortedIndex;
+                            }
+                            else if (TryCompareForSort(previousValue, value, out var comparison)
+                                     && IsSortedStep(comparison, ref sortedDirection))
+                            {
+                                currentSortedIndex = dictionaryState.AddSortedUnique(value);
+                                dictionaryIndex = currentSortedIndex;
+                            }
+                            else
+                            {
+                                if (knownSortOrder != DictionarySortOrder.Unsorted)
+                                {
+                                    Volatile.Write(ref strategyContext.DictionarySortOrder,
+                                        (int)DictionarySortOrder.Unsorted);
+                                    knownSortOrder = DictionarySortOrder.Unsorted;
+                                }
+                                dictionaryState.EnableMap();
+                                dictionaryIndex = dictionaryState.GetOrAddIndex(value);
+                            }
+                        }
+                        else
+                        {
+                            dictionaryIndex = dictionaryState.GetOrAddIndex(value);
+                        }
+
+                        indexes[pagePresentCount++] = dictionaryIndex;
+                        presentIndex++;
+                        previousValue = value;
+                        if (presentIndex == nextDropCheckRow || presentIndex == presentCount)
+                        {
+                            if (strategyContext.Strategy.ShouldDropDictionary(
+                                    checked((uint)dictionaryState.Count), checked((uint)presentCount),
+                                    checked((uint)presentIndex)))
+                            {
+                                pages.Clear();
+                                return false;
+                            }
+                            nextDropCheckRow = Math.Min(presentCount,
+                                presentIndex + DictionaryDropCheckPeriodRows);
+                        }
+
+                        if (!hasColumnValue)
+                        {
+                            columnMin = value;
+                            columnMax = value;
+                            hasColumnValue = true;
+                        }
+                        else
+                        {
+                            if (value < columnMin)
+                                columnMin = value;
+                            if (value > columnMax)
+                                columnMax = value;
+                        }
+                    }
+                }
+                rowsWritten = pageEnd;
+
+                var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
+                    ref page.Content);
+                var definitionStart = page.Content.WrittenLength;
+                var currentLevel = -1;
+                var currentRunLength = 0;
+                var pageHasValue = false;
+                var pageMin = 0L;
+                var pageMax = 0L;
+                for (var i = pageStart; i < rowsWritten; i++)
+                {
+                    var nullableValue = values[i];
+                    var present = nullableValue.HasValue;
+                    if (present)
+                    {
+                        var value = nullableValue.GetValueOrDefault();
+                        if (!pageHasValue)
+                        {
+                            pageMin = value;
+                            pageMax = value;
+                            pageHasValue = true;
+                        }
+                        else
+                        {
+                            if (value < pageMin)
+                                pageMin = value;
+                            if (value > pageMax)
+                                pageMax = value;
+                        }
+                    }
+                    else
+                    {
+                        nullCount++;
+                    }
+
+                    var level = present ? 1 : 0;
+                    if (currentRunLength == 0)
+                    {
+                        currentLevel = level;
+                        currentRunLength = 1;
+                    }
+                    else if (currentLevel == level)
+                    {
+                        currentRunLength++;
+                    }
+                    else
+                    {
+                        EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref page.Content);
+                        currentLevel = level;
+                        currentRunLength = 1;
+                    }
+                }
+
+                EncodingPrimitives.WriteRleRun(currentLevel, currentRunLength, 1, ref page.Content);
+                var definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref page.Content);
+                var pageBitWidth = Math.Max(1, EncodingPrimitives.GetBitWidthFromMaxValue(
+                    dictionaryState.Count <= 1 ? 0 : dictionaryState.Count - 1));
+                DictionaryIndexEncodingDispatcher.WriteIndexes(dictionaryEncoding,
+                    indexes[..pagePresentCount], pageBitWidth, ref page.Content);
+                WriteDataPageHeader(ref page, pageRowCount, pageRowCount, nullCount, 0, definitionLength,
+                    dictionaryEncoding);
+                page.Statistics = pageHasValue
+                    ? ColumnStatistics.FromInt64(pageMin, pageMax, nullCount)
+                    : ColumnStatistics.Empty(nullCount);
+                if (rowsWritten <= pageStart)
+                    throw new InvalidOperationException("Optional Int64 dictionary page made no progress.");
+            }
+
+            if (presentIndex != presentCount || !hasColumnValue)
+                throw new InvalidOperationException(
+                    $"Optional Int64 dictionary pages consumed {presentIndex} values, expected {presentCount}.");
+
+            if (!dictionaryState.IsMapEnabled)
+            {
+                var discoveredSortOrder = sortedDirection switch
+                {
+                    1 => DictionarySortOrder.Ascending,
+                    -1 => DictionarySortOrder.Descending,
+                    _ => DictionarySortOrder.Unknown
+                };
+                if (discoveredSortOrder != knownSortOrder)
+                    Volatile.Write(ref strategyContext.DictionarySortOrder, (int)discoveredSortOrder);
+            }
+
+            ref var dictionaryPage = ref pages[dictionaryPageIndex];
+            PlainEncoding.WriteValues(column, dictionaryState.AsSpan(), ref dictionaryPage.Content);
+            dictionaryPage.SetDictionaryPageMetadata(checked((uint)dictionaryState.Count));
+
+            statistics = ColumnStatistics.FromInt64(columnMin, columnMax, values.Length - presentCount);
+            return true;
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rentedIndexesBuffer);
+        }
+    }
+
     internal static bool TryEncodeOptionalPlainDateTime(BufferWriterFactory bufferWriters, Column column,
         ReadOnlySpan<DateTime?> values, LogicalType.Timestamp timestamp, PageStrategyContext strategyContext,
         PageList pages, ParquetDataPageVersion dataPageVersion, LeafProjectionInfo leafProjectionInfo)

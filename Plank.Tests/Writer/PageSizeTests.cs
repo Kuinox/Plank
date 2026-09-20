@@ -179,6 +179,125 @@ internal sealed class PageSizeTests
     [Test]
     [Arguments(ParquetDataPageVersion.V1)]
     [Arguments(ParquetDataPageVersion.V2)]
+    public void OptionalInt64DictionaryPagesPreserveNullsStatsAndIndexes(ParquetDataPageVersion dataPageVersion)
+    {
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.OptionalLeaf("id", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.RleDictionary]))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = 6
+        });
+        var column = writer.CreateSerializedColumn<long?>(schema.LeafColumns[0]);
+        long?[] values = [1, null, 2, 3, null, 1, 4];
+
+        column.Serialize(values);
+
+        AssertDataPageRows(column.Pages, [3, 3, 1]);
+        if (column.Statistics.MinBits != 1 || column.Statistics.MaxBits != 4 || column.Statistics.NullCount != 2)
+            throw new InvalidOperationException(
+                $"Optional Int64 dictionary column statistics were not preserved: kind={column.Statistics.ValueKind}, min={column.Statistics.MinBits}, max={column.Statistics.MaxBits}, nulls={column.Statistics.NullCount}.");
+
+        writer.StartRowGroup().Write(column);
+        writer.CloseFile();
+
+        using var readStream = new MemoryStream(stream.ToArray(), writable: false);
+        using var reader = new ParquetSharp.ParquetFileReader(readStream, leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var logical = rowGroup.Column(0).LogicalReader<long?>();
+        var actual = logical.ReadAll(values.Length);
+        if (!actual.AsSpan().SequenceEqual(values))
+            throw new InvalidOperationException("ParquetSharp did not preserve optional Int64 dictionary values.");
+    }
+
+    [Test]
+    public void OptionalInt64DictionaryStreamingRoundTripsAcrossRandomInputs()
+    {
+        var random = new Random(0x5EED);
+        foreach (var dataPageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
+        foreach (var targetPageBytes in new uint[] { 1, 2, 6, 17, 1024 })
+        {
+            AssertOptionalInt64DictionaryRoundTrip([null, null, null], dataPageVersion, targetPageBytes);
+            AssertOptionalInt64DictionaryRoundTrip([1, null, 2, 3, null, 1, 4], dataPageVersion,
+                targetPageBytes);
+            AssertOptionalInt64DictionaryRoundTrip(
+                [long.MaxValue, long.MinValue, 0, long.MaxValue, null, long.MinValue], dataPageVersion,
+                targetPageBytes);
+
+            for (var iteration = 0; iteration < 32; iteration++)
+            {
+                var values = new long?[random.Next(1, 257)];
+                for (var i = 0; i < values.Length; i++)
+                    values[i] = random.Next(5) == 0 ? null : random.Next(-8, 9);
+                AssertOptionalInt64DictionaryRoundTrip(values, dataPageVersion, targetPageBytes);
+            }
+        }
+
+        var fallbackValues = new long?[20_000];
+        for (var i = 0; i < fallbackValues.Length; i++)
+            fallbackValues[i] = i;
+        AssertOptionalInt64DictionaryRoundTrip(fallbackValues, ParquetDataPageVersion.V2, 1024);
+
+        var lowCardinalityValues = new long?[40_001];
+        for (var i = 0; i < lowCardinalityValues.Length; i++)
+            lowCardinalityValues[i] = i % 7;
+        AssertOptionalInt64DictionaryRoundTrip(lowCardinalityValues, ParquetDataPageVersion.V2, 1024 * 1024);
+    }
+
+    static void AssertOptionalInt64DictionaryRoundTrip(ReadOnlySpan<long?> values,
+        ParquetDataPageVersion dataPageVersion, uint targetPageBytes)
+    {
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.OptionalLeaf("id", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.RleDictionary]))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = targetPageBytes,
+            WritePageIndexes = true
+        });
+        var column = writer.CreateSerializedColumn<long?>(schema.LeafColumns[0]);
+        column.Serialize(values);
+
+        AssertStatistics(column.Statistics,
+            ColumnStatistics.CreateOptional(schema.LeafColumns[0].Column, values),
+            $"optional Int64 dictionary column version={dataPageVersion}, target={targetPageBytes}");
+        var rowOffset = 0;
+        for (var i = 0; i < column.Pages.Count; i++)
+        {
+            ref var page = ref column.Pages[i];
+            if (page.Kind == PageKind.Dictionary)
+                continue;
+            var pageRowCount = checked((int)page.RowCount);
+            AssertStatistics(page.Statistics,
+                ColumnStatistics.CreateOptional(schema.LeafColumns[0].Column,
+                    values.Slice(rowOffset, pageRowCount)),
+                $"optional Int64 dictionary page {i} version={dataPageVersion}, target={targetPageBytes}");
+            rowOffset += pageRowCount;
+        }
+        if (rowOffset != values.Length)
+            throw new InvalidOperationException($"Pages covered {rowOffset} of {values.Length} rows.");
+
+        writer.StartRowGroup().Write(column);
+        writer.CloseFile();
+        using var readStream = new MemoryStream(stream.ToArray(), writable: false);
+        using var reader = new ParquetSharp.ParquetFileReader(readStream, leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var logical = rowGroup.Column(0).LogicalReader<long?>();
+        var actual = logical.ReadAll(values.Length);
+        if (!actual.AsSpan().SequenceEqual(values))
+            throw new InvalidOperationException(
+                $"Optional Int64 dictionary round-trip failed for version={dataPageVersion}, target={targetPageBytes}.");
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
     public void OptionalInt32ByteStreamSplitUsesFixedTargetPages(ParquetDataPageVersion dataPageVersion)
     {
         int?[][] valuePatterns =
