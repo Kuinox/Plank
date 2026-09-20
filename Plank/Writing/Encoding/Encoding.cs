@@ -1105,6 +1105,9 @@ static class Encoding
             var initialUniqueCapacity = Math.Max(256, presentCount / 2);
             var knownSortOrder = (DictionarySortOrder)Volatile.Read(ref strategyContext.DictionarySortOrder);
             dictionaryState.Reset(initialUniqueCapacity, knownSortOrder == DictionarySortOrder.Unsorted);
+            Span<int> smallValueIndexes = stackalloc int[SmallInt64DictionaryCount];
+            smallValueIndexes.Fill(-1);
+            var usesSmallValueIndexes = false;
 
             var previousValue = 0L;
             var currentSortedIndex = 0;
@@ -1145,7 +1148,28 @@ static class Encoding
                         int dictionaryIndex;
                         if (presentIndex == 0)
                         {
-                            dictionaryIndex = dictionaryState.AddFirst(value);
+                            var smallValueOffset = unchecked(value - SmallInt64DictionaryMinimum);
+                            if ((ulong)smallValueOffset < SmallInt64DictionaryCount)
+                            {
+                                usesSmallValueIndexes = true;
+                                dictionaryIndex = GetOrAddForcedInt64DictionaryIndex(value, dictionaryState,
+                                    smallValueIndexes, ref usesSmallValueIndexes);
+                                if (knownSortOrder != DictionarySortOrder.Unsorted)
+                                {
+                                    Volatile.Write(ref strategyContext.DictionarySortOrder,
+                                        (int)DictionarySortOrder.Unsorted);
+                                    knownSortOrder = DictionarySortOrder.Unsorted;
+                                }
+                            }
+                            else
+                            {
+                                dictionaryIndex = dictionaryState.AddFirst(value);
+                            }
+                        }
+                        else if (usesSmallValueIndexes)
+                        {
+                            dictionaryIndex = GetOrAddForcedInt64DictionaryIndex(value, dictionaryState,
+                                smallValueIndexes, ref usesSmallValueIndexes);
                         }
                         else if (!dictionaryState.IsMapEnabled)
                         {
