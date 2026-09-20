@@ -3,6 +3,7 @@ using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
+using ParquetDataPageVersion = Plank.Writing.ParquetDataPageVersion;
 
 namespace Plank.Tests.Writer;
 
@@ -92,6 +93,70 @@ internal sealed class FloatingPointDictionaryTests
 
         AssertNullableBitsEqual([.. first, .. second], actual);
         await Assert.That(strategy.RowsSeen).IsEquivalentTo([2u]);
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void DefaultOptionalDoubleDictionaryStreamsPageLocalIndexesAndPreservesBits(
+        ParquetDataPageVersion dataPageVersion)
+    {
+        var expected = new double?[4097];
+        for (var i = 0; i < expected.Length; i++)
+        {
+            expected[i] = (i % 11) switch
+            {
+                0 => 0d,
+                1 => BitConverter.Int64BitsToDouble(unchecked((long)0x8000000000000000)),
+                2 => BitConverter.Int64BitsToDouble(0x7FF8000000000001),
+                3 => BitConverter.Int64BitsToDouble(0x7FF8000000000002),
+                _ => BitConverter.Int64BitsToDouble((i % 733) + 1L)
+            };
+        }
+
+        var schema = new ParquetSchema([
+            ColumnDefinition.Leaf("value", ParquetPhysicalType.Double,
+                new ColumnOptions(ParquetRepetition.Optional, [EncodingKind.RleDictionary]))
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            Compression = CompressionKind.None,
+            DataPageVersion = dataPageVersion,
+            TargetDataPageSizeBytes = 64,
+            WritePageIndexes = true
+        });
+        var serialized = writer.CreateSerializedColumn<double?>(schema.LeafColumns[0]);
+        serialized.Serialize(expected);
+        AssertStatistics(serialized.Statistics,
+            ColumnStatistics.CreateOptional(schema.LeafColumns[0].Column, expected), "column");
+        var rowOffset = 0;
+        for (var i = 0; i < serialized.Pages.Count; i++)
+        {
+            ref var page = ref serialized.Pages[i];
+            if (page.Kind == PageKind.Dictionary)
+                continue;
+
+            var rowCount = checked((int)page.RowCount);
+            AssertStatistics(page.Statistics,
+                ColumnStatistics.CreateOptional(schema.LeafColumns[0].Column,
+                    expected.AsSpan(rowOffset, rowCount)), $"page {i}");
+            rowOffset += rowCount;
+        }
+        if (rowOffset != expected.Length)
+            throw new InvalidOperationException($"Dictionary pages covered {rowOffset} of {expected.Length} rows.");
+
+        writer.StartRowGroup().Write(serialized);
+        writer.CloseFile();
+
+        using var readStream = new MemoryStream(stream.ToArray(), writable: false);
+        using var reader = schema.CreateReader(readStream);
+        var actual = new List<double?>(expected.Length);
+        foreach (var rowGroup in reader.RowGroups)
+            foreach (var buffer in rowGroup.Column<double?>(schema.LeafColumns[0]))
+                actual.AddRange(buffer.Values);
+
+        AssertNullableBitsEqual(expected, actual.ToArray());
     }
 
     static T[] RoundTrip<T>(T[] values, ParquetPhysicalType physicalType)
@@ -213,5 +278,14 @@ internal sealed class FloatingPointDictionaryTests
                     $"0x{BitConverter.DoubleToInt64Bits(expected[i]!.Value):X16}, got " +
                     $"0x{BitConverter.DoubleToInt64Bits(actual[i]!.Value):X16}.");
         }
+    }
+
+    static void AssertStatistics(ColumnStatistics actual, ColumnStatistics expected, string context)
+    {
+        if (actual.ValueKind != expected.ValueKind || actual.MinBits != expected.MinBits
+            || actual.MaxBits != expected.MaxBits || actual.NullCount != expected.NullCount
+            || actual.DistinctCount != expected.DistinctCount || actual.NanCount != expected.NanCount
+            || actual.HasStatistics != expected.HasStatistics)
+            throw new InvalidOperationException($"Statistics mismatch for {context}.");
     }
 }

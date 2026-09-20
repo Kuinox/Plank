@@ -567,8 +567,29 @@ static class PlainEncoding
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    static bool ExtractOptionalDoubleValuesAndGetStatistics(ReadOnlySpan<double?> values, Span<double> destination,
-        out double min, out double max, out long nanCount)
+    internal static bool ExtractOptionalDoubleValuesAndGetStatistics(ReadOnlySpan<double?> values,
+        Span<double> destination, out double min, out double max, out long nanCount)
+    {
+        if (Avx2.IsSupported && values.Length >= Vector256<double>.Count * 4)
+            return ExtractOptionalDoubleValuesAndGetStatisticsVectorized(values, destination,
+                out min, out max, out nanCount);
+
+        if (AdvSimd.IsSupported && values.Length >= Vector128<double>.Count * 2)
+        {
+            ExtractOptionalDoubleValuesAdvSimd(values, destination);
+            return ColumnStatistics.TryGetDoubleMinMax(destination[..values.Length], out min, out max,
+                out nanCount);
+        }
+
+        for (var i = 0; i < values.Length; i++)
+            destination[i] = values[i]!.Value;
+        return ColumnStatistics.TryGetDoubleMinMax(destination[..values.Length], out min, out max,
+            out nanCount);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static bool ExtractOptionalDoubleValuesAndGetStatisticsVectorized(ReadOnlySpan<double?> values,
+        Span<double> destination, out double min, out double max, out long nanCount)
     {
         ref var nullableSource = ref MemoryMarshal.GetReference(values);
         ref var source = ref Unsafe.As<double?, long>(ref nullableSource);

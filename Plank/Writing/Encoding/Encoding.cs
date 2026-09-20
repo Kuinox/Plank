@@ -1072,6 +1072,213 @@ static class Encoding
     }
 
     /// <summary>
+    /// Writes the all-present nullable Double dictionary path without row-group-sized value or index buffers.
+    /// Each page extracts its nullable values into page-local dense storage, then builds compact bitwise
+    /// dictionary indexes from that dense page. Null-containing batches stay on the established generic path.
+    /// </summary>
+    internal static bool TryEncodeOptionalDoubleDictionary(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<double?> values, PageStrategyContext strategyContext, PageList pages,
+        ParquetDataPageVersion dataPageVersion, LeafProjectionInfo leafProjectionInfo,
+        ReusableDictionaryState<double> dictionaryState, out ColumnStatistics statistics)
+    {
+        statistics = default;
+        if (values.IsEmpty
+            || column.Options.Repetition != ParquetRepetition.Optional
+            || column.PhysicalType != ParquetPhysicalType.Double
+            || leafProjectionInfo.MaxDefinitionLevel != 1 || leafProjectionInfo.MaxRepetitionLevel != 0
+            || strategyContext.Strategy is not DefaultStrategy
+            || strategyContext.Strategy.GetDictionaryMode() != DictionaryMode.Maybe
+            || !strategyContext.Strategy.TryGetTargetDataPageSizeBytes(out var targetPageBytesUnsigned)
+            || !BitConverter.IsLittleEndian || !HasCanonicalNullableDoubleLayout
+            || (!Avx2.IsSupported && !AdvSimd.IsSupported)
+            || !AreAllNullableDoubleValuesPresent(values))
+            return false;
+
+        var presentCount = values.Length;
+        var targetPageBytes = checked((int)targetPageBytesUnsigned);
+        var dictionaryPageIndex = AddDictionaryPage(bufferWriters, pages);
+        var maximumPresentValuesPerPage = Math.Min(presentCount, Math.Max(1, targetPageBytes / 2));
+        var rentedIndexesBuffer = default(ParquetBuffer);
+        var rentedDenseValuesBuffer = default(ParquetBuffer);
+        try
+        {
+            rentedIndexesBuffer = bufferWriters.RentScratch<int>(checked((uint)maximumPresentValuesPerPage));
+            rentedDenseValuesBuffer = bufferWriters.RentScratch<double>(checked((uint)maximumPresentValuesPerPage));
+            var indexes = ParquetBuffer.AsSpan<int>(rentedIndexesBuffer, maximumPresentValuesPerPage);
+            var denseValues = ParquetBuffer.AsSpan<double>(rentedDenseValuesBuffer, maximumPresentValuesPerPage);
+            var initialUniqueCapacity = Math.Max(256, presentCount / 2);
+            var knownSortOrder = (DictionarySortOrder)Volatile.Read(ref strategyContext.DictionarySortOrder);
+            var usesSmallDoubleIndexes = knownSortOrder == DictionarySortOrder.Unsorted;
+            dictionaryState.Reset(initialUniqueCapacity, useMap: false);
+            Span<long> smallDoubleKeys = stackalloc long[SmallDoubleDictionaryTableSize];
+            Span<int> smallDoubleSlots = stackalloc int[SmallDoubleDictionaryTableSize];
+            smallDoubleSlots.Fill(-1);
+
+            var previousValue = 0d;
+            var currentSortedIndex = 0;
+            var sortedDirection = knownSortOrder switch
+            {
+                DictionarySortOrder.Ascending => 1,
+                DictionarySortOrder.Descending => -1,
+                _ => 0
+            };
+            var nextDropCheckRow = Math.Min(DictionaryDropCheckPeriodRows, presentCount);
+            var presentIndex = 0;
+            var hasColumnValue = false;
+            var columnMin = 0d;
+            var columnMax = 0d;
+            var columnNanCount = 0L;
+            var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
+            var rowsWritten = 0;
+            while (rowsWritten < values.Length)
+            {
+                var pageStart = rowsWritten;
+                var pagePresentCount = 0;
+                var estimatedPresentValueBytes = Math.Max(1,
+                    (EncodingPrimitives.GetBitWidthFromMaxValue(
+                        dictionaryState.Count <= 1 ? 0 : dictionaryState.Count - 1) + 7) / 8);
+                var maximumRowsPerPage = Math.Max(1, targetPageBytes / (1 + estimatedPresentValueBytes));
+                var pageRowCount = Math.Min(values.Length - pageStart, maximumRowsPerPage);
+
+                var pageHasValue = PlainEncoding.ExtractOptionalDoubleValuesAndGetStatistics(
+                    values.Slice(pageStart, pageRowCount), denseValues[..pageRowCount], out var pageMin,
+                    out var pageMax, out var pageNanCount);
+                if (pageHasValue)
+                {
+                    if (!hasColumnValue)
+                    {
+                        columnMin = pageMin;
+                        columnMax = pageMax;
+                        hasColumnValue = true;
+                    }
+                    else
+                    {
+                        if (ColumnStatistics.IsLessThan(pageMin, columnMin))
+                            columnMin = pageMin;
+                        if (ColumnStatistics.IsGreaterThan(pageMax, columnMax))
+                            columnMax = pageMax;
+                    }
+                }
+                columnNanCount += pageNanCount;
+
+                var pageIndex = AddNewDataPage(bufferWriters, pages);
+                ref var page = ref pages[pageIndex];
+                for (var i = 0; i < pageRowCount; i++)
+                {
+                    var value = denseValues[i];
+                    int dictionaryIndex;
+                    if (usesSmallDoubleIndexes)
+                    {
+                        dictionaryIndex = GetOrAddSmallDoubleDictionaryIndex(value, dictionaryState,
+                            smallDoubleKeys, smallDoubleSlots, ref usesSmallDoubleIndexes);
+                    }
+                    else if (presentIndex == 0)
+                    {
+                        dictionaryIndex = dictionaryState.AddFirst(value);
+                    }
+                    else if (!dictionaryState.IsMapEnabled)
+                    {
+                        // Repeated values must compare by bits, because double equality collapses signed
+                        // zero and NaN payloads that the dictionary must retain as separate values.
+                        if (BitConverter.DoubleToInt64Bits(value)
+                            == BitConverter.DoubleToInt64Bits(previousValue))
+                        {
+                            dictionaryIndex = currentSortedIndex;
+                        }
+                        else if (TryCompareForSort(previousValue, value, out var comparison)
+                                 && IsSortedStep(comparison, ref sortedDirection))
+                        {
+                            currentSortedIndex = dictionaryState.AddSortedUnique(value);
+                            dictionaryIndex = currentSortedIndex;
+                        }
+                        else
+                        {
+                            if (knownSortOrder != DictionarySortOrder.Unsorted)
+                            {
+                                Volatile.Write(ref strategyContext.DictionarySortOrder,
+                                    (int)DictionarySortOrder.Unsorted);
+                                knownSortOrder = DictionarySortOrder.Unsorted;
+                            }
+                            dictionaryState.EnableMap();
+                            dictionaryIndex = dictionaryState.GetOrAddIndex(value);
+                        }
+                    }
+                    else
+                    {
+                        dictionaryIndex = dictionaryState.GetOrAddIndex(value);
+                    }
+
+                    indexes[pagePresentCount++] = dictionaryIndex;
+                    presentIndex++;
+                    previousValue = value;
+
+                    // The existing generic builder inserts the first value before entering its drop-check
+                    // loop, so a one-value batch must not invoke ShouldDropDictionary.
+                    if (presentIndex > 1
+                        && (presentIndex == nextDropCheckRow || presentIndex == presentCount))
+                    {
+                        if (strategyContext.Strategy.ShouldDropDictionary(
+                                checked((uint)dictionaryState.Count), checked((uint)presentCount),
+                                checked((uint)presentIndex)))
+                        {
+                            pages.Clear();
+                            return false;
+                        }
+                        nextDropCheckRow = Math.Min(presentCount,
+                            presentIndex + DictionaryDropCheckPeriodRows);
+                    }
+                }
+                rowsWritten = checked(pageStart + pageRowCount);
+
+                var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
+                    ref page.Content);
+                var definitionStart = page.Content.WrittenLength;
+                EncodingPrimitives.WriteRleRun(1, pageRowCount, 1, ref page.Content);
+                var definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref page.Content);
+                var pageBitWidth = Math.Max(1, EncodingPrimitives.GetBitWidthFromMaxValue(
+                    dictionaryState.Count <= 1 ? 0 : dictionaryState.Count - 1));
+                DictionaryIndexEncodingDispatcher.WriteIndexes(dictionaryEncoding,
+                    indexes[..pagePresentCount], pageBitWidth, ref page.Content);
+                WriteDataPageHeader(ref page, pageRowCount, pageRowCount, 0, 0, definitionLength,
+                    dictionaryEncoding);
+                page.Statistics = ColumnStatistics.FromDoubleAccumulation(pageMin, pageMax, 0,
+                    pageNanCount, pageHasValue);
+                if (rowsWritten <= pageStart)
+                    throw new InvalidOperationException("Optional Double dictionary page made no progress.");
+            }
+
+            if (presentIndex != presentCount || (!hasColumnValue && columnNanCount == 0))
+                throw new InvalidOperationException(
+                    $"Optional Double dictionary pages consumed {presentIndex} values, expected {presentCount}.");
+
+            if (!usesSmallDoubleIndexes && !dictionaryState.IsMapEnabled)
+            {
+                var discoveredSortOrder = sortedDirection switch
+                {
+                    1 => DictionarySortOrder.Ascending,
+                    -1 => DictionarySortOrder.Descending,
+                    _ => DictionarySortOrder.Unknown
+                };
+                if (discoveredSortOrder != knownSortOrder)
+                    Volatile.Write(ref strategyContext.DictionarySortOrder, (int)discoveredSortOrder);
+            }
+
+            ref var dictionaryPage = ref pages[dictionaryPageIndex];
+            PlainEncoding.WriteValues(column, dictionaryState.AsSpan(), ref dictionaryPage.Content);
+            dictionaryPage.SetDictionaryPageMetadata(checked((uint)dictionaryState.Count));
+
+            statistics = ColumnStatistics.FromDoubleAccumulation(columnMin, columnMax,
+                values.Length - presentCount, columnNanCount, hasColumnValue);
+            return true;
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rentedIndexesBuffer);
+            bufferWriters.ReturnScratch(rentedDenseValuesBuffer);
+        }
+    }
+
+    /// <summary>
     /// Writes the generic nullable Int64 dictionary path without row-group-sized value or index buffers.
     /// A page-local index buffer is populated while the dictionary, levels, and statistics are built, then
     /// encoded once. Different pages may use different dictionary bit widths as the dictionary grows.
@@ -1526,7 +1733,7 @@ static class Encoding
     /// lanes 0 and 2. Masking those two lanes and comparing them where they already sit needs no cross-lane permute
     /// to gather the flags together first, and uses only platform-neutral <see cref="Vector256"/> operators.
     /// </summary>
-    static bool AreAllNullableDoubleValuesPresent(ReadOnlySpan<double?> values)
+    internal static bool AreAllNullableDoubleValuesPresent(ReadOnlySpan<double?> values)
     {
         ref var nullableSource = ref MemoryMarshal.GetReference(values);
         ref var source = ref Unsafe.As<double?, long>(ref nullableSource);
@@ -2690,6 +2897,37 @@ static class Encoding
         }
 
         return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static int GetOrAddSmallDoubleDictionaryIndex(double value, ReusableDictionaryState<double> dictionaryState,
+        Span<long> keys, Span<int> slots, ref bool usesSmallIndexes)
+    {
+        if (!usesSmallIndexes)
+            return dictionaryState.GetOrAddIndex(value);
+
+        var bits = BitConverter.DoubleToInt64Bits(value);
+        var hash = unchecked((uint)(bits ^ (bits >> 32)));
+        hash ^= hash >> 16;
+        hash *= 0x45d9f3bu;
+        hash ^= hash >> 16;
+        var slot = (int)(hash & (SmallDoubleDictionaryTableSize - 1));
+        while (slots[slot] >= 0 && keys[slot] != bits)
+            slot = (slot + 1) & (SmallDoubleDictionaryTableSize - 1);
+
+        if (slots[slot] >= 0)
+            return slots[slot];
+        if (dictionaryState.Count < SmallDoubleDictionaryCapacity)
+        {
+            var dictionaryIndex = dictionaryState.AddSortedUnique(value);
+            keys[slot] = bits;
+            slots[slot] = dictionaryIndex;
+            return dictionaryIndex;
+        }
+
+        dictionaryState.EnableMap();
+        usesSmallIndexes = false;
+        return dictionaryState.GetOrAddIndex(value);
     }
 
     static void EncodeOptionalFlatValues<T, TSource>(BufferWriterFactory bufferWriters, Column column,

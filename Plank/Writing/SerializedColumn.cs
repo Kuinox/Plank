@@ -1198,6 +1198,29 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
 
+        if (typeof(TValue) == typeof(double)
+            && _column.PhysicalType == ParquetPhysicalType.Double
+            && strategyContext.Strategy is DefaultStrategy
+            && strategyContext.Strategy.GetDictionaryMode() == DictionaryMode.Maybe
+            && _owner.WritePageIndexes
+            && _column.Options.BloomFilter is null)
+        {
+            Pages.Clear();
+            var doubleValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<double?>>(ref values);
+            if (Plank.Writing.Encoding.Encoding.TryEncodeOptionalDoubleDictionary(
+                    _owner.BufferWriters, _column, doubleValues, strategyContext, Pages,
+                    _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
+                    GetOrCreateDictionaryState<double>(), out var dictionaryStatistics))
+            {
+                ColumnOrdinal = columnOrdinal;
+                RowCount = checked((uint)values.Length);
+                HasPendingData = true;
+                Statistics = dictionaryStatistics;
+                _bloomFilterByteLength = 0;
+                return;
+            }
+        }
+
         if (typeof(TValue) == typeof(long)
             && _column.PhysicalType == ParquetPhysicalType.Int64
             && strategyContext.Strategy is DefaultStrategy
