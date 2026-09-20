@@ -214,16 +214,16 @@ internal sealed class PageSizeTests
     }
 
     [Test]
-    public void OptionalInt64DictionaryFusionMatchesUnfusedPagesAcrossRandomInputs()
+    public void OptionalInt64DictionaryStreamingRoundTripsAcrossRandomInputs()
     {
         var random = new Random(0x5EED);
         foreach (var dataPageVersion in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
         foreach (var targetPageBytes in new uint[] { 1, 2, 6, 17, 1024 })
         {
-            AssertOptionalInt64DictionaryPagesMatch([null, null, null], dataPageVersion, targetPageBytes);
-            AssertOptionalInt64DictionaryPagesMatch([1, null, 2, 3, null, 1, 4], dataPageVersion,
+            AssertOptionalInt64DictionaryRoundTrip([null, null, null], dataPageVersion, targetPageBytes);
+            AssertOptionalInt64DictionaryRoundTrip([1, null, 2, 3, null, 1, 4], dataPageVersion,
                 targetPageBytes);
-            AssertOptionalInt64DictionaryPagesMatch(
+            AssertOptionalInt64DictionaryRoundTrip(
                 [long.MaxValue, long.MinValue, 0, long.MaxValue, null, long.MinValue], dataPageVersion,
                 targetPageBytes);
 
@@ -232,48 +232,23 @@ internal sealed class PageSizeTests
                 var values = new long?[random.Next(1, 257)];
                 for (var i = 0; i < values.Length; i++)
                     values[i] = random.Next(5) == 0 ? null : random.Next(-8, 9);
-                AssertOptionalInt64DictionaryPagesMatch(values, dataPageVersion, targetPageBytes);
+                AssertOptionalInt64DictionaryRoundTrip(values, dataPageVersion, targetPageBytes);
             }
         }
 
         var fallbackValues = new long?[20_000];
         for (var i = 0; i < fallbackValues.Length; i++)
             fallbackValues[i] = i;
-        AssertOptionalInt64DictionaryPagesMatch(fallbackValues, ParquetDataPageVersion.V2, 1024);
+        AssertOptionalInt64DictionaryRoundTrip(fallbackValues, ParquetDataPageVersion.V2, 1024);
+
+        var lowCardinalityValues = new long?[40_001];
+        for (var i = 0; i < lowCardinalityValues.Length; i++)
+            lowCardinalityValues[i] = i % 7;
+        AssertOptionalInt64DictionaryRoundTrip(lowCardinalityValues, ParquetDataPageVersion.V2, 1024 * 1024);
     }
 
-    static void AssertOptionalInt64DictionaryPagesMatch(ReadOnlySpan<long?> values,
+    static void AssertOptionalInt64DictionaryRoundTrip(ReadOnlySpan<long?> values,
         ParquetDataPageVersion dataPageVersion, uint targetPageBytes)
-    {
-        var fused = CaptureOptionalInt64DictionaryPages(values, dataPageVersion, targetPageBytes, writePageIndexes: true);
-        var unfused = CaptureOptionalInt64DictionaryPages(values, dataPageVersion, targetPageBytes, writePageIndexes: false);
-        if (fused.Length != unfused.Length)
-            throw new InvalidOperationException(
-                $"Optional Int64 dictionary page count mismatch: fused={fused.Length}, unfused={unfused.Length}.");
-
-        for (var i = 0; i < fused.Length; i++)
-        {
-            var actual = fused[i];
-            var expected = unfused[i];
-            if (actual.Kind != expected.Kind || actual.RowCount != expected.RowCount
-                || actual.ValueCount != expected.ValueCount || actual.NullCount != expected.NullCount
-                || actual.Encoding != expected.Encoding
-                || !actual.Header.AsSpan().SequenceEqual(expected.Header)
-                || !actual.Content.AsSpan().SequenceEqual(expected.Content)
-                || actual.Statistics.ValueKind != expected.Statistics.ValueKind
-                || actual.Statistics.MinBits != expected.Statistics.MinBits
-                || actual.Statistics.MaxBits != expected.Statistics.MaxBits
-                || actual.Statistics.NullCount != expected.Statistics.NullCount
-                || actual.Statistics.HasStatistics != expected.Statistics.HasStatistics)
-            {
-                throw new InvalidOperationException(
-                    $"Optional Int64 dictionary page {i} differs for version={dataPageVersion}, target={targetPageBytes}, rows={values.Length}: kind {actual.Kind}/{expected.Kind}, rows {actual.RowCount}/{expected.RowCount}, values {actual.ValueCount}/{expected.ValueCount}, nulls {actual.NullCount}/{expected.NullCount}, encoding {actual.Encoding}/{expected.Encoding}, header {Convert.ToHexString(actual.Header)}/{Convert.ToHexString(expected.Header)}, content {Convert.ToHexString(actual.Content)}/{Convert.ToHexString(expected.Content)}, stats {actual.Statistics.ValueKind}/{expected.Statistics.ValueKind}:{actual.Statistics.MinBits}/{expected.Statistics.MinBits}:{actual.Statistics.MaxBits}/{expected.Statistics.MaxBits}:{actual.Statistics.NullCount}/{expected.Statistics.NullCount}:{actual.Statistics.HasStatistics}/{expected.Statistics.HasStatistics}.");
-            }
-        }
-    }
-
-    static OptionalInt64PageSnapshot[] CaptureOptionalInt64DictionaryPages(ReadOnlySpan<long?> values,
-        ParquetDataPageVersion dataPageVersion, uint targetPageBytes, bool writePageIndexes)
     {
         var schema = new PlankParquetSchema([
             ColumnDefinition.OptionalLeaf("id", ParquetPhysicalType.Int64,
@@ -284,27 +259,41 @@ internal sealed class PageSizeTests
         {
             DataPageVersion = dataPageVersion,
             TargetDataPageSizeBytes = targetPageBytes,
-            WritePageIndexes = writePageIndexes
+            WritePageIndexes = true
         });
         var column = writer.CreateSerializedColumn<long?>(schema.LeafColumns[0]);
         column.Serialize(values);
-        var snapshots = new OptionalInt64PageSnapshot[column.Pages.Count];
-        for (var i = 0; i < snapshots.Length; i++)
+
+        AssertStatistics(column.Statistics,
+            ColumnStatistics.CreateOptional(schema.LeafColumns[0].Column, values),
+            $"optional Int64 dictionary column version={dataPageVersion}, target={targetPageBytes}");
+        var rowOffset = 0;
+        for (var i = 0; i < column.Pages.Count; i++)
         {
             ref var page = ref column.Pages[i];
-            var header = new byte[page.Header.WrittenLength];
-            page.Header.CopyTo(header);
-            var content = new byte[page.Content.WrittenLength];
-            page.Content.CopyTo(content);
-            snapshots[i] = new OptionalInt64PageSnapshot(page.Kind, page.Encoding, page.RowCount,
-                page.ValueCount, page.NullCount, header, content, page.Statistics);
+            if (page.Kind == PageKind.Dictionary)
+                continue;
+            var pageRowCount = checked((int)page.RowCount);
+            AssertStatistics(page.Statistics,
+                ColumnStatistics.CreateOptional(schema.LeafColumns[0].Column,
+                    values.Slice(rowOffset, pageRowCount)),
+                $"optional Int64 dictionary page {i} version={dataPageVersion}, target={targetPageBytes}");
+            rowOffset += pageRowCount;
         }
+        if (rowOffset != values.Length)
+            throw new InvalidOperationException($"Pages covered {rowOffset} of {values.Length} rows.");
 
-        return snapshots;
+        writer.StartRowGroup().Write(column);
+        writer.CloseFile();
+        using var readStream = new MemoryStream(stream.ToArray(), writable: false);
+        using var reader = new ParquetSharp.ParquetFileReader(readStream, leaveOpen: false);
+        using var rowGroup = reader.RowGroup(0);
+        using var logical = rowGroup.Column(0).LogicalReader<long?>();
+        var actual = logical.ReadAll(values.Length);
+        if (!actual.AsSpan().SequenceEqual(values))
+            throw new InvalidOperationException(
+                $"Optional Int64 dictionary round-trip failed for version={dataPageVersion}, target={targetPageBytes}.");
     }
-
-    readonly record struct OptionalInt64PageSnapshot(PageKind Kind, EncodingKind Encoding, uint RowCount,
-        uint ValueCount, uint NullCount, byte[] Header, byte[] Content, ColumnStatistics Statistics);
 
     [Test]
     [Arguments(ParquetDataPageVersion.V1)]
