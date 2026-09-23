@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Plank.Schema;
+using Plank.Writing.Encoding;
 
 namespace Plank.Writing;
 
@@ -1395,7 +1396,7 @@ internal readonly struct ColumnStatistics
     static int CompareBinary(Column column, ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
         => column.LogicalType is LogicalType.Decimal
             ? CompareDecimalBytes(left, right)
-            : left.SequenceCompareTo(right);
+            : EncodingPrimitives.ComparePayload(left, right);
 
     static int CompareDecimalBytes(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
@@ -1415,7 +1416,7 @@ internal readonly struct ColumnStatistics
         if (lengthComparison != 0)
             return leftNegative ? -lengthComparison : lengthComparison;
 
-        return left.SequenceCompareTo(right);
+        return EncodingPrimitives.ComparePayload(left, right);
     }
 
     static int CompareZeroToDecimal(ReadOnlySpan<byte> value)

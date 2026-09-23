@@ -71,7 +71,7 @@ internal sealed class PayloadCopyTests
     {
         ReadOnlySpan<byte> alphabet = "abz"u8;
         var values = new List<byte[]> { Array.Empty<byte>() };
-        for (var length = 1; length <= 12; length++)
+        for (var length = 1; length <= 20; length++)
             for (var seed = 0; seed < 24; seed++)
             {
                 var value = new byte[length];

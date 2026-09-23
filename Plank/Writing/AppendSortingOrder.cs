@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using Plank.Schema;
+using Plank.Writing.Encoding;
 using TextEncoding = System.Text.Encoding;
 
 namespace Plank.Writing;
@@ -140,6 +141,6 @@ sealed class AppendSortingOrder(ParquetSortingColumn[] columns)
                 ? CompareFloating((double)BitConverter.UInt16BitsToHalf(BinaryPrimitives.ReadUInt16LittleEndian(left)),
                     (double)BitConverter.UInt16BitsToHalf(BinaryPrimitives.ReadUInt16LittleEndian(right)))
                 : null;
-        return left.SequenceCompareTo(right);
+        return EncodingPrimitives.ComparePayload(left, right);
     }
 }

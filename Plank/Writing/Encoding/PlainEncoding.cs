@@ -1001,12 +1001,12 @@ static class PlainEncoding
                 minIndex = index;
                 maxIndex = index;
             }
-            else if (value.SequenceCompareTo(min) < 0)
+            else if (EncodingPrimitives.ComparePayload(value, min) < 0)
             {
                 min = value;
                 minIndex = index;
             }
-            else if (value.SequenceCompareTo(max) > 0)
+            else if (EncodingPrimitives.ComparePayload(value, max) > 0)
             {
                 max = value;
                 maxIndex = index;
