@@ -69,9 +69,6 @@ static class EncodingPrimitives
         }
     }
 
-    /// <summary>Longest common prefix <see cref="ComparePayload"/> compares without calling CoreLib.</summary>
-    const int InlinePayloadCompareLength = 8;
-
     /// <summary>
     /// Orders two BYTE_ARRAY payloads as unsigned byte sequences, the same order
     /// <see cref="ReadOnlySpan{T}.SequenceCompareTo"/> gives. That method is a call whose setup costs
@@ -83,7 +80,7 @@ static class EncodingPrimitives
     internal static int ComparePayload(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
         var common = Math.Min(left.Length, right.Length);
-        if (common > InlinePayloadCompareLength)
+        if (common >= Vector128<byte>.Count)
             return left.SequenceCompareTo(right);
 
         for (var i = 0; i < common; i++)

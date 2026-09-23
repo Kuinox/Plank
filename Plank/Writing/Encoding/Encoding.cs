@@ -2736,7 +2736,7 @@ static class Encoding
         };
         if (values.Length > 1 && sortedDirection == 0)
         {
-            var firstComparison = values[0].AsSpan().SequenceCompareTo(values[1]);
+            var firstComparison = EncodingPrimitives.ComparePayload(values[0], values[1]);
             if (firstComparison != 0)
                 sortedDirection = firstComparison < 0 ? 1 : -1;
         }
@@ -2752,7 +2752,7 @@ static class Encoding
                 continue;
             }
 
-            var comparison = previous.AsSpan().SequenceCompareTo(value);
+            var comparison = EncodingPrimitives.ComparePayload(previous, value);
             if (IsSortedStep(comparison, ref sortedDirection))
             {
                 currentSortedIndex = dictionaryState.AddSortedUnique(value!);
@@ -3555,12 +3555,12 @@ static class Encoding
                         pageMinIndex = i;
                         pageMaxIndex = i;
                     }
-                    else if (payload.SequenceCompareTo(pageMin.Span) < 0)
+                    else if (EncodingPrimitives.ComparePayload(payload, pageMin.Span) < 0)
                     {
                         pageMin = memory;
                         pageMinIndex = i;
                     }
-                    else if (payload.SequenceCompareTo(pageMax.Span) > 0)
+                    else if (EncodingPrimitives.ComparePayload(payload, pageMax.Span) > 0)
                     {
                         pageMax = memory;
                         pageMaxIndex = i;
@@ -3601,10 +3601,10 @@ static class Encoding
             }
             else
             {
-                if (pageMin.Span.SequenceCompareTo(
+                if (EncodingPrimitives.ComparePayload(pageMin.Span,
                         rows[binaryMinMax.MinIndex].GetValueOrDefault().Span) < 0)
                     binaryMinMax.MinIndex = pageMinIndex;
-                if (pageMax.Span.SequenceCompareTo(
+                if (EncodingPrimitives.ComparePayload(pageMax.Span,
                         rows[binaryMinMax.MaxIndex].GetValueOrDefault().Span) > 0)
                     binaryMinMax.MaxIndex = pageMaxIndex;
             }
@@ -4377,12 +4377,13 @@ static class Encoding
         }
         if (typeof(T) == typeof(byte[]))
         {
-            comparison = Unsafe.As<T, byte[]>(ref left).AsSpan().SequenceCompareTo(Unsafe.As<T, byte[]>(ref right).AsSpan());
+            comparison = EncodingPrimitives.ComparePayload(Unsafe.As<T, byte[]>(ref left),
+                Unsafe.As<T, byte[]>(ref right));
             return true;
         }
         if (typeof(T) == typeof(ReadOnlyMemory<byte>))
         {
-            comparison = Unsafe.As<T, ReadOnlyMemory<byte>>(ref left).Span.SequenceCompareTo(
+            comparison = EncodingPrimitives.ComparePayload(Unsafe.As<T, ReadOnlyMemory<byte>>(ref left).Span,
                 Unsafe.As<T, ReadOnlyMemory<byte>>(ref right).Span);
             return true;
         }
