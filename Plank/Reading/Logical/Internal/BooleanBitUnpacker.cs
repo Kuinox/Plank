@@ -45,6 +45,7 @@ static class BooleanBitUnpacker
     /// Expands whole packed bytes from the start of <paramref name="payload"/> and returns how many
     /// values were written. The caller finishes the remainder a bit at a time.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static int UnpackAligned(ReadOnlySpan<byte> payload, Span<bool> destination)
     {
         ref var source = ref MemoryMarshal.GetReference(payload);
