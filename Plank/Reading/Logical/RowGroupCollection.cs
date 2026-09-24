@@ -1,6 +1,8 @@
+using System.Collections;
+
 namespace Plank.Reading.Logical;
 
-public readonly struct RowGroupCollection
+public readonly struct RowGroupCollection : IReadOnlyList<RowGroup>
 {
     readonly ParquetReader? _reader;
     readonly int _footerVersion;
@@ -21,10 +23,16 @@ public readonly struct RowGroupCollection
     public Enumerator GetEnumerator()
         => new(this);
 
+    IEnumerator<RowGroup> IEnumerable<RowGroup>.GetEnumerator()
+        => GetEnumerator();
+
+    IEnumerator IEnumerable.GetEnumerator()
+        => GetEnumerator();
+
     ParquetReader GetReader()
         => _reader ?? throw new InvalidOperationException("The row group collection is not initialized.");
 
-    public struct Enumerator
+    public struct Enumerator : IEnumerator<RowGroup>
     {
         readonly RowGroupCollection _rowGroups;
         readonly int _count;
@@ -40,6 +48,8 @@ public readonly struct RowGroupCollection
 
         public RowGroup Current { get; private set; }
 
+        object IEnumerator.Current => Current;
+
         public bool MoveNext()
         {
             var index = _index + 1;
@@ -52,6 +62,13 @@ public readonly struct RowGroupCollection
             Current = _rowGroups[index];
             _index = index;
             return true;
+        }
+
+        void IEnumerator.Reset()
+            => throw new NotSupportedException();
+
+        void IDisposable.Dispose()
+        {
         }
     }
 }
