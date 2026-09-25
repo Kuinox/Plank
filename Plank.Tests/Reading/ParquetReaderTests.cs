@@ -35,6 +35,9 @@ internal sealed class ParquetReaderTests
         await Assert.That(rowGroups.Count).IsEqualTo(2);
         await Assert.That(rowGroups[0].Index).IsEqualTo(0);
         await Assert.That(rowGroups[1].Index).IsEqualTo(1);
+        IReadOnlyList<RowGroup> list = rowGroups;
+        await Assert.That(list.Count).IsEqualTo(2);
+        await Assert.That(rowGroups.Select(group => group.Index).ToArray()).IsEquivalentTo([0, 1]);
         await Assert.That(rowGroups[0].MetadataOffset).IsGreaterThan(0UL);
         await Assert.That(rowGroups[1].MetadataOffset).IsGreaterThan(rowGroups[0].MetadataOffset);
             await Assert.That(rowGroups[0].ColumnChunkOffset).IsGreaterThan(0UL);
