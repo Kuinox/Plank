@@ -18,7 +18,7 @@ static class DeltaBinaryPackedDecoder
 
     // AMD family 17h (Zen 1/2) implements PDEP in microcode. Instruction support
     // alone must not select that path, including for fields smaller than a byte.
-    static readonly bool UsePdep = Bmi2.X64.IsSupported && !HasSlowPdep();
+    internal static readonly bool UsePdep = Bmi2.X64.IsSupported && !HasSlowPdep();
 
     // Initialize the CPU choice before nested decode methods are compiled, so
     // the JIT can fold the readonly flag and discard the unused kernel branch.
