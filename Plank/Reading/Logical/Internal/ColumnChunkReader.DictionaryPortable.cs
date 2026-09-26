@@ -1,10 +1,67 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 
 namespace Plank.Reading.Logical.Internal;
 
 static partial class ColumnChunkReader
 {
+    // Eight 9-bit indexes use nine bytes; keep the final byte load separate
+    // so the last literal group never reads past the page boundary.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void DecodeNullableInt32DictionaryNineBitPortable(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<int> dictionary, Span<int?> destination)
+    {
+        ref var source = ref MemoryMarshal.GetReference(payload);
+        ref var target = ref Unsafe.As<int?, ulong>(ref MemoryMarshal.GetReference(destination));
+        ref var dictionaryStart = ref MemoryMarshal.GetReference(dictionary);
+        var limit = (uint)dictionary.Length;
+        for (var valueIndex = 0; valueIndex < destination.Length; valueIndex += 8)
+        {
+            var byteIndex = valueIndex / 8 * 9;
+            var bits = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex));
+            var last = Unsafe.Add(ref source, byteIndex + 8);
+            var i0 = (uint)(bits & 511);
+            var i1 = (uint)(bits >> 9 & 511);
+            var i2 = (uint)(bits >> 18 & 511);
+            var i3 = (uint)(bits >> 27 & 511);
+            var i4 = (uint)(bits >> 36 & 511);
+            var i5 = (uint)(bits >> 45 & 511);
+            var i6 = (uint)(bits >> 54 & 511);
+            var i7 = (uint)((bits >> 63 | (ulong)last << 1) & 511);
+            if (i0 >= limit || i1 >= limit || i2 >= limit || i3 >= limit ||
+                i4 >= limit || i5 >= limit || i6 >= limit || i7 >= limit)
+            {
+                ValidateDictionaryIndex((int)i0, dictionary.Length);
+                ValidateDictionaryIndex((int)i1, dictionary.Length);
+                ValidateDictionaryIndex((int)i2, dictionary.Length);
+                ValidateDictionaryIndex((int)i3, dictionary.Length);
+                ValidateDictionaryIndex((int)i4, dictionary.Length);
+                ValidateDictionaryIndex((int)i5, dictionary.Length);
+                ValidateDictionaryIndex((int)i6, dictionary.Length);
+                ValidateDictionaryIndex((int)i7, dictionary.Length);
+            }
+
+            Unsafe.Add(ref target, valueIndex) = 1UL |
+                (ulong)(uint)Unsafe.Add(ref dictionaryStart, (int)i0) << 32;
+            Unsafe.Add(ref target, valueIndex + 1) = 1UL |
+                (ulong)(uint)Unsafe.Add(ref dictionaryStart, (int)i1) << 32;
+            Unsafe.Add(ref target, valueIndex + 2) = 1UL |
+                (ulong)(uint)Unsafe.Add(ref dictionaryStart, (int)i2) << 32;
+            Unsafe.Add(ref target, valueIndex + 3) = 1UL |
+                (ulong)(uint)Unsafe.Add(ref dictionaryStart, (int)i3) << 32;
+            Unsafe.Add(ref target, valueIndex + 4) = 1UL |
+                (ulong)(uint)Unsafe.Add(ref dictionaryStart, (int)i4) << 32;
+            Unsafe.Add(ref target, valueIndex + 5) = 1UL |
+                (ulong)(uint)Unsafe.Add(ref dictionaryStart, (int)i5) << 32;
+            Unsafe.Add(ref target, valueIndex + 6) = 1UL |
+                (ulong)(uint)Unsafe.Add(ref dictionaryStart, (int)i6) << 32;
+            Unsafe.Add(ref target, valueIndex + 7) = 1UL |
+                (ulong)(uint)Unsafe.Add(ref dictionaryStart, (int)i7) << 32;
+        }
+    }
+
     // Eight 11-bit indexes occupy exactly eleven bytes. Do not load sixteen
     // bytes from the input: the final group may end at the page boundary.
     static void DecodeDictionaryLiteral11BitPortable<T>(ReadOnlySpan<byte> payload,
