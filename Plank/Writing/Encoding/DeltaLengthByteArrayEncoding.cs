@@ -74,6 +74,14 @@ static class DeltaLengthByteArrayEncoding
         BufferWriterFactory bufferWriters, ref BufferWriter writer)
         where TRowAccess : IByteArrayRow<TRow>
     {
+        if (typeof(TRow) == typeof(ReadOnlyMemory<byte>?))
+        {
+            WriteOptionalMemoryPayloads(
+                Unsafe.As<ReadOnlySpan<TRow>, ReadOnlySpan<ReadOnlyMemory<byte>?>>(ref rows),
+                bufferWriters, ref writer);
+            return;
+        }
+
         if (typeof(TRow) == typeof(byte[]))
         {
             WriteOptionalByteArrayPayloads(column,
@@ -82,6 +90,51 @@ static class DeltaLengthByteArrayEncoding
         }
 
         WritePayloads<TRow, TRowAccess>(column, rows, bufferWriters, ref writer);
+    }
+
+    static void WriteOptionalMemoryPayloads(ReadOnlySpan<ReadOnlyMemory<byte>?> values,
+        BufferWriterFactory bufferWriters, ref BufferWriter writer)
+    {
+        var presentCount = 0;
+        for (var i = 0; i < values.Length; i++)
+            if (values[i].HasValue)
+                presentCount++;
+
+        var byteLength = checked(presentCount * sizeof(int));
+        var rentedLengthsBytes = bufferWriters.RentScratch(checked((uint)Math.Max(byteLength, sizeof(int))));
+        var lengths = MemoryMarshal.Cast<byte, int>(rentedLengthsBytes.Span[..byteLength]);
+        try
+        {
+            var denseIndex = 0;
+            var totalPayloadBytes = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                if (values[i] is not { } value)
+                    continue;
+                lengths[denseIndex++] = value.Length;
+                totalPayloadBytes = checked(totalPayloadBytes + value.Length);
+            }
+
+            DeltaBinaryPackedEncoding.WriteInt32(lengths, ref writer);
+            if (totalPayloadBytes == 0)
+                return;
+
+            var destination = writer.GetSpan(totalPayloadBytes);
+            var offset = 0;
+            for (var i = 0; i < values.Length; i++)
+            {
+                if (values[i] is not { } value)
+                    continue;
+                value.Span.CopyTo(destination[offset..]);
+                offset += value.Length;
+            }
+
+            writer.Advance(offset);
+        }
+        finally
+        {
+            bufferWriters.ReturnScratch(rentedLengthsBytes);
+        }
     }
 
     static void WriteOptionalByteArrayPayloads(Column column, ReadOnlySpan<byte[]> values,
