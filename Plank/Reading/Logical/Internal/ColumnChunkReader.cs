@@ -4361,7 +4361,7 @@ static partial class ColumnChunkReader
     static unsafe void DecodeDictionaryLiteralInt32Indexes11BitCore(ReadOnlySpan<byte> payload,
         ReadOnlySpan<int> dictionary, Span<int> destination)
     {
-        if (!Avx2.IsSupported || !Bmi2.X64.IsSupported)
+        if (!Avx2.IsSupported || !DeltaBinaryPackedDecoder.UsePdep)
         {
             DecodeDictionaryLiteral11BitPortable(payload, dictionary, destination);
             return;
@@ -4452,7 +4452,7 @@ static partial class ColumnChunkReader
     static void DecodeDictionaryLiteralInt64Indexes11BitCore(ReadOnlySpan<byte> payload,
         ReadOnlySpan<long> dictionary, Span<long> destination)
     {
-        if (!Avx2.IsSupported || !Bmi2.X64.IsSupported)
+        if (!Avx2.IsSupported || !DeltaBinaryPackedDecoder.UsePdep)
         {
             DecodeDictionaryLiteral11BitPortable(payload, dictionary, destination);
             return;
