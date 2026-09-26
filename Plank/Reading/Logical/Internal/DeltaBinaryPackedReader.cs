@@ -21,17 +21,16 @@ ref struct DeltaBinaryPackedReader
     internal ulong ReadUnsignedVarInt()
     {
         ulong value = 0;
-        var shift = 0;
-        while (true)
+        for (var byteIndex = 0; byteIndex < 10; byteIndex++)
         {
             var b = ReadByte();
-            value |= (ulong)(b & 0x7F) << shift;
+            if (byteIndex == 9 && (b & 0xFE) != 0)
+                throw new CorruptParquetException("Delta-binary-packed UInt64 varint exceeds 64 bits.");
+            value |= (ulong)(b & 0x7F) << (byteIndex * 7);
             if ((b & 0x80) == 0)
                 return value;
-            shift += 7;
-            if (shift >= 70)
-                throw new CorruptParquetException("Invalid delta-binary-packed UInt64 varint.");
         }
+        throw new CorruptParquetException("Invalid delta-binary-packed UInt64 varint.");
     }
 
     internal long ReadZigZagInt64()

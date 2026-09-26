@@ -4912,18 +4912,19 @@ static partial class ColumnChunkReader
     static uint ReadUnsignedVarInt(ref ReadOnlySpan<byte> payload)
     {
         uint value = 0;
-        var shift = 0;
-        while (true)
+        for (var byteIndex = 0; byteIndex < 5; byteIndex++)
         {
             if (payload.IsEmpty)
                 throw new CorruptParquetException("Unexpected end of RLE/bit-pack payload while reading varint.");
             var b = payload[0];
             payload = payload[1..];
-            value |= (uint)(b & 0x7F) << shift;
+            if (byteIndex == 4 && (b & 0xF0) != 0)
+                throw new CorruptParquetException("RLE/bit-pack UInt32 varint exceeds 32 bits.");
+            value |= (uint)(b & 0x7F) << (byteIndex * 7);
             if ((b & 0x80) == 0)
                 return value;
-            shift += 7;
         }
+        throw new CorruptParquetException("RLE/bit-pack UInt32 varint exceeds five bytes.");
     }
 
     static int ReadLittleEndian(ref ReadOnlySpan<byte> payload, int byteWidth)
