@@ -1068,6 +1068,17 @@ static partial class ColumnChunkReader
                     literalTarget = literalTarget[literalVectorizedLength..];
                 }
 
+                if (NullableInt32HasCanonicalLayout &&
+                    System.Runtime.Intrinsics.Arm.AdvSimd.IsSupported &&
+                    bitWidth == 9 && literalTarget.Length >= 8)
+                {
+                    var literalVectorizedLength = literalTarget.Length & ~7;
+                    DecodeNullableInt32DictionaryNineBitPortable(literalPayload, dictionary,
+                        literalTarget[..literalVectorizedLength]);
+                    literalPayload = literalPayload[(literalVectorizedLength / 8 * 9)..];
+                    literalTarget = literalTarget[literalVectorizedLength..];
+                }
+
                 var mask = bitWidth == 32 ? ulong.MaxValue : (1UL << bitWidth) - 1UL;
                 ulong bitBuffer = 0;
                 var bufferedBits = 0;
