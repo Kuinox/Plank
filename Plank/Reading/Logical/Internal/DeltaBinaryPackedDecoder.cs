@@ -16,26 +16,6 @@ static class DeltaBinaryPackedDecoder
     const int PackedBytesPerBitWidth = MiniBlockChunk / 8;
     const int PackedWordLookahead = sizeof(ulong) - 1;
 
-    // AMD family 17h (Zen 1/2) implements PDEP in microcode. Instruction support
-    // alone must not select that path, including for fields smaller than a byte.
-    internal static readonly bool UsePdep = Bmi2.X64.IsSupported && !HasSlowPdep();
-
-    // Initialize the CPU choice before nested decode methods are compiled, so
-    // the JIT can fold the readonly flag and discard the unused kernel branch.
-    static DeltaBinaryPackedDecoder() { }
-
-    static bool HasSlowPdep()
-    {
-        if (!X86Base.IsSupported) return false;
-        var (_, ebx, ecx, edx) = X86Base.CpuId(0, 0);
-        if (ebx != 0x68747541 || edx != 0x69746e65 || ecx != 0x444d4163) // AuthenticAMD
-            return false;
-        var (eax, _, _, _) = X86Base.CpuId(1, 0);
-        var family = (eax >> 8) & 0xf;
-        if (family == 0xf) family += (eax >> 20) & 0xff;
-        return family == 0x17;
-    }
-
     // Bounds the stack buffer the per-block bit widths are read into. Writers in
     // the wild use 4; this is room to spare rather than a considered limit.
     const int MaxMiniBlockCount = 64;
@@ -430,7 +410,7 @@ static class DeltaBinaryPackedDecoder
     static void ReadInt32Blocks(ref DeltaBinaryPackedReader reader, Span<int> destination,
         BlockLayout layout, ref long previous)
     {
-        var usePdep = Avx2.IsSupported && UsePdep;
+        var usePdep = Avx2.IsSupported && X86DecodeCapabilities.UsePdep;
         var index = 0;
         Span<byte> bitWidthStorage = stackalloc byte[MaxMiniBlockCount];
         var bitWidths = bitWidthStorage[..layout.MiniBlockCount];
@@ -512,7 +492,7 @@ static class DeltaBinaryPackedDecoder
         Span<int?> destination, BlockLayout layout, ref long previous,
         bool canonicalLayout)
     {
-        var usePdep = Avx2.IsSupported && UsePdep;
+        var usePdep = Avx2.IsSupported && X86DecodeCapabilities.UsePdep;
         var index = 0;
         Span<byte> bitWidthStorage = stackalloc byte[MaxMiniBlockCount];
         var bitWidths = bitWidthStorage[..layout.MiniBlockCount];
@@ -1166,7 +1146,7 @@ static class DeltaBinaryPackedDecoder
     static void ReadInt64Blocks(ref DeltaBinaryPackedReader reader, Span<long> destination,
         BlockLayout layout, ref long previous)
     {
-        var usePdep = Avx2.IsSupported && UsePdep;
+        var usePdep = Avx2.IsSupported && X86DecodeCapabilities.UsePdep;
         var index = 0;
         Span<long> adjustedDeltas = Avx2.IsSupported ? stackalloc long[MiniBlockChunk] : default;
 
