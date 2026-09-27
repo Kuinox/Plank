@@ -694,6 +694,9 @@ static class DeltaBinaryPackedDecoder
         }
     }
 
+    // Optimize the hot BMI2 loop from its first call while the surrounding
+    // page reader remains eligible for tiering.
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeNullableInt32MiniBlockBmi2(ReadOnlySpan<byte> packed, int bitWidth,
         long minDelta, ref long previous, Span<int?> destination)
     {
@@ -704,7 +707,7 @@ static class DeltaBinaryPackedDecoder
             var laneMask = 0x0101010101010101UL * ((1UL << bitWidth) - 1);
             for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
             {
-                var packedWord = ReadPackedWord(packed, index * bitWidth / 8);
+                var packedWord = ReadPackedWordBmi2(packed, index * bitWidth / 8);
                 var unpacked = Bmi2.X64.ParallelBitDeposit(packedWord, laneMask);
                 var unpackedBytes = Vector128.CreateScalar(unpacked).AsByte();
                 var residuals = Avx2.ConvertToVector256Int32(unpackedBytes);
@@ -718,9 +721,9 @@ static class DeltaBinaryPackedDecoder
             for (var index = 0; index < MiniBlockChunk; index += Vector256<int>.Count)
             {
                 var bitOffset = index * bitWidth;
-                var lowerWord = ReadPackedWord(packed, bitOffset / 8) >> (bitOffset & 7);
+                var lowerWord = ReadPackedWordBmi2(packed, bitOffset / 8) >> (bitOffset & 7);
                 var upperBitOffset = bitOffset + 4 * bitWidth;
-                var upperWord = ReadPackedWord(packed, upperBitOffset / 8) >> (upperBitOffset & 7);
+                var upperWord = ReadPackedWordBmi2(packed, upperBitOffset / 8) >> (upperBitOffset & 7);
                 var lower = Bmi2.X64.ParallelBitDeposit(lowerWord, laneMask);
                 var upper = Bmi2.X64.ParallelBitDeposit(upperWord, laneMask);
                 var residuals = Avx2.ConvertToVector256Int32(Vector128.Create(lower, upper).AsUInt16());
@@ -1036,6 +1039,23 @@ static class DeltaBinaryPackedDecoder
     {
         if (byteOffset <= packed.Length - sizeof(ulong))
             return BinaryPrimitives.ReadUInt64LittleEndian(packed.Slice(byteOffset, sizeof(ulong)));
+
+        ulong value = 0;
+        for (var i = byteOffset; i < packed.Length; i++)
+            value |= (ulong)packed[i] << ((i - byteOffset) * 8);
+        return value;
+    }
+
+    // Use full-word loads for the PDEP mini-block path, with a bytewise tail.
+    // Keep the other decoders on their original path.
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    static ulong ReadPackedWordBmi2(ReadOnlySpan<byte> packed, int byteOffset)
+    {
+        if ((ulong)(uint)byteOffset + sizeof(ulong) <= (uint)packed.Length)
+        {
+            var word = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref MemoryMarshal.GetReference(packed), byteOffset));
+            return BitConverter.IsLittleEndian ? word : BinaryPrimitives.ReverseEndianness(word);
+        }
 
         ulong value = 0;
         for (var i = byteOffset; i < packed.Length; i++)
