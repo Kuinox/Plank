@@ -694,6 +694,9 @@ static class DeltaBinaryPackedDecoder
         }
     }
 
+    // Optimize the hot BMI2 loop from its first call while the surrounding
+    // page reader remains eligible for tiering.
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeNullableInt32MiniBlockBmi2(ReadOnlySpan<byte> packed, int bitWidth,
         long minDelta, ref long previous, Span<int?> destination)
     {
@@ -1043,8 +1046,8 @@ static class DeltaBinaryPackedDecoder
         return value;
     }
 
-    // The PDEP mini-block path benefits from optimized packed-word loads before its
-    // tiered caller is promoted. Keep the other decoders on their original path.
+    // Use full-word loads for the PDEP mini-block path, with a bytewise tail.
+    // Keep the other decoders on their original path.
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     static ulong ReadPackedWordBmi2(ReadOnlySpan<byte> packed, int byteOffset)
     {
