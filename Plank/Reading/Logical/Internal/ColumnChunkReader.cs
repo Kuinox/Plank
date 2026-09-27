@@ -19,6 +19,20 @@ static partial class ColumnChunkReader
     static readonly bool NullableInt32HasCanonicalLayout = HasCanonicalNullableInt32Layout();
     static readonly bool NullableInt64HasCanonicalLayout = HasCanonicalNullableInt64Layout();
     static readonly bool NullableDoubleHasCanonicalLayout = HasCanonicalNullableDoubleLayout();
+    static readonly bool UseScalarWideInt64Gather = HasIntelFamily6Model158();
+
+    static bool HasIntelFamily6Model158()
+    {
+        if (!X86Base.IsSupported)
+            return false;
+        var (_, ebx, ecx, edx) = X86Base.CpuId(0, 0);
+        if (ebx != 0x756e6547 || edx != 0x49656e69 || ecx != 0x6c65746e)
+            return false;
+        var (eax, _, _, _) = X86Base.CpuId(1, 0);
+        var family = (eax >> 8) & 0xf;
+        var model = (eax >> 4 & 0xf) | (eax >> 12 & 0xf0);
+        return family == 6 && model == 158;
+    }
     internal static bool TryDecodeDictionaryPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         Column column, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
         => TryDecodeDictionaryPageIntoNative(header, payload, default, column, ref state, bufferPool);
@@ -4250,9 +4264,14 @@ static partial class ColumnChunkReader
             (typeof(T) == typeof(long) || typeof(T) == typeof(DateTime)))
         {
             var vectorizedLength = destination.Length & ~7;
-            DecodeDictionaryLiteralInt64IndexesWide(payload, bitWidth,
-                Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref dictionary),
-                Unsafe.As<Span<T>, Span<long>>(ref destination)[..vectorizedLength]);
+            if (UseScalarWideInt64Gather)
+                DecodeDictionaryLiteralInt64IndexesWideScalar(payload, bitWidth,
+                    Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref dictionary),
+                    Unsafe.As<Span<T>, Span<long>>(ref destination)[..vectorizedLength]);
+            else
+                DecodeDictionaryLiteralInt64IndexesWide(payload, bitWidth,
+                    Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref dictionary),
+                    Unsafe.As<Span<T>, Span<long>>(ref destination)[..vectorizedLength]);
             payload = payload[(vectorizedLength / 8 * bitWidth)..];
             destination = destination[vectorizedLength..];
             if (destination.IsEmpty)
@@ -4509,8 +4528,8 @@ static partial class ColumnChunkReader
                         (int)((a >> 60 | b << 4) & mask),
                         (int)(b >> 16 & mask), (int)(b >> 36 & mask),
                         (int)((b >> 56 | (ulong)c << 8) & mask), (int)(c >> 12 & mask));
-                    GatherDictionaryInt64(indexes, maximumIndex, dictionary.Length, dictionaryPointer,
-                        ref target, valueIndex);
+                    GatherDictionaryInt64(indexes, maximumIndex, dictionary.Length,
+                        dictionaryPointer, ref target, valueIndex);
                 }
             }
             else
@@ -4526,8 +4545,54 @@ static partial class ColumnChunkReader
                         (int)((a >> 57 | b << 7) & mask),
                         (int)(b >> 12 & mask), (int)(b >> 31 & mask),
                         (int)((b >> 50 | (ulong)c << 14) & mask), (int)(c >> 5 & mask));
-                    GatherDictionaryInt64(indexes, maximumIndex, dictionary.Length, dictionaryPointer,
-                        ref target, valueIndex);
+                    GatherDictionaryInt64(indexes, maximumIndex, dictionary.Length,
+                        dictionaryPointer, ref target, valueIndex);
+                }
+            }
+        }
+    }
+
+    static unsafe void DecodeDictionaryLiteralInt64IndexesWideScalar(ReadOnlySpan<byte> payload, int bitWidth,
+        ReadOnlySpan<long> dictionary, Span<long> destination)
+    {
+        ref var source = ref MemoryMarshal.GetReference(payload);
+        ref var target = ref MemoryMarshal.GetReference(destination);
+        var maximumIndex = Vector256.Create(dictionary.Length - 1);
+        var mask = (1U << bitWidth) - 1U;
+        fixed (long* dictionaryPointer = dictionary)
+        {
+            var byteIndex = 0;
+            if (bitWidth == 20)
+            {
+                for (var valueIndex = 0; valueIndex < destination.Length; valueIndex += 8, byteIndex += 20)
+                {
+                    var a = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex));
+                    var b = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex + 8));
+                    var c = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref source, byteIndex + 16));
+                    var indexes = Vector256.Create(
+                        (int)(a & mask), (int)(a >> 20 & mask), (int)(a >> 40 & mask),
+                        (int)((a >> 60 | b << 4) & mask),
+                        (int)(b >> 16 & mask), (int)(b >> 36 & mask),
+                        (int)((b >> 56 | (ulong)c << 8) & mask), (int)(c >> 12 & mask));
+                    GatherDictionaryInt64Scalar(indexes, maximumIndex, dictionary.Length,
+                        dictionaryPointer, ref target, valueIndex);
+                }
+            }
+            else
+            {
+                for (var valueIndex = 0; valueIndex < destination.Length; valueIndex += 8, byteIndex += 19)
+                {
+                    var a = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex));
+                    var b = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, byteIndex + 8));
+                    var c = (uint)(Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref source, byteIndex + 16)) |
+                        Unsafe.Add(ref source, byteIndex + 18) << 16);
+                    var indexes = Vector256.Create(
+                        (int)(a & mask), (int)(a >> 19 & mask), (int)(a >> 38 & mask),
+                        (int)((a >> 57 | b << 7) & mask),
+                        (int)(b >> 12 & mask), (int)(b >> 31 & mask),
+                        (int)((b >> 50 | (ulong)c << 14) & mask), (int)(c >> 5 & mask));
+                    GatherDictionaryInt64Scalar(indexes, maximumIndex, dictionary.Length,
+                        dictionaryPointer, ref target, valueIndex);
                 }
             }
         }
@@ -4545,6 +4610,19 @@ static partial class ColumnChunkReader
             .StoreUnsafe(ref target, (nuint)valueIndex);
         Avx2.GatherVector256(dictionaryPointer, indexes.GetUpper(), sizeof(long))
             .StoreUnsafe(ref target, (nuint)(valueIndex + 4));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    static unsafe void GatherDictionaryInt64Scalar(Vector256<int> indexes, Vector256<int> maximumIndex,
+        int dictionaryLength, long* dictionaryPointer, ref long target, int valueIndex)
+    {
+        if (Vector256.GreaterThan(indexes, maximumIndex) != Vector256<int>.Zero)
+        {
+            for (var lane = 0; lane < 8; lane++)
+                ValidateDictionaryIndex(indexes.GetElement(lane), dictionaryLength);
+        }
+        for (var lane = 0; lane < 8; lane++)
+            Unsafe.Add(ref target, valueIndex + lane) = dictionaryPointer[indexes.GetElement(lane)];
     }
 
     static Array DecodeBooleanRle(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
