@@ -996,6 +996,7 @@ static partial class DeltaBinaryPackedDecoder
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeNullableInt32MiniBlock(ReadOnlySpan<byte> packed, int bitWidth,
         long minDelta, ref long previous, Span<int?> destination)
     {
