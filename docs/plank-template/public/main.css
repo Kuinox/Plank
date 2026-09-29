@@ -873,8 +873,34 @@ body.plank-benchmarks-page article {
   }
 }
 
-/* The full navigation needs room for links, utilities, and search. */
-@media (max-width: 1199.98px) {
+/* Keep navigation visible on portrait monitors; put search on its own row. */
+@media (min-width: 768px) and (max-width: 1199.98px) {
+  body > header {
+    height: auto;
+  }
+
+  #navbar {
+    flex-wrap: wrap;
+  }
+
+  #navbar .navbar-nav {
+    flex-wrap: wrap;
+  }
+
+  #navbar form.search {
+    flex-basis: 100%;
+    max-width: none;
+    margin: 0.35rem 0;
+    order: 30;
+  }
+
+  html {
+    scroll-padding-top: 8rem;
+  }
+}
+
+/* Phone navigation expands into a scrollable menu. */
+@media (max-width: 767.98px) {
   body > header {
     height: auto;
   }
@@ -974,9 +1000,12 @@ body.plank-benchmarks-page article {
   }
 
   .plank-guide-links a {
-    grid-template-columns: 4.7rem minmax(0, 1fr) auto;
-    gap: 0.6rem;
-    padding-inline: 1rem;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+
+  article h1 {
+    overflow-wrap: anywhere;
   }
 
   .plank-footer-links {
