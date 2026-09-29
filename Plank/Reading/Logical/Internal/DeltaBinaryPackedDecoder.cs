@@ -960,29 +960,45 @@ static class DeltaBinaryPackedDecoder
         }
 
         var mask = (1UL << bitWidth) - 1;
-        var packedByteCount = bitWidth * PackedBytesPerBitWidth;
-        var byteOffset = 0;
-        ulong bitBuffer = 0;
-        var bufferedBits = 0;
-        for (var i = 0; i < destination.Length; i++)
+        ref var target = ref MemoryMarshal.GetReference(destination);
+        var index = 0;
+        if (bitWidth <= 16)
         {
-            if (bufferedBits < bitWidth)
+            // Four residuals fit in one word, including the byte-alignment shift.
+            for (; index + 3 < destination.Length; index += 4)
             {
-                var bytesToLoad = Math.Min((64 - bufferedBits) / 8,
-                    packedByteCount - byteOffset);
-                var loaded = ReadPackedWord(packed, byteOffset);
-                if (bytesToLoad < sizeof(ulong))
-                    loaded &= (1UL << (bytesToLoad * 8)) - 1;
-                bitBuffer |= loaded << bufferedBits;
-                byteOffset += bytesToLoad;
-                bufferedBits += bytesToLoad * 8;
+                var bitOffset = index * bitWidth;
+                var word = ReadPackedWord(packed, bitOffset >> 3) >> (bitOffset & 7);
+                previous = unchecked(previous + minDelta + (long)(word & mask));
+                Unsafe.Add(ref target, index) = unchecked((int)previous);
+                previous = unchecked(previous + minDelta + (long)((word >> bitWidth) & mask));
+                Unsafe.Add(ref target, index + 1) = unchecked((int)previous);
+                previous = unchecked(previous + minDelta + (long)((word >> (bitWidth * 2)) & mask));
+                Unsafe.Add(ref target, index + 2) = unchecked((int)previous);
+                previous = unchecked(previous + minDelta + (long)((word >> (bitWidth * 3)) & mask));
+                Unsafe.Add(ref target, index + 3) = unchecked((int)previous);
             }
+        }
+        else if (bitWidth <= 30 || bitWidth == 32)
+        {
+            // Two residuals fit in one word for these widths.
+            for (; index + 1 < destination.Length; index += 2)
+            {
+                var bitOffset = index * bitWidth;
+                var word = ReadPackedWord(packed, bitOffset >> 3) >> (bitOffset & 7);
+                previous = unchecked(previous + minDelta + (long)(word & mask));
+                Unsafe.Add(ref target, index) = unchecked((int)previous);
+                previous = unchecked(previous + minDelta + (long)((word >> bitWidth) & mask));
+                Unsafe.Add(ref target, index + 1) = unchecked((int)previous);
+            }
+        }
 
-            var delta = bitBuffer & mask;
-            bitBuffer >>= bitWidth;
-            bufferedBits -= bitWidth;
-            previous = unchecked(previous + minDelta + (long)delta);
-            destination[i] = unchecked((int)previous);
+        for (; index < destination.Length; index++)
+        {
+            var bitOffset = index * bitWidth;
+            var residual = (ReadPackedWord(packed, bitOffset >> 3) >> (bitOffset & 7)) & mask;
+            previous = unchecked(previous + minDelta + (long)residual);
+            Unsafe.Add(ref target, index) = unchecked((int)previous);
         }
     }
 

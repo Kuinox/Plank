@@ -255,6 +255,47 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
+    public void ReadInt32PortableMiniBlocksHandleEveryPackedWidth()
+    {
+        for (var width = 1; width <= 56; width++)
+        foreach (var count in new[] { 2, 17, 33 })
+        {
+            var residuals = new long[32];
+            var mask = (1L << width) - 1;
+            for (var i = 0; i < residuals.Length; i++)
+                residuals[i] = ((1L << (width - 1)) + i) & mask;
+
+            var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 256, 256);
+            try
+            {
+                DeltaBinaryPackedEncoding.WritePackedUnsignedValues(residuals, width, ref writer);
+                var payload = new byte[10 + writer.WrittenLength];
+                byte[] header = [0x80, 0x01, 0x04, (byte)count, 0, 0, (byte)width, 0, 0, 0];
+                header.CopyTo(payload, 0);
+                writer.CopyTo(payload.AsSpan(header.Length));
+
+                var expected = new int[count];
+                long running = 0;
+                for (var i = 1; i < count; i++)
+                {
+                    running = unchecked(running + residuals[i - 1]);
+                    expected[i] = unchecked((int)running);
+                }
+
+                var decoded = new int[count];
+                var consumed = DeltaBinaryPackedDecoder.ReadInt32(payload, decoded);
+                if (!decoded.SequenceEqual(expected) || consumed != payload.Length)
+                    throw new InvalidOperationException(
+                        $"Portable Int32 decode failed for width {width}, count {count}.");
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+        }
+    }
+
+    [Test]
     public void ReadNullableInt32WritesDirectlyAcrossVectorWidthsAndScalarFallback()
     {
         var values = new int[257];
