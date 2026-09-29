@@ -6,7 +6,7 @@ using System.Runtime.Intrinsics.X86;
 
 namespace Plank.Reading.Logical.Internal;
 
-static class DeltaBinaryPackedDecoder
+static partial class DeltaBinaryPackedDecoder
 {
     // The unit every decoder below works in. It is not the mini-block size — the
     // format only requires a mini-block to be a multiple of 32 values — but 32
@@ -956,6 +956,16 @@ static class DeltaBinaryPackedDecoder
                 previous = unchecked(previous + minDelta);
                 destination[i] = unchecked((int)previous);
             }
+            return;
+        }
+
+        // Each generated group reads eight values from bitWidth bytes. Seven
+        // lookahead bytes make its final unaligned word load safe; partial
+        // chunks and payload tails keep using the checked scalar decoder.
+        if (bitWidth is > 0 and <= 56 && destination.Length == MiniBlockChunk &&
+            packed.Length >= bitWidth * PackedBytesPerBitWidth + PackedWordLookahead)
+        {
+            DecodeInt32MiniBlockFast(packed, bitWidth, minDelta, ref previous, destination);
             return;
         }
 

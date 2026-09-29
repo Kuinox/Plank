@@ -258,9 +258,9 @@ internal sealed class DeltaBinaryPackedDecoderTests
     public void ReadInt32PortableMiniBlocksHandleEveryPackedWidth()
     {
         for (var width = 1; width <= 56; width++)
-        foreach (var count in new[] { 2, 17, 33 })
+        foreach (var count in new[] { 2, 17, 33, 97 })
         {
-            var residuals = new long[32];
+            var residuals = new long[count == 97 ? 96 : 32];
             var mask = (1L << width) - 1;
             for (var i = 0; i < residuals.Length; i++)
                 residuals[i] = ((1L << (width - 1)) + i) & mask;
@@ -268,9 +268,19 @@ internal sealed class DeltaBinaryPackedDecoderTests
             var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 256, 256);
             try
             {
-                DeltaBinaryPackedEncoding.WritePackedUnsignedValues(residuals, width, ref writer);
+                DeltaBinaryPackedEncoding.WritePackedUnsignedValues(
+                    residuals.AsSpan(0, 32), width, ref writer);
+                if (count == 97)
+                {
+                    DeltaBinaryPackedEncoding.WritePackedUnsignedValues(
+                        residuals.AsSpan(32, 32), width, ref writer);
+                    DeltaBinaryPackedEncoding.WritePackedUnsignedValues(
+                        residuals.AsSpan(64, 32), width, ref writer);
+                }
                 var payload = new byte[10 + writer.WrittenLength];
-                byte[] header = [0x80, 0x01, 0x04, (byte)count, 0, 0, (byte)width, 0, 0, 0];
+                byte[] header = [0x80, 0x01, 0x04, (byte)count, 0, 0,
+                    (byte)width, count == 97 ? (byte)width : (byte)0,
+                    count == 97 ? (byte)width : (byte)0, 0];
                 header.CopyTo(payload, 0);
                 writer.CopyTo(payload.AsSpan(header.Length));
 
