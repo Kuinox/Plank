@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Description>A high-performance Apache Parquet reader and writer for .NET.</Description>
     <PackageTags>apache;parquet;dotnet;c#</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
