@@ -1243,27 +1243,6 @@ static partial class DeltaBinaryPackedDecoder
                         continue;
                     }
 
-                    if (count == MiniBlockChunk)
-                    {
-                        var packed = reader.ReadBytesWithLookahead(
-                            bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
-                        if (packed.Length >= bitWidth * PackedBytesPerBitWidth + PackedWordLookahead)
-                            DecodeInt64MiniBlockFast(packed, bitWidth, minDelta, ref previous,
-                                destination.Slice(index, count));
-                        else
-                        {
-                            var tailReader = new DeltaBinaryPackedReader(packed);
-                            for (var i = 0; i < MiniBlockChunk; i++)
-                            {
-                                previous = unchecked(previous + minDelta +
-                                    (long)tailReader.ReadPackedUnsigned(bitWidth));
-                                destination[index + i] = previous;
-                            }
-                        }
-                        index += count;
-                        continue;
-                    }
-
                     for (var i = 0; i < MiniBlockChunk; i++)
                     {
                         var delta = reader.ReadPackedUnsigned(bitWidth);
@@ -1509,7 +1488,7 @@ static partial class DeltaBinaryPackedDecoder
             return;
         }
 
-        if (bitWidth <= 56 && destination.Length == MiniBlockChunk &&
+        if (bitWidth <= 16 && destination.Length == MiniBlockChunk &&
             packed.Length >= bitWidth * PackedBytesPerBitWidth + PackedWordLookahead)
         {
             DecodeInt64MiniBlockFast(packed, bitWidth, minDelta, ref previous, destination);

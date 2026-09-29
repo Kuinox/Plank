@@ -34,7 +34,7 @@ public sealed class DeltaBinaryPackedIntegerGenerator : IIncrementalGenerator
         source.AppendLine("{");
         EmitVariant(source, "Int32", "int", "unchecked((int)current)", 56);
         EmitVariant(source, "NullableInt32", "int?", "unchecked((int)current)", 56);
-        EmitVariant(source, "Int64", "long", "current", 64);
+        EmitVariant(source, "Int64", "long", "current", 16);
         source.AppendLine("}");
         return source.ToString();
     }
