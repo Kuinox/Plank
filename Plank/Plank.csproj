@@ -38,6 +38,10 @@
                       IncludeAssets="analyzers"
                       Private="false"
                       PrivateAssets="none" />
+    <ProjectReference Include="..\Plank.InternalGen\Plank.InternalGen.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

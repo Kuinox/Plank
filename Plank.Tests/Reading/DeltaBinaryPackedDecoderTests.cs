@@ -255,6 +255,77 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
+    public void ReadInt32PortableMiniBlocksHandleEveryPackedWidth()
+    {
+        for (var width = 1; width <= 56; width++)
+        foreach (var count in new[] { 2, 17, 33, 97 })
+        {
+            var residuals = new long[count == 97 ? 96 : 32];
+            var mask = (1L << width) - 1;
+            for (var i = 0; i < residuals.Length; i++)
+                residuals[i] = ((1L << (width - 1)) + i) & mask;
+
+            var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 256, 256);
+            try
+            {
+                DeltaBinaryPackedEncoding.WritePackedUnsignedValues(
+                    residuals.AsSpan(0, 32), width, ref writer);
+                if (count == 97)
+                {
+                    DeltaBinaryPackedEncoding.WritePackedUnsignedValues(
+                        residuals.AsSpan(32, 32), width, ref writer);
+                    DeltaBinaryPackedEncoding.WritePackedUnsignedValues(
+                        residuals.AsSpan(64, 32), width, ref writer);
+                }
+                var payload = new byte[10 + writer.WrittenLength];
+                byte[] header = [0x80, 0x01, 0x04, (byte)count, 0, 0,
+                    (byte)width, count == 97 ? (byte)width : (byte)0,
+                    count == 97 ? (byte)width : (byte)0, 0];
+                header.CopyTo(payload, 0);
+                writer.CopyTo(payload.AsSpan(header.Length));
+
+                var expected = new int[count];
+                var expectedLong = new long[count];
+                long running = 0;
+                for (var i = 1; i < count; i++)
+                {
+                    running = unchecked(running + residuals[i - 1]);
+                    expected[i] = unchecked((int)running);
+                    expectedLong[i] = running;
+                }
+
+                var decoded = new int[count];
+                var consumed = DeltaBinaryPackedDecoder.ReadInt32(payload, decoded);
+                if (!decoded.SequenceEqual(expected) || consumed != payload.Length)
+                    throw new InvalidOperationException(
+                        $"Portable Int32 decode failed for width {width}, count {count}.");
+
+                var nullable = new int?[count];
+                foreach (var canonicalLayout in new[] { false, true })
+                {
+                    consumed = DeltaBinaryPackedDecoder.ReadNullableInt32(
+                        payload, nullable, canonicalLayout);
+                    if (!nullable.SequenceEqual(expected.Select(static value => (int?)value)) ||
+                        consumed != payload.Length)
+                        throw new InvalidOperationException(
+                            $"Portable nullable Int32 decode failed for width {width}, " +
+                            $"count {count}, canonical {canonicalLayout}.");
+                }
+
+                var decodedLong = new long[count];
+                consumed = DeltaBinaryPackedDecoder.ReadInt64(payload, decodedLong);
+                if (!decodedLong.SequenceEqual(expectedLong) || consumed != payload.Length)
+                    throw new InvalidOperationException(
+                        $"Portable Int64 decode failed for width {width}, count {count}.");
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+        }
+    }
+
+    [Test]
     public void ReadNullableInt32WritesDirectlyAcrossVectorWidthsAndScalarFallback()
     {
         var values = new int[257];
