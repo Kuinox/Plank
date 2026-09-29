@@ -8,6 +8,7 @@
     <IsRoslynComponent>true</IsRoslynComponent>
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
     <IsPackable>false</IsPackable>
+    <Description>Private source generation used only while building Plank.</Description>
   </PropertyGroup>
 
   <ItemGroup>
