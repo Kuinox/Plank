@@ -285,11 +285,13 @@ internal sealed class DeltaBinaryPackedDecoderTests
                 writer.CopyTo(payload.AsSpan(header.Length));
 
                 var expected = new int[count];
+                var expectedLong = new long[count];
                 long running = 0;
                 for (var i = 1; i < count; i++)
                 {
                     running = unchecked(running + residuals[i - 1]);
                     expected[i] = unchecked((int)running);
+                    expectedLong[i] = running;
                 }
 
                 var decoded = new int[count];
@@ -297,6 +299,24 @@ internal sealed class DeltaBinaryPackedDecoderTests
                 if (!decoded.SequenceEqual(expected) || consumed != payload.Length)
                     throw new InvalidOperationException(
                         $"Portable Int32 decode failed for width {width}, count {count}.");
+
+                var nullable = new int?[count];
+                foreach (var canonicalLayout in new[] { false, true })
+                {
+                    consumed = DeltaBinaryPackedDecoder.ReadNullableInt32(
+                        payload, nullable, canonicalLayout);
+                    if (!nullable.SequenceEqual(expected.Select(static value => (int?)value)) ||
+                        consumed != payload.Length)
+                        throw new InvalidOperationException(
+                            $"Portable nullable Int32 decode failed for width {width}, " +
+                            $"count {count}, canonical {canonicalLayout}.");
+                }
+
+                var decodedLong = new long[count];
+                consumed = DeltaBinaryPackedDecoder.ReadInt64(payload, decodedLong);
+                if (!decodedLong.SequenceEqual(expectedLong) || consumed != payload.Length)
+                    throw new InvalidOperationException(
+                        $"Portable Int64 decode failed for width {width}, count {count}.");
             }
             finally
             {

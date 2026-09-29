@@ -1009,6 +1009,13 @@ static partial class DeltaBinaryPackedDecoder
             return;
         }
 
+        if (bitWidth <= 56 && destination.Length == MiniBlockChunk &&
+            packed.Length >= bitWidth * PackedBytesPerBitWidth + PackedWordLookahead)
+        {
+            DecodeNullableInt32MiniBlockFast(packed, bitWidth, minDelta, ref previous, destination);
+            return;
+        }
+
         var mask = (1UL << bitWidth) - 1;
         var packedByteCount = bitWidth * PackedBytesPerBitWidth;
         var byteOffset = 0;
@@ -1232,6 +1239,27 @@ static partial class DeltaBinaryPackedDecoder
                         else
                             DecodeInt64MiniBlock(packed, bitWidth, minDelta, ref previous,
                                 destination.Slice(index, count));
+                        index += count;
+                        continue;
+                    }
+
+                    if (count == MiniBlockChunk)
+                    {
+                        var packed = reader.ReadBytesWithLookahead(
+                            bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
+                        if (packed.Length >= bitWidth * PackedBytesPerBitWidth + PackedWordLookahead)
+                            DecodeInt64MiniBlockFast(packed, bitWidth, minDelta, ref previous,
+                                destination.Slice(index, count));
+                        else
+                        {
+                            var tailReader = new DeltaBinaryPackedReader(packed);
+                            for (var i = 0; i < MiniBlockChunk; i++)
+                            {
+                                previous = unchecked(previous + minDelta +
+                                    (long)tailReader.ReadPackedUnsigned(bitWidth));
+                                destination[index + i] = previous;
+                            }
+                        }
                         index += count;
                         continue;
                     }
@@ -1478,6 +1506,13 @@ static partial class DeltaBinaryPackedDecoder
                 previous = unchecked(previous + minDelta);
                 destination[i] = previous;
             }
+            return;
+        }
+
+        if (bitWidth <= 56 && destination.Length == MiniBlockChunk &&
+            packed.Length >= bitWidth * PackedBytesPerBitWidth + PackedWordLookahead)
+        {
+            DecodeInt64MiniBlockFast(packed, bitWidth, minDelta, ref previous, destination);
             return;
         }
 
