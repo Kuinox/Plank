@@ -1,4 +1,5 @@
-// Generated for every legal INT32 residual width by tools/generate-int32-unpack.py.
+// Generated from DeltaBinaryPackedDecoder.FastInt32.tt. Run:
+// dotnet t4 Plank/Reading/Logical/Internal/DeltaBinaryPackedDecoder.FastInt32.tt -o Plank/Reading/Logical/Internal/DeltaBinaryPackedDecoder.FastInt32.cs
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -2199,4 +2200,5 @@ static partial class DeltaBinaryPackedDecoder
         }
         previous = current;
     }
+
 }
