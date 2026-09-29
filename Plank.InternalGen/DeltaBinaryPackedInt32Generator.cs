@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text;
 using Microsoft.CodeAnalysis;
 
-namespace Plank.SourceGen;
+namespace Plank.InternalGen;
 
 [Generator]
 public sealed class DeltaBinaryPackedInt32Generator : IIncrementalGenerator
