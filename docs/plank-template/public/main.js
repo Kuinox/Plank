@@ -262,6 +262,28 @@ function initializeBenchmarkFrame() {
   });
 }
 
+function initializePhoneNavigation() {
+  const button = document.querySelector('[data-bs-target="#navpanel"]');
+  const panel = document.getElementById("navpanel");
+  const icon = button?.querySelector("i");
+  if (!button || !panel || !icon) return;
+  icon.classList.remove("bi-three-dots");
+  const update = () => {
+    const expanded = button.getAttribute("aria-expanded") === "true";
+    icon.classList.toggle("bi-list", !expanded);
+    icon.classList.toggle("bi-x-lg", expanded);
+    button.setAttribute("aria-label", expanded ? "Close navigation" : "Open navigation");
+  };
+  update();
+  new MutationObserver(update).observe(button, { attributes: true, attributeFilter: ["aria-expanded"] });
+  document.querySelector("body > header")?.addEventListener("keydown", event => {
+    if (event.key === "Escape" && panel.classList.contains("show")) {
+      button.click();
+      button.focus();
+    }
+  });
+}
+
 export default {
   defaultTheme: "auto",
   iconLinks: [
@@ -283,6 +305,7 @@ export default {
     if (document.querySelector("#plank-benchmarks"))
       document.body.classList.add("plank-benchmarks-page");
 
+    initializePhoneNavigation();
     initializeParquetBackground();
     initializeBenchmarkFrame();
   }

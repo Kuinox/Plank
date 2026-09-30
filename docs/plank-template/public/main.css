@@ -899,65 +899,80 @@ body.plank-benchmarks-page article {
   }
 }
 
-/* Phone navigation expands into a scrollable menu. */
+/* Phone navigation opens below the compact header without moving the article. */
 @media (max-width: 767.98px) {
-  body > header {
-    height: auto;
-  }
-
-  #autocollapse {
-    width: 100%;
-  }
-  #autocollapse > .container-xxl {
-    flex-wrap: wrap !important;
-  }
-
+  body > header { height: auto; }
+  #autocollapse { width: 100%; position: relative; }
+  #autocollapse > .container-xxl { flex-wrap: nowrap !important; }
   #autocollapse [data-bs-target="#navpanel"] {
     display: block !important;
     margin-left: auto;
+    min-width: 44px;
+    min-height: 44px;
   }
-
   #autocollapse #navpanel {
-    flex-basis: 100%;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 100%;
     max-height: calc(100dvh - 4rem);
     overflow-y: auto;
+    background: var(--plank-canvas);
+    border-bottom: 1px solid var(--plank-line);
+    box-shadow: 0 12px 20px color-mix(in srgb, var(--plank-ink) 10%, transparent);
   }
-
-  #autocollapse #navpanel.collapse:not(.show) {
-    display: none !important;
-  }
-
-  #autocollapse #navpanel.show {
-    display: block !important;
-  }
-
+  #autocollapse #navpanel.collapse:not(.show) { display: none !important; }
+  #autocollapse #navpanel.show { display: block !important; }
   #autocollapse #navbar {
     flex-direction: column;
     align-items: stretch;
-    padding-top: 0.8rem;
+    gap: 8px;
+    padding: 12px;
   }
-
   #autocollapse #navbar .navbar-nav {
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2px 8px;
+    width: 100%;
   }
-
+  #autocollapse #navbar .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 8px 10px;
+    border-radius: 4px;
+  }
+  #autocollapse #navbar .nav-link.active {
+    background: var(--plank-surface);
+    color: var(--plank-fir);
+  }
   #autocollapse #navbar .navbar-nav .dropdown-menu {
     position: static;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: var(--plank-surface);
   }
-
+  #autocollapse #navbar .navbar-nav .dropdown-menu .nav-link {
+    white-space: normal;
+    padding-left: 14px;
+  }
   #autocollapse #navbar form.search {
     display: flex;
     width: 100%;
     max-width: none;
-    margin: 0.5rem 0;
-    order: 30;
+    margin: 0;
+    order: -1;
   }
-
+  #autocollapse #navbar .search input { min-height: 44px; font-size: 16px; }
   #autocollapse #navbar form.icons {
     align-self: flex-start;
-    margin: 0 0 0.5rem;
+    margin: 0;
     order: 40;
   }
+  #autocollapse #navbar form.icons .btn { min-width: 44px; min-height: 44px; }
 }
 
 @media (max-width: 767.98px) {
