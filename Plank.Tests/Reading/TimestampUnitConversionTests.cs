@@ -11,9 +11,10 @@ internal sealed class TimestampUnitConversionTests
         [EncodingKind.Plain, EncodingKind.DeltaBinaryPacked, EncodingKind.ByteStreamSplit];
 
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
-    public void RawBoundariesAndSubTickValuesSurviveBatches(bool optional)
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(true, true)]
+    public void RawBoundariesAndSubTickValuesSurviveBatches(bool optional, bool allPresent)
     {
         foreach (var version in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
         foreach (var encoding in Encodings)
@@ -28,7 +29,7 @@ internal sealed class TimestampUnitConversionTests
             };
             var raw = new long?[40_003];
             for (var i = 0; i < raw.Length; i++)
-                raw[i] = optional && i % 7 == 0 ? null : boundaries[i % boundaries.Length];
+                raw[i] = optional && !allPresent && i % 7 == 0 ? null : boundaries[i % boundaries.Length];
             var (schema, bytes) = WriteRaw(raw, unit, utc, encoding, version, optional);
             using var source = new MemoryReadSource(bytes);
             using var reader = schema.CreateReader(source);
@@ -61,7 +62,9 @@ internal sealed class TimestampUnitConversionTests
     }
 
     [Test]
-    public void InvalidMillisAndMicrosAreCorruptAcrossBatches()
+    [Arguments(false)]
+    [Arguments(true)]
+    public void InvalidMillisAndMicrosAreCorruptAcrossBatches(bool optional)
     {
         foreach (var version in new[] { ParquetDataPageVersion.V1, ParquetDataPageVersion.V2 })
         foreach (var encoding in Encodings)
@@ -75,19 +78,35 @@ internal sealed class TimestampUnitConversionTests
             var raw = new long?[40_003];
             Array.Fill(raw, 0L);
             raw[invalidIndex] = invalid;
-            var (schema, bytes) = WriteRaw(raw, unit, utc, encoding, version, optional: false);
+            var (schema, bytes) = WriteRaw(raw, unit, utc, encoding, version, optional);
             using var source = new MemoryReadSource(bytes);
             using var reader = schema.CreateReader(source);
             Assert.Throws<CorruptParquetException>(() =>
             {
-                foreach (var buffer in reader.RowGroups[0].Column<DateTime>(0))
-                    _ = buffer.Values.Length;
+                if (optional)
+                {
+                    foreach (var buffer in reader.RowGroups[0].Column<DateTime?>(0))
+                        _ = buffer.Values.Length;
+                }
+                else
+                {
+                    foreach (var buffer in reader.RowGroups[0].Column<DateTime>(0))
+                        _ = buffer.Values.Length;
+                }
             });
             if (utc)
                 Assert.Throws<CorruptParquetException>(() =>
                 {
-                    foreach (var buffer in reader.RowGroups[0].Column<DateTimeOffset>(0))
-                        _ = buffer.Values.Length;
+                    if (optional)
+                    {
+                        foreach (var buffer in reader.RowGroups[0].Column<DateTimeOffset?>(0))
+                            _ = buffer.Values.Length;
+                    }
+                    else
+                    {
+                        foreach (var buffer in reader.RowGroups[0].Column<DateTimeOffset>(0))
+                            _ = buffer.Values.Length;
+                    }
                 });
         }
     }
