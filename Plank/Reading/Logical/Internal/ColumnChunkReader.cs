@@ -521,7 +521,8 @@ static partial class ColumnChunkReader
                  ((page.DecoderKind is FixedWidthDecoderKind.Plain or FixedWidthDecoderKind.Dictionary or
                        FixedWidthDecoderKind.ByteStreamSplit &&
                    column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int?)) ||
-                  (page.DecoderKind == FixedWidthDecoderKind.ByteStreamSplit &&
+                  ((page.DecoderKind == FixedWidthDecoderKind.Plain && BitConverter.IsLittleEndian ||
+                    page.DecoderKind == FixedWidthDecoderKind.ByteStreamSplit) &&
                    column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTime?)) ||
                   (page.DecoderKind == FixedWidthDecoderKind.Dictionary &&
                    column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(DateTime?))))
@@ -878,14 +879,23 @@ static partial class ColumnChunkReader
         }
 
         if (converter is null && byteDefinitions.IsEmpty && physicalBatchCount == values.Length &&
-            decoderKind == FixedWidthDecoderKind.ByteStreamSplit &&
+            (decoderKind == FixedWidthDecoderKind.Plain && BitConverter.IsLittleEndian ||
+             decoderKind == FixedWidthDecoderKind.ByteStreamSplit) &&
             column.PhysicalType == ParquetPhysicalType.Int64 &&
             typeof(T) == typeof(DateTime?) && typeof(TValue) == typeof(DateTime))
         {
             var nullableTimestamps = Unsafe.As<Span<T>, Span<DateTime?>>(ref values);
-            var raw = MemoryMarshal.Cast<byte, long>(AsBytes(nullableTimestamps))[..physicalBatchCount];
-            DecodeByteStreamSplitUInt64Slice(payload, totalPhysicalCount, physicalOffset,
-                MemoryMarshal.Cast<long, ulong>(raw));
+            ReadOnlySpan<long> raw;
+            if (decoderKind == FixedWidthDecoderKind.Plain)
+                raw = MemoryMarshal.Cast<byte, long>(payload)
+                    .Slice(physicalOffset, physicalBatchCount);
+            else
+            {
+                var decoded = MemoryMarshal.Cast<byte, long>(AsBytes(nullableTimestamps))[..physicalBatchCount];
+                DecodeByteStreamSplitUInt64Slice(payload, totalPhysicalCount, physicalOffset,
+                    MemoryMarshal.Cast<long, ulong>(decoded));
+                raw = decoded;
+            }
             var timestamp = GetTimestampLogicalType(column.LogicalType);
             var kind = timestamp.IsAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified;
             MaterializeAllPresentNullableDateTimes(raw, nullableTimestamps, timestamp.Unit, kind);
