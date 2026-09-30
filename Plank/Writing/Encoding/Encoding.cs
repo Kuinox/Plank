@@ -2952,6 +2952,8 @@ static class Encoding
             : 0;
         var useTargetPageBytes = TryGetOptionalPageSizer(column, dataEncoding, useDictionary, dictionaryBitWidth,
             strategy, out var targetPageBytes, out var presentValueBytes);
+        var allPresentDictionary = useDictionary && strategy is DefaultStrategy
+            && denseValues.Length == values.Length;
         var fixedRowsPerPage = 0;
         if (!useDictionary && column.PhysicalType == ParquetPhysicalType.Int32
             && dataEncoding == EncodingKind.ByteStreamSplit && strategy is DefaultStrategy
@@ -2959,6 +2961,12 @@ static class Encoding
         {
             const int estimatedEncodedBytesPerRow = sizeof(int) + 1;
             fixedRowsPerPage = Math.Max(1, checked((int)fixedTargetPageBytes) / estimatedEncodedBytesPerRow);
+        }
+        else if (useTargetPageBytes && allPresentDictionary)
+        {
+            // This is exactly the budget used by the per-row sizer: one level byte
+            // plus the rounded dictionary-index width, with no null rows to vary it.
+            fixedRowsPerPage = Math.Max(1, targetPageBytes / (1 + presentValueBytes));
         }
         else if (useTargetPageBytes && !useDictionary && dataEncoding == EncodingKind.Plain
                  && denseValues.Length == values.Length
@@ -3013,9 +3021,20 @@ static class Encoding
                 var pageRows = values.Slice(pageStart, pageRowCount);
                 var nullCount = 0;
                 var presentRows = 0;
-                var definitionLength = WriteOptionalDefinitionLevels<TSource?, TSource, NullableValueRow<TSource>>(
-                    pageRows, ref nullCount, ref presentRows, dataPageVersion == ParquetDataPageVersion.V1,
-                    ref page.Content);
+                int definitionLength;
+                if (allPresentDictionary)
+                {
+                    presentRows = pageRowCount;
+                    var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
+                        ref page.Content);
+                    var definitionStart = page.Content.WrittenLength;
+                    EncodingPrimitives.WriteRleRun(1, pageRowCount, 1, ref page.Content);
+                    definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref page.Content);
+                }
+                else
+                    definitionLength = WriteOptionalDefinitionLevels<TSource?, TSource, NullableValueRow<TSource>>(
+                        pageRows, ref nullCount, ref presentRows, dataPageVersion == ParquetDataPageVersion.V1,
+                        ref page.Content);
                 var pageDenseValues = denseValues.Slice(denseOffset, presentRows);
                 if (useDictionary)
                 {
