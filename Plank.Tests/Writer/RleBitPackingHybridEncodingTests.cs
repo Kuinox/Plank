@@ -6,6 +6,29 @@ namespace Plank.Tests.Writer;
 internal sealed class RleBitPackingHybridEncodingTests
 {
     [Test]
+    public void ShortRepeatAfterLiteralAlignmentDoesNotSplitLiteralRun()
+    {
+        int[] values = [1, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        byte[] expected = [1, 5, 1, 2];
+        if (!EncodeDictionaryIndexes(values, 1).SequenceEqual(expected))
+            throw new InvalidOperationException("Short repeats must remain in the same literal run.");
+
+        var booleans = Array.ConvertAll(values, static value => value != 0);
+        if (!EncodeBooleans(booleans).SequenceEqual(expected.AsSpan(1).ToArray()))
+            throw new InvalidOperationException("Boolean short repeats must remain in the same literal run.");
+    }
+
+    [Test]
+    public void RepeatStillUsesRleWhenEightValuesRemainAfterLiteralAlignment()
+    {
+        var values = new int[16];
+        values[0] = 1;
+        byte[] expected = [1, 3, 1, 16, 0];
+        if (!EncodeDictionaryIndexes(values, 1).SequenceEqual(expected))
+            throw new InvalidOperationException("Eight remaining repeats must use RLE.");
+    }
+
+    [Test]
     public void DictionaryIndexesMatchReferenceAcrossBitWidthsAndBoundaries()
     {
         int[] lengths = [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255];
@@ -178,11 +201,14 @@ internal sealed class RleBitPackingHybridEncodingTests
                     if (padding == 0)
                         break;
 
-                    var take = Math.Min(runLength, 8 - padding);
+                    var take = 8 - padding;
+                    if (runLength - take < 8)
+                    {
+                        index += runLength;
+                        continue;
+                    }
                     index += take;
-                    if (take < runLength)
-                        break;
-                    continue;
+                    break;
                 }
 
                 index += runLength;

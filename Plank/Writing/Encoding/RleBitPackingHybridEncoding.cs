@@ -99,12 +99,16 @@ static class RleBitPackingHybridEncoding
                     if (padding == 0)
                         break;
 
-                    var take = Math.Min(runLength, 8 - padding);
+                    var take = 8 - padding;
+                    // Keep literals together when alignment leaves too few repeats for RLE.
+                    if (runLength - take < 8)
+                    {
+                        index += runLength;
+                        previousRunWasSingle = false;
+                        continue;
+                    }
                     index += take;
-                    if (take < runLength)
-                        break;
-                    previousRunWasSingle = false;
-                    continue;
+                    break;
                 }
                 previousRunWasSingle = runLength == 1;
                 index += runLength;
@@ -167,12 +171,16 @@ static class RleBitPackingHybridEncoding
                     if (padding == 0)
                         break;
 
-                    var take = Math.Min(runLength, 8 - padding);
+                    var take = 8 - padding;
+                    // Keep literals together when alignment leaves too few repeats for RLE.
+                    if (runLength - take < 8)
+                    {
+                        index += runLength;
+                        previousRunWasSingle = false;
+                        continue;
+                    }
                     index += take;
-                    if (take < runLength)
-                        break;
-                    previousRunWasSingle = false;
-                    continue;
+                    break;
                 }
 
                 previousRunWasSingle = runLength == 1;
