@@ -1,0 +1,21 @@
+const {JSDOM}=require('jsdom');const fs=require('fs');const assert=require('assert');
+(async()=>{
+const path=require('path');
+const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
+if(!process.argv[2])throw new Error('Pass an encoding-profile Parquet file to test local upload');
+const dom=new JSDOM(html,{runScripts:'outside-only',pretendToBeVisual:true,url:'http://localhost/'});const w=dom.window,d=w.document;
+w.TextDecoder=TextDecoder;w.TextEncoder=TextEncoder;w.fetch=()=>Promise.reject(new Error('Unexpected network'));
+w.HTMLElement.prototype.getBoundingClientRect=function(){return {width:900,height:500,left:0,top:0,right:900,bottom:500}};
+for(const x of html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g))w.eval(x[1]);
+const bytes=fs.readFileSync(process.argv[2]);
+w.Blob.prototype.arrayBuffer=function(){return new Promise((resolve,reject)=>{const reader=new w.FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsArrayBuffer(this)})};
+const file=new w.File([bytes],'input.encoding-profile.parquet');
+Object.defineProperty(d.getElementById('files'),'files',{value:[file]});d.getElementById('files').dispatchEvent(new w.Event('change'));
+await new Promise(r=>setTimeout(r,200));
+assert(!d.getElementById('report').hidden,d.getElementById('message').textContent);assert(d.querySelector('svg'));assert(d.getElementById('column-type').textContent.includes('Physical type:'));
+const search=d.getElementById('search');search.value='zstd';search.dispatchEvent(new w.Event('input'));const limited=d.querySelectorAll('[data-id]').length;
+d.getElementById('clear-filters').click();assert(search.value==='');assert(d.querySelectorAll('[data-id]').length>limited);
+const slider=d.getElementById('feature-level');slider.value=0;slider.dispatchEvent(new w.Event('input'));const feature0=d.querySelectorAll('[data-id]').length;
+slider.value=4;slider.dispatchEvent(new w.Event('input'));assert(d.querySelectorAll('[data-id]').length>=feature0);
+console.log('PASS: local compressed Parquet upload, physical type, graph, clear filters, feature slider');w.close();
+})().catch(e=>{console.error(e);process.exit(1)});

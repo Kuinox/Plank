@@ -1,0 +1,9 @@
+{
+  "name": "plank-profile-viewer",
+  "private": true,
+  "scripts": {
+    "dev": "python3 -m http.server 5173 --bind 127.0.0.1",
+    "test": "node check.cjs"
+  },
+  "devDependencies": { "jsdom": "30.1.2" }
+}

@@ -138,11 +138,15 @@ def rowgroups(request):
 def main():
     request = json.loads(Path(sys.argv[1]).read_text())
     with contextlib.redirect_stdout(sys.stderr):
-        if request['kind'] != 'rowgroups':
+        if request['kind'] == 'rowgroups':
+            rowgroups(request)
+            result = str(Path(request['output']).resolve())
+        elif request['kind'] == 'query':
+            from query import profile
+            result = json.dumps(profile(request))
+        else:
             raise ValueError('Unsupported worker operation')
-        # Keep engine chatter on stderr; expose the result path on stdout at completion.
-        rowgroups(request)
-    sys.stdout.write(str(Path(request['output']).resolve()) + '\n')
+    sys.stdout.write(result + '\n')
 
 
 if __name__ == '__main__':

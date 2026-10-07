@@ -76,7 +76,7 @@ internal sealed class PythonProject(string directory, string python)
             "[project]\nname = \"plank-query-worker\"\nversion = \"1.0.0\"\nrequires-python = \">=3.10\"\ndependencies = [\n" +
             string.Join(",\n", dependencies.Select(x => "  " + JsonSerializer.Serialize(x))) + "\n]\n", token);
         var assembly = Assembly.GetExecutingAssembly();
-        foreach (var name in new[] { "worker.py", "repack.py" })
+        foreach (var name in new[] { "worker.py", "repack.py", "query.py" })
         {
             using var resource = assembly.GetManifestResourceStream($"Plank.Tool.Querying.{name}")!;
             using var reader = new StreamReader(resource);

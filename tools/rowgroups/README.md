@@ -39,4 +39,4 @@ python tools/rowgroups/check_repack.py
 
 The checks use PyArrow and fastparquet from the worker environment and cover 20 variants: V1/V2 pages, plain/dictionary, nullable data, dictionary incompatibility, splitting/merging, page checksums, omitted indexes, decoded equality and unchanged data-page bytes. Real footer operations were exercised with DuckDB, Polars, DataFusion and ClickHouse, plus fresh/cached CLI bootstrap and input/output validation.
 
-The recovered checkout currently contains this new profiler and worker foundation. The previous schema/encoding/merge/query CLI commands and viewer sources were not present upstream and are not yet restored here.
+Schema inspection, encoding and query profiling, page-preserving merge, and HTML reports are also restored; see [Plank.Tool/README.md](../../Plank.Tool/README.md).

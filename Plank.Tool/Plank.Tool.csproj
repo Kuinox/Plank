@@ -12,5 +12,7 @@
   <ItemGroup>
     <PackageReference Include="ConsoleAppFramework" Version="5.7.13" />
     <EmbeddedResource Include="Querying/*.py" />
+    <EmbeddedResource Include="../tools/profile-viewer/index.html" LogicalName="Plank.Tool.ReportViewer.html" />
+    <ProjectReference Include="../Plank/Plank.csproj" />
   </ItemGroup>
 </Project>
