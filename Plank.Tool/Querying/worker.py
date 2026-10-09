@@ -82,6 +82,20 @@ def rowgroups(request):
             info = details(path, size)
             variants.append(info)
             print(f'Repacked target {size:,}: {info["row_group_count"]} groups, actual {info["min_rows_per_group"]:,}–{info["max_rows_per_group"]:,} rows', file=sys.stderr, flush=True)
+        if request.get('query') is not None:
+            from network import profile as network_profile, write_report
+            profile = network_profile(variants, request)
+            report = result.with_suffix('.html')
+            output_temp.write_text(json.dumps(profile, separators=(',', ':')))
+            os.link(output_temp, result)
+            try:
+                write_report(profile, report)
+            except BaseException:
+                result.unlink()
+                raise
+            output_temp.unlink()
+            marker.unlink()
+            return str(report.resolve())
         results = []
         rng = random.Random(42)
         for engine in request['engines']:
@@ -139,8 +153,8 @@ def main():
     request = json.loads(Path(sys.argv[1]).read_text())
     with contextlib.redirect_stdout(sys.stderr):
         if request['kind'] == 'rowgroups':
-            rowgroups(request)
-            result = str(Path(request['output']).resolve())
+            network_report = rowgroups(request)
+            result = network_report or str(Path(request['output']).resolve())
         elif request['kind'] == 'query':
             from query import profile
             result = json.dumps(profile(request))
