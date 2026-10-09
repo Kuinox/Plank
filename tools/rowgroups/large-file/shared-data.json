@@ -1,0 +1,147 @@
+{
+  "file_name": "hits-aligned.parquet",
+  "file_bytes": 11499803268,
+  "part_bytes": 500000000,
+  "parts": [
+    {
+      "number": 0,
+      "file_name": "hits-aligned.parquet.part-000",
+      "bytes": 500000000,
+      "sha256": "10c539867f1e115d68add53d24578c8661f2652fd437390e82512c3f2cf08193"
+    },
+    {
+      "number": 1,
+      "file_name": "hits-aligned.parquet.part-001",
+      "bytes": 500000000,
+      "sha256": "e719e83db90320b83e85ee833ebae31a2206aff2885aa51b5d287c00bcb3f174"
+    },
+    {
+      "number": 2,
+      "file_name": "hits-aligned.parquet.part-002",
+      "bytes": 500000000,
+      "sha256": "50944ba17dbb9410aeb09aeec8b2134aaf856a26d172bf51c8c15651e7fe7b15"
+    },
+    {
+      "number": 3,
+      "file_name": "hits-aligned.parquet.part-003",
+      "bytes": 500000000,
+      "sha256": "f7da226d6ee561c060fe72eeab42fcbd408ea8aa92a0579e0a8ca3bb33d91e1f"
+    },
+    {
+      "number": 4,
+      "file_name": "hits-aligned.parquet.part-004",
+      "bytes": 500000000,
+      "sha256": "3a7d431cdaa696218bfa73a0d790e48e8039c60ab936ed4159ac08aae7b2bf6f"
+    },
+    {
+      "number": 5,
+      "file_name": "hits-aligned.parquet.part-005",
+      "bytes": 500000000,
+      "sha256": "cde0907f7451a0347cd64733f9ea55c5322b7cd5992b1d1959c5197b2b3bc530"
+    },
+    {
+      "number": 6,
+      "file_name": "hits-aligned.parquet.part-006",
+      "bytes": 500000000,
+      "sha256": "68926eb4f3f4cc76cb352518ca877b57e72ef5071ab8d4b503a52492f302db7d"
+    },
+    {
+      "number": 7,
+      "file_name": "hits-aligned.parquet.part-007",
+      "bytes": 500000000,
+      "sha256": "9575e2e4ceb6537dbf06d8d609a0abe3ea1dd84730aa859773d1f7153deba652"
+    },
+    {
+      "number": 8,
+      "file_name": "hits-aligned.parquet.part-008",
+      "bytes": 500000000,
+      "sha256": "9d13b97a488c7cfac3f2609fc9056e9a202446338365761491e3b7194da4667e"
+    },
+    {
+      "number": 9,
+      "file_name": "hits-aligned.parquet.part-009",
+      "bytes": 500000000,
+      "sha256": "40310d00f5073f006b761ba473bb0afb9709e7add7ba797d150f9925ded4b83a"
+    },
+    {
+      "number": 10,
+      "file_name": "hits-aligned.parquet.part-010",
+      "bytes": 500000000,
+      "sha256": "994284168b09a2472963b4fa7976b6a5f70ad82514e7bfd910a6456163e53c64"
+    },
+    {
+      "number": 11,
+      "file_name": "hits-aligned.parquet.part-011",
+      "bytes": 500000000,
+      "sha256": "bc290b7e4d13f020069a5659a1ad0794465cffd1affc6d4ffd31a127f6f02ce6"
+    },
+    {
+      "number": 12,
+      "file_name": "hits-aligned.parquet.part-012",
+      "bytes": 500000000,
+      "sha256": "2dd106aa5a90dff141e6c04e85979cf2a28ef5094957c55e61b90f665cfd80c0"
+    },
+    {
+      "number": 13,
+      "file_name": "hits-aligned.parquet.part-013",
+      "bytes": 500000000,
+      "sha256": "3efd36506437e04050de36c3e3c5a3fc84712153634beb3c99bfaf0d956befb1"
+    },
+    {
+      "number": 14,
+      "file_name": "hits-aligned.parquet.part-014",
+      "bytes": 500000000,
+      "sha256": "ac8e0b5108ed07011ce77938ac4ea8930de4ebd568337421e7b7e0c9145b682a"
+    },
+    {
+      "number": 15,
+      "file_name": "hits-aligned.parquet.part-015",
+      "bytes": 500000000,
+      "sha256": "e8280ce714af431b62987da2e43c2936f7547e347e781efb6d146d2a0a05c97b"
+    },
+    {
+      "number": 16,
+      "file_name": "hits-aligned.parquet.part-016",
+      "bytes": 500000000,
+      "sha256": "a6d37619e406f9074e45c746daad7a5fc6541448fbda5c3a15638e7d5d42a58e"
+    },
+    {
+      "number": 17,
+      "file_name": "hits-aligned.parquet.part-017",
+      "bytes": 500000000,
+      "sha256": "41b9fde6ff6bf272bb8ba277d11edcfff89a99c4da4cfc662a45c3fc799e6356"
+    },
+    {
+      "number": 18,
+      "file_name": "hits-aligned.parquet.part-018",
+      "bytes": 500000000,
+      "sha256": "d730454219984966969adbaa120dadf4dbafde8883a62982acd3ea1ac9e12758"
+    },
+    {
+      "number": 19,
+      "file_name": "hits-aligned.parquet.part-019",
+      "bytes": 500000000,
+      "sha256": "40a067d31e509849d1188d7d2082971351b11920eca2ae7abf1e0047b4e17a32"
+    },
+    {
+      "number": 20,
+      "file_name": "hits-aligned.parquet.part-020",
+      "bytes": 500000000,
+      "sha256": "180d81e8fb976f2ed41a3e4b1685f16bd01d5d7a80c7e6bdd5b4f215d0176622"
+    },
+    {
+      "number": 21,
+      "file_name": "hits-aligned.parquet.part-021",
+      "bytes": 500000000,
+      "sha256": "e73c0213ebfb754e72b83ab1305d44ae387d14b1b5b6020f8e4d1a4a2429577c"
+    },
+    {
+      "number": 22,
+      "file_name": "hits-aligned.parquet.part-022",
+      "bytes": 499803268,
+      "sha256": "1a1ccf58d64d1e6dadc5e9ec2143fcae3434ed51488ca9bc09db03892f9468e9"
+    }
+  ],
+  "sha256": "ab521ba2d596066d8705fd93544cb59df473c2301e00c5b6834500421138371d",
+  "complete": true
+}

@@ -40,3 +40,10 @@ python tools/rowgroups/check_repack.py
 The checks use PyArrow and fastparquet from the worker environment and cover 20 variants: V1/V2 pages, plain/dictionary, nullable data, dictionary incompatibility, splitting/merging, page checksums, omitted indexes, decoded equality and unchanged data-page bytes. Real footer operations were exercised with DuckDB, Polars, DataFusion and ClickHouse, plus fresh/cached CLI bootstrap and input/output validation.
 
 Schema inspection, encoding and query profiling, page-preserving merge, and HTML reports are also restored; see [Plank.Tool/README.md](../../Plank.Tool/README.md).
+
+## Large ClickBench experiment and session handoff
+
+See [large-file/HANDOFF.md](large-file/HANDOFF.md) for the completed nine-layout,
+four-engine network report, saved captures, recovery locations and executable
+rebuild instructions. That pipeline normalizes page alignment before exact
+regrouping; it is separate from the older CLI footer profiler described above.

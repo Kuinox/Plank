@@ -1,0 +1,4252 @@
+{
+  "kind": "rowgroups-network",
+  "version": 1,
+  "transport": "simulated S3 over local HTTP",
+  "query": "SELECT \"WatchID\" FROM data WHERE \"CounterID\" = 17 AND \"WatchID\" = 9110818468285196899",
+  "simulation": {
+    "latency_ms": 100,
+    "initial_throughput_mib_s": 1.25,
+    "ramp_up_ms": 700,
+    "max_throughput_mib_s": 53
+  },
+  "files": [
+    {
+      "name": "hits-rows-1000.parquet",
+      "label": "1,000 rows/group \u00b7 99,998 groups \u00b7 12.31 GB \u00b7 simulated S3",
+      "size": 12305708099,
+      "row_groups": 99998,
+      "target": 1000,
+      "engines": [
+        {
+          "name": "duckdb",
+          "version": "1.5.6",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 1.248844,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.29818999999999,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 101.888756,
+              "start": 12305445955,
+              "end": 12305708098,
+              "bytes": 262144,
+              "first_byte_ms": 202.40626,
+              "status": 206,
+              "duration": 168.22867200000002,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 270.779122,
+              "start": 11498832843,
+              "end": 12305708090,
+              "bytes": 806875248,
+              "first_byte_ms": 371.229885,
+              "status": 206,
+              "duration": 17164.51072,
+              "id": 2
+            }
+          ],
+          "elapsed_ms": 27326.92482,
+          "result_rows": null,
+          "error": "Exceeded the 8 GiB memory limit",
+          "error_detail": "",
+          "result_verified": false
+        },
+        {
+          "name": "polars",
+          "version": "2.0.0",
+          "requests": [
+            {
+              "method": "GET",
+              "time": 8.449433,
+              "start": 12305445955,
+              "end": 12305708098,
+              "bytes": 262144,
+              "first_byte_ms": 109.123984,
+              "status": 206,
+              "duration": 168.483558,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 177.437013,
+              "start": 11498832843,
+              "end": 11507237848,
+              "bytes": 8405006,
+              "first_byte_ms": 278.125675,
+              "status": 206,
+              "duration": 898.0395699999999,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 177.900332,
+              "start": 11507237849,
+              "end": 11515642798,
+              "bytes": 8404950,
+              "first_byte_ms": 280.812285,
+              "status": 206,
+              "duration": 901.111625,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 178.265523,
+              "start": 11515642799,
+              "end": 11524047748,
+              "bytes": 8404950,
+              "first_byte_ms": 289.672552,
+              "status": 206,
+              "duration": 901.7661269999999,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 178.67205,
+              "start": 11524047749,
+              "end": 11532452698,
+              "bytes": 8404950,
+              "first_byte_ms": 280.789338,
+              "status": 206,
+              "duration": 900.1164339999999,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 1076.579795,
+              "start": 11532452699,
+              "end": 11540857648,
+              "bytes": 8404950,
+              "first_byte_ms": 1176.880828,
+              "status": 206,
+              "duration": 1250.536935,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 1079.173313,
+              "start": 11549262599,
+              "end": 11557667548,
+              "bytes": 8404950,
+              "first_byte_ms": 1180.434114,
+              "status": 206,
+              "duration": 1280.714252,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 1079.342338,
+              "start": 11566072499,
+              "end": 11574477448,
+              "bytes": 8404950,
+              "first_byte_ms": 1180.456869,
+              "status": 206,
+              "duration": 1276.37709,
+              "id": 7
+            },
+            {
+              "method": "GET",
+              "time": 1080.369945,
+              "start": 11582882399,
+              "end": 11591287348,
+              "bytes": 8404950,
+              "first_byte_ms": 1181.782818,
+              "status": 206,
+              "duration": 1277.4102320000002,
+              "id": 8
+            },
+            {
+              "method": "GET",
+              "time": 1107.129126,
+              "start": 11599692299,
+              "end": 11608097248,
+              "bytes": 8404950,
+              "first_byte_ms": 1209.611059,
+              "status": 206,
+              "duration": 1280.4868639999997,
+              "id": 9
+            },
+            {
+              "method": "GET",
+              "time": 1107.569926,
+              "start": 11608097249,
+              "end": 11616502198,
+              "bytes": 8404950,
+              "first_byte_ms": 1210.073983,
+              "status": 206,
+              "duration": 1279.103746,
+              "id": 10
+            },
+            {
+              "method": "GET",
+              "time": 1107.907248,
+              "start": 11616502199,
+              "end": 11624907148,
+              "bytes": 8404950,
+              "first_byte_ms": 1210.889588,
+              "status": 206,
+              "duration": 1279.423456,
+              "id": 11
+            },
+            {
+              "method": "GET",
+              "time": 1108.234346,
+              "start": 11624907149,
+              "end": 11633312098,
+              "bytes": 8404950,
+              "first_byte_ms": 1210.67044,
+              "status": 206,
+              "duration": 1278.763298,
+              "id": 12
+            },
+            {
+              "method": "GET",
+              "time": 2327.474171,
+              "start": 11633312099,
+              "end": 11641717048,
+              "bytes": 8404950,
+              "first_byte_ms": 2427.736659,
+              "status": 206,
+              "duration": 1095.7918290000002,
+              "id": 13
+            },
+            {
+              "method": "GET",
+              "time": 2355.968451,
+              "start": 11650121999,
+              "end": 11658526948,
+              "bytes": 8404950,
+              "first_byte_ms": 2456.4108,
+              "status": 206,
+              "duration": 1253.867252,
+              "id": 14
+            },
+            {
+              "method": "GET",
+              "time": 2357.994656,
+              "start": 11666931899,
+              "end": 11675336848,
+              "bytes": 8404950,
+              "first_byte_ms": 2459.51657,
+              "status": 206,
+              "duration": 1260.3942230000002,
+              "id": 15
+            },
+            {
+              "method": "GET",
+              "time": 2360.12669,
+              "start": 11683741799,
+              "end": 11692146748,
+              "bytes": 8404950,
+              "first_byte_ms": 2461.877208,
+              "status": 206,
+              "duration": 1269.827484,
+              "id": 16
+            },
+            {
+              "method": "GET",
+              "time": 2386.908098,
+              "start": 11700551699,
+              "end": 11708956648,
+              "bytes": 8404950,
+              "first_byte_ms": 2489.572549,
+              "status": 206,
+              "duration": 1272.79578,
+              "id": 17
+            },
+            {
+              "method": "GET",
+              "time": 2387.21024,
+              "start": 11717361599,
+              "end": 11725766548,
+              "bytes": 8404950,
+              "first_byte_ms": 2489.606113,
+              "status": 206,
+              "duration": 1272.8909600000002,
+              "id": 18
+            },
+            {
+              "method": "GET",
+              "time": 2387.51841,
+              "start": 11734171499,
+              "end": 11742576448,
+              "bytes": 8404950,
+              "first_byte_ms": 2490.197899,
+              "status": 206,
+              "duration": 1274.2047939999998,
+              "id": 19
+            },
+            {
+              "method": "GET",
+              "time": 2387.80243,
+              "start": 11750981399,
+              "end": 11759386348,
+              "bytes": 8404950,
+              "first_byte_ms": 2490.15063,
+              "status": 206,
+              "duration": 1272.599291,
+              "id": 20
+            },
+            {
+              "method": "GET",
+              "time": 3423.568149,
+              "start": 11767791299,
+              "end": 11776196248,
+              "bytes": 8404950,
+              "first_byte_ms": 3527.603756,
+              "status": 206,
+              "duration": 927.5228789999996,
+              "id": 21
+            },
+            {
+              "method": "GET",
+              "time": 3610.228794,
+              "start": 11784601199,
+              "end": 11793006148,
+              "bytes": 8404950,
+              "first_byte_ms": 3710.899355,
+              "status": 206,
+              "duration": 1216.9745019999996,
+              "id": 22
+            },
+            {
+              "method": "GET",
+              "time": 3618.657739,
+              "start": 11801411099,
+              "end": 11809816048,
+              "bytes": 8404950,
+              "first_byte_ms": 3719.897029,
+              "status": 206,
+              "duration": 1238.9242059999997,
+              "id": 23
+            },
+            {
+              "method": "GET",
+              "time": 3630.204675,
+              "start": 11818220999,
+              "end": 11826625948,
+              "bytes": 8404950,
+              "first_byte_ms": 3732.316138,
+              "status": 206,
+              "duration": 1252.467149,
+              "id": 24
+            },
+            {
+              "method": "GET",
+              "time": 3660.004831,
+              "start": 11835030899,
+              "end": 11843435848,
+              "bytes": 8404950,
+              "first_byte_ms": 3762.999016,
+              "status": 206,
+              "duration": 1261.921808,
+              "id": 25
+            },
+            {
+              "method": "GET",
+              "time": 3660.306868,
+              "start": 11851840799,
+              "end": 11860245748,
+              "bytes": 8404950,
+              "first_byte_ms": 3762.980247,
+              "status": 206,
+              "duration": 1260.9424679999997,
+              "id": 26
+            },
+            {
+              "method": "GET",
+              "time": 3660.613345,
+              "start": 11868650699,
+              "end": 11877055648,
+              "bytes": 8404950,
+              "first_byte_ms": 3762.926846,
+              "status": 206,
+              "duration": 1260.9915269999997,
+              "id": 27
+            },
+            {
+              "method": "GET",
+              "time": 3661.897371,
+              "start": 11885460599,
+              "end": 11893865548,
+              "bytes": 8404950,
+              "first_byte_ms": 3764.102148,
+              "status": 206,
+              "duration": 1260.34515,
+              "id": 28
+            },
+            {
+              "method": "GET",
+              "time": 4351.569421,
+              "start": 11902270499,
+              "end": 11910675448,
+              "bytes": 8404950,
+              "first_byte_ms": 4456.074879,
+              "status": 206,
+              "duration": 1067.0129660000002,
+              "id": 29
+            },
+            {
+              "method": "GET",
+              "time": 4827.507685,
+              "start": 11919080399,
+              "end": 11927485348,
+              "bytes": 8404950,
+              "first_byte_ms": 4928.689402,
+              "status": 206,
+              "duration": 1121.4206880000002,
+              "id": 30
+            },
+            {
+              "method": "GET",
+              "time": 4857.81553,
+              "start": 11935890299,
+              "end": 11944295248,
+              "bytes": 8404950,
+              "first_byte_ms": 4958.934363,
+              "status": 206,
+              "duration": 1198.699415,
+              "id": 31
+            },
+            {
+              "method": "GET",
+              "time": 4882.933444,
+              "start": 11952700199,
+              "end": 11961105148,
+              "bytes": 8404950,
+              "first_byte_ms": 4984.920033,
+              "status": 206,
+              "duration": 1232.8826789999994,
+              "id": 32
+            },
+            {
+              "method": "GET",
+              "time": 4921.493959,
+              "start": 11969510099,
+              "end": 11977915048,
+              "bytes": 8404950,
+              "first_byte_ms": 5023.792059,
+              "status": 206,
+              "duration": 1255.8845569999994,
+              "id": 33
+            },
+            {
+              "method": "GET",
+              "time": 4921.783412,
+              "start": 11986319999,
+              "end": 11994724948,
+              "bytes": 8404950,
+              "first_byte_ms": 5024.378228,
+              "status": 206,
+              "duration": 1257.0781270000007,
+              "id": 34
+            },
+            {
+              "method": "GET",
+              "time": 4922.115735,
+              "start": 12003129899,
+              "end": 12011534848,
+              "bytes": 8404950,
+              "first_byte_ms": 5024.416203,
+              "status": 206,
+              "duration": 1257.0368909999997,
+              "id": 35
+            },
+            {
+              "method": "GET",
+              "time": 4922.472113,
+              "start": 12019939799,
+              "end": 12028344748,
+              "bytes": 8404950,
+              "first_byte_ms": 5025.001402,
+              "status": 206,
+              "duration": 1257.0392000000002,
+              "id": 36
+            },
+            {
+              "method": "GET",
+              "time": 5418.871011,
+              "start": 12036749699,
+              "end": 12045154648,
+              "bytes": 8404950,
+              "first_byte_ms": 5522.904107,
+              "status": 206,
+              "duration": 1144.7304809999996,
+              "id": 37
+            },
+            {
+              "method": "GET",
+              "time": 5949.272528,
+              "start": 12053559599,
+              "end": 12061964548,
+              "bytes": 8404950,
+              "first_byte_ms": 6053.282077,
+              "status": 206,
+              "duration": 1144.6842649999999,
+              "id": 38
+            },
+            {
+              "method": "GET",
+              "time": 6056.800621,
+              "start": 12070369499,
+              "end": 12078774448,
+              "bytes": 8404950,
+              "first_byte_ms": 6160.608069,
+              "status": 206,
+              "duration": 1151.835309,
+              "id": 39
+            },
+            {
+              "method": "GET",
+              "time": 6116.0738,
+              "start": 12087179399,
+              "end": 12095584348,
+              "bytes": 8404950,
+              "first_byte_ms": 6217.816612,
+              "status": 206,
+              "duration": 1206.7659439999998,
+              "id": 40
+            },
+            {
+              "method": "GET",
+              "time": 6177.654258,
+              "start": 12103989299,
+              "end": 12112394248,
+              "bytes": 8404950,
+              "first_byte_ms": 6280.267898,
+              "status": 206,
+              "duration": 1251.4984040000008,
+              "id": 41
+            },
+            {
+              "method": "GET",
+              "time": 6179.084795,
+              "start": 12120799199,
+              "end": 12129204148,
+              "bytes": 8404950,
+              "first_byte_ms": 6281.519407,
+              "status": 206,
+              "duration": 1250.9495910000005,
+              "id": 42
+            },
+            {
+              "method": "GET",
+              "time": 6179.432414,
+              "start": 12137609099,
+              "end": 12146014048,
+              "bytes": 8404950,
+              "first_byte_ms": 6282.062744,
+              "status": 206,
+              "duration": 1250.8905080000004,
+              "id": 43
+            },
+            {
+              "method": "GET",
+              "time": 6179.727539,
+              "start": 12154418999,
+              "end": 12162823948,
+              "bytes": 8404950,
+              "first_byte_ms": 6282.08699,
+              "status": 206,
+              "duration": 1252.0658669999993,
+              "id": 44
+            },
+            {
+              "method": "GET",
+              "time": 6563.833764,
+              "start": 12171228899,
+              "end": 12179633848,
+              "bytes": 8404950,
+              "first_byte_ms": 6668.590188,
+              "status": 206,
+              "duration": 1167.1976590000004,
+              "id": 45
+            },
+            {
+              "method": "GET",
+              "time": 7094.19967,
+              "start": 12188038799,
+              "end": 12196443748,
+              "bytes": 8404950,
+              "first_byte_ms": 7198.362023,
+              "status": 206,
+              "duration": 1166.5962029999992,
+              "id": 46
+            },
+            {
+              "method": "GET",
+              "time": 7208.892789,
+              "start": 12204848699,
+              "end": 12213253648,
+              "bytes": 8404950,
+              "first_byte_ms": 7313.018659,
+              "status": 206,
+              "duration": 1166.030135,
+              "id": 47
+            },
+            {
+              "method": "GET",
+              "time": 7323.596449,
+              "start": 12221658599,
+              "end": 12230063548,
+              "bytes": 8404950,
+              "first_byte_ms": 7427.722235,
+              "status": 206,
+              "duration": 1167.8052150000012,
+              "id": 48
+            },
+            {
+              "method": "GET",
+              "time": 7429.391495,
+              "start": 12238468499,
+              "end": 12246873448,
+              "bytes": 8404950,
+              "first_byte_ms": 7532.032616,
+              "status": 206,
+              "duration": 1249.7504929999996,
+              "id": 49
+            },
+            {
+              "method": "GET",
+              "time": 7430.258112,
+              "start": 12255278399,
+              "end": 12263683348,
+              "bytes": 8404950,
+              "first_byte_ms": 7532.688435,
+              "status": 206,
+              "duration": 1252.9861499999997,
+              "id": 50
+            },
+            {
+              "method": "GET",
+              "time": 7430.507597,
+              "start": 12272088299,
+              "end": 12280493248,
+              "bytes": 8404950,
+              "first_byte_ms": 7532.623702,
+              "status": 206,
+              "duration": 1251.8731790000002,
+              "id": 51
+            },
+            {
+              "method": "GET",
+              "time": 7431.966009,
+              "start": 12288898199,
+              "end": 12297303148,
+              "bytes": 8404950,
+              "first_byte_ms": 7534.976878,
+              "status": 206,
+              "duration": 1253.3533580000003,
+              "id": 52
+            },
+            {
+              "method": "GET",
+              "time": 7731.284733,
+              "start": 11540857649,
+              "end": 11549262598,
+              "bytes": 8404950,
+              "first_byte_ms": 7835.432108,
+              "status": 206,
+              "duration": 1168.9571779999987,
+              "id": 53
+            },
+            {
+              "method": "GET",
+              "time": 8261.097541,
+              "start": 11574477449,
+              "end": 11582882398,
+              "bytes": 8404950,
+              "first_byte_ms": 8365.152014,
+              "status": 206,
+              "duration": 1168.3221190000004,
+              "id": 54
+            },
+            {
+              "method": "GET",
+              "time": 8375.162149,
+              "start": 11641717049,
+              "end": 11650121998,
+              "bytes": 8404950,
+              "first_byte_ms": 8479.282132,
+              "status": 206,
+              "duration": 1167.776183,
+              "id": 55
+            },
+            {
+              "method": "GET",
+              "time": 8491.872295,
+              "start": 11675336849,
+              "end": 11683741798,
+              "bytes": 8404950,
+              "first_byte_ms": 8596.344603,
+              "status": 206,
+              "duration": 1166.980238,
+              "id": 56
+            },
+            {
+              "method": "GET",
+              "time": 8679.41352,
+              "start": 11708956649,
+              "end": 11717361598,
+              "bytes": 8404950,
+              "first_byte_ms": 8781.454585,
+              "status": 206,
+              "duration": 1249.2015950000005,
+              "id": 57
+            },
+            {
+              "method": "GET",
+              "time": 8682.613695,
+              "start": 11742576449,
+              "end": 11750981398,
+              "bytes": 8404950,
+              "first_byte_ms": 8785.685454,
+              "status": 206,
+              "duration": 1253.0031839999992,
+              "id": 58
+            },
+            {
+              "method": "GET",
+              "time": 8683.40351,
+              "start": 11776196249,
+              "end": 11784601198,
+              "bytes": 8404950,
+              "first_byte_ms": 8786.180091,
+              "status": 206,
+              "duration": 1251.341386,
+              "id": 59
+            },
+            {
+              "method": "GET",
+              "time": 8685.497779,
+              "start": 11809816049,
+              "end": 11818220998,
+              "bytes": 8404950,
+              "first_byte_ms": 8788.500493,
+              "status": 206,
+              "duration": 1251.5822900000003,
+              "id": 60
+            },
+            {
+              "method": "GET",
+              "time": 8900.45369,
+              "start": 11843435849,
+              "end": 11851840798,
+              "bytes": 8404950,
+              "first_byte_ms": 9004.596153,
+              "status": 206,
+              "duration": 1169.0231089999997,
+              "id": 61
+            },
+            {
+              "method": "GET",
+              "time": 9429.674993,
+              "start": 11877055649,
+              "end": 11885460598,
+              "bytes": 8404950,
+              "first_byte_ms": 9533.800235,
+              "status": 206,
+              "duration": 1166.0114709999998,
+              "id": 62
+            },
+            {
+              "method": "GET",
+              "time": 9543.186158,
+              "start": 11910675449,
+              "end": 11919080398,
+              "bytes": 8404950,
+              "first_byte_ms": 9647.302527,
+              "status": 206,
+              "duration": 1169.557252999999,
+              "id": 63
+            },
+            {
+              "method": "GET",
+              "time": 9659.102229,
+              "start": 11944295249,
+              "end": 11952700198,
+              "bytes": 8404950,
+              "first_byte_ms": 9763.332484,
+              "status": 206,
+              "duration": 1168.3701720000008,
+              "id": 64
+            },
+            {
+              "method": "GET",
+              "time": 9929.726477,
+              "start": 11977915049,
+              "end": 11986319998,
+              "bytes": 8404950,
+              "first_byte_ms": 10032.01397,
+              "status": 206,
+              "duration": 1248.2358189999995,
+              "id": 65
+            },
+            {
+              "method": "GET",
+              "time": 9934.950039,
+              "start": 12011534849,
+              "end": 12019939798,
+              "bytes": 8404950,
+              "first_byte_ms": 10037.929487,
+              "status": 206,
+              "duration": 1249.7859820000012,
+              "id": 66
+            },
+            {
+              "method": "GET",
+              "time": 9935.794253,
+              "start": 12045154649,
+              "end": 12053559598,
+              "bytes": 8404950,
+              "first_byte_ms": 10038.52463,
+              "status": 206,
+              "duration": 1252.1773819999999,
+              "id": 67
+            },
+            {
+              "method": "GET",
+              "time": 9937.246504,
+              "start": 12078774449,
+              "end": 12087179398,
+              "bytes": 8404950,
+              "first_byte_ms": 10040.30772,
+              "status": 206,
+              "duration": 1251.6296139999995,
+              "id": 68
+            },
+            {
+              "method": "GET",
+              "time": 10069.696261,
+              "start": 12112394249,
+              "end": 12120799198,
+              "bytes": 8404950,
+              "first_byte_ms": 10173.829537,
+              "status": 206,
+              "duration": 1193.746545,
+              "id": 69
+            },
+            {
+              "method": "GET",
+              "time": 10595.92228,
+              "start": 12146014049,
+              "end": 12154418998,
+              "bytes": 8404950,
+              "first_byte_ms": 10700.094591,
+              "status": 206,
+              "duration": 1158.9602169999998,
+              "id": 70
+            },
+            {
+              "method": "GET",
+              "time": 10713.207749,
+              "start": 12179633849,
+              "end": 12188038798,
+              "bytes": 8404950,
+              "first_byte_ms": 10817.087848,
+              "status": 206,
+              "duration": 1157.5505490000014,
+              "id": 71
+            },
+            {
+              "method": "GET",
+              "time": 10827.733155,
+              "start": 12213253649,
+              "end": 12221658598,
+              "bytes": 8404950,
+              "first_byte_ms": 10931.830408,
+              "status": 206,
+              "duration": 1159.5433919999996,
+              "id": 72
+            },
+            {
+              "method": "GET",
+              "time": 11178.238551,
+              "start": 12246873449,
+              "end": 12255278398,
+              "bytes": 8404950,
+              "first_byte_ms": 11279.98362,
+              "status": 206,
+              "duration": 1242.0408029999999,
+              "id": 73
+            },
+            {
+              "method": "GET",
+              "time": 11184.967143,
+              "start": 12280493249,
+              "end": 12288898198,
+              "bytes": 8404950,
+              "first_byte_ms": 11287.017472,
+              "status": 206,
+              "duration": 1251.5463409999993,
+              "id": 74
+            },
+            {
+              "method": "GET",
+              "time": 11188.196331,
+              "start": 11557667549,
+              "end": 11566072498,
+              "bytes": 8404950,
+              "first_byte_ms": 11291.187505,
+              "status": 206,
+              "duration": 1254.7813210000004,
+              "id": 75
+            },
+            {
+              "method": "GET",
+              "time": 11189.091262,
+              "start": 11658526949,
+              "end": 11666931898,
+              "bytes": 8404950,
+              "first_byte_ms": 11291.75906,
+              "status": 206,
+              "duration": 1253.6408609999999,
+              "id": 76
+            },
+            {
+              "method": "GET",
+              "time": 11263.672182,
+              "start": 11725766549,
+              "end": 11734171498,
+              "bytes": 8404950,
+              "first_byte_ms": 11367.861508,
+              "status": 206,
+              "duration": 1222.6431639999992,
+              "id": 77
+            },
+            {
+              "method": "GET",
+              "time": 11755.161885,
+              "start": 11793006149,
+              "end": 11801411098,
+              "bytes": 8404950,
+              "first_byte_ms": 11859.268218,
+              "status": 206,
+              "duration": 1149.5100920000004,
+              "id": 78
+            },
+            {
+              "method": "GET",
+              "time": 11871.017125,
+              "start": 11860245749,
+              "end": 11868650698,
+              "bytes": 8404950,
+              "first_byte_ms": 11975.15352,
+              "status": 206,
+              "duration": 1152.4386489999997,
+              "id": 79
+            },
+            {
+              "method": "GET",
+              "time": 11987.583216,
+              "start": 11927485349,
+              "end": 11935890298,
+              "bytes": 8404950,
+              "first_byte_ms": 12091.632944,
+              "status": 206,
+              "duration": 1141.1720319999986,
+              "id": 80
+            },
+            {
+              "method": "GET",
+              "time": 12420.513119,
+              "start": 11994724949,
+              "end": 12003129898,
+              "bytes": 8404950,
+              "first_byte_ms": 12522.291279,
+              "status": 206,
+              "duration": 1236.9951360000014,
+              "id": 81
+            },
+            {
+              "method": "GET",
+              "time": 12436.729936,
+              "start": 12061964549,
+              "end": 12070369498,
+              "bytes": 8404950,
+              "first_byte_ms": 12538.808593,
+              "status": 206,
+              "duration": 1255.651414,
+              "id": 82
+            },
+            {
+              "method": "GET",
+              "time": 12442.838152,
+              "start": 12129204149,
+              "end": 12137609098,
+              "bytes": 8404950,
+              "first_byte_ms": 12545.87051,
+              "status": 206,
+              "duration": 1254.0141920000005,
+              "id": 83
+            },
+            {
+              "method": "GET",
+              "time": 12443.143372,
+              "start": 12196443749,
+              "end": 12204848698,
+              "bytes": 8404950,
+              "first_byte_ms": 12545.924679,
+              "status": 206,
+              "duration": 1261.6151799999989,
+              "id": 84
+            },
+            {
+              "method": "GET",
+              "time": 12486.478469,
+              "start": 12263683349,
+              "end": 12272088298,
+              "bytes": 8404950,
+              "first_byte_ms": 12590.671315,
+              "status": 206,
+              "duration": 1240.408080000001,
+              "id": 85
+            },
+            {
+              "method": "GET",
+              "time": 12904.932817,
+              "start": 11591287349,
+              "end": 11599692298,
+              "bytes": 8404950,
+              "first_byte_ms": 13009.060896,
+              "status": 206,
+              "duration": 1146.2002549999997,
+              "id": 86
+            },
+            {
+              "method": "GET",
+              "time": 13023.700763,
+              "start": 11759386349,
+              "end": 11767791298,
+              "bytes": 8404950,
+              "first_byte_ms": 13127.808956,
+              "status": 206,
+              "duration": 1139.1136419999984,
+              "id": 87
+            },
+            {
+              "method": "GET",
+              "time": 13128.989294,
+              "start": 11893865549,
+              "end": 11902270498,
+              "bytes": 8404950,
+              "first_byte_ms": 13233.119634,
+              "status": 206,
+              "duration": 1155.0051279999989,
+              "id": 88
+            },
+            {
+              "method": "GET",
+              "time": 13659.39286,
+              "start": 12028344749,
+              "end": 12036749698,
+              "bytes": 8404950,
+              "first_byte_ms": 13761.105126,
+              "status": 206,
+              "duration": 1208.761128,
+              "id": 89
+            },
+            {
+              "method": "GET",
+              "time": 13692.615754,
+              "start": 12162823949,
+              "end": 12171228898,
+              "bytes": 8404950,
+              "first_byte_ms": 13798.600099,
+              "status": 206,
+              "duration": 1245.83957,
+              "id": 90
+            },
+            {
+              "method": "GET",
+              "time": 13696.964729,
+              "start": 12297303149,
+              "end": 12305708098,
+              "bytes": 8404950,
+              "first_byte_ms": 13799.376246,
+              "status": 206,
+              "duration": 1246.5598250000003,
+              "id": 91
+            },
+            {
+              "method": "GET",
+              "time": 13704.958338,
+              "start": 11826625949,
+              "end": 11835030898,
+              "bytes": 8404950,
+              "first_byte_ms": 13808.335822,
+              "status": 206,
+              "duration": 1241.7254049999992,
+              "id": 92
+            },
+            {
+              "method": "GET",
+              "time": 13727.332403,
+              "start": 12095584349,
+              "end": 12103989298,
+              "bytes": 8404950,
+              "first_byte_ms": 13831.255816,
+              "status": 206,
+              "duration": 1237.691406,
+              "id": 93
+            },
+            {
+              "method": "GET",
+              "time": 14052.080772,
+              "start": 11692146749,
+              "end": 11700551698,
+              "bytes": 8404950,
+              "first_byte_ms": 14157.812847,
+              "status": 206,
+              "duration": 1040.341749000001,
+              "id": 94
+            },
+            {
+              "method": "GET",
+              "time": 14163.017939,
+              "start": 12230063549,
+              "end": 12238468498,
+              "bytes": 8404950,
+              "first_byte_ms": 14267.166831,
+              "status": 206,
+              "duration": 954.7362869999997,
+              "id": 95
+            },
+            {
+              "method": "GET",
+              "time": 14284.351436,
+              "start": 11961105149,
+              "end": 11969510098,
+              "bytes": 8404950,
+              "first_byte_ms": 14387.733017,
+              "status": 206,
+              "duration": 877.8668469999993,
+              "id": 96
+            },
+            {
+              "method": "GET",
+              "time": 18737.884535,
+              "start": 4,
+              "end": 31372,
+              "bytes": 31369,
+              "first_byte_ms": 18838.768654,
+              "status": 206,
+              "duration": 102.1577189999989,
+              "id": 97
+            }
+          ],
+          "elapsed_ms": 19206.902033,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "datafusion",
+          "version": "54.1.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 2.62008,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.385788,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 103.799126,
+              "start": 12305183811,
+              "end": 12305708098,
+              "bytes": 524288,
+              "first_byte_ms": 204.233816,
+              "status": 206,
+              "duration": 202.605369,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 306.779375,
+              "start": 11498832843,
+              "end": 12305708090,
+              "bytes": 806875248,
+              "first_byte_ms": 407.319444,
+              "status": 206,
+              "duration": 17770.13521,
+              "id": 2
+            }
+          ],
+          "elapsed_ms": 19178.260082,
+          "result_rows": null,
+          "error": "Row group count exceeds DataFusion\u2019s 32,768-group limit",
+          "error_detail": "Traceback (most recent call last):\n  File \"/workspace/scratch/5c6ee7ff85bc/large-rowgroups/engine_worker.py\", line 13, in <module>\n    rows=operation(r['query'])\n         ^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/scratch/5c6ee7ff85bc/Plank/Plank.Tool/Querying/network.py\", line 54, in execute\n    context.register_parquet('data', 's3://plank/' + filename)\n  File \"/tmp/plank-s3-worker/lib/python3.12/site-packages/datafusion/context.py\", line 1056, in register_parquet\n    self.ctx.register_parquet(\nException: DataFusion error: Parquet error: Parquet error: Row group ordinal 32768 exceeds i16 max value\n",
+          "result_verified": false
+        },
+        {
+          "name": "clickhouse",
+          "version": "4.4.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 8.412742,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.35481200000001,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 109.287333,
+              "start": 0,
+              "end": 12305708098,
+              "bytes": 5013505,
+              "first_byte_ms": 209.575424,
+              "status": 200,
+              "aborted": true,
+              "duration": 34348.027491,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 361.440818,
+              "start": 12305642563,
+              "end": 12305708098,
+              "bytes": 65536,
+              "first_byte_ms": 462.482524,
+              "status": 206,
+              "duration": 107.37909400000001,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 469.36243,
+              "start": 11498832843,
+              "end": 12305642562,
+              "bytes": 806809720,
+              "first_byte_ms": 569.771945,
+              "status": 206,
+              "duration": 17233.628018,
+              "id": 3
+            }
+          ],
+          "elapsed_ms": 34457.547,
+          "result_rows": null,
+          "error": "Exceeded the 8 GiB memory limit",
+          "error_detail": "",
+          "result_verified": false
+        }
+      ]
+    },
+    {
+      "name": "hits-rows-10000.parquet",
+      "label": "10,000 rows/group \u00b7 10,000 groups \u00b7 11.58 GB \u00b7 simulated S3",
+      "size": 11581826508,
+      "row_groups": 10000,
+      "target": 10000,
+      "engines": [
+        {
+          "name": "duckdb",
+          "version": "1.5.6",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 1.441391,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.38566900000001,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 102.217128,
+              "start": 11581564364,
+              "end": 11581826507,
+              "bytes": 262144,
+              "first_byte_ms": 202.63122,
+              "status": 206,
+              "duration": 168.54206799999997,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 271.332236,
+              "start": 11498832843,
+              "end": 11581826499,
+              "bytes": 82993657,
+              "first_byte_ms": 371.767088,
+              "status": 206,
+              "duration": 2116.823611,
+              "id": 2
+            },
+            {
+              "method": "HEAD",
+              "time": 3908.628949,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.29294100000016,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 4009.312473,
+              "start": 11581564364,
+              "end": 11581826507,
+              "bytes": 262144,
+              "first_byte_ms": 4109.624773,
+              "status": 206,
+              "duration": 105.8007719999996,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 4115.514653,
+              "start": 11498832843,
+              "end": 11581826499,
+              "bytes": 82993657,
+              "first_byte_ms": 4215.778828,
+              "status": 206,
+              "duration": 1849.643462,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 8424.833683,
+              "start": 4,
+              "end": 80763,
+              "bytes": 80760,
+              "first_byte_ms": 8525.435752,
+              "status": 206,
+              "duration": 102.61297299999933,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 8527.899723,
+              "start": 328766,
+              "end": 329471,
+              "bytes": 706,
+              "first_byte_ms": 8628.199886,
+              "status": 206,
+              "duration": 100.40908200000013,
+              "id": 7
+            }
+          ],
+          "elapsed_ms": 8936.749876,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "polars",
+          "version": "2.0.0",
+          "requests": [
+            {
+              "method": "GET",
+              "time": 11.719996,
+              "start": 11581564364,
+              "end": 11581826507,
+              "bytes": 262144,
+              "first_byte_ms": 112.295687,
+              "status": 206,
+              "duration": 168.409081,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 180.500634,
+              "start": 11498832843,
+              "end": 11507132213,
+              "bytes": 8299371,
+              "first_byte_ms": 281.12312,
+              "status": 206,
+              "duration": 912.6002679999999,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 181.101546,
+              "start": 11507132214,
+              "end": 11515431579,
+              "bytes": 8299366,
+              "first_byte_ms": 283.565151,
+              "status": 206,
+              "duration": 924.1403100000001,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 181.54444,
+              "start": 11515431580,
+              "end": 11523730945,
+              "bytes": 8299366,
+              "first_byte_ms": 283.695321,
+              "status": 206,
+              "duration": 911.807105,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 181.917095,
+              "start": 11523730946,
+              "end": 11532030311,
+              "bytes": 8299366,
+              "first_byte_ms": 283.600721,
+              "status": 206,
+              "duration": 909.280943,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 1091.843769,
+              "start": 11532030312,
+              "end": 11540329677,
+              "bytes": 8299366,
+              "first_byte_ms": 1192.160998,
+              "status": 206,
+              "duration": 966.1669999999999,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 1094.738285,
+              "start": 11548629044,
+              "end": 11556928409,
+              "bytes": 8299366,
+              "first_byte_ms": 1195.629566,
+              "status": 206,
+              "duration": 976.436682,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 1094.907956,
+              "start": 11556928410,
+              "end": 11565227775,
+              "bytes": 8299366,
+              "first_byte_ms": 1195.76366,
+              "status": 206,
+              "duration": 976.9954600000001,
+              "id": 7
+            },
+            {
+              "method": "GET",
+              "time": 1108.600212,
+              "start": 11540329678,
+              "end": 11548629043,
+              "bytes": 8299366,
+              "first_byte_ms": 1210.052853,
+              "status": 206,
+              "duration": 980.5250589999998,
+              "id": 8
+            },
+            {
+              "method": "GET",
+              "time": 1109.909653,
+              "start": 11573527142,
+              "end": 11581826507,
+              "bytes": 8299366,
+              "first_byte_ms": 1212.339952,
+              "status": 206,
+              "duration": 976.9003540000001,
+              "id": 9
+            },
+            {
+              "method": "GET",
+              "time": 1110.2686,
+              "start": 11565227776,
+              "end": 11573527141,
+              "bytes": 8299366,
+              "first_byte_ms": 1212.929681,
+              "status": 206,
+              "duration": 977.297088,
+              "id": 10
+            },
+            {
+              "method": "GET",
+              "time": 2468.747977,
+              "start": 4,
+              "end": 329471,
+              "bytes": 329468,
+              "first_byte_ms": 2569.121426,
+              "status": 206,
+              "duration": 107.6603610000002,
+              "id": 11
+            }
+          ],
+          "elapsed_ms": 2642.090064,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "datafusion",
+          "version": "54.1.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 10.706949,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.30935500000001,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 112.345307,
+              "start": 11581302220,
+              "end": 11581826507,
+              "bytes": 524288,
+              "first_byte_ms": 212.684988,
+              "status": 206,
+              "duration": 202.271727,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 314.980741,
+              "start": 11498832843,
+              "end": 11581826499,
+              "bytes": 82993657,
+              "first_byte_ms": 415.309187,
+              "status": 206,
+              "duration": 1991.65489,
+              "id": 2
+            },
+            {
+              "method": "HEAD",
+              "time": 2611.358372,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.29684799999995,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 2712.111129,
+              "start": 11581302220,
+              "end": 11581826507,
+              "bytes": 524288,
+              "first_byte_ms": 2812.444034,
+              "status": 206,
+              "duration": 111.21660599999996,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 2823.634404,
+              "start": 11498832843,
+              "end": 11581826499,
+              "bytes": 82993657,
+              "first_byte_ms": 2923.930345,
+              "status": 206,
+              "duration": 1860.853498,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 5091.621093,
+              "start": 11581302220,
+              "end": 11581826507,
+              "bytes": 524288,
+              "first_byte_ms": 5192.013371,
+              "status": 206,
+              "duration": 111.40076500000032,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 5203.384915,
+              "start": 11498832843,
+              "end": 11581826499,
+              "bytes": 82993657,
+              "first_byte_ms": 5303.691427,
+              "status": 206,
+              "duration": 1834.1398450000006,
+              "id": 7
+            },
+            {
+              "method": "GET",
+              "time": 7459.230974,
+              "start": 4,
+              "end": 329471,
+              "bytes": 329468,
+              "first_byte_ms": 7559.600754,
+              "status": 206,
+              "duration": 107.31727200000023,
+              "id": 8
+            }
+          ],
+          "elapsed_ms": 7688.930492,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "clickhouse",
+          "version": "4.4.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 5.539691,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.329426,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 106.380807,
+              "start": 0,
+              "end": 11581826507,
+              "bytes": 5013505,
+              "first_byte_ms": 206.671304,
+              "status": 200,
+              "aborted": true,
+              "duration": 2986.423358,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 360.640284,
+              "start": 11581760972,
+              "end": 11581826507,
+              "bytes": 65536,
+              "first_byte_ms": 462.170411,
+              "status": 206,
+              "duration": 107.76323500000001,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 468.841797,
+              "start": 11498832843,
+              "end": 11581760971,
+              "bytes": 82928129,
+              "first_byte_ms": 569.075942,
+              "status": 206,
+              "duration": 1904.047306,
+              "id": 3
+            },
+            {
+              "method": "HEAD",
+              "time": 3101.202595,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.26767199999995,
+              "id": 4
+            },
+            {
+              "method": "HEAD",
+              "time": 3203.926416,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.25740900000028,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 3307.845102,
+              "start": 11581760972,
+              "end": 11581826507,
+              "bytes": 65536,
+              "first_byte_ms": 3408.13159,
+              "status": 206,
+              "duration": 101.68109399999958,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 3413.050874,
+              "start": 11498832843,
+              "end": 11581760971,
+              "bytes": 82928129,
+              "first_byte_ms": 3513.316504,
+              "status": 206,
+              "duration": 1831.1088949999998,
+              "id": 7
+            },
+            {
+              "method": "GET",
+              "time": 6977.033989,
+              "start": 4,
+              "end": 329471,
+              "bytes": 329468,
+              "first_byte_ms": 7077.398347,
+              "status": 206,
+              "duration": 107.52687400000013,
+              "id": 8
+            }
+          ],
+          "elapsed_ms": 7375.262981,
+          "result_rows": 1,
+          "result_verified": true
+        }
+      ]
+    },
+    {
+      "name": "hits-rows-100000.parquet",
+      "label": "100,000 rows/group \u00b7 1,000 groups \u00b7 11.51 GB \u00b7 simulated S3",
+      "size": 11507195138,
+      "row_groups": 1000,
+      "target": 100000,
+      "engines": [
+        {
+          "name": "duckdb",
+          "version": "1.5.6",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 1.181552,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.37893100000001,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 101.866236,
+              "start": 11506932994,
+              "end": 11507195137,
+              "bytes": 262144,
+              "first_byte_ms": 202.153499,
+              "status": 206,
+              "duration": 168.03087299999999,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 270.351654,
+              "start": 11498832843,
+              "end": 11507195129,
+              "bytes": 8362287,
+              "first_byte_ms": 370.629798,
+              "status": 206,
+              "duration": 433.46176799999995,
+              "id": 2
+            },
+            {
+              "method": "HEAD",
+              "time": 830.722526,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.23762199999999,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 931.391983,
+              "start": 11506932994,
+              "end": 11507195137,
+              "bytes": 262144,
+              "first_byte_ms": 1031.680798,
+              "status": 206,
+              "duration": 105.7923310000001,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 1037.471297,
+              "start": 11498832843,
+              "end": 11507195129,
+              "bytes": 8362287,
+              "first_byte_ms": 1137.748561,
+              "status": 206,
+              "duration": 275.9150239999999,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 1502.747609,
+              "start": 4,
+              "end": 807603,
+              "bytes": 807600,
+              "first_byte_ms": 1603.053838,
+              "status": 206,
+              "duration": 117.12372000000005,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 1620.409614,
+              "start": 3324763,
+              "end": 3331768,
+              "bytes": 7006,
+              "first_byte_ms": 1720.676947,
+              "status": 206,
+              "duration": 100.49299600000018,
+              "id": 7
+            }
+          ],
+          "elapsed_ms": 1764.076158,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "polars",
+          "version": "2.0.0",
+          "requests": [
+            {
+              "method": "GET",
+              "time": 8.584722,
+              "start": 11506932994,
+              "end": 11507195137,
+              "bytes": 262144,
+              "first_byte_ms": 108.951868,
+              "status": 206,
+              "duration": 168.993958,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 177.926455,
+              "start": 11498832843,
+              "end": 11507195137,
+              "bytes": 8362295,
+              "first_byte_ms": 278.221398,
+              "status": 206,
+              "duration": 435.61421399999995,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 650.782134,
+              "start": 4,
+              "end": 807603,
+              "bytes": 807600,
+              "first_byte_ms": 751.131871,
+              "status": 206,
+              "duration": 118.47079399999996,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 651.198921,
+              "start": 3324763,
+              "end": 3331768,
+              "bytes": 7006,
+              "first_byte_ms": 751.909786,
+              "status": 206,
+              "duration": 100.95610099999999,
+              "id": 3
+            }
+          ],
+          "elapsed_ms": 812.680729,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "datafusion",
+          "version": "54.1.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 2.27529,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.363375,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 103.692659,
+              "start": 11506670850,
+              "end": 11507195137,
+              "bytes": 524288,
+              "first_byte_ms": 204.000138,
+              "status": 206,
+              "duration": 202.03946200000001,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 306.077318,
+              "start": 11498832843,
+              "end": 11507195129,
+              "bytes": 8362287,
+              "first_byte_ms": 406.436646,
+              "status": 206,
+              "duration": 413.438681,
+              "id": 2
+            },
+            {
+              "method": "HEAD",
+              "time": 749.733905,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.21432399999992,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 896.169515,
+              "start": 4,
+              "end": 807603,
+              "bytes": 807600,
+              "first_byte_ms": 996.554712,
+              "status": 206,
+              "duration": 117.82864299999994,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 896.793266,
+              "start": 3324763,
+              "end": 3331768,
+              "bytes": 7006,
+              "first_byte_ms": 997.258757,
+              "status": 206,
+              "duration": 100.75556099999994,
+              "id": 5
+            }
+          ],
+          "elapsed_ms": 1077.89961,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "clickhouse",
+          "version": "4.4.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 9.421548,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.320817,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 110.239101,
+              "start": 0,
+              "end": 11507195137,
+              "bytes": 5013505,
+              "first_byte_ms": 210.52352,
+              "status": 200,
+              "aborted": true,
+              "duration": 830.672614,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 362.136194,
+              "start": 11507129602,
+              "end": 11507195137,
+              "bytes": 65536,
+              "first_byte_ms": 463.914788,
+              "status": 206,
+              "duration": 106.58606000000003,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 469.282483,
+              "start": 11498832843,
+              "end": 11507129601,
+              "bytes": 8296759,
+              "first_byte_ms": 569.529749,
+              "status": 206,
+              "duration": 354.987417,
+              "id": 3
+            },
+            {
+              "method": "HEAD",
+              "time": 950.731971,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 102.30265999999995,
+              "id": 4
+            },
+            {
+              "method": "HEAD",
+              "time": 1056.434332,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.23543399999994,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 1157.460248,
+              "start": 11507129602,
+              "end": 11507195137,
+              "bytes": 65536,
+              "first_byte_ms": 1257.772533,
+              "status": 206,
+              "duration": 101.78558299999986,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 1261.919024,
+              "start": 11498832843,
+              "end": 11507129601,
+              "bytes": 8296759,
+              "first_byte_ms": 1362.879701,
+              "status": 206,
+              "duration": 277.19256799999994,
+              "id": 7
+            },
+            {
+              "method": "GET",
+              "time": 1654.655648,
+              "start": 4,
+              "end": 3331768,
+              "bytes": 3331765,
+              "first_byte_ms": 1754.978606,
+              "status": 206,
+              "duration": 170.75458000000003,
+              "id": 8
+            }
+          ],
+          "elapsed_ms": 1929.364297,
+          "result_rows": 1,
+          "result_verified": true
+        }
+      ]
+    },
+    {
+      "name": "hits-rows-200000.parquet",
+      "label": "200,000 rows/group \u00b7 500 groups \u00b7 11.50 GB \u00b7 simulated S3",
+      "size": 11503043552,
+      "row_groups": 500,
+      "target": 200000,
+      "engines": [
+        {
+          "name": "duckdb",
+          "version": "1.5.6",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 1.508471,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.27774,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 102.142638,
+              "start": 11502781408,
+              "end": 11503043551,
+              "bytes": 262144,
+              "first_byte_ms": 202.447428,
+              "status": 206,
+              "duration": 168.00206699999998,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 270.716969,
+              "start": 11498832843,
+              "end": 11503043543,
+              "bytes": 4210701,
+              "first_byte_ms": 370.996981,
+              "status": 206,
+              "duration": 303.042704,
+              "id": 2
+            },
+            {
+              "method": "HEAD",
+              "time": 643.797289,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.25790200000006,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 744.380176,
+              "start": 11502781408,
+              "end": 11503043551,
+              "bytes": 262144,
+              "first_byte_ms": 844.734424,
+              "status": 206,
+              "duration": 106.57393000000002,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 851.248969,
+              "start": 11498832843,
+              "end": 11503043543,
+              "bytes": 4210701,
+              "first_byte_ms": 951.518305,
+              "status": 206,
+              "duration": 189.82750800000008,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 1137.786096,
+              "start": 4,
+              "end": 1615203,
+              "bytes": 1615200,
+              "first_byte_ms": 1238.104643,
+              "status": 206,
+              "duration": 133.95374300000003,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 1272.446649,
+              "start": 6566906,
+              "end": 6580911,
+              "bytes": 14006,
+              "first_byte_ms": 1372.892457,
+              "status": 206,
+              "duration": 101.03601400000002,
+              "id": 7
+            }
+          ],
+          "elapsed_ms": 1416.436344,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "polars",
+          "version": "2.0.0",
+          "requests": [
+            {
+              "method": "GET",
+              "time": 8.278426,
+              "start": 11502781408,
+              "end": 11503043551,
+              "bytes": 262144,
+              "first_byte_ms": 108.671044,
+              "status": 206,
+              "duration": 168.147724,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 176.827474,
+              "start": 11498832843,
+              "end": 11503043551,
+              "bytes": 4210709,
+              "first_byte_ms": 277.118556,
+              "status": 206,
+              "duration": 304.607939,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 504.127862,
+              "start": 4,
+              "end": 1615203,
+              "bytes": 1615200,
+              "first_byte_ms": 605.488853,
+              "status": 206,
+              "duration": 147.05888999999996,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 504.485604,
+              "start": 6566906,
+              "end": 6580911,
+              "bytes": 14006,
+              "first_byte_ms": 605.389329,
+              "status": 206,
+              "duration": 101.47532799999993,
+              "id": 3
+            }
+          ],
+          "elapsed_ms": 686.839976,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "datafusion",
+          "version": "54.1.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 2.553183,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.312286,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 103.85371,
+              "start": 11502519264,
+              "end": 11503043551,
+              "bytes": 524288,
+              "first_byte_ms": 204.237075,
+              "status": 206,
+              "duration": 202.374114,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 306.572868,
+              "start": 11498832843,
+              "end": 11503043543,
+              "bytes": 4210701,
+              "first_byte_ms": 406.885628,
+              "status": 206,
+              "duration": 288.81168999999994,
+              "id": 2
+            },
+            {
+              "method": "HEAD",
+              "time": 618.031787,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.25988399999994,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 761.461987,
+              "start": 4,
+              "end": 1615203,
+              "bytes": 1615200,
+              "first_byte_ms": 861.908865,
+              "status": 206,
+              "duration": 136.13240299999995,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 762.094899,
+              "start": 6566906,
+              "end": 6580911,
+              "bytes": 14006,
+              "first_byte_ms": 862.647845,
+              "status": 206,
+              "duration": 101.6611959999999,
+              "id": 5
+            }
+          ],
+          "elapsed_ms": 976.541946,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "clickhouse",
+          "version": "4.4.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 5.275782,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.376207,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 106.367761,
+              "start": 0,
+              "end": 11503043551,
+              "bytes": 5013505,
+              "first_byte_ms": 206.781103,
+              "status": 200,
+              "aborted": true,
+              "duration": 633.444243,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 358.508915,
+              "start": 11502978016,
+              "end": 11503043551,
+              "bytes": 65536,
+              "first_byte_ms": 459.824266,
+              "status": 206,
+              "duration": 107.59164099999998,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 466.585891,
+              "start": 11498832843,
+              "end": 11502978015,
+              "bytes": 4145173,
+              "first_byte_ms": 566.878488,
+              "status": 206,
+              "duration": 235.10217200000005,
+              "id": 3
+            },
+            {
+              "method": "HEAD",
+              "time": 747.593338,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.23864200000003,
+              "id": 4
+            },
+            {
+              "method": "HEAD",
+              "time": 850.40508,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.79225799999995,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 951.320903,
+              "start": 11502978016,
+              "end": 11503043551,
+              "bytes": 65536,
+              "first_byte_ms": 1051.592266,
+              "status": 206,
+              "duration": 102.98410100000001,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 1054.731897,
+              "start": 11498832843,
+              "end": 11502978015,
+              "bytes": 4145173,
+              "first_byte_ms": 1155.124807,
+              "status": 206,
+              "duration": 186.9995210000002,
+              "id": 7
+            },
+            {
+              "method": "GET",
+              "time": 1296.93639,
+              "start": 6566906,
+              "end": 6580911,
+              "bytes": 14006,
+              "first_byte_ms": 1397.252185,
+              "status": 206,
+              "duration": 100.67933900000003,
+              "id": 8
+            },
+            {
+              "method": "GET",
+              "time": 1400.639612,
+              "start": 4,
+              "end": 1615203,
+              "bytes": 1615200,
+              "first_byte_ms": 1500.951462,
+              "status": 206,
+              "duration": 134.22404000000006,
+              "id": 9
+            }
+          ],
+          "elapsed_ms": 1598.455368,
+          "result_rows": 1,
+          "result_verified": true
+        }
+      ]
+    },
+    {
+      "name": "hits-rows-500000.parquet",
+      "label": "500,000 rows/group \u00b7 200 groups \u00b7 11.50 GB \u00b7 simulated S3",
+      "size": 11500541963,
+      "row_groups": 200,
+      "target": 500000,
+      "engines": [
+        {
+          "name": "duckdb",
+          "version": "1.5.6",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 1.063733,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.3238,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 101.995496,
+              "start": 11500279819,
+              "end": 11500541962,
+              "bytes": 262144,
+              "first_byte_ms": 202.373508,
+              "status": 206,
+              "duration": 168.383846,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 270.88968,
+              "start": 11498832843,
+              "end": 11500541954,
+              "bytes": 1709112,
+              "first_byte_ms": 371.210516,
+              "status": 206,
+              "duration": 200.985632,
+              "id": 2
+            },
+            {
+              "method": "HEAD",
+              "time": 496.713204,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.37184400000001,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 597.387794,
+              "start": 11500279819,
+              "end": 11500541962,
+              "bytes": 262144,
+              "first_byte_ms": 698.117442,
+              "status": 206,
+              "duration": 108.39145199999996,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 706.083725,
+              "start": 11498832843,
+              "end": 11500541954,
+              "bytes": 1709112,
+              "first_byte_ms": 806.819999,
+              "status": 206,
+              "duration": 142.313803,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 884.620484,
+              "start": 4,
+              "end": 4038003,
+              "bytes": 4038000,
+              "first_byte_ms": 984.940959,
+              "status": 206,
+              "duration": 184.77033499999993,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 1073.853383,
+              "start": 16294319,
+              "end": 16329324,
+              "bytes": 35006,
+              "first_byte_ms": 1174.379601,
+              "status": 206,
+              "duration": 103.29815500000018,
+              "id": 7
+            }
+          ],
+          "elapsed_ms": 1230.620559,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "polars",
+          "version": "2.0.0",
+          "requests": [
+            {
+              "method": "GET",
+              "time": 7.776515,
+              "start": 11500279819,
+              "end": 11500541962,
+              "bytes": 262144,
+              "first_byte_ms": 108.16898,
+              "status": 206,
+              "duration": 168.258421,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 176.378457,
+              "start": 11498832843,
+              "end": 11500541962,
+              "bytes": 1709120,
+              "first_byte_ms": 276.685681,
+              "status": 206,
+              "duration": 200.513725,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 391.063432,
+              "start": 4,
+              "end": 4038003,
+              "bytes": 4038000,
+              "first_byte_ms": 491.360115,
+              "status": 206,
+              "duration": 225.47042800000003,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 391.482146,
+              "start": 16294319,
+              "end": 16329324,
+              "bytes": 35006,
+              "first_byte_ms": 492.560336,
+              "status": 206,
+              "duration": 104.340552,
+              "id": 3
+            }
+          ],
+          "elapsed_ms": 650.911643,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "datafusion",
+          "version": "54.1.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 3.034463,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.398234,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 106.602516,
+              "start": 11500017675,
+              "end": 11500541962,
+              "bytes": 524288,
+              "first_byte_ms": 207.038484,
+              "status": 206,
+              "duration": 203.46804100000003,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 310.423471,
+              "start": 11498832843,
+              "end": 11500541954,
+              "bytes": 1709112,
+              "first_byte_ms": 410.775039,
+              "status": 206,
+              "duration": 190.78162199999997,
+              "id": 2
+            },
+            {
+              "method": "HEAD",
+              "time": 513.622844,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.22896800000001,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 633.324852,
+              "start": 4,
+              "end": 4038003,
+              "bytes": 4038000,
+              "first_byte_ms": 733.825177,
+              "status": 206,
+              "duration": 206.1011900000001,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 633.885548,
+              "start": 16294319,
+              "end": 16329324,
+              "bytes": 35006,
+              "first_byte_ms": 734.75553,
+              "status": 206,
+              "duration": 102.59291000000007,
+              "id": 5
+            }
+          ],
+          "elapsed_ms": 929.240564,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "clickhouse",
+          "version": "4.4.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 7.114367,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.323152,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 107.959477,
+              "start": 0,
+              "end": 11500541962,
+              "bytes": 5013505,
+              "first_byte_ms": 208.950508,
+              "status": 200,
+              "aborted": true,
+              "duration": 542.901569,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 364.327421,
+              "start": 11500476427,
+              "end": 11500541962,
+              "bytes": 65536,
+              "first_byte_ms": 465.114025,
+              "status": 206,
+              "duration": 106.994777,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 471.854493,
+              "start": 11498832843,
+              "end": 11500476426,
+              "bytes": 1643584,
+              "first_byte_ms": 572.197184,
+              "status": 206,
+              "duration": 158.95000299999998,
+              "id": 3
+            },
+            {
+              "method": "HEAD",
+              "time": 657.524866,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.255357,
+              "id": 4
+            },
+            {
+              "method": "HEAD",
+              "time": 760.662727,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.265894,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 861.837738,
+              "start": 11500476427,
+              "end": 11500541962,
+              "bytes": 65536,
+              "first_byte_ms": 962.194141,
+              "status": 206,
+              "duration": 101.73378000000002,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 964.055987,
+              "start": 11498832843,
+              "end": 11500476426,
+              "bytes": 1643584,
+              "first_byte_ms": 1064.380189,
+              "status": 206,
+              "duration": 136.175663,
+              "id": 7
+            },
+            {
+              "method": "GET",
+              "time": 1133.575811,
+              "start": 16294319,
+              "end": 16329324,
+              "bytes": 35006,
+              "first_byte_ms": 1234.14572,
+              "status": 206,
+              "duration": 101.9003110000001,
+              "id": 8
+            },
+            {
+              "method": "GET",
+              "time": 1242.769634,
+              "start": 4,
+              "end": 4038003,
+              "bytes": 4038000,
+              "first_byte_ms": 1343.14051,
+              "status": 206,
+              "duration": 187.98134200000004,
+              "id": 9
+            }
+          ],
+          "elapsed_ms": 1489.332976,
+          "result_rows": 1,
+          "result_verified": true
+        }
+      ]
+    },
+    {
+      "name": "hits-rows-1000000.parquet",
+      "label": "1,000,000 rows/group \u00b7 100 groups \u00b7 11.50 GB \u00b7 simulated S3",
+      "size": 11499691978,
+      "row_groups": 100,
+      "target": 1000000,
+      "engines": [
+        {
+          "name": "duckdb",
+          "version": "1.5.6",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 1.189846,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.358477,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 101.869704,
+              "start": 11499429834,
+              "end": 11499691977,
+              "bytes": 262144,
+              "first_byte_ms": 202.21448,
+              "status": 206,
+              "duration": 168.13173799999998,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 270.559702,
+              "start": 11498832843,
+              "end": 11499691977,
+              "bytes": 859135,
+              "first_byte_ms": 370.922591,
+              "status": 206,
+              "duration": 155.170925,
+              "id": 2
+            },
+            {
+              "method": "HEAD",
+              "time": 440.053511,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.30332900000002,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 540.703809,
+              "start": 11499429834,
+              "end": 11499691977,
+              "bytes": 262144,
+              "first_byte_ms": 640.999564,
+              "status": 206,
+              "duration": 108.57064700000001,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 649.655488,
+              "start": 11498832843,
+              "end": 11499691977,
+              "bytes": 859135,
+              "first_byte_ms": 749.92083,
+              "status": 206,
+              "duration": 122.40375500000005,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 794.307643,
+              "start": 4,
+              "end": 8076003,
+              "bytes": 8076000,
+              "first_byte_ms": 894.649269,
+              "status": 206,
+              "duration": 270.3670840000001,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 1072.657391,
+              "start": 24331140,
+              "end": 24401158,
+              "bytes": 70019,
+              "first_byte_ms": 1173.115135,
+              "status": 206,
+              "duration": 102.28912800000012,
+              "id": 7
+            }
+          ],
+          "elapsed_ms": 1237.730272,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "polars",
+          "version": "2.0.0",
+          "requests": [
+            {
+              "method": "GET",
+              "time": 11.154031,
+              "start": 11499429834,
+              "end": 11499691977,
+              "bytes": 262144,
+              "first_byte_ms": 111.568849,
+              "status": 206,
+              "duration": 168.200329,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 179.714196,
+              "start": 11498832843,
+              "end": 11499691977,
+              "bytes": 859135,
+              "first_byte_ms": 280.023445,
+              "status": 206,
+              "duration": 155.300783,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 350.131388,
+              "start": 4,
+              "end": 8076003,
+              "bytes": 8076000,
+              "first_byte_ms": 450.441166,
+              "status": 206,
+              "duration": 344.88272699999993,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 350.579674,
+              "start": 24331140,
+              "end": 24401158,
+              "bytes": 70019,
+              "first_byte_ms": 451.796197,
+              "status": 206,
+              "duration": 107.30262699999997,
+              "id": 3
+            }
+          ],
+          "elapsed_ms": 740.087791,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "datafusion",
+          "version": "54.1.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 2.387552,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.338453,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 103.809069,
+              "start": 11499167690,
+              "end": 11499691977,
+              "bytes": 524288,
+              "first_byte_ms": 204.143409,
+              "status": 206,
+              "duration": 202.09600100000003,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 306.215058,
+              "start": 11498832843,
+              "end": 11499691969,
+              "bytes": 859127,
+              "first_byte_ms": 406.472962,
+              "status": 206,
+              "duration": 148.368071,
+              "id": 2
+            },
+            {
+              "method": "HEAD",
+              "time": 461.043953,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.20270300000004,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 570.556302,
+              "start": 4,
+              "end": 8076003,
+              "bytes": 8076000,
+              "first_byte_ms": 670.833941,
+              "status": 206,
+              "duration": 302.185608,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 571.088907,
+              "start": 24331140,
+              "end": 24401158,
+              "bytes": 70019,
+              "first_byte_ms": 671.854699,
+              "status": 206,
+              "duration": 105.33023100000003,
+              "id": 5
+            }
+          ],
+          "elapsed_ms": 933.331253,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "clickhouse",
+          "version": "4.4.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 5.431441,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.307812,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 106.25726,
+              "start": 0,
+              "end": 11499691977,
+              "bytes": 5013505,
+              "first_byte_ms": 206.569358,
+              "status": 200,
+              "aborted": true,
+              "duration": 509.346045,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 364.915117,
+              "start": 11499626442,
+              "end": 11499691977,
+              "bytes": 65536,
+              "first_byte_ms": 465.487231,
+              "status": 206,
+              "duration": 105.27753200000001,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 470.632251,
+              "start": 11498832843,
+              "end": 11499626441,
+              "bytes": 793599,
+              "first_byte_ms": 571.636782,
+              "status": 206,
+              "duration": 136.67722200000003,
+              "id": 3
+            },
+            {
+              "method": "HEAD",
+              "time": 623.952763,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.20265199999994,
+              "id": 4
+            },
+            {
+              "method": "HEAD",
+              "time": 726.866399,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.21445300000005,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 827.8956,
+              "start": 11499626442,
+              "end": 11499691977,
+              "bytes": 65536,
+              "first_byte_ms": 928.207584,
+              "status": 206,
+              "duration": 101.70469700000001,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 930.032609,
+              "start": 11498832843,
+              "end": 11499626441,
+              "bytes": 793599,
+              "first_byte_ms": 1030.303995,
+              "status": 206,
+              "duration": 116.82096000000013,
+              "id": 7
+            },
+            {
+              "method": "GET",
+              "time": 1062.203687,
+              "start": 24331140,
+              "end": 24401158,
+              "bytes": 70019,
+              "first_byte_ms": 1162.46301,
+              "status": 206,
+              "duration": 102.01689600000009,
+              "id": 8
+            },
+            {
+              "method": "GET",
+              "time": 1167.944482,
+              "start": 4,
+              "end": 8076003,
+              "bytes": 8076000,
+              "first_byte_ms": 1268.21829,
+              "status": 206,
+              "duration": 268.96997399999987,
+              "id": 9
+            }
+          ],
+          "elapsed_ms": 1504.48863,
+          "result_rows": 1,
+          "result_verified": true
+        }
+      ]
+    },
+    {
+      "name": "hits-rows-2000000.parquet",
+      "label": "2,000,000 rows/group \u00b7 50 groups \u00b7 11.50 GB \u00b7 simulated S3",
+      "size": 11499275128,
+      "row_groups": 50,
+      "target": 2000000,
+      "engines": [
+        {
+          "name": "duckdb",
+          "version": "1.5.6",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 1.42935,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.283104,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 102.05126,
+              "start": 11499012984,
+              "end": 11499275127,
+              "bytes": 262144,
+              "first_byte_ms": 202.359526,
+              "status": 206,
+              "duration": 168.002727,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 270.747306,
+              "start": 11498832843,
+              "end": 11499275127,
+              "bytes": 442285,
+              "first_byte_ms": 370.992216,
+              "status": 206,
+              "duration": 129.97268000000003,
+              "id": 2
+            },
+            {
+              "method": "HEAD",
+              "time": 411.045535,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.21551200000005,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 511.582423,
+              "start": 11499012984,
+              "end": 11499275127,
+              "bytes": 262144,
+              "first_byte_ms": 611.854862,
+              "status": 206,
+              "duration": 108.95345700000001,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 620.987369,
+              "start": 11498832843,
+              "end": 11499275127,
+              "bytes": 442285,
+              "first_byte_ms": 721.279458,
+              "status": 206,
+              "duration": 112.55898400000001,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 749.437942,
+              "start": 4,
+              "end": 16152003,
+              "bytes": 16152000,
+              "first_byte_ms": 849.765081,
+              "status": 206,
+              "duration": 462.9339909999999,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 1229.884672,
+              "start": 48528498,
+              "end": 48668554,
+              "bytes": 140057,
+              "first_byte_ms": 1330.541644,
+              "status": 206,
+              "duration": 104.12156100000016,
+              "id": 7
+            }
+          ],
+          "elapsed_ms": 1462.414602,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "polars",
+          "version": "2.0.0",
+          "requests": [
+            {
+              "method": "GET",
+              "time": 8.328914,
+              "start": 11499012984,
+              "end": 11499275127,
+              "bytes": 262144,
+              "first_byte_ms": 108.687117,
+              "status": 206,
+              "duration": 168.212287,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 176.801886,
+              "start": 11498832843,
+              "end": 11499275127,
+              "bytes": 442285,
+              "first_byte_ms": 277.152175,
+              "status": 206,
+              "duration": 130.46415199999998,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 318.387633,
+              "start": 4,
+              "end": 8076003,
+              "bytes": 8076000,
+              "first_byte_ms": 418.662838,
+              "status": 206,
+              "duration": 499.435487,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 318.773109,
+              "start": 8076004,
+              "end": 16152003,
+              "bytes": 8076000,
+              "first_byte_ms": 420.099638,
+              "status": 206,
+              "duration": 499.324983,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 319.113309,
+              "start": 48528498,
+              "end": 48668554,
+              "bytes": 140057,
+              "first_byte_ms": 420.215115,
+              "status": 206,
+              "duration": 119.05779999999999,
+              "id": 4
+            }
+          ],
+          "elapsed_ms": 871.628439,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "datafusion",
+          "version": "54.1.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 2.151002,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.369103,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 103.804835,
+              "start": 11498750840,
+              "end": 11499275127,
+              "bytes": 524288,
+              "first_byte_ms": 204.215605,
+              "status": 206,
+              "duration": 202.788043,
+              "id": 1
+            },
+            {
+              "method": "HEAD",
+              "time": 310.917432,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.244756,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 420.69495,
+              "start": 4,
+              "end": 16152003,
+              "bytes": 16152000,
+              "first_byte_ms": 521.062556,
+              "status": 206,
+              "duration": 545.672509,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 421.297744,
+              "start": 48528498,
+              "end": 48668554,
+              "bytes": 140057,
+              "first_byte_ms": 522.432879,
+              "status": 206,
+              "duration": 111.62337799999995,
+              "id": 4
+            }
+          ],
+          "elapsed_ms": 1036.726989,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "clickhouse",
+          "version": "4.4.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 8.398884,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 101.22625500000001,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 113.881753,
+              "start": 0,
+              "end": 11499275127,
+              "bytes": 5013505,
+              "first_byte_ms": 214.979787,
+              "status": 200,
+              "aborted": true,
+              "duration": 481.98147700000004,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 366.995358,
+              "start": 11499209592,
+              "end": 11499275127,
+              "bytes": 65536,
+              "first_byte_ms": 467.726412,
+              "status": 206,
+              "duration": 106.99129099999999,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 474.479629,
+              "start": 11498832843,
+              "end": 11499209591,
+              "bytes": 376749,
+              "first_byte_ms": 574.75355,
+              "status": 206,
+              "duration": 114.153795,
+              "id": 3
+            },
+            {
+              "method": "HEAD",
+              "time": 603.572897,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.29448000000002,
+              "id": 4
+            },
+            {
+              "method": "HEAD",
+              "time": 706.729596,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.73196099999996,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 807.580017,
+              "start": 11499209592,
+              "end": 11499275127,
+              "bytes": 65536,
+              "first_byte_ms": 907.873145,
+              "status": 206,
+              "duration": 101.76485300000002,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 909.631121,
+              "start": 11498832843,
+              "end": 11499209591,
+              "bytes": 376749,
+              "first_byte_ms": 1009.934501,
+              "status": 206,
+              "duration": 108.12538600000005,
+              "id": 7
+            },
+            {
+              "method": "GET",
+              "time": 1023.616438,
+              "start": 48528498,
+              "end": 48668554,
+              "bytes": 140057,
+              "first_byte_ms": 1123.88729,
+              "status": 206,
+              "duration": 103.27368899999988,
+              "id": 8
+            },
+            {
+              "method": "GET",
+              "time": 1130.69282,
+              "start": 4,
+              "end": 16152003,
+              "bytes": 16152000,
+              "first_byte_ms": 1230.941183,
+              "status": 206,
+              "duration": 436.47349800000006,
+              "id": 9
+            }
+          ],
+          "elapsed_ms": 1631.238807,
+          "result_rows": 1,
+          "result_verified": true
+        }
+      ]
+    },
+    {
+      "name": "hits-rows-5000000.parquet",
+      "label": "5,000,000 rows/group \u00b7 20 groups \u00b7 11.50 GB \u00b7 simulated S3",
+      "size": 11499017082,
+      "row_groups": 20,
+      "target": 5000000,
+      "engines": [
+        {
+          "name": "duckdb",
+          "version": "1.5.6",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 1.544393,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.34217100000001,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 102.214513,
+              "start": 11498754938,
+              "end": 11499017081,
+              "bytes": 262144,
+              "first_byte_ms": 202.597599,
+              "status": 206,
+              "duration": 168.205106,
+              "id": 1
+            },
+            {
+              "method": "HEAD",
+              "time": 275.205617,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.25274099999996,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 375.760086,
+              "start": 11498754938,
+              "end": 11499017081,
+              "bytes": 262144,
+              "first_byte_ms": 476.022174,
+              "status": 206,
+              "duration": 112.414603,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 496.598017,
+              "start": 4,
+              "end": 40380003,
+              "bytes": 40380000,
+              "first_byte_ms": 596.950958,
+              "status": 206,
+              "duration": 1031.440406,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 1572.162249,
+              "start": 161470390,
+              "end": 161820702,
+              "bytes": 350313,
+              "first_byte_ms": 1672.750251,
+              "status": 206,
+              "duration": 108.46093700000006,
+              "id": 5
+            }
+          ],
+          "elapsed_ms": 1881.894551,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "polars",
+          "version": "2.0.0",
+          "requests": [
+            {
+              "method": "GET",
+              "time": 9.068644,
+              "start": 11498754938,
+              "end": 11499017081,
+              "bytes": 262144,
+              "first_byte_ms": 109.395047,
+              "status": 206,
+              "duration": 168.312689,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 188.332074,
+              "start": 4,
+              "end": 8076003,
+              "bytes": 8076000,
+              "first_byte_ms": 288.680456,
+              "status": 206,
+              "duration": 876.4098639999999,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 188.641745,
+              "start": 8076004,
+              "end": 16152003,
+              "bytes": 8076000,
+              "first_byte_ms": 291.219042,
+              "status": 206,
+              "duration": 876.886128,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 189.003754,
+              "start": 16152004,
+              "end": 24228003,
+              "bytes": 8076000,
+              "first_byte_ms": 291.255845,
+              "status": 206,
+              "duration": 876.2685299999999,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 189.264638,
+              "start": 24228004,
+              "end": 32304003,
+              "bytes": 8076000,
+              "first_byte_ms": 291.008959,
+              "status": 206,
+              "duration": 875.8394010000001,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 189.566687,
+              "start": 161470390,
+              "end": 161820702,
+              "bytes": 350313,
+              "first_byte_ms": 291.190784,
+              "status": 206,
+              "duration": 195.778186,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 1065.003502,
+              "start": 32304004,
+              "end": 40380003,
+              "bytes": 8076000,
+              "first_byte_ms": 1165.332708,
+              "status": 206,
+              "duration": 271.2859249999999,
+              "id": 6
+            }
+          ],
+          "elapsed_ms": 1418.433449,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "datafusion",
+          "version": "54.1.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 3.125924,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.323334,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 104.341079,
+              "start": 11498492794,
+              "end": 11499017081,
+              "bytes": 524288,
+              "first_byte_ms": 204.677192,
+              "status": 206,
+              "duration": 202.209069,
+              "id": 1
+            },
+            {
+              "method": "HEAD",
+              "time": 310.487179,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.205647,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 418.467105,
+              "start": 4,
+              "end": 40380003,
+              "bytes": 40380000,
+              "first_byte_ms": 518.817506,
+              "status": 206,
+              "duration": 1062.699202,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 419.044813,
+              "start": 161470390,
+              "end": 161820702,
+              "bytes": 350313,
+              "first_byte_ms": 520.270546,
+              "status": 206,
+              "duration": 127.85962800000004,
+              "id": 4
+            }
+          ],
+          "elapsed_ms": 1575.972396,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "clickhouse",
+          "version": "4.4.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 5.904045,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.335102,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 106.73859,
+              "start": 0,
+              "end": 11499017081,
+              "bytes": 5013505,
+              "first_byte_ms": 207.027479,
+              "status": 200,
+              "aborted": true,
+              "duration": 467.45960199999996,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 358.37968,
+              "start": 11498951546,
+              "end": 11499017081,
+              "bytes": 65536,
+              "first_byte_ms": 459.17207,
+              "status": 206,
+              "duration": 105.620161,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 464.391692,
+              "start": 11498832843,
+              "end": 11498951545,
+              "bytes": 118703,
+              "first_byte_ms": 564.639882,
+              "status": 206,
+              "duration": 104.79800500000005,
+              "id": 3
+            },
+            {
+              "method": "HEAD",
+              "time": 579.512022,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.217761,
+              "id": 4
+            },
+            {
+              "method": "HEAD",
+              "time": 682.17771,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.21638699999994,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 783.067469,
+              "start": 11498951546,
+              "end": 11499017081,
+              "bytes": 65536,
+              "first_byte_ms": 883.498418,
+              "status": 206,
+              "duration": 102.27514100000008,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 885.447662,
+              "start": 11498832843,
+              "end": 11498951545,
+              "bytes": 118703,
+              "first_byte_ms": 985.797656,
+              "status": 206,
+              "duration": 105.486219,
+              "id": 7
+            },
+            {
+              "method": "GET",
+              "time": 991.485923,
+              "start": 161470390,
+              "end": 161820702,
+              "bytes": 350313,
+              "first_byte_ms": 1091.775023,
+              "status": 206,
+              "duration": 107.65791899999999,
+              "id": 8
+            },
+            {
+              "method": "GET",
+              "time": 1102.25367,
+              "start": 4,
+              "end": 40380003,
+              "bytes": 40380000,
+              "first_byte_ms": 1202.552199,
+              "status": 206,
+              "duration": 952.8481379999998,
+              "id": 9
+            }
+          ],
+          "elapsed_ms": 2121.920499,
+          "result_rows": 1,
+          "result_verified": true
+        }
+      ]
+    },
+    {
+      "name": "hits-rows-10000000.parquet",
+      "label": "10,000,000 rows/group \u00b7 10 groups \u00b7 11.50 GB \u00b7 simulated S3",
+      "size": 11498930327,
+      "row_groups": 10,
+      "target": 10000000,
+      "engines": [
+        {
+          "name": "duckdb",
+          "version": "1.5.6",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 1.214712,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.315164,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 101.848482,
+              "start": 11498668183,
+              "end": 11498930326,
+              "bytes": 262144,
+              "first_byte_ms": 202.191993,
+              "status": 206,
+              "duration": 168.43457999999998,
+              "id": 1
+            },
+            {
+              "method": "HEAD",
+              "time": 273.339461,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.586724,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 374.26863,
+              "start": 11498668183,
+              "end": 11498930326,
+              "bytes": 262144,
+              "first_byte_ms": 474.58392,
+              "status": 206,
+              "duration": 112.64120300000002,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 490.57357,
+              "start": 4,
+              "end": 80760003,
+              "bytes": 80760000,
+              "first_byte_ms": 590.901214,
+              "status": 206,
+              "duration": 1850.293611,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 2416.422227,
+              "start": 316739244,
+              "end": 317439706,
+              "bytes": 700463,
+              "first_byte_ms": 2516.96774,
+              "status": 206,
+              "duration": 115.4276890000001,
+              "id": 5
+            }
+          ],
+          "elapsed_ms": 2841.281805,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "polars",
+          "version": "2.0.0",
+          "requests": [
+            {
+              "method": "GET",
+              "time": 8.964597,
+              "start": 11498668183,
+              "end": 11498930326,
+              "bytes": 262144,
+              "first_byte_ms": 109.341535,
+              "status": 206,
+              "duration": 168.206357,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 186.584896,
+              "start": 4,
+              "end": 8076003,
+              "bytes": 8076000,
+              "first_byte_ms": 286.904994,
+              "status": 206,
+              "duration": 881.5651670000001,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 186.937806,
+              "start": 8076004,
+              "end": 16152003,
+              "bytes": 8076000,
+              "first_byte_ms": 289.423191,
+              "status": 206,
+              "duration": 884.085289,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 187.305783,
+              "start": 16152004,
+              "end": 24228003,
+              "bytes": 8076000,
+              "first_byte_ms": 289.484412,
+              "status": 206,
+              "duration": 884.008069,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 187.599693,
+              "start": 24228004,
+              "end": 32304003,
+              "bytes": 8076000,
+              "first_byte_ms": 289.23966,
+              "status": 206,
+              "duration": 883.1507150000001,
+              "id": 4
+            },
+            {
+              "method": "GET",
+              "time": 187.868533,
+              "start": 316739244,
+              "end": 317439706,
+              "bytes": 700463,
+              "first_byte_ms": 289.528981,
+              "status": 206,
+              "duration": 266.933612,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 1068.438552,
+              "start": 48456004,
+              "end": 56532003,
+              "bytes": 8076000,
+              "first_byte_ms": 1168.734952,
+              "status": 206,
+              "duration": 950.884296,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 1070.949576,
+              "start": 64608004,
+              "end": 72684003,
+              "bytes": 8076000,
+              "first_byte_ms": 1171.532485,
+              "status": 206,
+              "duration": 958.660451,
+              "id": 7
+            },
+            {
+              "method": "GET",
+              "time": 1071.193332,
+              "start": 32304004,
+              "end": 40380003,
+              "bytes": 8076000,
+              "first_byte_ms": 1171.676498,
+              "status": 206,
+              "duration": 959.267042,
+              "id": 8
+            },
+            {
+              "method": "GET",
+              "time": 1071.460922,
+              "start": 56532004,
+              "end": 64608003,
+              "bytes": 8076000,
+              "first_byte_ms": 1173.612704,
+              "status": 206,
+              "duration": 961.6604150000001,
+              "id": 9
+            },
+            {
+              "method": "GET",
+              "time": 1087.93482,
+              "start": 40380004,
+              "end": 48456003,
+              "bytes": 8076000,
+              "first_byte_ms": 1190.032879,
+              "status": 206,
+              "duration": 953.0891799999999,
+              "id": 10
+            },
+            {
+              "method": "GET",
+              "time": 1088.20666,
+              "start": 72684004,
+              "end": 80760003,
+              "bytes": 8076000,
+              "first_byte_ms": 1190.664625,
+              "status": 206,
+              "duration": 953.090158,
+              "id": 11
+            }
+          ],
+          "elapsed_ms": 2175.38014,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "datafusion",
+          "version": "54.1.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 2.418252,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.29868300000001,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 103.501743,
+              "start": 11498406039,
+              "end": 11498930326,
+              "bytes": 524288,
+              "first_byte_ms": 203.828315,
+              "status": 206,
+              "duration": 202.16542,
+              "id": 1
+            },
+            {
+              "method": "HEAD",
+              "time": 310.06943,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.228183,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 417.939239,
+              "start": 4,
+              "end": 80760003,
+              "bytes": 80760000,
+              "first_byte_ms": 518.578982,
+              "status": 206,
+              "duration": 1907.2574470000002,
+              "id": 3
+            },
+            {
+              "method": "GET",
+              "time": 418.488352,
+              "start": 316739244,
+              "end": 317439706,
+              "bytes": 700463,
+              "first_byte_ms": 519.983764,
+              "status": 206,
+              "duration": 151.65561599999995,
+              "id": 4
+            }
+          ],
+          "elapsed_ms": 2455.157332,
+          "result_rows": 1,
+          "result_verified": true
+        },
+        {
+          "name": "clickhouse",
+          "version": "4.4.0",
+          "requests": [
+            {
+              "method": "HEAD",
+              "time": 8.383637,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.329621,
+              "id": 0
+            },
+            {
+              "method": "GET",
+              "time": 109.233766,
+              "start": 0,
+              "end": 11498930326,
+              "bytes": 5013505,
+              "first_byte_ms": 209.529151,
+              "status": 200,
+              "aborted": true,
+              "duration": 462.661997,
+              "id": 1
+            },
+            {
+              "method": "GET",
+              "time": 361.324172,
+              "start": 11498864791,
+              "end": 11498930326,
+              "bytes": 65536,
+              "first_byte_ms": 461.877731,
+              "status": 206,
+              "duration": 105.38863400000002,
+              "id": 2
+            },
+            {
+              "method": "GET",
+              "time": 467.167342,
+              "start": 11498832843,
+              "end": 11498864790,
+              "bytes": 31948,
+              "first_byte_ms": 567.447571,
+              "status": 206,
+              "duration": 101.50482399999993,
+              "id": 3
+            },
+            {
+              "method": "HEAD",
+              "time": 578.258371,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.21713199999999,
+              "id": 4
+            },
+            {
+              "method": "HEAD",
+              "time": 681.784293,
+              "start": null,
+              "end": null,
+              "bytes": 0,
+              "first_byte_ms": null,
+              "status": 200,
+              "duration": 100.22679299999993,
+              "id": 5
+            },
+            {
+              "method": "GET",
+              "time": 782.808617,
+              "start": 11498864791,
+              "end": 11498930326,
+              "bytes": 65536,
+              "first_byte_ms": 883.10368,
+              "status": 206,
+              "duration": 101.84487899999999,
+              "id": 6
+            },
+            {
+              "method": "GET",
+              "time": 885.511756,
+              "start": 11498832843,
+              "end": 11498864790,
+              "bytes": 31948,
+              "first_byte_ms": 985.781298,
+              "status": 206,
+              "duration": 100.96951999999999,
+              "id": 7
+            },
+            {
+              "method": "GET",
+              "time": 988.685908,
+              "start": 316739244,
+              "end": 317439706,
+              "bytes": 700463,
+              "first_byte_ms": 1088.97321,
+              "status": 206,
+              "duration": 115.33161099999995,
+              "id": 8
+            },
+            {
+              "method": "GET",
+              "time": 1106.756555,
+              "start": 4,
+              "end": 80760003,
+              "bytes": 80760000,
+              "first_byte_ms": 1207.028377,
+              "status": 206,
+              "duration": 1834.856683,
+              "id": 9
+            }
+          ],
+          "elapsed_ms": 3020.711998,
+          "result_rows": 1,
+          "result_verified": true
+        }
+      ]
+    }
+  ],
+  "source": {
+    "source_url": "https://clickhouse-public-datasets.s3.amazonaws.com/hits_compatible/hits.parquet",
+    "source_size": 14779976446,
+    "source_sha256": "a390f6cb782f6aaef278c72fc1dd86c4f30bc843ebab3c159e9bd4d45ddb079f",
+    "rows": 99997497,
+    "columns": 105,
+    "compression": "ZSTD",
+    "compression_level": 3,
+    "use_dictionary": false,
+    "all_values_verified": true
+  },
+  "page_preserving_repacking": true
+}

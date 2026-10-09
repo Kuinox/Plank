@@ -1,0 +1,9 @@
+{
+  "numpy": "2.5.3",
+  "fastparquet": "2026.9.0",
+  "pyarrow": "25.0.1",
+  "duckdb": "1.5.6",
+  "polars": "2.0.0",
+  "datafusion": "54.1.0",
+  "chdb": "4.4.0"
+}

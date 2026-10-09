@@ -1,0 +1,5 @@
+.venv/
+work/
+*.parquet
+*.parquet.part-*
+*.incomplete
