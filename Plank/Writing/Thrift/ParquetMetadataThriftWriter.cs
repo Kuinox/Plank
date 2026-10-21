@@ -922,20 +922,20 @@ static class ParquetMetadataThriftWriter
             ColumnStatistics.ColumnStatisticsValueKind.UInt32 or
             ColumnStatistics.ColumnStatisticsValueKind.UInt64);
         if (writeLegacyMinMax)
+        {
             WriteStatisticsValue(ref writer, 1, statistics, writeMax: true);
-        if (writeLegacyMinMax)
             WriteStatisticsValue(ref writer, 2, statistics, writeMax: false);
+        }
         writer.WriteFieldI64(3, statistics.NullCount);
         if (statistics.DistinctCount >= 0)
             writer.WriteFieldI64(4, statistics.DistinctCount);
         if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
+        {
             WriteStatisticsValue(ref writer, 5, statistics, writeMax: true);
-        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
             WriteStatisticsValue(ref writer, 6, statistics, writeMax: false);
-        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
             writer.WriteFieldBool(7, true);
-        if (statistics.ValueKind != ColumnStatistics.ColumnStatisticsValueKind.None)
             writer.WriteFieldBool(8, true);
+        }
         if (statistics.NanCount >= 0)
             writer.WriteFieldI64(9, statistics.NanCount);
         writer.EndStruct(previous);
