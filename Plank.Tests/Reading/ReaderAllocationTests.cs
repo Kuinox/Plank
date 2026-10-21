@@ -786,6 +786,10 @@ internal sealed class ReaderAllocationTests
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
+            // Refill the shared pool as CompressionAllocationTests.MeasureSteadyStateAllocations explains.
+            GC.WaitForPendingFinalizers();
+            _ = SumValues(rowGroup, schema.LeafColumns[0]);
+
             var before = GC.GetAllocatedBytesForCurrentThread();
             _ = SumValues(rowGroup, schema.LeafColumns[0]);
             var after = GC.GetAllocatedBytesForCurrentThread();

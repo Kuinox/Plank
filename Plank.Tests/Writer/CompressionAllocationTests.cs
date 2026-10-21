@@ -78,6 +78,11 @@ internal sealed class CompressionAllocationTests
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
+            // Under high memory pressure every gen-2 GC empties ArrayPool<T>.Shared, which holds Snappier's buffers.
+            // The pool is emptied from a finalizer, so wait for it and then refill the pool with one more call.
+            GC.WaitForPendingFinalizers();
+            Compression.Compress(codec, GetDefaultCompressionLevel(codec), context, ref source, ref destination);
+
             var before = GC.GetAllocatedBytesForCurrentThread();
             Compression.Compress(codec, GetDefaultCompressionLevel(codec), context, ref source, ref destination);
             var after = GC.GetAllocatedBytesForCurrentThread();

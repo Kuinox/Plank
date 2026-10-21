@@ -331,6 +331,10 @@ internal sealed class WriterAllocationTests
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
+        // Refill the shared pool as CompressionAllocationTests.MeasureSteadyStateAllocations explains.
+        GC.WaitForPendingFinalizers();
+        WriteOneRowGroup(writer, stream, serialized, values);
+
         var before = GC.GetAllocatedBytesForCurrentThread();
         WriteOneRowGroup(writer, stream, serialized, values);
         var after = GC.GetAllocatedBytesForCurrentThread();
