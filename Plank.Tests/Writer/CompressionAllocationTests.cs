@@ -7,13 +7,10 @@ namespace Plank.Tests.Writer;
 [NotInParallel]
 internal sealed class CompressionAllocationTests
 {
-    // Snappier 1.3.1 creates per-operation compressor state. Remove this budget when its reusable API ships.
-    const long ManagedSnappyAllocationBudget = 48;
-
+    // Snappier allocates per operation; include Snappy when its reusable codec API is adopted.
     static readonly CompressionKind[] _compressionKinds =
     [
         CompressionKind.None,
-        CompressionKind.Snappy,
         CompressionKind.Gzip,
         CompressionKind.Zstd,
         CompressionKind.Lz4,
@@ -21,43 +18,38 @@ internal sealed class CompressionAllocationTests
     ];
 
     [Test]
-    public void CompressionCodecsStayWithinAllocationBudgetAfterWarmupForContiguousInput()
+    public void CompressionCodecsDoNotAllocateAfterWarmupForContiguousInput()
     {
         var failures = new List<string>();
         for (var i = 0; i < _compressionKinds.Length; i++)
         {
             var codec = _compressionKinds[i];
             var allocated = MeasureSteadyStateAllocations(codec, multiSegmentInput: false);
-            var budget = GetAllocationBudget(codec);
-            if (allocated > budget)
-                failures.Add($"codec '{codec}' allocated {allocated} bytes with a {budget}-byte budget.");
+            if (allocated != 0)
+                failures.Add($"codec '{codec}' allocated {allocated} bytes; expected zero.");
         }
 
         if (failures.Count > 0)
             throw new InvalidOperationException(
-                $"Compression allocation budgets were exceeded for contiguous input. Failures: {string.Join(' ', failures)}");
+                $"Expected zero compression allocations for contiguous input. Failures: {string.Join(' ', failures)}");
     }
 
     [Test]
-    public void CompressionCodecsStayWithinAllocationBudgetAfterWarmupForSegmentedInput()
+    public void CompressionCodecsDoNotAllocateAfterWarmupForSegmentedInput()
     {
         var failures = new List<string>();
         for (var i = 0; i < _compressionKinds.Length; i++)
         {
             var codec = _compressionKinds[i];
             var allocated = MeasureSteadyStateAllocations(codec, multiSegmentInput: true);
-            var budget = GetAllocationBudget(codec);
-            if (allocated > budget)
-                failures.Add($"codec '{codec}' allocated {allocated} bytes with a {budget}-byte budget.");
+            if (allocated != 0)
+                failures.Add($"codec '{codec}' allocated {allocated} bytes; expected zero.");
         }
 
         if (failures.Count > 0)
             throw new InvalidOperationException(
-                $"Compression allocation budgets were exceeded for segmented input. Failures: {string.Join(' ', failures)}");
+                $"Expected zero compression allocations for segmented input. Failures: {string.Join(' ', failures)}");
     }
-
-    static long GetAllocationBudget(CompressionKind codec)
-        => codec == CompressionKind.Snappy ? ManagedSnappyAllocationBudget : 0;
 
     static long MeasureSteadyStateAllocations(CompressionKind codec, bool multiSegmentInput)
     {
