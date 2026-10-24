@@ -2998,19 +2998,14 @@ static class Encoding
                 {
                     while (rowsWritten < values.Length)
                     {
-                        var rowBytes = 0;
-                        if (useTargetPageBytes)
-                        {
-                            rowBytes = GetOptionalRowBytes<TSource?, TSource, NullableValueRow<TSource>>(
-                                column, in values[rowsWritten], presentValueBytes);
-                            if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
-                                break;
-                        }
+                        var rowBytes = GetOptionalRowBytes<TSource?, TSource, NullableValueRow<TSource>>(
+                            column, in values[rowsWritten], presentValueBytes);
+                        if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
+                            break;
 
                         rowsWritten++;
                         pageRowCount++;
-                        if (useTargetPageBytes)
-                            pageBytes = checked(pageBytes + rowBytes);
+                        pageBytes = checked(pageBytes + rowBytes);
                         if (rowsWritten == values.Length)
                             break;
                     }
