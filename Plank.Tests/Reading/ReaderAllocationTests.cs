@@ -31,13 +31,10 @@ internal sealed class ReaderAllocationTests
         Execution = new() { WorkerCount = 1 }
     };
 
-    // Snappier 1.3.1 creates per-operation decompressor state. Remove this budget when its reusable API ships.
-    const long ManagedSnappyAllocationBudget = 80;
-
+    // Snappier allocates per operation; include Snappy when its reusable codec API is adopted.
     static readonly CompressionKind[] _compressionKinds =
     [
         CompressionKind.None,
-        CompressionKind.Snappy,
         CompressionKind.Gzip,
         CompressionKind.Zstd,
         CompressionKind.Lz4,
@@ -467,7 +464,7 @@ internal sealed class ReaderAllocationTests
     }
 
     [Test]
-    public void CompressedColumnBufferEnumerationStaysWithinAllocationBudgetAfterWarmup()
+    public void CompressedColumnBufferEnumerationDoesNotAllocateAfterWarmup()
     {
         var failures = new List<string>();
         for (var i = 0; i < _compressionKinds.Length; i++)
@@ -476,9 +473,8 @@ internal sealed class ReaderAllocationTests
             try
             {
                 var allocated = MeasureCompressedColumnBufferEnumerationAllocations(compression);
-                var budget = compression == CompressionKind.Snappy ? ManagedSnappyAllocationBudget : 0;
-                if (allocated > budget)
-                    failures.Add($"codec '{compression}' allocated {allocated} bytes with a {budget}-byte budget.");
+                if (allocated != 0)
+                    failures.Add($"codec '{compression}' allocated {allocated} bytes; expected zero.");
             }
             catch (CorruptParquetException ex)
             {
@@ -488,7 +484,7 @@ internal sealed class ReaderAllocationTests
 
         if (failures.Count > 0)
             throw new InvalidOperationException(
-                $"Compressed column-buffer allocation budgets were exceeded. Failures: {string.Join(' ', failures)}");
+                $"Expected zero compressed column-buffer allocations. Failures: {string.Join(' ', failures)}");
     }
 
     [Test]

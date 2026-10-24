@@ -10,13 +10,10 @@ internal sealed class WriterAllocationTests
     [ThreadStatic]
     static WorkerAllocationTracker? _currentWorkerAllocationTracker;
 
-    // Snappier 1.3.1 creates per-operation compressor state. Remove this budget when its reusable API ships.
-    const long ManagedSnappyAllocationBudget = 48;
-
+    // Snappier allocates per operation; include Snappy when its reusable codec API is adopted.
     static readonly CompressionKind[] _compressionKinds =
     [
         CompressionKind.None,
-        CompressionKind.Snappy,
         CompressionKind.Gzip,
         CompressionKind.Zstd,
         CompressionKind.Lz4,
@@ -197,21 +194,20 @@ internal sealed class WriterAllocationTests
     }
 
     [Test]
-    public void CompressedWriteChainsStayWithinAllocationBudgetAfterWarmup()
+    public void CompressedWriteChainsDoNotAllocateAfterWarmup()
     {
         var failures = new List<string>();
         for (var i = 0; i < _compressionKinds.Length; i++)
         {
             var compression = _compressionKinds[i];
             var allocated = MeasureCompressedWriteChainAllocations(compression);
-            var budget = compression == CompressionKind.Snappy ? ManagedSnappyAllocationBudget : 0;
-            if (allocated > budget)
-                failures.Add($"codec '{compression}' allocated {allocated} bytes with a {budget}-byte budget.");
+            if (allocated != 0)
+                failures.Add($"codec '{compression}' allocated {allocated} bytes; expected zero.");
         }
 
         if (failures.Count > 0)
             throw new InvalidOperationException(
-                $"Compressed write-chain allocation budgets were exceeded. Failures: {string.Join(' ', failures)}");
+                $"Expected zero compressed write-chain allocations. Failures: {string.Join(' ', failures)}");
     }
 
     [Test]
