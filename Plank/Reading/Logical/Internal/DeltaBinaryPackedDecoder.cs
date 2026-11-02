@@ -75,6 +75,9 @@ static partial class DeltaBinaryPackedDecoder
         if (miniBlockSize % MiniBlockChunk != 0)
             throw new CorruptParquetException(
                 $"Delta binary packed mini-block size {miniBlockSize} is not a multiple of {MiniBlockChunk}.");
+        if ((long)miniBlockCount * miniBlockSize > int.MaxValue)
+            throw new NotSupportedException(
+                $"Delta binary packed block size {blockSize} exceeds the supported range.");
         if (miniBlockCount > MaxMiniBlockCount)
             throw new NotSupportedException(
                 $"Delta binary packed decoding supports at most {MaxMiniBlockCount} mini-blocks per block, "
@@ -86,11 +89,11 @@ static partial class DeltaBinaryPackedDecoder
     // A block costs at least one min-delta varint plus one bit-width byte per
     // mini-block, so this is the most values the bytes left could possibly hold.
     // It exists to stop a corrupt value count from driving a huge allocation.
-    static uint MaxPossibleValues(BlockLayout layout, int remainingBytes)
+    static long MaxPossibleValues(BlockLayout layout, int remainingBytes)
     {
-        var blockSize = layout.MiniBlockCount * layout.MiniBlockSize;
+        var blockSize = (long)layout.MiniBlockCount * layout.MiniBlockSize;
         var perByte = (blockSize + layout.MiniBlockCount) / (1 + layout.MiniBlockCount);
-        return (uint)remainingBytes * (uint)perByte + 2U;
+        return remainingBytes * perByte + 2;
     }
 
     internal static BatchState StartBatch(ReadOnlySpan<byte> payload, int expectedValueCount)
@@ -149,7 +152,7 @@ static partial class DeltaBinaryPackedDecoder
             // the final block have no payload and their widths are unspecified.
             var usedMiniBlocks = Math.Min(layout.MiniBlockCount,
                 1 + (remaining - 1) / layout.MiniBlockSize);
-            int encodedByteCount;
+            long encodedByteCount;
             if (usedMiniBlocks == 4)
             {
                 var width0 = payload[offset];
@@ -159,8 +162,8 @@ static partial class DeltaBinaryPackedDecoder
                 if (Math.Max(Math.Max(width0, width1), Math.Max(width2, width3)) > 64)
                     throw new CorruptParquetException(
                         "Delta binary packed mini-block bit width exceeds 64.");
-                encodedByteCount = checked(layout.MiniBlockSize / 8 *
-                    (width0 + width1 + width2 + width3));
+                encodedByteCount = (long)(layout.MiniBlockSize / 8) *
+                    (width0 + width1 + width2 + width3);
             }
             else
             {
@@ -171,14 +174,14 @@ static partial class DeltaBinaryPackedDecoder
                     if (bitWidth > 64)
                         throw new CorruptParquetException(
                             $"Delta binary packed mini-block bit width {bitWidth} exceeds 64.");
-                    encodedByteCount = checked(encodedByteCount + layout.MiniBlockSize * bitWidth / 8);
+                    encodedByteCount += (long)(layout.MiniBlockSize / 8) * bitWidth;
                 }
             }
             offset += layout.MiniBlockCount;
             if (encodedByteCount > payload.Length - offset)
                 throw new CorruptParquetException(
                     "Unexpected end of delta-binary-packed mini-block.");
-            offset += encodedByteCount;
+            offset += (int)encodedByteCount;
             remaining -= Math.Min(remaining, checked(layout.MiniBlockCount * layout.MiniBlockSize));
         }
         return offset;
@@ -349,7 +352,9 @@ static partial class DeltaBinaryPackedDecoder
             return ([], reader.Offset);
         }
 
-        var values = new int[checked((int)valueCount)];
+        if (valueCount > int.MaxValue)
+            throw new NotSupportedException("Delta binary packed value count exceeds the supported array size.");
+        var values = new int[(int)valueCount];
         ReadInt32Values(ref reader, values, layout);
 
         return (values, reader.Offset);
@@ -1147,7 +1152,9 @@ static partial class DeltaBinaryPackedDecoder
             return ([], reader.Offset);
         }
 
-        var values = new long[checked((int)valueCount)];
+        if (valueCount > int.MaxValue)
+            throw new NotSupportedException("Delta binary packed value count exceeds the supported array size.");
+        var values = new long[(int)valueCount];
         ReadInt64Values(ref reader, values, layout);
 
         return (values, reader.Offset);

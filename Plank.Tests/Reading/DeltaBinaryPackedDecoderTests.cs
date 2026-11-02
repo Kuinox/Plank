@@ -9,6 +9,39 @@ namespace Plank.Tests.Reading;
 internal sealed class DeltaBinaryPackedDecoderTests
 {
     [Test]
+    public void LargeBlockExceedsImplementationLimit()
+    {
+        // The reported page declares 2,527,943,296 values per block, four
+        // mini-blocks, 5,000 values, and 20 bits for the first mini-block.
+        byte[] payload = [0x80, 0xb5, 0xb5, 0xb5, 0x09, 4, 0x88, 0x27, 0,
+            0, 20, 20, 20, 20];
+        Assert.Throws<NotSupportedException>(() => DeltaBinaryPackedDecoder.StartBatch(payload, 5000));
+        Assert.Throws<NotSupportedException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(payload, 5000));
+
+        byte[] oneValue = [0x80, 0xb5, 0xb5, 0xb5, 0x09, 4, 1, 42];
+        Assert.Throws<NotSupportedException>(() => DeltaBinaryPackedDecoder.StartBatch(oneValue, 1));
+    }
+
+    [Test]
+    public void LargeSupportedBlockRejectsTruncatedPackedBytes()
+    {
+        // Both DELTA_LENGTH_BYTE_ARRAY and DELTA_BYTE_ARRAY use the scanner.
+        // Even with a supported block size, the packed byte count can exceed Int32.
+        const uint blockSize = 2147483520;
+        const int fourMiniBlocksValueCount = 1610612642;
+        foreach (var valueCount in new[] { 2, fourMiniBlocksValueCount })
+        {
+            var payload = new List<byte>();
+            WriteUnsignedVarIntReference(blockSize, payload);
+            WriteUnsignedVarIntReference(4, payload);
+            WriteUnsignedVarIntReference((uint)valueCount, payload);
+            payload.AddRange([0, 0, 64, 64, 64, 64]); // first value, min delta, widths
+            Assert.Throws<CorruptParquetException>(() =>
+                DeltaBinaryPackedDecoder.GetEncodedLength(payload.ToArray(), valueCount));
+        }
+    }
+
+    [Test]
     public void ConstantInt64DeltasPreserveWrappingTailsAndBatchBoundaries()
     {
         foreach (var (blockSize, miniBlocks) in new[] { (128, 1), (128, 2), (128, 4), (256, 4), (256, 8), (512, 16) })
