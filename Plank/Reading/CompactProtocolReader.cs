@@ -68,6 +68,8 @@ ref struct CompactProtocolReader
         type = (CompactProtocolType)(header & 0x0F);
         var delta = header >> 4;
         fieldId = delta == 0 ? ReadI16() : _lastFieldId + delta;
+        if (fieldId is < short.MinValue or > short.MaxValue)
+            throw new CorruptParquetException("Compact protocol field id exceeds the i16 range.");
         _lastFieldId = fieldId;
         inlineBool = type switch
         {

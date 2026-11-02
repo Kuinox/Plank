@@ -107,6 +107,24 @@ internal sealed class LargePageHeaderTests
     }
 
     [Test]
+    public void OverflowingFieldIdsStopTheHeaderProbe()
+    {
+        var (schema, file, _) = CreateFile(valueLength: 1000);
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(file));
+        var chunk = physical.Metadata.ColumnChunk(0, 0);
+        // Each inline bool field increments the Thrift field id by nine.
+        file.AsSpan(checked((int)chunk.ChunkOffset), checked((int)chunk.TotalCompressedSize)).Fill(0x91);
+        using var source = new TrackingReadSource(file);
+        using var reader = schema.CreateReader(source);
+        source.Reads.Clear();
+
+        Assert.Throws<CorruptParquetException>(() => reader.RowGroups[0].GetColumnMetadata(0).OpenPages());
+        if (source.Reads.Count > short.MaxValue / 9 + 1)
+            throw new InvalidOperationException($"Read {source.Reads.Count} header bytes despite i16 field ids.");
+    }
+
+    [Test]
     public void TruncatedHeaderCannotGrowPastItsPageBoundary()
     {
         var (_, file, _) = CreateFile();
