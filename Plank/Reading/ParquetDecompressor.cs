@@ -58,6 +58,10 @@ static class ParquetDecompressor
     {
         try
         {
+            // Snappier rents its internal buffer from the block's length preamble
+            // before checking the destination. Validate it against the page size first.
+            if (Snappier.Snappy.GetUncompressedLength(payload) != destination.Length)
+                throw new CorruptParquetException("Snappy block length does not match the expected uncompressed size.");
             return Snappier.Snappy.Decompress(payload, destination);
         }
         catch (InvalidOperationException ex)
