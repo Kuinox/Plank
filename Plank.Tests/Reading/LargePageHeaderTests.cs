@@ -139,7 +139,7 @@ internal sealed class LargePageHeaderTests
         var chunk = physical.Metadata.ColumnChunk(0, 0);
         var bytes = file.AsSpan(checked((int)chunk.ChunkOffset), checked((int)chunk.TotalCompressedSize));
         const int fieldCount = 512;
-        const int headerLength = 10 + 2 * fieldCount + 1;
+        const int headerLength = 10 + 10 + 2 * fieldCount + 1;
         var payloadLength = bytes.Length - headerLength;
         var position = 0;
         bytes[position++] = 0x15; // type: data page
@@ -148,6 +148,12 @@ internal sealed class LargePageHeaderTests
         WriteSize(bytes, ref position, payloadLength);
         bytes[position++] = 0x15; // compressed_page_size
         WriteSize(bytes, ref position, payloadLength);
+        bytes[position++] = 0x2c; // data_page_header (field 5)
+        bytes[position++] = 0x15; bytes[position++] = 0x28; // num_values: 20
+        bytes[position++] = 0x15; bytes[position++] = 0x00; // encoding: PLAIN
+        bytes[position++] = 0x15; bytes[position++] = 0x06; // definition_level_encoding: RLE
+        bytes[position++] = 0x15; bytes[position++] = 0x06; // repetition_level_encoding: RLE
+        bytes[position++] = 0x00; // end of DataPageHeader
         for (var i = 0; i < fieldCount; i++)
         {
             bytes[position++] = 0x01;
