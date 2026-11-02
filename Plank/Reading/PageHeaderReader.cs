@@ -103,6 +103,18 @@ static class PageHeaderReader
         }
 
         requiredFields.Validate(ParquetRequiredFields.PageHeader);
+        const uint pageHeaderMask = (1u << 5) | (1u << 6) | (1u << 7) | (1u << 8);
+        var expectedHeader = type switch
+        {
+            PageHeaderType.DataPage => 1u << 5,
+            PageHeaderType.IndexPage => 1u << 6,
+            PageHeaderType.DictionaryPage => 1u << 7,
+            PageHeaderType.DataPageV2 => 1u << 8,
+            _ => 0u
+        };
+        if (expectedHeader != 0 && (requiredFields.Seen & pageHeaderMask) != expectedHeader)
+            throw new CorruptParquetException($"Page type '{type}' does not match its page header.");
+
         return new PageHeader(type, uncompressedPageSize, compressedPageSize, valueCount, encoding, reader.Offset,
             repetitionLevelsByteLength, definitionLevelsByteLength, nullCount, isCompressed, repetitionLevelEncoding,
             definitionLevelEncoding, rowCount, statistics, crc);
