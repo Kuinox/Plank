@@ -164,7 +164,7 @@ internal sealed class ParquetMetadataComplianceTests
         var footerLength = BinaryPrimitives.ReadInt32LittleEndian(file.AsSpan(file.Length - 8, sizeof(int)));
         var footerOffset = checked(file.Length - 8 - footerLength);
         var reader = new CompactProtocolReader(file.AsSpan(footerOffset, footerLength));
-        reader.BeginStruct();
+        reader.BeginRootStruct();
 
         RowGroupMetadata? rowGroup = null;
         var columnOrderCount = 0;
@@ -174,7 +174,7 @@ internal sealed class ParquetMetadataComplianceTests
             {
                 case 4:
                 {
-                    var (count, elementType) = reader.ReadListHeader();
+                    var (count, elementType) = reader.ReadListHeader(type);
                     if (count == 0 || elementType != CompactProtocolType.Struct)
                         throw new InvalidOperationException("Expected at least one row group.");
                     rowGroup = ReadRowGroup(ref reader);
@@ -184,7 +184,7 @@ internal sealed class ParquetMetadataComplianceTests
                 }
                 case 7:
                 {
-                    var (count, elementType) = reader.ReadListHeader();
+                    var (count, elementType) = reader.ReadListHeader(type);
                     if (elementType != CompactProtocolType.Struct)
                         throw new InvalidOperationException("Expected column_orders to contain structs.");
                     columnOrderCount = checked((int)count);
@@ -205,7 +205,7 @@ internal sealed class ParquetMetadataComplianceTests
 
     static RowGroupMetadata ReadRowGroup(ref CompactProtocolReader reader)
     {
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         ColumnMetadata? column = null;
         var fileOffset = -1L;
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
@@ -214,7 +214,7 @@ internal sealed class ParquetMetadataComplianceTests
             {
                 case 1:
                 {
-                    var (count, elementType) = reader.ReadListHeader();
+                    var (count, elementType) = reader.ReadListHeader(type);
                     if (count == 0 || elementType != CompactProtocolType.Struct)
                         throw new InvalidOperationException("Expected at least one column chunk.");
                     column = ReadColumnChunk(ref reader);
@@ -223,7 +223,7 @@ internal sealed class ParquetMetadataComplianceTests
                     break;
                 }
                 case 5:
-                    fileOffset = reader.ReadI64();
+                    fileOffset = reader.ReadI64(type);
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -237,7 +237,7 @@ internal sealed class ParquetMetadataComplianceTests
 
     static ColumnMetadata ReadColumnChunk(ref CompactProtocolReader reader)
     {
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         var fileOffset = -1L;
         var columnIndexOffset = -1L;
         var columnIndexLength = -1;
@@ -247,16 +247,16 @@ internal sealed class ParquetMetadataComplianceTests
             switch (fieldId)
             {
                 case 2:
-                    fileOffset = reader.ReadI64();
+                    fileOffset = reader.ReadI64(type);
                     break;
                 case 3:
                     metadata = ReadColumnMetadata(ref reader);
                     break;
                 case 6:
-                    columnIndexOffset = reader.ReadI64();
+                    columnIndexOffset = reader.ReadI64(type);
                     break;
                 case 7:
-                    columnIndexLength = reader.ReadI32();
+                    columnIndexLength = reader.ReadI32(type);
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -276,7 +276,7 @@ internal sealed class ParquetMetadataComplianceTests
 
     static ColumnMetadata ReadColumnMetadata(ref CompactProtocolReader reader)
     {
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         var codec = -1;
         var valueCount = -1L;
         var dataPageOffset = -1L;
@@ -287,16 +287,16 @@ internal sealed class ParquetMetadataComplianceTests
             switch (fieldId)
             {
                 case 4:
-                    codec = reader.ReadI32();
+                    codec = reader.ReadI32(type);
                     break;
                 case 5:
-                    valueCount = reader.ReadI64();
+                    valueCount = reader.ReadI64(type);
                     break;
                 case 9:
-                    dataPageOffset = reader.ReadI64();
+                    dataPageOffset = reader.ReadI64(type);
                     break;
                 case 11:
-                    dictionaryPageOffset = reader.ReadI64();
+                    dictionaryPageOffset = reader.ReadI64(type);
                     break;
                 case 12:
                     statistics = ReadStatistics(ref reader);
@@ -312,7 +312,7 @@ internal sealed class ParquetMetadataComplianceTests
 
     static StatisticsMetadata ReadStatistics(ref CompactProtocolReader reader)
     {
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         var hasLegacyMax = false;
         var hasLegacyMin = false;
         var hasModernMax = false;

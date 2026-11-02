@@ -9,7 +9,7 @@ static class PhysicalMetadataThriftReader
     internal static void Read(ParquetFileMetadata metadata, IParquetBufferPool bufferPool)
     {
         var reader = new CompactProtocolReader(metadata.FooterBytes);
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         var seenFields = 0;
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
@@ -31,20 +31,20 @@ static class PhysicalMetadataThriftReader
             switch (fieldId)
             {
                 case 1:
-                    metadata.FileVersion = reader.ReadI32();
+                    metadata.FileVersion = reader.ReadI32(type);
                     break;
                 case 2:
-                    ReadSchema(ref reader, metadata, bufferPool);
+                    ReadSchema(ref reader, type, metadata, bufferPool);
                     break;
                 case 4:
-                    ReadRowGroups(ref reader, metadata, bufferPool);
+                    ReadRowGroups(ref reader, type, metadata, bufferPool);
                     break;
                 case 5:
-                    ReadKeyValueMetadata(ref reader, metadata, bufferPool);
+                    ReadKeyValueMetadata(ref reader, type, metadata, bufferPool);
                     break;
                 case 6:
                 {
-                    var createdBy = reader.ReadBinary();
+                    var createdBy = reader.ReadBinary(type);
                     metadata.CreatedByOffset = reader.Offset - createdBy.Length;
                     metadata.CreatedByLength = createdBy.Length;
                     metadata.HasCreatedBy = true;
@@ -57,10 +57,11 @@ static class PhysicalMetadataThriftReader
         }
     }
 
-    static void ReadKeyValueMetadata(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
+    static void ReadKeyValueMetadata(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        ParquetFileMetadata metadata,
         IParquetBufferPool bufferPool)
     {
-        var (count, elementType) = reader.ReadListHeader();
+        var (count, elementType) = reader.ReadListHeader(wireType);
         if (elementType != CompactProtocolType.Struct)
             throw new CorruptParquetException("Expected key-value metadata to be encoded as a list of structs.");
         if (count > reader.Remaining)
@@ -70,11 +71,12 @@ static class PhysicalMetadataThriftReader
         metadata.KeyValueMetadataBuffer = Rent<ParquetKeyValueMetadataInfo>(bufferPool, entryCount);
         var entries = metadata.KeyValueMetadataStorage;
         for (var i = 0; i < entryCount; i++)
-            entries[i] = ReadKeyValueMetadataEntry(ref reader);
+            entries[i] = ReadKeyValueMetadataEntry(ref reader, elementType);
         metadata.KeyValueMetadataCount = entryCount;
     }
 
-    static ParquetKeyValueMetadataInfo ReadKeyValueMetadataEntry(ref CompactProtocolReader reader)
+    static ParquetKeyValueMetadataInfo ReadKeyValueMetadataEntry(ref CompactProtocolReader reader,
+        CompactProtocolType wireType)
     {
         var keyOffset = 0;
         var keyLength = 0;
@@ -83,14 +85,14 @@ static class PhysicalMetadataThriftReader
         var hasKey = false;
         var hasValue = false;
 
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 1:
                 {
-                    var key = reader.ReadBinary();
+                    var key = reader.ReadBinary(type);
                     keyOffset = reader.Offset - key.Length;
                     keyLength = key.Length;
                     hasKey = true;
@@ -98,7 +100,7 @@ static class PhysicalMetadataThriftReader
                 }
                 case 2:
                 {
-                    var value = reader.ReadBinary();
+                    var value = reader.ReadBinary(type);
                     valueOffset = reader.Offset - value.Length;
                     valueLength = value.Length;
                     hasValue = true;
@@ -115,10 +117,11 @@ static class PhysicalMetadataThriftReader
         return new ParquetKeyValueMetadataInfo(keyOffset, keyLength, valueOffset, valueLength, hasValue);
     }
 
-    static void ReadSchema(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
+    static void ReadSchema(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        ParquetFileMetadata metadata,
         IParquetBufferPool bufferPool)
     {
-        var (count, elementType) = reader.ReadListHeader();
+        var (count, elementType) = reader.ReadListHeader(wireType);
         if (elementType != CompactProtocolType.Struct)
             throw new CorruptParquetException("Expected schema to be encoded as a list of structs.");
         if (count > reader.Remaining)
@@ -143,7 +146,7 @@ static class PhysicalMetadataThriftReader
             if (depth > 0)
                 remainingChildren[depth - 1]--;
 
-            var node = ReadSchemaNode(ref reader, ordinal, parentOrdinal);
+            var node = ReadSchemaNode(ref reader, elementType, ordinal, parentOrdinal);
             schemaNodes[ordinal] = node;
             if (node.PhysicalType.HasValue)
             {
@@ -168,7 +171,8 @@ static class PhysicalMetadataThriftReader
         metadata.SchemaNodeCount = nodeCount;
     }
 
-    static ParquetSchemaNodeInfo ReadSchemaNode(ref CompactProtocolReader reader, int ordinal, int parentOrdinal)
+    static ParquetSchemaNodeInfo ReadSchemaNode(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        int ordinal, int parentOrdinal)
     {
         ParquetPhysicalType? physicalType = null;
         var typeLength = 0U;
@@ -182,46 +186,46 @@ static class PhysicalMetadataThriftReader
         var annotation = NodeKind.Group;
         int? schemaFieldId = null;
 
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
 
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 1:
-                    physicalType = ReadPhysicalType(reader.ReadI32());
+                    physicalType = ReadPhysicalType(reader.ReadI32(type));
                     break;
                 case 2:
-                    typeLength = reader.ReadI32AsU32();
+                    typeLength = reader.ReadI32AsU32(type);
                     break;
                 case 3:
-                    repetition = ReadRepetition(reader.ReadI32());
+                    repetition = ReadRepetition(reader.ReadI32(type));
                     break;
                 case 4:
                 {
-                    var name = reader.ReadBinary();
+                    var name = reader.ReadBinary(type);
                     nameOffset = reader.Offset - name.Length;
                     nameLength = name.Length;
                     break;
                 }
                 case 5:
-                    childCount = checked((int)reader.ReadI32AsU32());
+                    childCount = checked((int)reader.ReadI32AsU32(type));
                     break;
                 case 6:
-                    convertedType = reader.ReadI32();
+                    convertedType = reader.ReadI32(type);
                     break;
                 case 7:
-                    logicalType = new LogicalTypeInfo(LogicalTypeKind.Decimal, Scale: reader.ReadI32());
+                    logicalType = new LogicalTypeInfo(LogicalTypeKind.Decimal, Scale: reader.ReadI32(type));
                     break;
                 case 8:
-                    logicalType = new LogicalTypeInfo(LogicalTypeKind.Decimal, Precision: reader.ReadI32(),
+                    logicalType = new LogicalTypeInfo(LogicalTypeKind.Decimal, Precision: reader.ReadI32(type),
                         Scale: logicalType.Scale);
                     break;
                 case 9:
-                    schemaFieldId = reader.ReadI32();
+                    schemaFieldId = reader.ReadI32(type);
                     break;
                 case 10:
-                    (logicalType, annotation) = ReadLogicalType(ref reader);
+                    (logicalType, annotation) = ReadLogicalType(ref reader, type);
                     hasLogicalType = true;
                     break;
                 default:
@@ -243,75 +247,76 @@ static class PhysicalMetadataThriftReader
             nameOffset, nameLength, childCount, schemaFieldId);
     }
 
-    static (LogicalTypeInfo LogicalType, NodeKind Annotation) ReadLogicalType(ref CompactProtocolReader reader)
+    static (LogicalTypeInfo LogicalType, NodeKind Annotation) ReadLogicalType(ref CompactProtocolReader reader,
+        CompactProtocolType wireType)
     {
         var logicalType = default(LogicalTypeInfo);
         var annotation = NodeKind.Group;
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 1:
-                    reader.Skip(type, inlineBool);
+                    reader.SkipStruct(type);
                     logicalType = new LogicalTypeInfo(LogicalTypeKind.String);
                     break;
                 case 2:
-                    reader.Skip(type, inlineBool);
+                    reader.SkipStruct(type);
                     annotation = NodeKind.Map;
                     break;
                 case 3:
-                    reader.Skip(type, inlineBool);
+                    reader.SkipStruct(type);
                     annotation = NodeKind.List;
                     break;
                 case 4:
-                    reader.Skip(type, inlineBool);
+                    reader.SkipStruct(type);
                     logicalType = new LogicalTypeInfo(LogicalTypeKind.Enum);
                     break;
                 case 5:
-                    logicalType = ReadDecimalLogicalType(ref reader);
+                    logicalType = ReadDecimalLogicalType(ref reader, type);
                     break;
                 case 6:
-                    reader.Skip(type, inlineBool);
+                    reader.SkipStruct(type);
                     logicalType = new LogicalTypeInfo(LogicalTypeKind.Date);
                     break;
                 case 7:
-                    logicalType = ReadTemporalLogicalType(ref reader, LogicalTypeKind.Time);
+                    logicalType = ReadTemporalLogicalType(ref reader, type, LogicalTypeKind.Time);
                     break;
                 case 8:
-                    logicalType = ReadTemporalLogicalType(ref reader, LogicalTypeKind.Timestamp);
+                    logicalType = ReadTemporalLogicalType(ref reader, type, LogicalTypeKind.Timestamp);
                     break;
                 case 10:
-                    logicalType = ReadIntegerLogicalType(ref reader);
+                    logicalType = ReadIntegerLogicalType(ref reader, type);
                     break;
                 case 11:
-                    reader.Skip(type, inlineBool);
+                    reader.SkipStruct(type);
                     logicalType = new LogicalTypeInfo(LogicalTypeKind.Unknown);
                     break;
                 case 12:
-                    reader.Skip(type, inlineBool);
+                    reader.SkipStruct(type);
                     logicalType = new LogicalTypeInfo(LogicalTypeKind.Json);
                     break;
                 case 13:
-                    reader.Skip(type, inlineBool);
+                    reader.SkipStruct(type);
                     logicalType = new LogicalTypeInfo(LogicalTypeKind.Bson);
                     break;
                 case 14:
-                    reader.Skip(type, inlineBool);
+                    reader.SkipStruct(type);
                     logicalType = new LogicalTypeInfo(LogicalTypeKind.Uuid);
                     break;
                 case 15:
-                    reader.Skip(type, inlineBool);
+                    reader.SkipStruct(type);
                     logicalType = new LogicalTypeInfo(LogicalTypeKind.Float16);
                     break;
                 case 16:
-                    logicalType = ReadVariantLogicalType(ref reader);
+                    logicalType = ReadVariantLogicalType(ref reader, type);
                     break;
                 case 17:
-                    logicalType = ReadGeospatialLogicalType(ref reader, LogicalTypeKind.Geometry);
+                    logicalType = ReadGeospatialLogicalType(ref reader, type, LogicalTypeKind.Geometry);
                     break;
                 case 18:
-                    logicalType = ReadGeospatialLogicalType(ref reader, LogicalTypeKind.Geography);
+                    logicalType = ReadGeospatialLogicalType(ref reader, type, LogicalTypeKind.Geography);
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -322,56 +327,59 @@ static class PhysicalMetadataThriftReader
         return (logicalType, annotation);
     }
 
-    static LogicalTypeInfo ReadDecimalLogicalType(ref CompactProtocolReader reader)
+    static LogicalTypeInfo ReadDecimalLogicalType(ref CompactProtocolReader reader,
+        CompactProtocolType wireType)
     {
         var scale = 0;
         var precision = 0;
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
             if (fieldId == 1)
-                scale = reader.ReadI32();
+                scale = reader.ReadI32(type);
             else if (fieldId == 2)
-                precision = reader.ReadI32();
+                precision = reader.ReadI32(type);
             else
                 reader.Skip(type, inlineBool);
 
         return new LogicalTypeInfo(LogicalTypeKind.Decimal, precision, scale);
     }
 
-    static LogicalTypeInfo ReadIntegerLogicalType(ref CompactProtocolReader reader)
+    static LogicalTypeInfo ReadIntegerLogicalType(ref CompactProtocolReader reader,
+        CompactProtocolType wireType)
     {
         byte bitWidth = 0;
         var isSigned = false;
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
             if (fieldId == 1)
-                bitWidth = reader.ReadByte();
+                bitWidth = reader.ReadByte(type);
             else if (fieldId == 2)
-                isSigned = reader.ReadBool(inlineBool);
+                isSigned = reader.ReadBool(type, inlineBool);
             else
                 reader.Skip(type, inlineBool);
 
         return new LogicalTypeInfo(LogicalTypeKind.Integer, BitWidth: bitWidth, IsSigned: isSigned);
     }
 
-    static LogicalTypeInfo ReadTemporalLogicalType(ref CompactProtocolReader reader, LogicalTypeKind kind)
+    static LogicalTypeInfo ReadTemporalLogicalType(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        LogicalTypeKind kind)
     {
         bool? isAdjustedToUtc = null;
         TimeUnit? unit = null;
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
             if (fieldId == 1)
             {
                 if (isAdjustedToUtc.HasValue)
                     throw new CorruptParquetException(
                         $"{kind} logical type contains more than one isAdjustedToUTC value.");
-                isAdjustedToUtc = reader.ReadBool(inlineBool);
+                isAdjustedToUtc = reader.ReadBool(type, inlineBool);
             }
             else if (fieldId == 2)
             {
                 if (unit.HasValue)
                     throw new CorruptParquetException($"{kind} logical type contains more than one time unit.");
-                unit = ReadTimeUnit(ref reader);
+                unit = ReadTimeUnit(ref reader, type);
             }
             else
                 reader.Skip(type, inlineBool);
@@ -384,17 +392,18 @@ static class PhysicalMetadataThriftReader
         return new LogicalTypeInfo(kind, Unit: unit.Value, IsAdjustedToUtc: isAdjustedToUtc.Value);
     }
 
-    static LogicalTypeInfo ReadVariantLogicalType(ref CompactProtocolReader reader)
+    static LogicalTypeInfo ReadVariantLogicalType(ref CompactProtocolReader reader,
+        CompactProtocolType wireType)
     {
         sbyte? specificationVersion = null;
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
             if (fieldId == 1)
             {
                 if (specificationVersion.HasValue)
                     throw new CorruptParquetException(
                         "Variant logical type contains more than one specification version.");
-                specificationVersion = unchecked((sbyte)reader.ReadByte());
+                specificationVersion = unchecked((sbyte)reader.ReadByte(type));
             }
             else
                 reader.Skip(type, inlineBool);
@@ -405,19 +414,20 @@ static class PhysicalMetadataThriftReader
         };
     }
 
-    static LogicalTypeInfo ReadGeospatialLogicalType(ref CompactProtocolReader reader, LogicalTypeKind kind)
+    static LogicalTypeInfo ReadGeospatialLogicalType(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        LogicalTypeKind kind)
     {
         var hasCrs = false;
         var crsOffset = 0;
         var crsLength = 0;
         EdgeInterpolationAlgorithm? algorithm = null;
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
             if (fieldId == 1)
             {
                 if (hasCrs)
                     throw new CorruptParquetException($"{kind} logical type contains more than one CRS.");
-                var crs = reader.ReadBinary();
+                var crs = reader.ReadBinary(type);
                 hasCrs = true;
                 crsOffset = reader.Offset - crs.Length;
                 crsLength = crs.Length;
@@ -427,7 +437,7 @@ static class PhysicalMetadataThriftReader
                 if (algorithm.HasValue)
                     throw new CorruptParquetException(
                         "Geography logical type contains more than one edge interpolation algorithm.");
-                algorithm = (EdgeInterpolationAlgorithm)reader.ReadI32();
+                algorithm = (EdgeInterpolationAlgorithm)reader.ReadI32(type);
             }
             else
                 reader.Skip(type, inlineBool);
@@ -441,10 +451,11 @@ static class PhysicalMetadataThriftReader
         };
     }
 
-    static TimeUnit ReadTimeUnit(ref CompactProtocolReader reader)
+    static TimeUnit ReadTimeUnit(ref CompactProtocolReader reader,
+        CompactProtocolType wireType)
     {
         TimeUnit? unit = null;
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             var current = fieldId switch
@@ -454,7 +465,10 @@ static class PhysicalMetadataThriftReader
                 3 => TimeUnit.Nanos,
                 _ => null
             };
-            reader.Skip(type, inlineBool);
+            if (current.HasValue)
+                reader.SkipStruct(type);
+            else
+                reader.Skip(type, inlineBool);
             if (!current.HasValue)
                 throw new NotSupportedException($"Time unit variant {fieldId} is not supported.");
             if (unit.HasValue)
@@ -493,10 +507,11 @@ static class PhysicalMetadataThriftReader
             _ => (decimalType, NodeKind.Group)
         };
 
-    static void ReadRowGroups(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
+    static void ReadRowGroups(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        ParquetFileMetadata metadata,
         IParquetBufferPool bufferPool)
     {
-        var (count, elementType) = reader.ReadListHeader();
+        var (count, elementType) = reader.ReadListHeader(wireType);
         if (elementType != CompactProtocolType.Struct)
             throw new CorruptParquetException("Expected row_groups to be encoded as a list of structs.");
         if (count > reader.Remaining)
@@ -511,13 +526,14 @@ static class PhysicalMetadataThriftReader
         for (var ordinal = 0; ordinal < rowGroupCount; ordinal++)
         {
             var metadataStart = reader.Offset;
-            rowGroups[ordinal] = ReadRowGroup(ref reader, metadata, ordinal,
+            rowGroups[ordinal] = ReadRowGroup(ref reader, elementType, metadata, ordinal,
                 metadata.FooterOffset + (ulong)metadataStart, metadataStart);
         }
         metadata.RowGroupCount = rowGroupCount;
     }
 
-    static ParquetRowGroupInfo ReadRowGroup(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
+    static ParquetRowGroupInfo ReadRowGroup(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        ParquetFileMetadata metadata,
         int ordinal, ulong metadataOffset, int metadataStart)
     {
         var columnChunkOffset = 0UL;
@@ -527,25 +543,25 @@ static class PhysicalMetadataThriftReader
         var sortingColumnStart = metadata.SortingColumnCount;
         var sortingColumnCount = 0;
         var hasSortingColumns = false;
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 1:
-                    columnCount = ReadColumns(ref reader, metadata, ordinal);
+                    columnCount = ReadColumns(ref reader, type, metadata, ordinal);
                     break;
                 case 3:
-                    rowCount = reader.ReadI64AsU64();
+                    rowCount = reader.ReadI64AsU64(type);
                     break;
                 case 4:
                     if (hasSortingColumns)
                         throw new CorruptParquetException("Row group contains more than one sorting_columns field.");
                     hasSortingColumns = true;
-                    sortingColumnCount = ReadSortingColumns(ref reader, metadata);
+                    sortingColumnCount = ReadSortingColumns(ref reader, type, metadata);
                     break;
                 case 5:
-                    columnChunkOffset = reader.ReadI64AsU64();
+                    columnChunkOffset = reader.ReadI64AsU64(type);
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -565,9 +581,10 @@ static class PhysicalMetadataThriftReader
             sortingColumnStart, sortingColumnCount, reader.Offset - metadataStart);
     }
 
-    static int ReadSortingColumns(ref CompactProtocolReader reader, ParquetFileMetadata metadata)
+    static int ReadSortingColumns(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        ParquetFileMetadata metadata)
     {
-        var (count, elementType) = reader.ReadListHeader();
+        var (count, elementType) = reader.ReadListHeader(wireType);
         if (elementType != CompactProtocolType.Struct)
             throw new CorruptParquetException("Expected sorting columns to be encoded as a list of structs.");
         if (count > (uint)metadata.ColumnCount)
@@ -582,7 +599,7 @@ static class PhysicalMetadataThriftReader
         var start = metadata.SortingColumnCount;
         for (var i = 0; i < sortingColumnCount; i++)
         {
-            var sortingColumn = ReadSortingColumn(ref reader, metadata.ColumnCount);
+            var sortingColumn = ReadSortingColumn(ref reader, elementType, metadata.ColumnCount);
             for (var previous = start; previous < metadata.SortingColumnCount; previous++)
                 if (destination[previous].ColumnOrdinal == sortingColumn.ColumnOrdinal)
                     throw new CorruptParquetException(
@@ -592,24 +609,25 @@ static class PhysicalMetadataThriftReader
         return sortingColumnCount;
     }
 
-    static ParquetSortingColumn ReadSortingColumn(ref CompactProtocolReader reader, int columnCount)
+    static ParquetSortingColumn ReadSortingColumn(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        int columnCount)
     {
         int? columnOrdinal = null;
         bool? descending = null;
         bool? nullsFirst = null;
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 1:
-                    columnOrdinal = checked((int)reader.ReadI32AsU32(checked((uint)(columnCount - 1))));
+                    columnOrdinal = checked((int)reader.ReadI32AsU32(type, checked((uint)(columnCount - 1))));
                     break;
                 case 2:
-                    descending = reader.ReadBool(inlineBool);
+                    descending = reader.ReadBool(type, inlineBool);
                     break;
                 case 3:
-                    nullsFirst = reader.ReadBool(inlineBool);
+                    nullsFirst = reader.ReadBool(type, inlineBool);
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -626,9 +644,10 @@ static class PhysicalMetadataThriftReader
         return new ParquetSortingColumn(columnOrdinal.Value, descending.Value, nullsFirst.Value);
     }
 
-    static int ReadColumns(ref CompactProtocolReader reader, ParquetFileMetadata metadata, int rowGroupOrdinal)
+    static int ReadColumns(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        ParquetFileMetadata metadata, int rowGroupOrdinal)
     {
-        var (count, elementType) = reader.ReadListHeader();
+        var (count, elementType) = reader.ReadListHeader(wireType);
         if (elementType != CompactProtocolType.Struct)
             throw new CorruptParquetException("Expected row group columns to be encoded as a list of structs.");
         if (count > reader.Remaining)
@@ -643,12 +662,13 @@ static class PhysicalMetadataThriftReader
             throw new CorruptParquetException("Column chunk metadata exceeds allocated row group capacity.");
 
         for (var i = 0; i < columnCount; i++)
-            columnChunks[metadata.ColumnChunkCount++] = ReadColumn(ref reader, metadata, rowGroupOrdinal, i);
+            columnChunks[metadata.ColumnChunkCount++] = ReadColumn(ref reader, elementType, metadata, rowGroupOrdinal, i);
 
         return columnCount;
     }
 
-    static ParquetColumnChunkInfo ReadColumn(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
+    static ParquetColumnChunkInfo ReadColumn(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        ParquetFileMetadata metadata,
         int rowGroupOrdinal, int expectedColumnOrdinal)
     {
         var dataPageOffset = 0UL;
@@ -669,32 +689,32 @@ static class PhysicalMetadataThriftReader
         var geospatialOffset = 0;
         var geospatialLength = 0;
 
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
 
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 2:
-                    dataPageOffset = reader.ReadI64AsU64();
+                    dataPageOffset = reader.ReadI64AsU64(type);
                     break;
                 case 3:
-                    ReadColumnMetadata(ref reader, metadata, ref physicalType, ref compression, ref dataPageOffset,
+                    ReadColumnMetadata(ref reader, type, metadata, ref physicalType, ref compression, ref dataPageOffset,
                         ref dictionaryPageOffset, ref totalCompressedSize, ref totalUncompressedSize, ref valueCount,
                         ref encodings, ref statistics, ref geospatialOffset, ref geospatialLength, ref bloomFilterOffset, ref bloomFilterLength,
                         expectedColumnOrdinal);
                     break;
                 case 4:
-                    offsetIndexOffset = reader.ReadI64AsU64();
+                    offsetIndexOffset = reader.ReadI64AsU64(type);
                     break;
                 case 5:
-                    offsetIndexLength = reader.ReadI32AsU32();
+                    offsetIndexLength = reader.ReadI32AsU32(type);
                     break;
                 case 6:
-                    columnIndexOffset = reader.ReadI64AsU64();
+                    columnIndexOffset = reader.ReadI64AsU64(type);
                     break;
                 case 7:
-                    columnIndexLength = reader.ReadI32AsU32();
+                    columnIndexLength = reader.ReadI32AsU32(type);
                     break;
                 default:
                     reader.Skip(type, inlineBool);
@@ -712,59 +732,58 @@ static class PhysicalMetadataThriftReader
         { GeospatialStatisticsOffset = geospatialOffset, GeospatialStatisticsLength = geospatialLength };
     }
 
-    static void ReadColumnMetadata(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
+    static void ReadColumnMetadata(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        ParquetFileMetadata metadata,
         ref ParquetPhysicalType? physicalType, ref CompressionKind compression, ref ulong dataPageOffset,
         ref ulong dictionaryPageOffset, ref ulong totalCompressedSize, ref ulong totalUncompressedSize,
         ref ulong valueCount, ref ParquetColumnChunkEncodings encodings, ref EncodedStatistics statistics,
         ref int geospatialOffset, ref int geospatialLength,
         ref ulong bloomFilterOffset, ref uint bloomFilterLength, int expectedColumnOrdinal)
     {
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 1:
-                    physicalType = ReadPhysicalType(reader.ReadI32());
+                    physicalType = ReadPhysicalType(reader.ReadI32(type));
                     break;
                 case 2:
-                    encodings = ReadEncodings(ref reader);
+                    encodings = ReadEncodings(ref reader, type);
                     break;
                 case 3:
-                    ReadAndValidatePath(ref reader, metadata, expectedColumnOrdinal);
+                    ReadAndValidatePath(ref reader, type, metadata, expectedColumnOrdinal);
                     break;
                 case 4:
-                    compression = ParquetThriftConversions.ReadCompression(reader.ReadI32());
+                    compression = ParquetThriftConversions.ReadCompression(reader.ReadI32(type));
                     break;
                 case 5:
-                    valueCount = reader.ReadI64AsU64();
+                    valueCount = reader.ReadI64AsU64(type);
                     break;
                 case 6:
-                    totalUncompressedSize = reader.ReadI64AsU64();
+                    totalUncompressedSize = reader.ReadI64AsU64(type);
                     break;
                 case 7:
-                    totalCompressedSize = reader.ReadI64AsU64();
+                    totalCompressedSize = reader.ReadI64AsU64(type);
                     break;
                 case 9:
-                    dataPageOffset = reader.ReadI64AsU64();
+                    dataPageOffset = reader.ReadI64AsU64(type);
                     break;
                 case 11:
-                    dictionaryPageOffset = reader.ReadI64AsU64();
+                    dictionaryPageOffset = reader.ReadI64AsU64(type);
                     break;
                 case 12:
-                    statistics = StatisticsThriftReader.Read(ref reader);
+                    statistics = StatisticsThriftReader.Read(ref reader, type);
                     break;
                 case 14:
-                    bloomFilterOffset = reader.ReadI64AsU64();
+                    bloomFilterOffset = reader.ReadI64AsU64(type);
                     break;
                 case 15:
-                    bloomFilterLength = reader.ReadI32AsU32();
+                    bloomFilterLength = reader.ReadI32AsU32(type);
                     break;
                 case 17:
-                    if (type != CompactProtocolType.Struct)
-                        throw new CorruptParquetException("Expected geospatial statistics to be a struct.");
                     geospatialOffset = reader.Offset;
-                    reader.Skip(type);
+                    reader.SkipStruct(type);
                     geospatialLength = reader.Offset - geospatialOffset;
                     break;
                 default:
@@ -774,9 +793,10 @@ static class PhysicalMetadataThriftReader
         }
     }
 
-    static ParquetColumnChunkEncodings ReadEncodings(ref CompactProtocolReader reader)
+    static ParquetColumnChunkEncodings ReadEncodings(ref CompactProtocolReader reader,
+        CompactProtocolType wireType)
     {
-        var (count, elementType) = reader.ReadListHeader();
+        var (count, elementType) = reader.ReadListHeader(wireType);
         if (elementType != CompactProtocolType.I32)
             throw new CorruptParquetException("Expected encoding ids to be encoded as I32 list elements.");
         if (count > reader.Remaining)
@@ -788,15 +808,16 @@ static class PhysicalMetadataThriftReader
         var encodingCount = checked((int)count);
         var encodings = default(ParquetColumnChunkEncodings.EncodingBuffer);
         for (var i = 0; i < encodingCount; i++)
-            encodings[i] = ParquetThriftConversions.ReadEncoding(reader.ReadI32());
+            encodings[i] = ParquetThriftConversions.ReadEncoding(reader.ReadI32(elementType));
 
         return new ParquetColumnChunkEncodings(encodings, encodingCount);
     }
 
-    static void ReadAndValidatePath(ref CompactProtocolReader reader, ParquetFileMetadata metadata,
+    static void ReadAndValidatePath(ref CompactProtocolReader reader, CompactProtocolType wireType,
+        ParquetFileMetadata metadata,
         int expectedColumnOrdinal)
     {
-        var (count, elementType) = reader.ReadListHeader();
+        var (count, elementType) = reader.ReadListHeader(wireType);
         if (elementType != CompactProtocolType.Binary)
             throw new CorruptParquetException("Expected path_in_schema to be encoded as binary list elements.");
         if (count > reader.Remaining)
@@ -812,7 +833,7 @@ static class PhysicalMetadataThriftReader
 
         for (var segmentOrdinal = 0; segmentOrdinal < column.PathSegmentCount; segmentOrdinal++)
         {
-            var actual = reader.ReadBinary();
+            var actual = reader.ReadBinary(elementType);
             var nodeOrdinal = column.NodeOrdinal;
             for (var i = column.PathSegmentCount - 1; i > segmentOrdinal; i--)
                 nodeOrdinal = metadata.SchemaNodeStorage[nodeOrdinal].ParentOrdinal;

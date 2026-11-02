@@ -202,7 +202,7 @@ internal sealed class AdditionalLogicalAnnotationTests
         var footerLength = BinaryPrimitives.ReadInt32LittleEndian(file.Slice(file.Length - 8, sizeof(int)));
         var footerOffset = checked(file.Length - 8 - footerLength);
         var reader = new CompactProtocolReader(file.Slice(footerOffset, footerLength));
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId != 2)
@@ -211,7 +211,7 @@ internal sealed class AdditionalLogicalAnnotationTests
                 continue;
             }
 
-            var (count, elementType) = reader.ReadListHeader();
+            var (count, elementType) = reader.ReadListHeader(type);
             if (elementType != CompactProtocolType.Struct)
                 throw new InvalidOperationException("Footer schema is not a list of structs.");
             for (var i = 0U; i < count; i++)
@@ -234,15 +234,15 @@ internal sealed class AdditionalLogicalAnnotationTests
         var name = ReadOnlySpan<byte>.Empty;
         convertedType = -1;
         logicalType = -1;
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
             switch (fieldId)
             {
                 case 4:
-                    name = reader.ReadBinary();
+                    name = reader.ReadBinary(type);
                     break;
                 case 6:
-                    convertedType = reader.ReadI32();
+                    convertedType = reader.ReadI32(type);
                     break;
                 case 10:
                     logicalType = ReadLogicalTypeId(ref reader);
@@ -258,7 +258,7 @@ internal sealed class AdditionalLogicalAnnotationTests
     static int ReadLogicalTypeId(ref CompactProtocolReader reader)
     {
         var logicalType = -1;
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             logicalType = fieldId;

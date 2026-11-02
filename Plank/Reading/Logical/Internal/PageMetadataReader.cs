@@ -89,14 +89,14 @@ static class PageMetadataReader
         var minimumCount = -1;
         var maximumCount = -1;
         var nullCountsCount = -1;
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 1:
                 {
-                    var (listCount, elementType) = reader.ReadListHeader();
+                    var (listCount, elementType) = reader.ReadListHeader(type);
                     if (elementType is not (CompactProtocolType.BooleanTrue or CompactProtocolType.BooleanFalse))
                         throw new CorruptParquetException("Column index null_pages must be a boolean list.");
                     var itemCount = ListCount(listCount, reader.Remaining, "Column index null_pages");
@@ -105,22 +105,22 @@ static class PageMetadataReader
                     for (var i = 0; i < itemCount; i++)
                     {
                         destination[i].HasNullPage = true;
-                        destination[i].IsNullPage = reader.ReadBool(null);
+                        destination[i].IsNullPage = reader.ReadBool(elementType, null);
                     }
                     nullPagesCount = itemCount;
                     count = MergeCount(count, itemCount, "column index");
                     break;
                 }
                 case 2:
-                    minimumCount = ReadBounds(ref reader, bytes, pool, ref entries, ref capacity, ref count,
+                    minimumCount = ReadBounds(ref reader, type, bytes, pool, ref entries, ref capacity, ref count,
                         writeMinimum: true);
                     break;
                 case 3:
-                    maximumCount = ReadBounds(ref reader, bytes, pool, ref entries, ref capacity, ref count,
+                    maximumCount = ReadBounds(ref reader, type, bytes, pool, ref entries, ref capacity, ref count,
                         writeMinimum: false);
                     break;
                 case 4:
-                    boundaryOrder = reader.ReadI32() switch
+                    boundaryOrder = reader.ReadI32(type) switch
                     {
                         0 => ParquetBoundaryOrder.Unordered,
                         1 => ParquetBoundaryOrder.Ascending,
@@ -131,7 +131,7 @@ static class PageMetadataReader
                     break;
                 case 5:
                 {
-                    var (listCount, elementType) = reader.ReadListHeader();
+                    var (listCount, elementType) = reader.ReadListHeader(type);
                     if (elementType != CompactProtocolType.I64)
                         throw new CorruptParquetException("Column index null_counts must be an i64 list.");
                     var itemCount = ListCount(listCount, reader.Remaining, "Column index null_counts");
@@ -139,7 +139,7 @@ static class PageMetadataReader
                     var destination = Entries(entries, itemCount);
                     for (var i = 0; i < itemCount; i++)
                     {
-                        var nullCount = reader.ReadI64();
+                        var nullCount = reader.ReadI64(elementType);
                         if (nullCount < 0)
                             throw new CorruptParquetException("Page null count cannot be negative.");
                         var previous = destination[i].Statistics;
@@ -175,10 +175,10 @@ static class PageMetadataReader
             }
     }
 
-    static int ReadBounds(ref CompactProtocolReader reader, ReadOnlySpan<byte> storage, IParquetBufferPool pool,
-        ref ParquetBuffer entries, ref int capacity, ref int count, bool writeMinimum)
+    static int ReadBounds(ref CompactProtocolReader reader, CompactProtocolType wireType, ReadOnlySpan<byte> storage,
+        IParquetBufferPool pool, ref ParquetBuffer entries, ref int capacity, ref int count, bool writeMinimum)
     {
-        var (listCount, elementType) = reader.ReadListHeader();
+        var (listCount, elementType) = reader.ReadListHeader(wireType);
         if (elementType != CompactProtocolType.Binary)
             throw new CorruptParquetException("Column index bounds must be a binary list.");
         var itemCount = ListCount(listCount, reader.Remaining, "Column index bounds");
@@ -186,7 +186,7 @@ static class PageMetadataReader
         var destination = Entries(entries, itemCount);
         for (var i = 0; i < itemCount; i++)
         {
-            var value = reader.ReadBinary();
+            var value = reader.ReadBinary(elementType);
             var offset = reader.Offset - value.Length;
             if ((uint)offset > (uint)storage.Length)
                 throw new CorruptParquetException("Column index bound offset is invalid.");
@@ -210,7 +210,7 @@ static class PageMetadataReader
     {
         var reader = new CompactProtocolReader(bytes);
         var locationsCount = -1;
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId != 1)
@@ -219,7 +219,7 @@ static class PageMetadataReader
                 continue;
             }
 
-            var (listCount, elementType) = reader.ReadListHeader();
+            var (listCount, elementType) = reader.ReadListHeader(type);
             if (elementType != CompactProtocolType.Struct)
                 throw new CorruptParquetException("Offset index page_locations must be a struct list.");
             var itemCount = ListCount(listCount, reader.Remaining, "Offset index page_locations");
@@ -233,22 +233,22 @@ static class PageMetadataReader
                 var hasOffset = false;
                 var hasCompressedSize = false;
                 var hasFirstRowIndex = false;
-                reader.BeginStruct();
+                reader.BeginStruct(elementType);
                 while (reader.TryReadFieldHeader(out var locationFieldId, out var locationType,
                            out var locationInlineBool))
                 {
                     switch (locationFieldId)
                     {
                         case 1:
-                            offset = reader.ReadI64AsU64();
+                            offset = reader.ReadI64AsU64(locationType);
                             hasOffset = true;
                             break;
                         case 2:
-                            compressedSize = reader.ReadI32AsU32();
+                            compressedSize = reader.ReadI32AsU32(locationType);
                             hasCompressedSize = true;
                             break;
                         case 3:
-                            firstRowIndex = reader.ReadI64AsU64();
+                            firstRowIndex = reader.ReadI64AsU64(locationType);
                             hasFirstRowIndex = true;
                             break;
                         default:

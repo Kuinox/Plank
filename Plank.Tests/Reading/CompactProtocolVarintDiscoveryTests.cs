@@ -27,7 +27,7 @@ internal sealed class CompactProtocolVarintDiscoveryTests
         var reader = new CompactProtocolReader(
             [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01]);
 
-        if (reader.ReadI64() != long.MinValue)
+        if (reader.ReadI64(CompactProtocolType.I64) != long.MinValue)
             throw new InvalidOperationException("The maximum UInt64 varint did not decode correctly.");
     }
 
@@ -41,6 +41,6 @@ internal sealed class CompactProtocolVarintDiscoveryTests
     {
         var reader = new CompactProtocolReader(
             [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]);
-        _ = reader.ReadI64();
+        _ = reader.ReadI64(CompactProtocolType.I64);
     }
 }

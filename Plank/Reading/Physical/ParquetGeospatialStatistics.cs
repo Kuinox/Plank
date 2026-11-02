@@ -19,25 +19,21 @@ public sealed class ParquetGeospatialStatistics
         var reader = new CompactProtocolReader(bytes);
         ParquetBoundingBox? box = null;
         int[]? types = null;
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var id, out var type, out var inlineBool))
         {
             if (id == 1)
             {
-                if (type != CompactProtocolType.Struct)
-                    throw new CorruptParquetException("Expected geospatial bounding box to be a struct.");
-                box = ParquetBoundingBox.Read(ref reader);
+                box = ParquetBoundingBox.Read(ref reader, type);
             }
             else if (id == 2)
             {
-                if (type != CompactProtocolType.List)
-                    throw new CorruptParquetException("Expected geospatial types to be a list.");
-                var (count, elementType) = reader.ReadListHeader();
+                var (count, elementType) = reader.ReadListHeader(type);
                 if (elementType != CompactProtocolType.I32 || count > reader.Remaining)
                     throw new CorruptParquetException("Invalid geospatial type list.");
                 types = new int[checked((int)count)];
                 for (var i = 0; i < types.Length; i++)
-                    types[i] = reader.ReadI32();
+                    types[i] = reader.ReadI32(elementType);
             }
             else
                 reader.Skip(type, inlineBool);
@@ -65,17 +61,15 @@ public sealed class ParquetBoundingBox
     public double? MMin { get; }
     public double? MMax { get; }
 
-    internal static ParquetBoundingBox Read(ref CompactProtocolReader reader)
+    internal static ParquetBoundingBox Read(ref CompactProtocolReader reader, CompactProtocolType wireType)
     {
         var values = new double?[8];
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var id, out var type, out var inlineBool))
         {
             if (id is >= 1 and <= 8)
             {
-                if (type != CompactProtocolType.Double)
-                    throw new CorruptParquetException("Expected a DOUBLE bounding box coordinate.");
-                values[id - 1] = reader.ReadDouble();
+                values[id - 1] = reader.ReadDouble(type);
             }
             else
                 reader.Skip(type, inlineBool);

@@ -1023,7 +1023,7 @@ internal sealed class ColumnStatisticsTests
     static int ReadColumnIndexPageCount(byte[] fileBytes, long offset, int length)
     {
         var reader = new CompactProtocolReader(fileBytes.AsSpan(checked((int)offset), length));
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId != 1)
@@ -1032,11 +1032,11 @@ internal sealed class ColumnStatisticsTests
                 continue;
             }
 
-            var (count, elementType) = reader.ReadListHeader();
+            var (count, elementType) = reader.ReadListHeader(type);
             if (elementType is not (CompactProtocolType.BooleanTrue or CompactProtocolType.BooleanFalse))
                 throw new InvalidOperationException("Column index null_pages was not a bool list.");
             for (var i = 0U; i < count; i++)
-                _ = reader.ReadBool(inlineBool: null);
+                _ = reader.ReadBool(elementType, inlineBool: null);
             return checked((int)count);
         }
 
@@ -1046,7 +1046,7 @@ internal sealed class ColumnStatisticsTests
     static int ReadOffsetIndexPageCount(byte[] fileBytes, long offset, int length)
     {
         var reader = new CompactProtocolReader(fileBytes.AsSpan(checked((int)offset), length));
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId != 1)
@@ -1055,7 +1055,7 @@ internal sealed class ColumnStatisticsTests
                 continue;
             }
 
-            var (count, elementType) = reader.ReadListHeader();
+            var (count, elementType) = reader.ReadListHeader(type);
             if (elementType != CompactProtocolType.Struct)
                 throw new InvalidOperationException("Offset index page_locations was not a struct list.");
             return checked((int)count);

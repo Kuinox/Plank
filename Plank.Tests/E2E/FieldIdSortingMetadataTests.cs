@@ -245,7 +245,7 @@ internal sealed class FieldIdSortingMetadataTests
     static int FindFirstSortingColumnIndexOffset(ReadOnlySpan<byte> footer)
     {
         var reader = new CompactProtocolReader(footer);
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId != 4)
@@ -254,10 +254,10 @@ internal sealed class FieldIdSortingMetadataTests
                 continue;
             }
 
-            var (rowGroupCount, rowGroupType) = reader.ReadListHeader();
+            var (rowGroupCount, rowGroupType) = reader.ReadListHeader(type);
             if (rowGroupCount == 0 || rowGroupType != CompactProtocolType.Struct)
                 break;
-            reader.BeginStruct();
+            reader.BeginRootStruct();
             while (reader.TryReadFieldHeader(out var rowGroupFieldId, out var rowGroupFieldType,
                        out var rowGroupInlineBool))
             {
@@ -267,10 +267,10 @@ internal sealed class FieldIdSortingMetadataTests
                     continue;
                 }
 
-                var (sortingCount, sortingType) = reader.ReadListHeader();
+                var (sortingCount, sortingType) = reader.ReadListHeader(rowGroupFieldType);
                 if (sortingCount == 0 || sortingType != CompactProtocolType.Struct)
                     break;
-                reader.BeginStruct();
+                reader.BeginRootStruct();
                 while (reader.TryReadFieldHeader(out var sortingFieldId, out var sortingFieldType,
                            out var sortingInlineBool))
                 {

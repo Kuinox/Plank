@@ -4,6 +4,79 @@ namespace Plank.Reading;
 
 ref struct CompactProtocolReader
 {
+    // Field and collection-element reads validate before consuming any payload.
+    // Untyped payload readers stay private; only root structs have no wire tag.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void RequireType(CompactProtocolType actual, CompactProtocolType expected)
+    {
+        if (actual != expected)
+            throw new CorruptParquetException($"Invalid compact protocol type '{actual}', expected '{expected}'.");
+    }
+
+    internal void BeginStruct(CompactProtocolType type)
+    {
+        RequireType(type, CompactProtocolType.Struct);
+        BeginStruct();
+    }
+
+    internal void BeginRootStruct() => BeginStruct();
+
+    // Known marker structs and deferred metadata still need their outer tag checked.
+    internal void SkipStruct(CompactProtocolType type)
+    {
+        RequireType(type, CompactProtocolType.Struct);
+        Skip(type);
+    }
+
+    internal int ReadI16(CompactProtocolType type)
+    {
+        RequireType(type, CompactProtocolType.I16);
+        return ReadI16();
+    }
+
+    internal int ReadI32(CompactProtocolType type)
+    {
+        RequireType(type, CompactProtocolType.I32);
+        return ReadI32();
+    }
+
+    internal long ReadI64(CompactProtocolType type)
+    {
+        RequireType(type, CompactProtocolType.I64);
+        return ReadI64();
+    }
+
+    internal byte ReadByte(CompactProtocolType type)
+    {
+        RequireType(type, CompactProtocolType.Byte);
+        return ReadByte();
+    }
+
+    internal double ReadDouble(CompactProtocolType type)
+    {
+        RequireType(type, CompactProtocolType.Double);
+        return ReadDouble();
+    }
+
+    internal ReadOnlySpan<byte> ReadBinary(CompactProtocolType type)
+    {
+        RequireType(type, CompactProtocolType.Binary);
+        return ReadBinary();
+    }
+
+    internal (uint Count, CompactProtocolType ElementType) ReadListHeader(CompactProtocolType type)
+    {
+        RequireType(type, CompactProtocolType.List);
+        return ReadListHeader();
+    }
+
+    internal bool ReadBool(CompactProtocolType type, bool? inlineBool)
+    {
+        if (type is not (CompactProtocolType.BooleanTrue or CompactProtocolType.BooleanFalse))
+            RequireType(type, CompactProtocolType.BooleanTrue);
+        return ReadBool(inlineBool);
+    }
+
     const int MaxStructDepth = 64;
 
     readonly ReadOnlySpan<byte> _buffer;
@@ -33,7 +106,7 @@ ref struct CompactProtocolReader
         _depth = 0;
     }
 
-    internal double ReadDouble()
+    double ReadDouble()
     {
         EnsureAvailable(sizeof(double));
         var value = System.Buffers.Binary.BinaryPrimitives.ReadDoubleLittleEndian(_buffer.Slice(_offset, sizeof(double)));
@@ -47,7 +120,7 @@ ref struct CompactProtocolReader
     internal uint Remaining
         => (uint)(_buffer.Length - _offset);
 
-    internal void BeginStruct()
+    void BeginStruct()
     {
         PushStruct();
     }
@@ -78,16 +151,16 @@ ref struct CompactProtocolReader
         return true;
     }
 
-    internal int ReadI32()
+    int ReadI32()
         => DecodeZigZag32(ReadVarUInt32());
 
-    internal int ReadI16()
+    int ReadI16()
         => DecodeZigZag32(ReadVarUInt32());
 
-    internal long ReadI64()
+    long ReadI64()
         => DecodeZigZag64(ReadVarUInt64());
 
-    internal byte ReadByte()
+    byte ReadByte()
     {
         EnsureAvailable(1);
         return _buffer[_offset++];
@@ -101,23 +174,25 @@ ref struct CompactProtocolReader
         return value;
     }
 
-    internal uint ReadI32AsU32(uint max = uint.MaxValue)
+    internal uint ReadI32AsU32(CompactProtocolType type, uint max = uint.MaxValue)
     {
+        RequireType(type, CompactProtocolType.I32);
         var value = DecodeZigZag32(ReadVarUInt32());
         if (value < 0 || (uint)value > max)
             throw new CorruptParquetException($"Expected a non-negative i32 value no greater than {max} but got {value}.");
         return (uint)value;
     }
 
-    internal ulong ReadI64AsU64(ulong max = ulong.MaxValue)
+    internal ulong ReadI64AsU64(CompactProtocolType type, ulong max = ulong.MaxValue)
     {
+        RequireType(type, CompactProtocolType.I64);
         var value = DecodeZigZag64(ReadVarUInt64());
         if (value < 0 || (ulong)value > max)
             throw new CorruptParquetException($"Expected a non-negative i64 value no greater than {max} but got {value}.");
         return (ulong)value;
     }
 
-    internal bool ReadBool(bool? inlineBool)
+    bool ReadBool(bool? inlineBool)
     {
         if (inlineBool.HasValue)
             return inlineBool.Value;
@@ -132,7 +207,7 @@ ref struct CompactProtocolReader
         };
     }
 
-    internal ReadOnlySpan<byte> ReadBinary()
+    ReadOnlySpan<byte> ReadBinary()
     {
         var length = ReadBinaryLength();
         var value = _buffer.Slice(_offset, length);
@@ -163,7 +238,7 @@ ref struct CompactProtocolReader
             $"Expected a varint value no greater than {available} but got {length}.");
     }
 
-    internal (uint Count, CompactProtocolType ElementType) ReadListHeader()
+    (uint Count, CompactProtocolType ElementType) ReadListHeader()
     {
         EnsureAvailable(1);
         var header = _buffer[_offset++];

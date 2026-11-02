@@ -197,12 +197,12 @@ internal sealed class WriterFormatBugReproductionsTests
         var footerLength = BinaryPrimitives.ReadInt32LittleEndian(file.AsSpan(file.Length - 8, sizeof(int)));
         var footerOffset = checked(file.Length - 8 - footerLength);
         var reader = new CompactProtocolReader(file.AsSpan(footerOffset, footerLength));
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId == 4)
             {
-                var (count, elementType) = reader.ReadListHeader();
+                var (count, elementType) = reader.ReadListHeader(type);
                 if (count == 0 || elementType != CompactProtocolType.Struct)
                     throw new InvalidOperationException("Expected at least one row group.");
                 return ReadRowGroupNanCount(ref reader);
@@ -216,12 +216,12 @@ internal sealed class WriterFormatBugReproductionsTests
 
     static long? ReadRowGroupNanCount(ref CompactProtocolReader reader)
     {
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId == 1)
             {
-                var (count, elementType) = reader.ReadListHeader();
+                var (count, elementType) = reader.ReadListHeader(type);
                 if (count == 0 || elementType != CompactProtocolType.Struct)
                     throw new InvalidOperationException("Expected at least one column chunk.");
                 return ReadColumnChunkNanCount(ref reader);
@@ -235,7 +235,7 @@ internal sealed class WriterFormatBugReproductionsTests
 
     static long? ReadColumnChunkNanCount(ref CompactProtocolReader reader)
     {
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId == 3)
@@ -249,7 +249,7 @@ internal sealed class WriterFormatBugReproductionsTests
 
     static long? ReadColumnMetadataNanCount(ref CompactProtocolReader reader)
     {
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId == 12)
@@ -263,11 +263,11 @@ internal sealed class WriterFormatBugReproductionsTests
 
     static long? ReadStatisticsNanCount(ref CompactProtocolReader reader)
     {
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId == 9)
-                return reader.ReadI64();
+                return reader.ReadI64(type);
 
             reader.Skip(type, inlineBool);
         }

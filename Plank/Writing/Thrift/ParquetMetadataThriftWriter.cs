@@ -139,7 +139,7 @@ static class ParquetMetadataThriftWriter
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
         var hasPageLocations = false;
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId != 1)
@@ -149,10 +149,8 @@ static class ParquetMetadataThriftWriter
             }
             if (hasPageLocations)
                 throw new CorruptParquetException("Offset index contains duplicate page_locations fields.");
-            if (type != CompactProtocolType.List)
-                throw new CorruptParquetException("Offset index page_locations must be encoded as a list.");
 
-            var (count, elementType) = reader.ReadListHeader();
+            var (count, elementType) = reader.ReadListHeader(type);
             if (elementType != CompactProtocolType.Struct)
                 throw new CorruptParquetException("Offset index page_locations must contain structs.");
             writer.WriteFieldHeader(1, CompactType.List);
@@ -165,22 +163,22 @@ static class ParquetMetadataThriftWriter
                 var hasOffset = false;
                 var hasCompressedPageSize = false;
                 var hasFirstRowIndex = false;
-                reader.BeginStruct();
+                reader.BeginStruct(elementType);
                 while (reader.TryReadFieldHeader(out var locationFieldId, out var locationType,
                            out var locationInlineBool))
                 {
                     switch (locationFieldId)
                     {
                         case 1:
-                            offset = reader.ReadI64AsU64(long.MaxValue);
+                            offset = reader.ReadI64AsU64(locationType, long.MaxValue);
                             hasOffset = true;
                             break;
                         case 2:
-                            compressedPageSize = reader.ReadI32AsU32(int.MaxValue);
+                            compressedPageSize = reader.ReadI32AsU32(locationType, int.MaxValue);
                             hasCompressedPageSize = true;
                             break;
                         case 3:
-                            firstRowIndex = reader.ReadI64AsU64(long.MaxValue);
+                            firstRowIndex = reader.ReadI64AsU64(locationType, long.MaxValue);
                             hasFirstRowIndex = true;
                             break;
                         default:
