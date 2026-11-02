@@ -740,9 +740,12 @@ static class PhysicalMetadataThriftReader
         ref int geospatialOffset, ref int geospatialLength,
         ref ulong bloomFilterOffset, ref uint bloomFilterLength, int expectedColumnOrdinal)
     {
+        var requiredFields = 0;
         reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
+            if (fieldId is 1 or 2 or 3 or 4 or 5 or 6 or 7 or 9)
+                requiredFields |= 1 << (fieldId - 1);
             switch (fieldId)
             {
                 case 1:
@@ -791,6 +794,8 @@ static class PhysicalMetadataThriftReader
                     break;
             }
         }
+        if (requiredFields != 0x17f)
+            throw new CorruptParquetException("Missing required column metadata field.");
     }
 
     static ParquetColumnChunkEncodings ReadEncodings(ref CompactProtocolReader reader,
