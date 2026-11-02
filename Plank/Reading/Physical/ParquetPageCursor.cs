@@ -6,8 +6,6 @@ using Plank.Schema;
 
 public struct ParquetPageCursor : IDisposable
 {
-    const int InitialPageHeaderLength = 64 * 1024;
-
     ParquetFileReader? _owner;
     readonly int _generation;
     readonly ParquetColumnChunkInfo _chunk;
@@ -175,29 +173,9 @@ public struct ParquetPageCursor : IDisposable
                     $"Indexed page size {boundedPageLength.Value} is outside its column chunk.");
             maxHeaderLength = boundedPageLength.Value;
         }
-        var headerProbeLength = Math.Min(maxHeaderLength, InitialPageHeaderLength);
         var maxUncompressedPageSize = (uint)Math.Min(_chunk.TotalUncompressedSize, uint.MaxValue);
-        PageHeader header;
-        while (true)
-        {
-            ReadOnlySpan<byte> headerBytes;
-            if (owner.TryBorrowSource(pageFileOffset, headerProbeLength, out var borrowedHeader))
-                headerBytes = borrowedHeader.Span;
-            else
-            {
-                EnsurePayloadBuffer(owner, headerProbeLength);
-                var headerDestination = _payloadBuffer.Span[..headerProbeLength];
-                owner.Source.ReadExactly(pageFileOffset, headerDestination);
-                headerBytes = headerDestination;
-            }
-            if (PageHeaderReader.TryRead(headerBytes, maxUncompressedPageSize, out header, out var missingBytes))
-                break;
-
-            var requiredLength = PageHeaderReader.GetRequiredBufferLength(headerProbeLength, missingBytes,
-                maxHeaderLength);
-            headerProbeLength = (int)Math.Min(maxHeaderLength,
-                Math.Max((long)headerProbeLength * 2, requiredLength));
-        }
+        var header = PageHeaderProbe.Read(owner, pageFileOffset, maxHeaderLength, maxUncompressedPageSize,
+            PageHeaderProbe.CursorInitialLength, allowBorrow: true, ref _payloadBuffer);
         var totalPageLength = checked(header.HeaderLength + (int)header.CompressedPageSize);
         if (boundedPageLength.HasValue && totalPageLength > boundedPageLength.Value)
             throw new CorruptParquetException(
