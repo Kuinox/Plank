@@ -109,6 +109,7 @@ static partial class ColumnChunkReader
     {
         buffer = default;
         page = default;
+        ValidateDeltaBinaryPackedPhysicalType(header, column);
         if (header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2) ||
             header.ValueCount == 0 || column.Options.Repetition == ParquetRepetition.Repeated ||
             RuntimeHelpers.IsReferenceOrContainsReferences<T>())

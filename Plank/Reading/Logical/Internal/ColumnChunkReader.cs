@@ -117,6 +117,15 @@ static partial class ColumnChunkReader
         return TryDecodeValuesIntoNative(payload, column, header.ValueCount, header.Encoding, destination);
     }
 
+    static void ValidateDeltaBinaryPackedPhysicalType(PageHeader header, Column column)
+    {
+        if (header.Type is PageHeaderType.DataPage or PageHeaderType.DataPageV2 &&
+            header.Encoding == EncodingKind.DeltaBinaryPacked &&
+            column.PhysicalType is not (ParquetPhysicalType.Int32 or ParquetPhysicalType.Int64))
+            throw new CorruptParquetException(
+                $"DELTA_BINARY_PACKED cannot encode physical type '{column.PhysicalType}' in column '{column.Name}'.");
+    }
+
     internal static bool TryDecodeNestedPageIntoNative<T>(PageHeader header, ReadOnlySpan<byte> payload,
         LeafColumn definition, ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool,
         out NestedColumnBuffer<T> buffer)
@@ -127,6 +136,7 @@ static partial class ColumnChunkReader
             return false;
 
         var column = definition.Column;
+        ValidateDeltaBinaryPackedPhysicalType(header, column);
         var isBinary = typeof(T) == typeof(BinaryValueDescriptor);
         if (isBinary != IsBinaryPhysicalType(column.PhysicalType))
             return false;
