@@ -543,13 +543,19 @@ static class PhysicalMetadataThriftReader
         var sortingColumnStart = metadata.SortingColumnCount;
         var sortingColumnCount = 0;
         var hasSortingColumns = false;
+        var requiredFields = 0;
         reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
+            if (fieldId is >= 1 and <= 3)
+                requiredFields |= 1 << (fieldId - 1);
             switch (fieldId)
             {
                 case 1:
                     columnCount = ReadColumns(ref reader, type, metadata, ordinal);
+                    break;
+                case 2:
+                    _ = reader.ReadI64(type);
                     break;
                 case 3:
                     rowCount = reader.ReadI64AsU64(type);
@@ -569,6 +575,12 @@ static class PhysicalMetadataThriftReader
             }
         }
 
+        if (requiredFields != 0x07)
+        {
+            var missingField = (requiredFields & 1) == 0 ? 1 : (requiredFields & 2) == 0 ? 2 : 3;
+            throw new CorruptParquetException($"Missing required RowGroup.{RowGroupFieldName(missingField)} field.");
+        }
+
         if (columnChunkOffset == 0 && columnCount != 0)
             columnChunkOffset = metadata.ColumnChunkStorage[columnStart].ChunkOffset;
         var sortingColumns = metadata.SortingColumnStorage.Slice(sortingColumnStart, sortingColumnCount);
@@ -580,6 +592,9 @@ static class PhysicalMetadataThriftReader
         return new ParquetRowGroupInfo(ordinal, metadataOffset, columnChunkOffset, rowCount, columnStart, columnCount,
             sortingColumnStart, sortingColumnCount, reader.Offset - metadataStart);
     }
+
+    static string RowGroupFieldName(int fieldId)
+        => fieldId switch { 1 => "columns", 2 => "total_byte_size", _ => "num_rows" };
 
     static int ReadSortingColumns(ref CompactProtocolReader reader, CompactProtocolType wireType,
         ParquetFileMetadata metadata)
