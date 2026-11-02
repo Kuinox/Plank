@@ -46,6 +46,7 @@ static class PageHeaderReader
     static PageHeader Read(ReadOnlySpan<byte> buffer, uint maxUncompressedPageSize, bool bufferMayBeTruncated)
     {
         var reader = new CompactProtocolReader(buffer, bufferMayBeTruncated);
+        var requiredFields = new RequiredFields();
         var type = PageHeaderType.DataPage;
         var uncompressedPageSize = 0U;
         var compressedPageSize = 0U;
@@ -65,6 +66,7 @@ static class PageHeaderReader
 
         while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
+            requiredFields.Add(fieldId);
             switch (fieldId)
             {
                 case 1:
@@ -83,6 +85,9 @@ static class PageHeaderReader
                     (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding, statistics)
                         = ReadDataPageHeader(ref reader, fieldType);
                     break;
+                case 6:
+                    reader.SkipStruct(fieldType);
+                    break;
                 case 7:
                     valueCount = ReadDictionaryHeader(ref reader, fieldType);
                     break;
@@ -97,6 +102,7 @@ static class PageHeaderReader
             }
         }
 
+        requiredFields.Validate(ParquetRequiredFields.PageHeader);
         return new PageHeader(type, uncompressedPageSize, compressedPageSize, valueCount, encoding, reader.Offset,
             repetitionLevelsByteLength, definitionLevelsByteLength, nullCount, isCompressed, repetitionLevelEncoding,
             definitionLevelEncoding, rowCount, statistics, crc);
@@ -106,6 +112,7 @@ static class PageHeaderReader
         EncodingKind DefinitionLevelEncoding, EncodedStatistics Statistics)
         ReadDataPageHeader(ref CompactProtocolReader reader, CompactProtocolType structType)
     {
+        var requiredFields = new RequiredFields();
         var valueCount = 0U;
         var encoding = EncodingKind.Plain;
         var repetitionLevelEncoding = EncodingKind.Rle;
@@ -116,6 +123,7 @@ static class PageHeaderReader
 
         while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
+            requiredFields.Add(fieldId);
             switch (fieldId)
             {
                 case 1:
@@ -139,21 +147,32 @@ static class PageHeaderReader
             }
         }
 
+        requiredFields.Validate(ParquetRequiredFields.DataPageHeader);
         return (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding, statistics);
     }
 
     static uint ReadDictionaryHeader(ref CompactProtocolReader reader, CompactProtocolType structType)
     {
         var valueCount = 0U;
+        var requiredFields = new RequiredFields();
         reader.BeginStruct(structType);
         while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
-            if (fieldId == 1)
-                valueCount = reader.ReadI32AsU32(fieldType);
+            if (fieldId is 1 or 2)
+            {
+                requiredFields.Add(fieldId);
+                if (fieldId == 1)
+                    valueCount = reader.ReadI32AsU32(fieldType);
+                else if (reader.ReadI32(fieldType) is not ((int)EncodingKind.Plain or (int)EncodingKind.PlainDictionary))
+                    throw new CorruptParquetException("Invalid DictionaryPageHeader encoding (field 2).");
+            }
+            else if (fieldId == 3)
+                _ = reader.ReadBool(fieldType, inlineBool);
             else
                 reader.Skip(fieldType, inlineBool);
         }
 
+        requiredFields.Validate(ParquetRequiredFields.DictionaryPageHeader);
         return valueCount;
     }
 
@@ -161,6 +180,7 @@ static class PageHeaderReader
         uint DefinitionLevelsByteLength, bool IsCompressed, EncodedStatistics Statistics)
         ReadDataPageV2Header(ref CompactProtocolReader reader, CompactProtocolType structType)
     {
+        var requiredFields = new RequiredFields();
         var valueCount = 0U;
         var encoding = EncodingKind.Plain;
         var nullCount = 0U;
@@ -174,6 +194,7 @@ static class PageHeaderReader
 
         while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
+            requiredFields.Add(fieldId);
             switch (fieldId)
             {
                 case 1:
@@ -206,7 +227,9 @@ static class PageHeaderReader
             }
         }
 
+        requiredFields.Validate(ParquetRequiredFields.DataPageHeaderV2);
         return (valueCount, encoding, nullCount, rowCount, repetitionLevelsByteLength, definitionLevelsByteLength,
             isCompressed, statistics);
     }
+
 }

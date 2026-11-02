@@ -209,7 +209,7 @@ static class PageMetadataReader
         ref int capacity, ref int count)
     {
         var reader = new CompactProtocolReader(bytes);
-        var locationsCount = -1;
+        var requiredIndex = new RequiredFields();
         reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
@@ -219,6 +219,7 @@ static class PageMetadataReader
                 continue;
             }
 
+            requiredIndex.Add(1);
             var (listCount, elementType) = reader.ReadListHeader(type);
             if (elementType != CompactProtocolType.Struct)
                 throw new CorruptParquetException("Offset index page_locations must be a struct list.");
@@ -230,26 +231,22 @@ static class PageMetadataReader
                 var offset = 0UL;
                 var compressedSize = 0U;
                 var firstRowIndex = 0UL;
-                var hasOffset = false;
-                var hasCompressedSize = false;
-                var hasFirstRowIndex = false;
+                var requiredLocation = new RequiredFields();
                 reader.BeginStruct(elementType);
                 while (reader.TryReadFieldHeader(out var locationFieldId, out var locationType,
                            out var locationInlineBool))
                 {
+                    requiredLocation.Add(locationFieldId);
                     switch (locationFieldId)
                     {
                         case 1:
                             offset = reader.ReadI64AsU64(locationType);
-                            hasOffset = true;
                             break;
                         case 2:
                             compressedSize = reader.ReadI32AsU32(locationType);
-                            hasCompressedSize = true;
                             break;
                         case 3:
                             firstRowIndex = reader.ReadI64AsU64(locationType);
-                            hasFirstRowIndex = true;
                             break;
                         default:
                             reader.Skip(locationType, locationInlineBool);
@@ -257,9 +254,7 @@ static class PageMetadataReader
                     }
                 }
 
-                if (!hasOffset || !hasCompressedSize || !hasFirstRowIndex)
-                    throw new CorruptParquetException(
-                        $"Offset index page location {i} is missing a required field.");
+                requiredLocation.Validate(ParquetRequiredFields.PageLocation);
 
                 destination[i].Offset = offset;
                 destination[i].CompressedSize = compressedSize;
@@ -267,12 +262,10 @@ static class PageMetadataReader
                 destination[i].HasLocation = true;
                 destination[i].HasFirstRowIndex = true;
             }
-            locationsCount = itemCount;
             count = MergeCount(count, itemCount, "page indexes");
         }
 
-        if (locationsCount < 0)
-            throw new CorruptParquetException("Offset index is missing page_locations.");
+        requiredIndex.Validate(ParquetRequiredFields.OffsetIndex);
     }
 
     static void ScanPageLocations(ParquetFileReader reader, ParquetColumnChunkInfo chunk, LeafColumn definition,

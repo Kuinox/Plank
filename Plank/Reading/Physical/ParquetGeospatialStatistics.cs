@@ -74,9 +74,10 @@ public sealed class ParquetBoundingBox
             else
                 reader.Skip(type, inlineBool);
         }
+        var required = new RequiredFields();
         for (var i = 0; i < 4; i++)
-            if (!values[i].HasValue)
-                throw new CorruptParquetException("Bounding box is missing a required XY coordinate.");
+            if (values[i].HasValue) required.Add(i + 1);
+        required.Validate(ParquetRequiredFields.BoundingBox);
         return new ParquetBoundingBox(values);
     }
 }

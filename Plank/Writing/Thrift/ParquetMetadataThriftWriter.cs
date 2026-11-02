@@ -139,6 +139,7 @@ static class ParquetMetadataThriftWriter
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
         var hasPageLocations = false;
+        var requiredIndex = new RequiredFields();
         reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
@@ -160,35 +161,29 @@ static class ParquetMetadataThriftWriter
                 var offset = 0UL;
                 var compressedPageSize = 0U;
                 var firstRowIndex = 0UL;
-                var hasOffset = false;
-                var hasCompressedPageSize = false;
-                var hasFirstRowIndex = false;
+                var requiredLocation = new RequiredFields();
                 reader.BeginStruct(elementType);
                 while (reader.TryReadFieldHeader(out var locationFieldId, out var locationType,
                            out var locationInlineBool))
                 {
+                    requiredLocation.Add(locationFieldId);
                     switch (locationFieldId)
                     {
                         case 1:
                             offset = reader.ReadI64AsU64(locationType, long.MaxValue);
-                            hasOffset = true;
                             break;
                         case 2:
                             compressedPageSize = reader.ReadI32AsU32(locationType, int.MaxValue);
-                            hasCompressedPageSize = true;
                             break;
                         case 3:
                             firstRowIndex = reader.ReadI64AsU64(locationType, long.MaxValue);
-                            hasFirstRowIndex = true;
                             break;
                         default:
                             reader.Skip(locationType, locationInlineBool);
                             break;
                     }
                 }
-                if (!hasOffset || !hasCompressedPageSize || !hasFirstRowIndex)
-                    throw new CorruptParquetException(
-                        $"Offset index page location {i} is missing a required field.");
+                requiredLocation.Validate(ParquetRequiredFields.PageLocation);
 
                 var previousLocation = writer.BeginStruct();
                 writer.WriteFieldI64(1, checked(checked((long)offset) + relocation));
@@ -197,9 +192,9 @@ static class ParquetMetadataThriftWriter
                 writer.EndStruct(previousLocation);
             }
             hasPageLocations = true;
+            requiredIndex.Add(1);
         }
-        if (!hasPageLocations)
-            throw new CorruptParquetException("Offset index is missing page_locations.");
+        requiredIndex.Validate(ParquetRequiredFields.OffsetIndex);
         if (reader.Remaining != 0)
             throw new CorruptParquetException("Offset index contains trailing bytes.");
         writer.EndStruct(previous);
