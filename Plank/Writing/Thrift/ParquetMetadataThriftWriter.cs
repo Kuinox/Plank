@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Text;
 using Plank.Reading;
 using Plank.Reading.Internal;
+using Plank.Reading.Logical.Internal;
 using Plank.Reading.Physical;
 using Plank.Schema;
 using TextEncoding = System.Text.Encoding;
@@ -133,71 +134,34 @@ static class ParquetMetadataThriftWriter
     }
 
     internal static void RelocateOffsetIndex(ref BufferWriter destination, ReadOnlySpan<byte> source,
-        long relocation)
+        long relocation, IParquetBufferPool pool)
     {
-        var reader = new CompactProtocolReader(source);
-        var writer = new CompactWriter(ref destination);
-        var previous = writer.BeginStruct();
-        var hasPageLocations = false;
-        var requiredIndex = new RequiredFields();
-        reader.BeginRootStruct();
-        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
+        ParquetBuffer entries = default;
+        try
         {
-            if (fieldId != 1)
-            {
-                reader.Skip(type, inlineBool);
-                continue;
-            }
-            if (hasPageLocations)
-                throw new CorruptParquetException("Offset index contains duplicate page_locations fields.");
-
-            var (count, elementType) = reader.ReadListHeader(type);
-            if (elementType != CompactProtocolType.Struct)
-                throw new CorruptParquetException("Offset index page_locations must contain structs.");
+            var capacity = 0;
+            var count = -1;
+            PageMetadataReader.ParseOffsetIndex(source, pool, ref entries, ref capacity, ref count);
+            var locations = PageMetadataReader.Entries(entries, count);
+            var writer = new CompactWriter(ref destination);
+            var previous = writer.BeginStruct();
             writer.WriteFieldHeader(1, CompactType.List);
-            writer.WriteListHeader(checked((int)count), CompactType.Struct);
-            for (var i = 0U; i < count; i++)
+            writer.WriteListHeader(count, CompactType.Struct);
+            foreach (ref readonly var location in locations)
             {
-                var offset = 0UL;
-                var compressedPageSize = 0U;
-                var firstRowIndex = 0UL;
-                var requiredLocation = new RequiredFields();
-                reader.BeginStruct(elementType);
-                while (reader.TryReadFieldHeader(out var locationFieldId, out var locationType,
-                           out var locationInlineBool))
-                {
-                    requiredLocation.Add(locationFieldId);
-                    switch (locationFieldId)
-                    {
-                        case 1:
-                            offset = reader.ReadI64AsU64(locationType, long.MaxValue);
-                            break;
-                        case 2:
-                            compressedPageSize = reader.ReadI32AsU32(locationType, int.MaxValue);
-                            break;
-                        case 3:
-                            firstRowIndex = reader.ReadI64AsU64(locationType, long.MaxValue);
-                            break;
-                        default:
-                            reader.Skip(locationType, locationInlineBool);
-                            break;
-                    }
-                }
-                requiredLocation.Validate(ParquetRequiredFields.PageLocation);
-
+                var offset = checked((long)location.Offset + relocation);
                 var previousLocation = writer.BeginStruct();
-                writer.WriteFieldI64(1, checked(checked((long)offset) + relocation));
-                writer.WriteFieldI32(2, checked((int)compressedPageSize));
-                writer.WriteFieldI64(3, checked((long)firstRowIndex));
+                writer.WriteFieldI64(1, offset);
+                writer.WriteFieldI32(2, (int)location.CompressedSize);
+                writer.WriteFieldI64(3, (long)location.FirstRowIndex);
                 writer.EndStruct(previousLocation);
             }
-            hasPageLocations = true;
-            requiredIndex.Add(1);
+            writer.EndStruct(previous);
         }
-        requiredIndex.Validate(ParquetRequiredFields.OffsetIndex);
-        if (reader.Remaining != 0)
-            throw new CorruptParquetException("Offset index contains trailing bytes.");
-        writer.EndStruct(previous);
+        finally
+        {
+            entries.Dispose();
+        }
     }
 
     internal static void WriteBloomFilterHeader(ref BufferWriter destination, int bitsetByteLength)

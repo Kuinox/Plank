@@ -32,7 +32,8 @@ static class PageMetadataReader
 
             if (!offsetIndex.IsEmpty)
             {
-                ParseOffsetIndex(offsetIndex.Span, reader.BufferPool, ref entries, ref capacity, ref count);
+                ParseOffsetIndex(offsetIndex.Span[..checked((int)chunk.OffsetIndexLength)], reader.BufferPool,
+                    ref entries, ref capacity, ref count);
                 ValidateLocations(reader, chunk, Entries(entries, count));
                 if (columnIndex.IsEmpty)
                     PopulateHeaderStatistics(reader, chunk, definition, Entries(entries, count),
@@ -205,11 +206,12 @@ static class PageMetadataReader
         return itemCount;
     }
 
-    static void ParseOffsetIndex(ReadOnlySpan<byte> bytes, IParquetBufferPool pool, ref ParquetBuffer entries,
+    internal static void ParseOffsetIndex(ReadOnlySpan<byte> bytes, IParquetBufferPool pool, ref ParquetBuffer entries,
         ref int capacity, ref int count)
     {
         var reader = new CompactProtocolReader(bytes);
         var requiredIndex = new RequiredFields();
+        var hasPageLocations = false;
         reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
@@ -219,6 +221,9 @@ static class PageMetadataReader
                 continue;
             }
 
+            if (hasPageLocations)
+                throw new CorruptParquetException("Offset index contains duplicate page_locations fields.");
+            hasPageLocations = true;
             requiredIndex.Add(1);
             var (listCount, elementType) = reader.ReadListHeader(type);
             if (elementType != CompactProtocolType.Struct)
@@ -266,6 +271,8 @@ static class PageMetadataReader
         }
 
         requiredIndex.Validate(ParquetRequiredFields.OffsetIndex);
+        if (reader.Remaining != 0)
+            throw new CorruptParquetException("Offset index contains trailing bytes.");
     }
 
     static void ScanPageLocations(ParquetFileReader reader, ParquetColumnChunkInfo chunk, LeafColumn definition,
@@ -510,6 +517,6 @@ static class PageMetadataReader
         capacity = (int)nextCapacity;
     }
 
-    static Span<PageMetadataEntry> Entries(ParquetBuffer buffer, int count)
+    internal static Span<PageMetadataEntry> Entries(ParquetBuffer buffer, int count)
         => count == 0 ? [] : ParquetBuffer.AsSpan<PageMetadataEntry>(buffer, count);
 }
