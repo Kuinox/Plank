@@ -15,10 +15,10 @@
 
   <ItemGroup>
     <None Include="..\README.md" Pack="true" PackagePath="" Link="README.md" />
+    <None Include="..\third_party\K4os.Compression.LZ4\LICENSE" Pack="true" PackagePath="licenses/" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
     <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="3.3.4">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -44,6 +44,15 @@
                       ReferenceOutputAssembly="false"
                       PrivateAssets="all" />
   </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Codec.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Level.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\**\*.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\**\*.cs"
+                     Exclude="..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\Pubternal.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\UnmanagedResources.cs" />
+  </ItemGroup>
+
+  <Target Name="RequireVendoredLz4" BeforeTargets="CoreCompile" Condition="!Exists('$(MSBuildProjectDirectory)/../third_party/K4os.Compression.LZ4/src/K4os.Compression.LZ4/LZ4Codec.cs')">
+    <Error Text="K4os LZ4 source is missing. Run git submodule update --init --recursive." />
+  </Target>
 
   <ItemGroup>
     <AdditionalFiles Include="BannedSymbols.txt" />

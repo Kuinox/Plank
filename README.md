@@ -97,7 +97,15 @@ Plank currently targets .NET 10.
 ```sh
 git clone --recurse-submodules https://github.com/Kuinox/Plank.git
 cd Plank
-dotnet test --solution Plank.sln --configuration Release
+# For an existing clone, also initialize or update the pinned dependencies:
+git submodule update --init --recursive
+dotnet build -c Release Plank.Tests/Plank.Tests.csproj
+./Plank.Tests/bin/Release/net10.0/Plank.Tests
 ```
+
+### Third-party code
+
+Plank includes the LZ4 block codec from [K4os.Compression.LZ4](https://github.com/MiloszKrajewski/K4os.Compression.LZ4),
+licensed under the [MIT license](third_party/K4os.Compression.LZ4/LICENSE). The license is also included in the NuGet package.
 
 [MIT License](LICENSE)

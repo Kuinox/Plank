@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Hashing;
-using K4os.Compression.LZ4;
+using Plank.Vendored.LZ4;
 
 namespace Plank.Reading;
 

@@ -1,5 +1,5 @@
 using System.IO.Compression;
-using K4os.Compression.LZ4;
+using Plank.Vendored.LZ4;
 using Plank.Schema;
 using ZstdSharp.Unsafe;
 
