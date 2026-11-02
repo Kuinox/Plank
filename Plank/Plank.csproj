@@ -46,8 +46,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <AdditionalFiles Include="..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Codec.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Level.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\**\*.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\**\*.cs"
-                     Exclude="..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\Pubternal.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\UnmanagedResources.cs" />
+    <Compile Include="..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Codec.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Level.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\**\*.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\**\*.cs"
+             Exclude="..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\Pubternal.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\UnmanagedResources.cs" />
   </ItemGroup>
 
   <Target Name="RequireVendoredLz4" BeforeTargets="CoreCompile" Condition="!Exists('$(MSBuildProjectDirectory)/../third_party/K4os.Compression.LZ4/src/K4os.Compression.LZ4/LZ4Codec.cs')">
