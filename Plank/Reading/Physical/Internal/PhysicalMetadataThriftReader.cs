@@ -679,6 +679,8 @@ static class PhysicalMetadataThriftReader
                     dataPageOffset = reader.ReadI64AsU64();
                     break;
                 case 3:
+                    if (type != CompactProtocolType.Struct)
+                        throw new CorruptParquetException("Column chunk meta_data must be a struct.");
                     ReadColumnMetadata(ref reader, metadata, ref physicalType, ref compression, ref dataPageOffset,
                         ref dictionaryPageOffset, ref totalCompressedSize, ref totalUncompressedSize, ref valueCount,
                         ref encodings, ref statistics, ref geospatialOffset, ref geospatialLength, ref bloomFilterOffset, ref bloomFilterLength,
