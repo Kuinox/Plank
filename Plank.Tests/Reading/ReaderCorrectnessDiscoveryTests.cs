@@ -170,6 +170,34 @@ internal sealed class ReaderCorrectnessDiscoveryTests
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void PageHeaderRejectsStatisticsWithWrongCompactType(bool exactness)
+    {
+        // A double field masquerades as either max_value (binary) or is_max_value_exact (bool).
+        // Treating it as the expected type ends the header early, inside the double's bytes.
+        byte[] header =
+        [
+            0x15, 0x00, 0x15, 0x02, 0x15, 0x02, 0x2c,
+            0x15, 0x02, 0x15, 0x00, 0x15, 0x06, 0x15, 0x06, 0x1c,
+            exactness ? (byte)0x77 : (byte)0x57, exactness ? (byte)0x01 : (byte)0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        ];
+
+        Assert.Throws<CorruptParquetException>(() => PageHeaderReader.Read(header));
+    }
+
+    [Test]
+    public void PageHeaderRejectsDictionaryHeaderWithWrongCompactType()
+    {
+        // Field 7 is a double, not a dictionary-header struct. Its bytes happen
+        // to look like a valid struct followed by the end of the page header.
+        byte[] header = [0x15, 0x00, 0x15, 0x02, 0x15, 0x02, 0x47, 0x11, 0x06, 0x00, 0x00];
+
+        Assert.Throws<CorruptParquetException>(() => PageHeaderReader.Read(header));
+    }
+
+    [Test]
     public async Task LegacyTimeMillisIsAdjustedToUtc()
     {
         var logicalType = ReadLegacyLogicalType(physicalType: 1, convertedType: 7);

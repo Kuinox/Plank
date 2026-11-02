@@ -67,12 +67,12 @@ internal sealed class MapLogicalTypeMetadataTests
         var footerLength = BinaryPrimitives.ReadInt32LittleEndian(file.Slice(file.Length - 8, sizeof(int)));
         var footerOffset = checked(file.Length - 8 - footerLength);
         var reader = new CompactProtocolReader(file.Slice(footerOffset, footerLength));
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId == 2)
             {
-                var (count, elementType) = reader.ReadListHeader();
+                var (count, elementType) = reader.ReadListHeader(type);
                 if (count < 2 || elementType != CompactProtocolType.Struct)
                     throw new InvalidOperationException("Footer schema does not contain a root and MAP node.");
 
@@ -91,13 +91,13 @@ internal sealed class MapLogicalTypeMetadataTests
     {
         var hasConvertedMap = false;
         var hasLogicalMap = false;
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 6:
-                    hasConvertedMap = reader.ReadI32() == 1;
+                    hasConvertedMap = reader.ReadI32(type) == 1;
                     break;
                 case 10:
                     hasLogicalMap = ReadLogicalMapAnnotation(ref reader);
@@ -114,7 +114,7 @@ internal sealed class MapLogicalTypeMetadataTests
     static bool ReadLogicalMapAnnotation(ref CompactProtocolReader reader)
     {
         var hasLogicalMap = false;
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             if (fieldId == 2)

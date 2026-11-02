@@ -146,7 +146,7 @@ internal sealed class EmptyRowGroupMutationTests
         var group = physical.Metadata.RowGroups[0];
         var groupOffset = checked((int)group.MetadataOffset);
         var reader = new CompactProtocolReader(bytes.AsSpan(groupOffset, group.MetadataLength));
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var field, out var type, out var inlineBool))
         {
             if (field != 1)
@@ -154,8 +154,8 @@ internal sealed class EmptyRowGroupMutationTests
                 reader.Skip(type, inlineBool);
                 continue;
             }
-            _ = reader.ReadListHeader();
-            reader.BeginStruct();
+            _ = reader.ReadListHeader(type);
+            reader.BeginRootStruct();
             while (reader.TryReadFieldHeader(out field, out type, out inlineBool))
             {
                 if (field != 3)
@@ -163,7 +163,7 @@ internal sealed class EmptyRowGroupMutationTests
                     reader.Skip(type, inlineBool);
                     continue;
                 }
-                reader.BeginStruct();
+                reader.BeginRootStruct();
                 while (reader.TryReadFieldHeader(out field, out type, out inlineBool))
                 {
                     if (field != targetField)
@@ -172,7 +172,7 @@ internal sealed class EmptyRowGroupMutationTests
                         continue;
                     }
                     var offset = reader.Offset;
-                    _ = reader.ReadI64();
+                    _ = reader.ReadI64(type);
                     if (reader.Offset != offset + 1 || value > 63)
                         throw new InvalidOperationException("Expected a single-byte integer fixture field.");
                     bytes[groupOffset + offset] = checked((byte)(value * 2));

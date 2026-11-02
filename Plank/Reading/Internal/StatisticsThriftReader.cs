@@ -2,7 +2,7 @@ namespace Plank.Reading.Internal;
 
 static class StatisticsThriftReader
 {
-    internal static EncodedStatistics Read(ref CompactProtocolReader reader)
+    internal static EncodedStatistics Read(ref CompactProtocolReader reader, CompactProtocolType structType)
     {
         var legacyMinimumOffset = 0;
         var legacyMinimumLength = 0;
@@ -23,14 +23,14 @@ static class StatisticsThriftReader
         var minimumExact = true;
         var maximumExact = true;
 
-        reader.BeginStruct();
+        reader.BeginStruct(structType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 1:
                 {
-                    var value = reader.ReadBinary();
+                    var value = reader.ReadBinary(type);
                     legacyMaximumOffset = reader.Offset - value.Length;
                     legacyMaximumLength = value.Length;
                     hasLegacyMaximum = true;
@@ -38,27 +38,27 @@ static class StatisticsThriftReader
                 }
                 case 2:
                 {
-                    var value = reader.ReadBinary();
+                    var value = reader.ReadBinary(type);
                     legacyMinimumOffset = reader.Offset - value.Length;
                     legacyMinimumLength = value.Length;
                     hasLegacyMinimum = true;
                     break;
                 }
                 case 3:
-                    nullCount = reader.ReadI64();
+                    nullCount = reader.ReadI64(type);
                     if (nullCount < 0)
                         throw new CorruptParquetException("Statistics null count cannot be negative.");
                     hasNullCount = true;
                     break;
                 case 4:
-                    distinctCount = reader.ReadI64();
+                    distinctCount = reader.ReadI64(type);
                     if (distinctCount < 0)
                         throw new CorruptParquetException("Statistics distinct count cannot be negative.");
                     hasDistinctCount = true;
                     break;
                 case 5:
                 {
-                    var value = reader.ReadBinary();
+                    var value = reader.ReadBinary(type);
                     maximumOffset = reader.Offset - value.Length;
                     maximumLength = value.Length;
                     hasMaximum = true;
@@ -66,17 +66,17 @@ static class StatisticsThriftReader
                 }
                 case 6:
                 {
-                    var value = reader.ReadBinary();
+                    var value = reader.ReadBinary(type);
                     minimumOffset = reader.Offset - value.Length;
                     minimumLength = value.Length;
                     hasMinimum = true;
                     break;
                 }
                 case 7:
-                    maximumExact = reader.ReadBool(inlineBool);
+                    maximumExact = reader.ReadBool(type, inlineBool);
                     break;
                 case 8:
-                    minimumExact = reader.ReadBool(inlineBool);
+                    minimumExact = reader.ReadBool(type, inlineBool);
                     break;
                 default:
                     reader.Skip(type, inlineBool);

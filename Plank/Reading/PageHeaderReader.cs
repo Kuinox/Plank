@@ -61,35 +61,35 @@ static class PageHeaderReader
         var definitionLevelEncoding = EncodingKind.Rle;
         var statistics = default(EncodedStatistics);
 
-        reader.BeginStruct();
+        reader.BeginRootStruct();
 
         while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 1:
-                    type = (PageHeaderType)reader.ReadI32();
+                    type = (PageHeaderType)reader.ReadI32(fieldType);
                     break;
                 case 2:
-                    uncompressedPageSize = reader.ReadI32AsU32(max: maxUncompressedPageSize);
+                    uncompressedPageSize = reader.ReadI32AsU32(fieldType, max: maxUncompressedPageSize);
                     break;
                 case 3:
-                    compressedPageSize = reader.ReadI32AsU32();
+                    compressedPageSize = reader.ReadI32AsU32(fieldType);
                     break;
                 case 4:
-                    crc = unchecked((uint)reader.ReadI32());
+                    crc = unchecked((uint)reader.ReadI32(fieldType));
                     break;
                 case 5:
                     (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding, statistics)
-                        = ReadDataPageHeader(ref reader);
+                        = ReadDataPageHeader(ref reader, fieldType);
                     break;
                 case 7:
-                    valueCount = ReadDictionaryHeader(ref reader);
+                    valueCount = ReadDictionaryHeader(ref reader, fieldType);
                     break;
                 case 8:
                     (valueCount, encoding, nullCount, rowCount, repetitionLevelsByteLength,
                         definitionLevelsByteLength, isCompressed, statistics)
-                        = ReadDataPageV2Header(ref reader);
+                        = ReadDataPageV2Header(ref reader, fieldType);
                     break;
                 default:
                     reader.Skip(fieldType, inlineBool);
@@ -104,7 +104,7 @@ static class PageHeaderReader
 
     static (uint ValueCount, EncodingKind Encoding, EncodingKind RepetitionLevelEncoding,
         EncodingKind DefinitionLevelEncoding, EncodedStatistics Statistics)
-        ReadDataPageHeader(ref CompactProtocolReader reader)
+        ReadDataPageHeader(ref CompactProtocolReader reader, CompactProtocolType structType)
     {
         var valueCount = 0U;
         var encoding = EncodingKind.Plain;
@@ -112,32 +112,26 @@ static class PageHeaderReader
         var definitionLevelEncoding = EncodingKind.Rle;
         var statistics = default(EncodedStatistics);
 
-        reader.BeginStruct();
+        reader.BeginStruct(structType);
 
         while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 1:
-                    valueCount = reader.ReadI32AsU32();
+                    valueCount = reader.ReadI32AsU32(fieldType);
                     break;
                 case 2:
-                    encoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32());
+                    encoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32(fieldType));
                     break;
                 case 3:
-                    if (fieldType == CompactProtocolType.I32)
-                        definitionLevelEncoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32());
-                    else
-                        reader.Skip(fieldType, inlineBool);
+                    definitionLevelEncoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32(fieldType));
                     break;
                 case 4:
-                    if (fieldType == CompactProtocolType.I32)
-                        repetitionLevelEncoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32());
-                    else
-                        reader.Skip(fieldType, inlineBool);
+                    repetitionLevelEncoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32(fieldType));
                     break;
                 case 5:
-                    statistics = StatisticsThriftReader.Read(ref reader);
+                    statistics = StatisticsThriftReader.Read(ref reader, fieldType);
                     break;
                 default:
                     reader.Skip(fieldType, inlineBool);
@@ -148,14 +142,14 @@ static class PageHeaderReader
         return (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding, statistics);
     }
 
-    static uint ReadDictionaryHeader(ref CompactProtocolReader reader)
+    static uint ReadDictionaryHeader(ref CompactProtocolReader reader, CompactProtocolType structType)
     {
         var valueCount = 0U;
-        reader.BeginStruct();
+        reader.BeginStruct(structType);
         while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
             if (fieldId == 1)
-                valueCount = reader.ReadI32AsU32();
+                valueCount = reader.ReadI32AsU32(fieldType);
             else
                 reader.Skip(fieldType, inlineBool);
         }
@@ -165,7 +159,7 @@ static class PageHeaderReader
 
     static (uint ValueCount, EncodingKind Encoding, uint NullCount, uint RowCount, uint RepetitionLevelsByteLength,
         uint DefinitionLevelsByteLength, bool IsCompressed, EncodedStatistics Statistics)
-        ReadDataPageV2Header(ref CompactProtocolReader reader)
+        ReadDataPageV2Header(ref CompactProtocolReader reader, CompactProtocolType structType)
     {
         var valueCount = 0U;
         var encoding = EncodingKind.Plain;
@@ -176,35 +170,35 @@ static class PageHeaderReader
         var isCompressed = true; // spec default
         var statistics = default(EncodedStatistics);
 
-        reader.BeginStruct();
+        reader.BeginStruct(structType);
 
         while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 1:
-                    valueCount = reader.ReadI32AsU32();
+                    valueCount = reader.ReadI32AsU32(fieldType);
                     break;
                 case 2:
-                    nullCount = reader.ReadI32AsU32();
+                    nullCount = reader.ReadI32AsU32(fieldType);
                     break;
                 case 3:
-                    rowCount = reader.ReadI32AsU32();
+                    rowCount = reader.ReadI32AsU32(fieldType);
                     break;
                 case 4:
-                    encoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32());
+                    encoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32(fieldType));
                     break;
                 case 5:
-                    definitionLevelsByteLength = reader.ReadI32AsU32();
+                    definitionLevelsByteLength = reader.ReadI32AsU32(fieldType);
                     break;
                 case 6:
-                    repetitionLevelsByteLength = reader.ReadI32AsU32();
+                    repetitionLevelsByteLength = reader.ReadI32AsU32(fieldType);
                     break;
                 case 7:
-                    isCompressed = reader.ReadBool(inlineBool);
+                    isCompressed = reader.ReadBool(fieldType, inlineBool);
                     break;
                 case 8:
-                    statistics = StatisticsThriftReader.Read(ref reader);
+                    statistics = StatisticsThriftReader.Read(ref reader, fieldType);
                     break;
                 default:
                     reader.Skip(fieldType, inlineBool);

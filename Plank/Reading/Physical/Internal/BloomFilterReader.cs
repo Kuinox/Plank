@@ -80,33 +80,29 @@ static class BloomFilterReader
         var hasHash = false;
         var hasCompression = false;
         bitsetLength = 0;
-        reader.BeginStruct();
+        reader.BeginRootStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             switch (fieldId)
             {
                 case 1:
                     ThrowIfDuplicate(hasLength, "numBytes");
-                    RequireType(type, CompactProtocolType.I32, "numBytes");
-                    bitsetLength = checked((int)reader.ReadI32AsU32(ParquetBloomFilterOptions.MaximumSupportedBytes));
+                    bitsetLength = checked((int)reader.ReadI32AsU32(type, ParquetBloomFilterOptions.MaximumSupportedBytes));
                     hasLength = true;
                     break;
                 case 2:
                     ThrowIfDuplicate(hasAlgorithm, "algorithm");
-                    RequireType(type, CompactProtocolType.Struct, "algorithm");
-                    ReadSupportedUnion(ref reader, "split-block algorithm");
+                    ReadSupportedUnion(ref reader, type, "split-block algorithm");
                     hasAlgorithm = true;
                     break;
                 case 3:
                     ThrowIfDuplicate(hasHash, "hash");
-                    RequireType(type, CompactProtocolType.Struct, "hash");
-                    ReadSupportedUnion(ref reader, "XXH64 hash");
+                    ReadSupportedUnion(ref reader, type, "XXH64 hash");
                     hasHash = true;
                     break;
                 case 4:
                     ThrowIfDuplicate(hasCompression, "compression");
-                    RequireType(type, CompactProtocolType.Struct, "compression");
-                    ReadSupportedUnion(ref reader, "uncompressed representation");
+                    ReadSupportedUnion(ref reader, type, "uncompressed representation");
                     hasCompression = true;
                     break;
                 default:
@@ -124,19 +120,19 @@ static class BloomFilterReader
         return reader.Offset;
     }
 
-    static void ReadSupportedUnion(ref CompactProtocolReader reader, string description)
+    static void ReadSupportedUnion(ref CompactProtocolReader reader, CompactProtocolType wireType, string description)
     {
         var supported = false;
         var fieldCount = 0;
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
             fieldCount++;
-            if (fieldId == 1 && type == CompactProtocolType.Struct)
+            if (fieldId == 1)
             {
                 if (supported)
                     throw new CorruptParquetException($"Bloom-filter {description} is declared more than once.");
-                ReadEmptyMarker(ref reader, description);
+                ReadEmptyMarker(ref reader, type, description);
                 supported = true;
                 continue;
             }
@@ -150,9 +146,9 @@ static class BloomFilterReader
             throw new CorruptParquetException($"Bloom-filter {description} union contains multiple alternatives.");
     }
 
-    static void ReadEmptyMarker(ref CompactProtocolReader reader, string description)
+    static void ReadEmptyMarker(ref CompactProtocolReader reader, CompactProtocolType wireType, string description)
     {
-        reader.BeginStruct();
+        reader.BeginStruct(wireType);
         if (!reader.TryReadFieldHeader(out _, out var type, out var inlineBool))
             return;
 
@@ -160,13 +156,6 @@ static class BloomFilterReader
         while (reader.TryReadFieldHeader(out _, out type, out inlineBool))
             reader.Skip(type, inlineBool);
         throw new CorruptParquetException($"Bloom-filter {description} marker must be empty.");
-    }
-
-    static void RequireType(CompactProtocolType actual, CompactProtocolType expected, string field)
-    {
-        if (actual != expected)
-            throw new CorruptParquetException(
-                $"Bloom-filter header field '{field}' has compact type {actual}, expected {expected}.");
     }
 
     static void ThrowIfDuplicate(bool present, string field)
