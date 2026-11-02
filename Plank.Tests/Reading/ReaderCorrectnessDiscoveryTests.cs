@@ -80,6 +80,21 @@ internal sealed class ReaderCorrectnessDiscoveryTests
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void DataPageHeaderRejectsMissingValueEncoding(bool v2)
+    {
+        // Compact Thrift page header with the value encoding field omitted.
+        byte[] header = v2
+            ? [0x15, 0x06, 0x15, 0x02, 0x15, 0x02, 0x5c,
+                0x15, 0x0a, 0x15, 0x00, 0x15, 0x0a, 0x25, 0x00, 0x15, 0x00, 0x00, 0x00]
+            : [0x15, 0x00, 0x15, 0x02, 0x15, 0x02, 0x2c,
+                0x15, 0x0a, 0x25, 0x06, 0x15, 0x06, 0x00, 0x00];
+
+        Assert.Throws<CorruptParquetException>(() => PageHeaderReader.Read(header));
+    }
+
+    [Test]
     public void SnappyRejectsOutputShorterThanPageHeaderSize()
     {
         byte[] compressed = [0x04, 0x0C, 1, 2, 3, 4];

@@ -108,6 +108,7 @@ static class PageHeaderReader
     {
         var valueCount = 0U;
         var encoding = EncodingKind.Plain;
+        var hasEncoding = false;
         var repetitionLevelEncoding = EncodingKind.Rle;
         var definitionLevelEncoding = EncodingKind.Rle;
         var statistics = default(EncodedStatistics);
@@ -122,7 +123,10 @@ static class PageHeaderReader
                     valueCount = reader.ReadI32AsU32();
                     break;
                 case 2:
+                    if (fieldType != CompactProtocolType.I32)
+                        throw new CorruptParquetException("Data page value encoding has an invalid type.");
                     encoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32());
+                    hasEncoding = true;
                     break;
                 case 3:
                     if (fieldType == CompactProtocolType.I32)
@@ -144,6 +148,9 @@ static class PageHeaderReader
                     break;
             }
         }
+
+        if (!hasEncoding)
+            throw new CorruptParquetException("Data page value encoding is missing.");
 
         return (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding, statistics);
     }
@@ -169,6 +176,7 @@ static class PageHeaderReader
     {
         var valueCount = 0U;
         var encoding = EncodingKind.Plain;
+        var hasEncoding = false;
         var nullCount = 0U;
         var rowCount = 0U;
         var repetitionLevelsByteLength = 0U;
@@ -192,7 +200,10 @@ static class PageHeaderReader
                     rowCount = reader.ReadI32AsU32();
                     break;
                 case 4:
+                    if (fieldType != CompactProtocolType.I32)
+                        throw new CorruptParquetException("Data page value encoding has an invalid type.");
                     encoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32());
+                    hasEncoding = true;
                     break;
                 case 5:
                     definitionLevelsByteLength = reader.ReadI32AsU32();
@@ -211,6 +222,9 @@ static class PageHeaderReader
                     break;
             }
         }
+
+        if (!hasEncoding)
+            throw new CorruptParquetException("Data page value encoding is missing.");
 
         return (valueCount, encoding, nullCount, rowCount, repetitionLevelsByteLength, definitionLevelsByteLength,
             isCompressed, statistics);
