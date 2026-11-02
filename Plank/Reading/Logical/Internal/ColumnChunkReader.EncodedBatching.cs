@@ -249,6 +249,7 @@ static partial class ColumnChunkReader
                 break;
             }
             case EncodedDecoderKind.ByteStreamSplitBinary:
+                RequireByteStreamSplitLanes(dataPayload, (uint)physicalCount, state.BinaryFixedLength, column);
                 _ = GetFixedBinaryPayloadLength(dataPayload, physicalCount, state.BinaryFixedLength);
                 break;
         }
