@@ -23,7 +23,8 @@ static class EncodingCompatibility
             EncodingKind.DeltaBinaryPacked =>
                 physicalType is ParquetPhysicalType.Int32 or ParquetPhysicalType.Int64,
             EncodingKind.DeltaLengthByteArray => physicalType == ParquetPhysicalType.ByteArray,
-            EncodingKind.DeltaByteArray => physicalType == ParquetPhysicalType.ByteArray,
+            EncodingKind.DeltaByteArray =>
+                physicalType is ParquetPhysicalType.ByteArray or ParquetPhysicalType.FixedLenByteArray,
             EncodingKind.ByteStreamSplit =>
                 physicalType is ParquetPhysicalType.Int32 or ParquetPhysicalType.Int64
                     or ParquetPhysicalType.Float or ParquetPhysicalType.Double
