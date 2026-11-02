@@ -8,6 +8,7 @@ namespace Plank.Reading.Logical.Internal;
 static class PageMetadataReader
 {
     const int InitialPageHeaderLength = 64 * 1024;
+    const int ExactHeaderProbeCount = 128;
 
     internal static ParquetDataPageMetadataCollection Open(ParquetFileReader reader, int rowGroupOrdinal,
         int physicalColumnOrdinal, LeafColumn definition, ulong rowCount)
@@ -371,13 +372,14 @@ static class PageMetadataReader
         }
     }
 
-    /// <summary>Reads the page header at <paramref name="offset"/> and nothing past it.</summary>
+    /// <summary>Reads the page header at <paramref name="offset"/>.</summary>
     /// <remarks>
-    /// A page header does not carry its own length, so the window has to grow
-    /// until one parses. It grows by exactly what the parse says it is short,
-    /// which is what keeps this from reading page payload: a caller scanning a
-    /// chunk's page metadata should not have to pull the chunk's data with it,
-    /// and HeaderFallbackInspectionReadsOnlyHeaders holds it to that.
+    /// A page header has no length prefix. For the first 128 probes, read exactly
+    /// the shortfall reported by the parser, without reading page payload. After
+    /// that, grow the window geometrically to bound repeated parsing work. Those
+    /// later reads may include payload or subsequent pages, but never extend past
+    /// the remaining column chunk or indexed page. A parseable header can cause
+    /// at most twice its length to be read, unless capped by that boundary.
     ///
     /// The shortfall used to be inferred by comparing the parse failure's Message
     /// against a literal. That missed the message a half-read statistics min/max
@@ -396,13 +398,14 @@ static class PageMetadataReader
         var maxUncompressedPageSize = (uint)Math.Min(totalUncompressedSize, uint.MaxValue);
         var length = 0;
         var missingBytes = 1;
+        var probes = 0;
         try
         {
             while (true)
             {
-                // Grow storage as necessary, but read exactly the shortfall so metadata
-                // inspection never reads page payload bytes.
                 var wanted = PageHeaderReader.GetRequiredBufferLength(length, missingBytes, maxLength);
+                if (probes >= ExactHeaderProbeCount)
+                    wanted = (int)Math.Min(maxLength, Math.Max((long)wanted, (long)length * 2));
                 if (wanted > buffer.Length)
                 {
                     var capacity = (uint)Math.Min(maxLength, Math.Max((long)buffer.Length * 2, wanted));
@@ -413,6 +416,7 @@ static class PageMetadataReader
                 }
                 reader.Source.ReadExactly(offset + (ulong)length, buffer.Span[length..wanted]);
                 length = wanted;
+                probes++;
 
                 if (!PageHeaderReader.TryRead(buffer.Span[..length], maxUncompressedPageSize, out var header,
                         out missingBytes))
@@ -422,9 +426,9 @@ static class PageMetadataReader
                 if (header.Type == PageHeaderType.DataPageV2 && !statistics.HasNullCount)
                     statistics = WithNullCount(statistics, header.NullCount);
 
-                // Statistics offsets refer to the complete parsed header window.
+                // Statistics offsets refer to the parsed header, not any read-ahead.
                 copiedStatistics = copyStatistics
-                    ? statisticsBuilder.Copy(buffer.Span[..length], statistics)
+                    ? statisticsBuilder.Copy(buffer.Span[..header.HeaderLength], statistics)
                     : default;
                 return header;
             }

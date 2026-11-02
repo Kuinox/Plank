@@ -107,6 +107,81 @@ internal sealed class LargePageHeaderTests
     }
 
     [Test]
+    public void LongFormFieldsDoNotCauseQuadraticHeaderProbing()
+    {
+        var (schema, file, _) = CreateFile(valueLength: 1000);
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(file));
+        var chunk = physical.Metadata.ColumnChunk(0, 0);
+        // Repeated long-form field 9, inline true: field IDs stay within i16,
+        // but the header never terminates before the end of the chunk.
+        var bytes = file.AsSpan(checked((int)chunk.ChunkOffset), checked((int)chunk.TotalCompressedSize));
+        for (var i = 0; i < bytes.Length; i++)
+            bytes[i] = (i & 1) == 0 ? (byte)0x01 : (byte)0x12;
+        using var source = new TrackingReadSource(file);
+        using var reader = schema.CreateReader(source);
+        source.Reads.Clear();
+
+        Assert.Throws<CorruptParquetException>(() => reader.RowGroups[0].GetColumnMetadata(0).OpenPages());
+        if (source.Reads.Count > 160)
+            throw new InvalidOperationException($"Header probe performed {source.Reads.Count} reads.");
+        foreach (var (offset, length) in source.Reads)
+            if (offset < chunk.ChunkOffset || offset + (ulong)length > chunk.ChunkOffset + chunk.TotalCompressedSize)
+                throw new InvalidOperationException("Header probe read outside the column chunk.");
+    }
+
+    [Test]
+    public void LongHeaderReadAheadPreservesPageLocation()
+    {
+        var (schema, file, _) = CreateFile(valueLength: 1000);
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(file));
+        var chunk = physical.Metadata.ColumnChunk(0, 0);
+        var bytes = file.AsSpan(checked((int)chunk.ChunkOffset), checked((int)chunk.TotalCompressedSize));
+        const int fieldCount = 512;
+        const int headerLength = 10 + 2 * fieldCount + 1;
+        var payloadLength = bytes.Length - headerLength;
+        var position = 0;
+        bytes[position++] = 0x15; // type: data page
+        bytes[position++] = 0;
+        bytes[position++] = 0x15; // uncompressed_page_size
+        WriteSize(bytes, ref position, payloadLength);
+        bytes[position++] = 0x15; // compressed_page_size
+        WriteSize(bytes, ref position, payloadLength);
+        for (var i = 0; i < fieldCount; i++)
+        {
+            bytes[position++] = 0x01;
+            bytes[position++] = 0x12;
+        }
+        bytes[position++] = 0; // end of PageHeader
+        if (position != headerLength)
+            throw new InvalidOperationException("Unexpected fixture header length.");
+
+        using var source = new TrackingReadSource(file);
+        using var reader = schema.CreateReader(source);
+        source.Reads.Clear();
+        using var pages = reader.RowGroups[0].GetColumnMetadata(0).OpenPages();
+        if (pages.Count != 1 || pages[0].Offset != chunk.ChunkOffset ||
+            pages[0].CompressedSize != chunk.TotalCompressedSize)
+            throw new InvalidOperationException("Read-ahead changed the scanned page location.");
+        var bytesRead = source.Reads.Sum(read => read.Length);
+        if (bytesRead <= headerLength || bytesRead > 2 * headerLength || source.Reads.Count > 160)
+            throw new InvalidOperationException($"Unexpected header read-ahead: {bytesRead} bytes.");
+
+        static void WriteSize(Span<byte> destination, ref int offset, int value)
+        {
+            var encoded = (uint)value * 2;
+            for (var i = 0; i < 3; i++)
+            {
+                destination[offset++] = (byte)((encoded & 0x7f) | (i < 2 ? 0x80U : 0));
+                encoded >>= 7;
+            }
+            if (encoded != 0)
+                throw new InvalidOperationException("Fixture size exceeds three-byte varint.");
+        }
+    }
+
+    [Test]
     public void TruncatedHeaderCannotGrowPastItsPageBoundary()
     {
         var (_, file, _) = CreateFile();
