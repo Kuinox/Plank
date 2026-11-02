@@ -9,6 +9,32 @@ namespace Plank.Tests.Reading;
 internal sealed class ColumnValueCountValidationTests
 {
     [Test]
+    public void RepeatedAncestorAllowsDifferentCountsAcrossRowGroups()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.List("numbers", ColumnDefinition.RequiredLeaf("element", ParquetPhysicalType.Int32),
+                repetition: ParquetRepetition.Required)
+        ]);
+        using var stream = new MemoryStream();
+        using (var writer = schema.CreateWriter(stream, new ParquetWriterOptions { Compression = CompressionKind.None }))
+        {
+            for (var i = 0; i < 2; i++)
+            {
+                var rowGroup = writer.StartRowGroup();
+                var column = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
+                column.Serialize([new[] { 1, 2, 3 }, new[] { 4, 5 }]);
+                rowGroup.Write(column);
+            }
+            writer.CloseFile();
+        }
+
+        using var reader = new ParquetFileReader();
+        reader.Reset(new MemoryStream(stream.ToArray(), writable: false));
+        if (reader.Metadata.RowGroupCount != 2)
+            throw new InvalidOperationException("Expected two row groups.");
+    }
+
+    [Test]
     [Arguments(false)]
     [Arguments(true)]
     public void NonRepeatedColumnValueCountMustMatchRowCount(bool nested)

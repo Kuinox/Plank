@@ -150,9 +150,16 @@ static class PhysicalMetadataThriftReader
             schemaNodes[ordinal] = node;
             if (node.PhysicalType.HasValue)
             {
+                var repeated = false;
+                var ancestor = ordinal;
+                while (ancestor >= 0 && schemaNodes[ancestor].ParentOrdinal >= 0)
+                {
+                    repeated |= schemaNodes[ancestor].Repetition == ParquetRepetition.Repeated;
+                    ancestor = schemaNodes[ancestor].ParentOrdinal;
+                }
                 var columnOrdinal = metadata.ColumnCount++;
                 columns[columnOrdinal] = new ParquetColumnSchemaInfo(columnOrdinal, ordinal, depth,
-                    node.PhysicalType.Value, node.TypeLength, node.LogicalType);
+                    node.PhysicalType.Value, node.TypeLength, node.LogicalType, repeated);
             }
 
             if (node.ChildCount <= 0)
@@ -571,17 +578,8 @@ static class PhysicalMetadataThriftReader
 
         for (var i = 0; i < columnCount; i++)
         {
-            var nodeOrdinal = metadata.ColumnStorage[i].NodeOrdinal;
-            var nodes = metadata.SchemaNodeStorage;
-            var repeated = false;
-            while (nodeOrdinal >= 0 && nodes[nodeOrdinal].ParentOrdinal >= 0)
-            {
-                var node = nodes[nodeOrdinal];
-                repeated |= node.Repetition == ParquetRepetition.Repeated;
-                nodeOrdinal = node.ParentOrdinal;
-            }
             var valueCount = metadata.ColumnChunkStorage[columnStart + i].ValueCount;
-            if (!repeated && valueCount != rowCount)
+            if (!metadata.ColumnStorage[i].IsRepeated && valueCount != rowCount)
                 throw new CorruptParquetException(
                     $"Non-repeated column {i} has {valueCount} values but row group {ordinal} has {rowCount} rows.");
         }
