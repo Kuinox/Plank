@@ -65,6 +65,15 @@ static class PageHeaderReader
 
         while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
         {
+            var validType = fieldId switch
+            {
+                1 or 2 or 3 or 4 => fieldType == CompactProtocolType.I32,
+                5 or 7 or 8 => fieldType == CompactProtocolType.Struct,
+                _ => true
+            };
+            if (!validType)
+                throw new CorruptParquetException($"Invalid compact protocol type '{fieldType}' for page header field {fieldId}.");
+
             switch (fieldId)
             {
                 case 1:

@@ -26,6 +26,16 @@ static class StatisticsThriftReader
         reader.BeginStruct();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
+            var validType = fieldId switch
+            {
+                1 or 2 or 5 or 6 => type == CompactProtocolType.Binary,
+                3 or 4 => type == CompactProtocolType.I64,
+                7 or 8 => type is CompactProtocolType.BooleanTrue or CompactProtocolType.BooleanFalse,
+                _ => true
+            };
+            if (!validType)
+                throw new CorruptParquetException($"Invalid compact protocol type '{type}' for statistics field {fieldId}.");
+
             switch (fieldId)
             {
                 case 1:
