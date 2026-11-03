@@ -150,9 +150,16 @@ static class PhysicalMetadataThriftReader
             schemaNodes[ordinal] = node;
             if (node.PhysicalType.HasValue)
             {
+                var repeated = false;
+                var ancestor = ordinal;
+                while (ancestor >= 0 && schemaNodes[ancestor].ParentOrdinal >= 0)
+                {
+                    repeated |= schemaNodes[ancestor].Repetition == ParquetRepetition.Repeated;
+                    ancestor = schemaNodes[ancestor].ParentOrdinal;
+                }
                 var columnOrdinal = metadata.ColumnCount++;
                 columns[columnOrdinal] = new ParquetColumnSchemaInfo(columnOrdinal, ordinal, depth,
-                    node.PhysicalType.Value, node.TypeLength, node.LogicalType);
+                    node.PhysicalType.Value, node.TypeLength, node.LogicalType, repeated);
             }
 
             if (node.ChildCount <= 0)
@@ -567,6 +574,14 @@ static class PhysicalMetadataThriftReader
                     reader.Skip(type, inlineBool);
                     break;
             }
+        }
+
+        for (var i = 0; i < columnCount; i++)
+        {
+            var valueCount = metadata.ColumnChunkStorage[columnStart + i].ValueCount;
+            if (!metadata.ColumnStorage[i].IsRepeated && valueCount != rowCount)
+                throw new CorruptParquetException(
+                    $"Non-repeated column {i} has {valueCount} values but row group {ordinal} has {rowCount} rows.");
         }
 
         if (columnChunkOffset == 0 && columnCount != 0)

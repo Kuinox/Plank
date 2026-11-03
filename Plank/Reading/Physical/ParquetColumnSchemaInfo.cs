@@ -5,12 +5,14 @@ namespace Plank.Reading.Physical;
 public readonly struct ParquetColumnSchemaInfo
 {
     internal readonly int NodeOrdinal;
+    internal readonly bool IsRepeated;
 
     internal ParquetColumnSchemaInfo(int ordinal, int nodeOrdinal, int pathSegmentCount,
-        ParquetPhysicalType physicalType, uint typeLength, LogicalTypeInfo logicalType)
+        ParquetPhysicalType physicalType, uint typeLength, LogicalTypeInfo logicalType, bool isRepeated)
     {
         Ordinal = ordinal;
         NodeOrdinal = nodeOrdinal;
+        IsRepeated = isRepeated;
         PathSegmentCount = pathSegmentCount;
         PhysicalType = physicalType;
         TypeLength = typeLength;
