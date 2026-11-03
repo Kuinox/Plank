@@ -29,6 +29,8 @@ internal sealed class RequiredFieldSet
 internal struct RequiredFields
 {
     uint _seen;
+    internal readonly uint Seen => _seen;
+
     internal void Add(int id)
     {
         if ((uint)id < 32)
