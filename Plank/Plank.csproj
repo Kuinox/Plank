@@ -12,6 +12,8 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <NoWarn>$(NoWarn);RS0026</NoWarn>
     <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeLz4BuildOutput</TargetsForTfmSpecificBuildOutput>
+    <!-- Resolving references for a no-build pack must not build project references. -->
+    <BuildProjectReferences Condition="'$(NoBuild)' == 'true'">false</BuildProjectReferences>
   </PropertyGroup>
 
   <ItemGroup>
@@ -47,14 +49,10 @@
                       PrivateAssets="all" />
   </ItemGroup>
 
-  <Target Name="IncludeLz4BuildOutput">
+  <Target Name="IncludeLz4BuildOutput" DependsOnTargets="ResolveReferences">
     <ItemGroup>
-      <BuildOutputInPackage Include="$(MSBuildThisFileDirectory)..\third_party\Plank.K4os.LZ4\bin\$(Configuration)\$(TargetFramework)\Plank.K4os.LZ4.dll" />
+      <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.ReferenceSourceTarget)' == 'ProjectReference' and '%(ReferenceCopyLocalPaths.Filename)' == 'Plank.K4os.LZ4'" />
     </ItemGroup>
-  </Target>
-
-  <Target Name="RequireVendoredLz4" BeforeTargets="CoreCompile" Condition="!Exists('$(MSBuildProjectDirectory)/../third_party/K4os.Compression.LZ4/src/K4os.Compression.LZ4/LZ4Codec.cs')">
-    <Error Text="K4os LZ4 source is missing. Run git submodule update --init --recursive." />
   </Target>
 
   <ItemGroup>

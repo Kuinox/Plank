@@ -1,17 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <AssemblyName>Plank.K4os.LZ4</AssemblyName>
     <IsPackable>false</IsPackable>
-    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>disable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Codec.cs;..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Level.cs;..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\**\*.cs;..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\**\*.cs"
-             Exclude="..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\Pubternal.cs;..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\UnmanagedResources.cs" />
+    <Compile Include="..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\**\*.cs"
+             Exclude="..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\obj\**\*.cs" />
   </ItemGroup>
 
   <Target Name="RequireVendoredLz4" BeforeTargets="CoreCompile" Condition="!Exists('$(MSBuildProjectDirectory)/../K4os.Compression.LZ4/src/K4os.Compression.LZ4/LZ4Codec.cs')">
