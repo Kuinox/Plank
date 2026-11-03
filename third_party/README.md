@@ -1,14 +1,14 @@
 # Vendored LZ4 maintenance
 
-`K4os.Compression.LZ4` is based on upstream tag 1.3.8. Plank compiles only
-its block codec and supporting sources. The fork has a mechanical namespace and
-visibility commit followed by the zero-offset rejection fix (and possibly later
-Plank-specific fixes/optimizations).
+`K4os.Compression.LZ4` is based on upstream tag 1.3.8. Plank builds only its
+block codec and supporting sources. The fork's only source change is the
+zero-offset rejection fix. `Plank.InternalGen/VendoredLz4Generator.cs` isolates
+those types at build time: it changes their namespace to `Plank.Vendored.LZ4`
+and makes top-level public types internal, avoiding collisions with consumers'
+K4os references without modifying upstream sources.
 
-For an upstream update, rebase or reapply the mechanical commit first: rename
-`K4os.Compression.LZ4` to `Plank.Vendored.LZ4` in the files listed by
-`Plank.csproj`, and make their top-level public types internal. Review any new
-source files and conditional declarations. Reapply the behavioral commits
-separately, resolve conflicts, update the submodule pin, and rerun the full
-suite, package/consumer checks, safety tests and benchmarks. Keep upstream's MIT
-license included in the package.
+For an upstream update, rebase the fix onto the new version, review the files
+included by `Plank.csproj` and the generator's handling of new top-level types
+and conditional declarations, and update the submodule pin. Rerun the full
+suite, package/consumer checks, safety tests and benchmarks. Keep upstream's
+MIT license included in the package.

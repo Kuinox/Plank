@@ -1,3 +1,0 @@
-[K4os.Compression.LZ4/src/K4os.Compression.LZ4/Internal/BufferPool.cs]
-# Upstream uses its own pool for the high-compression encoder's temporary context.
-dotnet_diagnostic.RS0030.severity = none
