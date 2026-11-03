@@ -82,7 +82,7 @@ static class PhysicalMetadataThriftReader
         var keyLength = 0;
         var valueOffset = 0;
         var valueLength = 0;
-        var hasKey = false;
+        var required = new RequiredFields();
         var hasValue = false;
 
         reader.BeginStruct(wireType);
@@ -95,7 +95,7 @@ static class PhysicalMetadataThriftReader
                     var key = reader.ReadBinary(type);
                     keyOffset = reader.Offset - key.Length;
                     keyLength = key.Length;
-                    hasKey = true;
+                    required.Add(1);
                     break;
                 }
                 case 2:
@@ -112,8 +112,7 @@ static class PhysicalMetadataThriftReader
             }
         }
 
-        if (!hasKey)
-            throw new CorruptParquetException("Key-value metadata entry is missing its required key.");
+        required.Validate(ParquetRequiredFields.KeyValue);
         return new ParquetKeyValueMetadataInfo(keyOffset, keyLength, valueOffset, valueLength, hasValue);
     }
 
@@ -192,6 +191,7 @@ static class PhysicalMetadataThriftReader
         var hasLogicalType = false;
         var annotation = NodeKind.Group;
         int? schemaFieldId = null;
+        var required = new RequiredFields();
 
         reader.BeginStruct(wireType);
 
@@ -211,6 +211,7 @@ static class PhysicalMetadataThriftReader
                 case 4:
                 {
                     var name = reader.ReadBinary(type);
+                    required.Add(4);
                     nameOffset = reader.Offset - name.Length;
                     nameLength = name.Length;
                     break;
@@ -241,6 +242,7 @@ static class PhysicalMetadataThriftReader
             }
         }
 
+        required.Validate(ParquetRequiredFields.SchemaElement);
         if (nameLength == 0 && parentOrdinal >= 0)
             throw new CorruptParquetException("Schema node is missing its name.");
         if (!hasLogicalType)
@@ -391,12 +393,12 @@ static class PhysicalMetadataThriftReader
             else
                 reader.Skip(type, inlineBool);
 
-        if (!unit.HasValue)
-            throw new CorruptParquetException($"{kind} logical type is missing its time unit.");
-        if (!isAdjustedToUtc.HasValue)
-            throw new CorruptParquetException($"{kind} logical type is missing isAdjustedToUTC.");
+        var required = new RequiredFields();
+        if (isAdjustedToUtc.HasValue) required.Add(1);
+        if (unit.HasValue) required.Add(2);
+        required.Validate(kind == LogicalTypeKind.Time ? ParquetRequiredFields.TimeType : ParquetRequiredFields.TimestampType);
 
-        return new LogicalTypeInfo(kind, Unit: unit.Value, IsAdjustedToUtc: isAdjustedToUtc.Value);
+        return new LogicalTypeInfo(kind, Unit: unit.GetValueOrDefault(), IsAdjustedToUtc: isAdjustedToUtc.GetValueOrDefault());
     }
 
     static LogicalTypeInfo ReadVariantLogicalType(ref CompactProtocolReader reader,
@@ -550,13 +552,18 @@ static class PhysicalMetadataThriftReader
         var sortingColumnStart = metadata.SortingColumnCount;
         var sortingColumnCount = 0;
         var hasSortingColumns = false;
+        var requiredFields = new RequiredFields();
         reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
+            requiredFields.Add(fieldId);
             switch (fieldId)
             {
                 case 1:
                     columnCount = ReadColumns(ref reader, type, metadata, ordinal);
+                    break;
+                case 2:
+                    _ = reader.ReadI64(type);
                     break;
                 case 3:
                     rowCount = reader.ReadI64AsU64(type);
@@ -575,6 +582,8 @@ static class PhysicalMetadataThriftReader
                     break;
             }
         }
+
+        requiredFields.Validate(ParquetRequiredFields.RowGroup);
 
         for (var i = 0; i < columnCount; i++)
         {
@@ -650,13 +659,12 @@ static class PhysicalMetadataThriftReader
             }
         }
 
-        if (!columnOrdinal.HasValue)
-            throw new CorruptParquetException("Sorting column is missing column_idx.");
-        if (!descending.HasValue)
-            throw new CorruptParquetException("Sorting column is missing descending.");
-        if (!nullsFirst.HasValue)
-            throw new CorruptParquetException("Sorting column is missing nulls_first.");
-        return new ParquetSortingColumn(columnOrdinal.Value, descending.Value, nullsFirst.Value);
+        var required = new RequiredFields();
+        if (columnOrdinal.HasValue) required.Add(1);
+        if (descending.HasValue) required.Add(2);
+        if (nullsFirst.HasValue) required.Add(3);
+        required.Validate(ParquetRequiredFields.SortingColumn);
+        return new ParquetSortingColumn(columnOrdinal.GetValueOrDefault(), descending.GetValueOrDefault(), nullsFirst.GetValueOrDefault());
     }
 
     static int ReadColumns(ref CompactProtocolReader reader, CompactProtocolType wireType,
@@ -738,9 +746,9 @@ static class PhysicalMetadataThriftReader
         }
 
         if (!physicalType.HasValue)
-            throw new CorruptParquetException("Column chunk metadata is missing a physical type.");
+            new RequiredFields().Validate(ParquetRequiredFields.ColumnMetaData);
 
-        return new ParquetColumnChunkInfo(rowGroupOrdinal, expectedColumnOrdinal, physicalType.Value, compression,
+        return new ParquetColumnChunkInfo(rowGroupOrdinal, expectedColumnOrdinal, physicalType.GetValueOrDefault(), compression,
             valueCount, dataPageOffset, dictionaryPageOffset, totalCompressedSize, totalUncompressedSize,
             columnIndexOffset, columnIndexLength, offsetIndexOffset, offsetIndexLength, bloomFilterOffset,
             bloomFilterLength, encodings, statistics)
@@ -755,9 +763,11 @@ static class PhysicalMetadataThriftReader
         ref int geospatialOffset, ref int geospatialLength,
         ref ulong bloomFilterOffset, ref uint bloomFilterLength, int expectedColumnOrdinal)
     {
+        var requiredFields = new RequiredFields();
         reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
+            requiredFields.Add(fieldId);
             switch (fieldId)
             {
                 case 1:
@@ -806,6 +816,7 @@ static class PhysicalMetadataThriftReader
                     break;
             }
         }
+        requiredFields.Validate(ParquetRequiredFields.ColumnMetaData);
     }
 
     static ParquetColumnChunkEncodings ReadEncodings(ref CompactProtocolReader reader,

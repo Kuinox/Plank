@@ -111,8 +111,12 @@ static class BloomFilterReader
             }
         }
 
-        if (!hasLength || !hasAlgorithm || !hasHash || !hasCompression)
-            throw new CorruptParquetException("Bloom-filter header is missing a required field.");
+        var required = new RequiredFields();
+        if (hasLength) required.Add(1);
+        if (hasAlgorithm) required.Add(2);
+        if (hasHash) required.Add(3);
+        if (hasCompression) required.Add(4);
+        required.Validate(ParquetRequiredFields.BloomFilterHeader);
         if (bitsetLength < ParquetBloomFilterOptions.MinimumBytes ||
             bitsetLength % ParquetBloomFilterOptions.MinimumBytes != 0)
             throw new CorruptParquetException(
