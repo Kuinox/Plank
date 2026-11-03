@@ -455,8 +455,10 @@ static partial class ColumnChunkReader
         var remaining = first.ValueCount - first.ValuesRead;
         if (remaining <= targetCount)
             return remaining;
+        if (first.BlockSize >= (uint)remaining || second.BlockSize >= (uint)remaining)
+            return remaining;
         var firstValue = first.ValuesRead == 0 ? 1 : 0;
-        var commonBlockSize = LeastCommonMultiple(first.BlockSize, second.BlockSize);
+        var commonBlockSize = LeastCommonMultiple((int)first.BlockSize, (int)second.BlockSize);
         var valuesAfterFirst = Math.Max(0, targetCount - firstValue);
         var blocks = Math.Max(1L, (valuesAfterFirst + commonBlockSize - 1) / commonBlockSize);
         return (int)Math.Min(remaining, firstValue + blocks * commonBlockSize);

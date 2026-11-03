@@ -18,6 +18,9 @@ ref struct DeltaBinaryPackedReader
     internal int Offset
         => _offset;
 
+    internal int RemainingBytes
+        => _buffer.Length - _offset;
+
     internal ulong ReadUnsignedVarInt()
     {
         ulong value = 0;
