@@ -89,7 +89,7 @@ static class PageHeaderReader
                     reader.SkipStruct(fieldType);
                     break;
                 case 7:
-                    valueCount = ReadDictionaryHeader(ref reader, fieldType);
+                    (valueCount, encoding) = ReadDictionaryHeader(ref reader, fieldType);
                     break;
                 case 8:
                     (valueCount, encoding, nullCount, rowCount, repetitionLevelsByteLength,
@@ -163,9 +163,10 @@ static class PageHeaderReader
         return (valueCount, encoding, repetitionLevelEncoding, definitionLevelEncoding, statistics);
     }
 
-    static uint ReadDictionaryHeader(ref CompactProtocolReader reader, CompactProtocolType structType)
+    static (uint ValueCount, EncodingKind Encoding) ReadDictionaryHeader(ref CompactProtocolReader reader, CompactProtocolType structType)
     {
         var valueCount = 0U;
+        var encoding = EncodingKind.Plain;
         var requiredFields = new RequiredFields();
         reader.BeginStruct(structType);
         while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
@@ -176,14 +177,14 @@ static class PageHeaderReader
                 if (fieldId == 1)
                     valueCount = reader.ReadI32AsU32(fieldType);
                 else
-                    _ = reader.ReadI32(fieldType);
+                    encoding = ParquetThriftConversions.ReadEncoding(reader.ReadI32(fieldType));
             }
             else
                 reader.Skip(fieldType, inlineBool);
         }
 
         requiredFields.Validate(ParquetRequiredFields.DictionaryPageHeader);
-        return valueCount;
+        return (valueCount, encoding);
     }
 
     static (uint ValueCount, EncodingKind Encoding, uint NullCount, uint RowCount, uint RepetitionLevelsByteLength,

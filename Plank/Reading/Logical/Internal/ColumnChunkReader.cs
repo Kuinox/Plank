@@ -41,8 +41,21 @@ static partial class ColumnChunkReader
         ReadOnlyMemory<byte> borrowedPayload, Column column, ref ColumnReadBuffers<T> state,
         IParquetBufferPool bufferPool)
     {
+        // Both flat and nested readers dispatch every page here before selecting a decoder.
+        // Level encodings are separate from the value encoding and are not checked here.
+        if (header.Type is PageHeaderType.DataPage or PageHeaderType.DataPageV2 or PageHeaderType.DictionaryPage &&
+            !EncodingCompatibility.IsSupported(column.PhysicalType, header.Encoding))
+            throw new CorruptParquetException(
+                $"Encoding '{header.Encoding}' does not support physical type '{column.PhysicalType}' for column '{column.Name}'.");
+
         if (header.Type != PageHeaderType.DictionaryPage)
             return false;
+
+        if (header.Encoding is not (EncodingKind.Plain or EncodingKind.PlainDictionary))
+            throw new CorruptParquetException($"Invalid dictionary page encoding '{header.Encoding}' for column '{column.Name}'.");
+        // Legacy PLAIN_DICTIONARY dictionary pages contain plain-encoded entries.
+        if (header.Encoding == EncodingKind.PlainDictionary)
+            header = header with { Encoding = EncodingKind.Plain };
 
         if (typeof(T) == typeof(BinaryValueDescriptor))
             return TryDecodeBinaryDictionaryPage(header, payload, borrowedPayload, column,
