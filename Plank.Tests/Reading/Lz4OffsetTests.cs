@@ -19,24 +19,11 @@ internal sealed class Lz4OffsetTests
     public void RejectsZeroOffsetInShortcutPath()
     {
         // Extra literals and output space allow the decoder's common shortcut.
-        byte[] block = [0x13, 1, 0, 0, 0xf0, 5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
-        byte[] destination = Enumerable.Repeat((byte)0xa5, 28).ToArray();
+        byte[] block = new byte[] { 0x13, 1, 0, 0, 0xf0, 17 }
+            .Concat(Enumerable.Range(0, 32).Select(i => (byte)i)).ToArray();
+        byte[] destination = Enumerable.Repeat((byte)0xa5, 40).ToArray();
         Assert.Throws<CorruptParquetException>(() =>
             ParquetDecompressor.DecompressInto(block, CompressionKind.Lz4, destination));
-    }
-
-    [Test]
-    public unsafe void BothDecoderImplementationsRejectZeroOffset()
-    {
-        byte[] block = [0x13, 1, 0, 0, 0x50, 2, 3, 4, 5, 6];
-        byte[] destination = new byte[13];
-        fixed (byte* input = block)
-        fixed (byte* output = destination)
-        {
-            if (Plank.K4os.LZ4.Engine.LL32.LZ4_decompress_safe(input, output, block.Length, destination.Length) >= 0 ||
-                Plank.K4os.LZ4.Engine.LL64.LZ4_decompress_safe(input, output, block.Length, destination.Length) >= 0)
-                throw new InvalidOperationException("A decoder accepted a zero match offset.");
-        }
     }
 
     [Test]

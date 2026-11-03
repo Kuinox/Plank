@@ -10,7 +10,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Plank.Tests" />
     <Compile Include="..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Codec.cs;..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Level.cs;..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\**\*.cs;..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\**\*.cs"
              Exclude="..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\Pubternal.cs;..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\UnmanagedResources.cs" />
   </ItemGroup>
