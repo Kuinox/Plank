@@ -3,6 +3,7 @@ using Plank.Reading.Logical.Internal;
 using Plank.Reading.Physical;
 using Plank.Schema;
 using Plank.Writing;
+using Plank.Writing.PageStrategy;
 
 namespace Plank.Tests.Reading;
 
@@ -54,6 +55,80 @@ internal sealed class PageEncodingCompatibilityTests
                 throw new InvalidOperationException("Legacy dictionary page was not decoded.");
         }
         finally { buffers.Dispose(); }
+    }
+
+    [Test]
+    public void DictionaryPageEncodingIsReadFromFileAndValidated()
+    {
+        var schema = new ParquetSchema([ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int32,
+            new ColumnOptions(encodings: [EncodingKind.RleDictionary]), pageStrategy: new ForcedDictionary())]);
+        int[] expected = [42, 17, 42, 17];
+        using var output = new MemoryStream();
+        using (var writer = schema.CreateWriter(output, new ParquetWriterOptions { Compression = CompressionKind.None }))
+        {
+            var group = writer.StartRowGroup();
+            var column = group.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+            column.Serialize(expected);
+            group.Write(column);
+            writer.CloseFile();
+        }
+        var file = output.ToArray();
+        int offset;
+        using (var physical = new ParquetFileReader())
+        {
+            physical.Reset(new MemoryStream(file, writable: false));
+            var chunk = physical.Metadata.ColumnChunk(0, 0);
+            if (chunk.DictionaryPageOffset == 0 || chunk.DictionaryPageOffset >= chunk.DataPageOffset)
+                throw new InvalidOperationException("Writer did not produce a dictionary page.");
+            offset = checked((int)chunk.DictionaryPageOffset);
+        }
+        var original = PageHeaderReader.Read(file.AsSpan(offset));
+        if (original.Type != PageHeaderType.DictionaryPage || original.Encoding != EncodingKind.Plain)
+            throw new InvalidOperationException("Expected a plain dictionary page.");
+        AssertFileValues(file, schema, expected);
+
+        // Locate the one-byte encoding field by parsing the changed header and requiring
+        // every other header field to remain unchanged; the payload and offsets stay intact.
+        var encodingOffset = -1;
+        for (var i = offset; i < offset + original.HeaderLength; i++)
+        {
+            if (file[i] != 0) continue;
+            file[i] = 4; // compact protocol zigzag encoding of PLAIN_DICTIONARY (2)
+            try
+            {
+                if (PageHeaderReader.Read(file.AsSpan(offset)) == original with { Encoding = EncodingKind.PlainDictionary })
+                    encodingOffset = i;
+            }
+            catch (Exception) { /* Not the encoding field. */ }
+            file[i] = 0;
+            if (encodingOffset >= 0) break;
+        }
+        if (encodingOffset < 0) throw new InvalidOperationException("Could not locate the dictionary encoding field.");
+
+        file[encodingOffset] = 4;
+        AssertFileValues(file, schema, expected);
+        file[encodingOffset] = 16; // RLE_DICTIONARY (8)
+        if (PageHeaderReader.Read(file.AsSpan(offset)).Encoding != EncodingKind.RleDictionary)
+            throw new InvalidOperationException("Dictionary encoding was not parsed.");
+        Assert.Throws<CorruptParquetException>(() => AssertFileValues(file, schema, expected));
+    }
+
+    static void AssertFileValues(byte[] file, ParquetSchema schema, int[] expected)
+    {
+        using var source = new MemoryReadSource(file);
+        using var reader = schema.CreateReader(source);
+        var actual = new List<int>();
+        foreach (var buffer in reader.RowGroups[0].Column<int>(0))
+            actual.AddRange(buffer.Values.ToArray());
+        if (!actual.SequenceEqual(expected))
+            throw new InvalidOperationException("Dictionary values did not round-trip.");
+    }
+
+    sealed class ForcedDictionary : IPageStrategy
+    {
+        public DictionaryMode GetDictionaryMode() => DictionaryMode.Forced;
+        public bool ShouldDropDictionary(uint uniqueCount, uint totalRowCount, uint rowsSeen) => false;
+        public uint GetNextDataPageRowCount(uint totalRowCount, uint rowsWritten) => totalRowCount - rowsWritten;
     }
 
     [Test]
