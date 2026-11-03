@@ -1,3 +1,6 @@
 [submodule "third_party/parquet-testing"]
 	path = third_party/parquet-testing
 	url = https://github.com/apache/parquet-testing.git
+[submodule "third_party/K4os.Compression.LZ4"]
+	path = third_party/K4os.Compression.LZ4
+	url = https://github.com/Kuinox/K4os.Compression.LZ4.git

@@ -18,7 +18,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
     <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="3.3.4">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -34,6 +33,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\K4os.Compression.LZ4.csproj" />
     <ProjectReference Include="..\Plank.SourceGen\Plank.SourceGen.csproj"
                       OutputItemType="Analyzer"
                       IncludeAssets="analyzers"
@@ -44,6 +44,10 @@
                       ReferenceOutputAssembly="false"
                       PrivateAssets="all" />
   </ItemGroup>
+
+  <Target Name="RequireVendoredLz4" BeforeTargets="_GenerateRestoreGraphProjectEntry;PrepareForBuild" Condition="!Exists('$(MSBuildProjectDirectory)/../third_party/K4os.Compression.LZ4/src/K4os.Compression.LZ4/K4os.Compression.LZ4.csproj')">
+    <Error Text="K4os LZ4 source is missing. Run git submodule update --init --recursive." />
+  </Target>
 
   <ItemGroup>
     <AdditionalFiles Include="BannedSymbols.txt" />
