@@ -63,6 +63,11 @@ jobs:
             --no-build \
             --output artifacts
 
+          dotnet pack third_party/K4os.Compression.LZ4/src/K4os.Compression.LZ4/K4os.Compression.LZ4.csproj \
+            --configuration Release \
+            --no-build \
+            --output artifacts
+
           dotnet pack Plank.SourceGen/Plank.SourceGen.csproj \
             --configuration Release \
             --output artifacts \
@@ -94,6 +99,7 @@ jobs:
               f"Plank.{version}.snupkg",
               f"Plank.SourceGen.{version}.nupkg",
               "Plank.Native.Zlib.1.3.1.1.nupkg",
+              "Plank.K4os.LZ4.1.3.8.1.nupkg",
           }
           actual_files = {path.name for path in directory.iterdir() if path.is_file()}
           if actual_files != expected_files:
@@ -130,6 +136,11 @@ jobs:
               "1.3.1.1",
           )
           verify_identity(
+              "Plank.K4os.LZ4.1.3.8.1.nupkg",
+              "Plank.K4os.LZ4",
+              "1.3.8.1",
+          )
+          verify_identity(
               f"Plank.SourceGen.{version}.nupkg",
               "Plank.SourceGen",
               version,
@@ -146,6 +157,7 @@ jobs:
           }
           expected_dependencies = {
               "Plank.Native.Zlib": "1.3.1.1",
+              "Plank.K4os.LZ4": "1.3.8.1",
               "Plank.SourceGen": version,
           }
           for package_id, expected_version in expected_dependencies.items():
@@ -170,6 +182,12 @@ jobs:
               missing = expected_native_assets.difference(package.namelist())
               if missing:
                   raise SystemExit(f"Native package is missing assets: {sorted(missing)}")
+
+          with ZipFile(directory / "Plank.K4os.LZ4.1.3.8.1.nupkg") as package:
+              required = {"lib/net10.0/Plank.K4os.LZ4.dll", "README.Plank.K4os.LZ4.md"}
+              missing = required.difference(package.namelist())
+              if missing:
+                  raise SystemExit(f"LZ4 package is missing files: {sorted(missing)}")
 
           with ZipFile(directory / f"Plank.{version}.nupkg") as package:
               if "lib/net10.0/Plank.xml" not in package.namelist():
@@ -231,6 +249,11 @@ jobs:
           source='https://api.nuget.org/v3/index.json'
 
           dotnet nuget push "artifacts/Plank.Native.Zlib.1.3.1.1.nupkg" \
+            --source "$source" \
+            --api-key "$NUGET_API_KEY" \
+            --skip-duplicate
+
+          dotnet nuget push "artifacts/Plank.K4os.LZ4.1.3.8.1.nupkg" \
             --source "$source" \
             --api-key "$NUGET_API_KEY" \
             --skip-duplicate

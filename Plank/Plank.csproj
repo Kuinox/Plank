@@ -11,14 +11,10 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <NoWarn>$(NoWarn);RS0026</NoWarn>
-    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeLz4BuildOutput</TargetsForTfmSpecificBuildOutput>
-    <!-- Resolving references for a no-build pack must not build project references. -->
-    <BuildProjectReferences Condition="'$(NoBuild)' == 'true'">false</BuildProjectReferences>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="..\README.md" Pack="true" PackagePath="" Link="README.md" />
-    <None Include="..\third_party\K4os.Compression.LZ4\LICENSE" Pack="true" PackagePath="licenses/" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,7 +33,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\K4os.Compression.LZ4.csproj" PrivateAssets="all" />
+    <ProjectReference Include="..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\K4os.Compression.LZ4.csproj" />
     <ProjectReference Include="..\Plank.SourceGen\Plank.SourceGen.csproj"
                       OutputItemType="Analyzer"
                       IncludeAssets="analyzers"
@@ -51,12 +47,6 @@
 
   <Target Name="RequireVendoredLz4" BeforeTargets="_GenerateRestoreGraphProjectEntry;PrepareForBuild" Condition="!Exists('$(MSBuildProjectDirectory)/../third_party/K4os.Compression.LZ4/src/K4os.Compression.LZ4/K4os.Compression.LZ4.csproj')">
     <Error Text="K4os LZ4 source is missing. Run git submodule update --init --recursive." />
-  </Target>
-
-  <Target Name="IncludeLz4BuildOutput" DependsOnTargets="ResolveReferences">
-    <ItemGroup>
-      <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.ReferenceSourceTarget)' == 'ProjectReference' and '%(ReferenceCopyLocalPaths.Filename)' == 'Plank.K4os.LZ4'" />
-    </ItemGroup>
   </Target>
 
   <ItemGroup>
