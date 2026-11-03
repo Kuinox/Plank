@@ -60,14 +60,18 @@ internal sealed class PageHeaderValidationTests
     }
 
     [Test]
-    [Arguments((byte)0x11)]
-    [Arguments((byte)0x10)]
-    [Arguments((byte)0x7e)]
-    public void RejectsWrongDictionaryEncoding(byte encoding)
+    public void RejectsWrongDictionaryEncodingWireType()
     {
-        byte[] header = [0x15, 0x04, 0x15, 0x18, 0x15, 0x18, 0x4c, 0x15, 0x06,
-            encoding == 0x11 ? (byte)0x11 : (byte)0x15, encoding, 0x00, 0x00];
+        byte[] header = [0x15, 0x04, 0x15, 0x18, 0x15, 0x18, 0x4c, 0x15, 0x06, 0x11, 0x00, 0x00];
         Assert.Throws<CorruptParquetException>(() => PageHeaderReader.Read(header));
+    }
+
+    [Test]
+    public void DictionaryEncodingPolicyIsNotEnforcedByHeaderParser()
+    {
+        byte[] header = [0x15, 0x04, 0x15, 0x18, 0x15, 0x18, 0x4c, 0x15, 0x06, 0x15, 0x10, 0x00, 0x00];
+        if (PageHeaderReader.Read(header).ValueCount != 3)
+            throw new InvalidOperationException("Dictionary value count was not read.");
     }
 
     [Test]
@@ -82,15 +86,5 @@ internal sealed class PageHeaderValidationTests
     {
         byte[] header = [0x15, 0x04, 0x15, 0x18, 0x15, 0x18, 0x4c, 0x11, 0x15, 0x00, 0x00, 0x00];
         Assert.Throws<CorruptParquetException>(() => PageHeaderReader.Read(header));
-    }
-
-    [Test]
-    [Arguments((byte)0x00)]
-    [Arguments((byte)0x04)]
-    public void AcceptsPlainAndLegacyDictionaryEncoding(byte encoding)
-    {
-        byte[] header = [0x15, 0x04, 0x15, 0x18, 0x15, 0x18, 0x4c, 0x15, 0x06, 0x15, encoding, 0x00, 0x00];
-        if (PageHeaderReader.Read(header).ValueCount != 3)
-            throw new InvalidOperationException("Dictionary value count was not read.");
     }
 }

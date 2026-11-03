@@ -163,11 +163,9 @@ static class PageHeaderReader
                 requiredFields.Add(fieldId);
                 if (fieldId == 1)
                     valueCount = reader.ReadI32AsU32(fieldType);
-                else if (reader.ReadI32(fieldType) is not ((int)EncodingKind.Plain or (int)EncodingKind.PlainDictionary))
-                    throw new CorruptParquetException("Invalid DictionaryPageHeader encoding (field 2).");
+                else
+                    _ = reader.ReadI32(fieldType);
             }
-            else if (fieldId == 3)
-                _ = reader.ReadBool(fieldType, inlineBool);
             else
                 reader.Skip(fieldType, inlineBool);
         }
