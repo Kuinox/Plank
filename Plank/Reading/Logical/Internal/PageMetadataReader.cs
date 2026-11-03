@@ -364,22 +364,7 @@ static class PageMetadataReader
         }
     }
 
-    /// <summary>Reads the page header at <paramref name="offset"/> and nothing past it.</summary>
-    /// <remarks>
-    /// A page header does not carry its own length, so the window has to grow
-    /// until one parses. It grows by exactly what the parse says it is short,
-    /// which is what keeps this from reading page payload: a caller scanning a
-    /// chunk's page metadata should not have to pull the chunk's data with it,
-    /// and HeaderFallbackInspectionReadsOnlyHeaders holds it to that.
-    ///
-    /// The shortfall used to be inferred by comparing the parse failure's Message
-    /// against a literal. That missed the message a half-read statistics min/max
-    /// actually raises — a binary field reports the bound its length prefix broke,
-    /// not the end of the payload — so the loop aborted on every page header with
-    /// statistics in it. Plank's writer emits none, so nothing in the suite or the
-    /// fuzz corpus had any; 26 files in apache/parquet-testing do. The signal is
-    /// now structural: see CompactProtocolTruncatedException.
-    /// </remarks>
+    /// <summary>Reads a page header, allowing bounded read-ahead for unusually complex headers.</summary>
     static PageHeader ReadPageHeader(ParquetFileReader reader, ulong offset, int remainingChunkLength,
         ulong totalUncompressedSize, bool copyStatistics, ref StatisticsBufferBuilder statisticsBuilder,
         out EncodedStatistics copiedStatistics)
@@ -387,40 +372,18 @@ static class PageMetadataReader
         var maxLength = remainingChunkLength;
         var buffer = reader.BufferPool.Rent(checked((uint)Math.Min(maxLength, InitialPageHeaderLength)));
         var maxUncompressedPageSize = (uint)Math.Min(totalUncompressedSize, uint.MaxValue);
-        var length = 0;
-        var missingBytes = 1;
         try
         {
-            while (true)
-            {
-                // Grow storage as necessary, but read exactly the shortfall so metadata
-                // inspection never reads page payload bytes.
-                var wanted = PageHeaderReader.GetRequiredBufferLength(length, missingBytes, maxLength);
-                if (wanted > buffer.Length)
-                {
-                    var capacity = (uint)Math.Min(maxLength, Math.Max((long)buffer.Length * 2, wanted));
-                    var grown = reader.BufferPool.Rent(capacity);
-                    buffer.Span[..length].CopyTo(grown.Span);
-                    buffer.Dispose();
-                    buffer = grown;
-                }
-                reader.Source.ReadExactly(offset + (ulong)length, buffer.Span[length..wanted]);
-                length = wanted;
+            var header = PageHeaderProbe.Read(reader, offset, maxLength, maxUncompressedPageSize,
+                initialLength: 1, allowBorrow: false, ref buffer);
+            var statistics = header.Statistics;
+            if (header.Type == PageHeaderType.DataPageV2 && !statistics.HasNullCount)
+                statistics = WithNullCount(statistics, header.NullCount);
 
-                if (!PageHeaderReader.TryRead(buffer.Span[..length], maxUncompressedPageSize, out var header,
-                        out missingBytes))
-                    continue;
-
-                var statistics = header.Statistics;
-                if (header.Type == PageHeaderType.DataPageV2 && !statistics.HasNullCount)
-                    statistics = WithNullCount(statistics, header.NullCount);
-
-                // Statistics offsets refer to the complete parsed header window.
-                copiedStatistics = copyStatistics
-                    ? statisticsBuilder.Copy(buffer.Span[..length], statistics)
-                    : default;
-                return header;
-            }
+            copiedStatistics = copyStatistics
+                ? statisticsBuilder.Copy(buffer.Span[..header.HeaderLength], statistics)
+                : default;
+            return header;
         }
         finally
         {

@@ -23,8 +23,8 @@ static class PageHeaderReader
     /// A page header does not carry its own length, so a caller scanning headers
     /// has to grow its window until one parses. <paramref name="missingBytes"/>
     /// is a lower bound on the shortfall — the field the parse stopped on needs
-    /// at least that many more — which lets the caller extend by exactly that and
-    /// never read a byte beyond the header it is after.
+    /// at least that many more. A caller can extend by that amount or read ahead,
+    /// as long as it stays inside the enclosing chunk or indexed page.
     /// </remarks>
     internal static bool TryRead(ReadOnlySpan<byte> buffer, uint maxUncompressedPageSize,
         out PageHeader header, out int missingBytes)
