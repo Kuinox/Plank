@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Plank.K4os.LZ4</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Plank.Tests" />
+    <Compile Include="..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Codec.cs;..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Level.cs;..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\**\*.cs;..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\**\*.cs"
+             Exclude="..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\Pubternal.cs;..\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\UnmanagedResources.cs" />
+  </ItemGroup>
+
+  <Target Name="RequireVendoredLz4" BeforeTargets="CoreCompile" Condition="!Exists('$(MSBuildProjectDirectory)/../K4os.Compression.LZ4/src/K4os.Compression.LZ4/LZ4Codec.cs')">
+    <Error Text="K4os LZ4 source is missing. Run git submodule update --init --recursive." />
+  </Target>
+</Project>

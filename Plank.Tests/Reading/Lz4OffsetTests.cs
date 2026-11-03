@@ -33,8 +33,8 @@ internal sealed class Lz4OffsetTests
         fixed (byte* input = block)
         fixed (byte* output = destination)
         {
-            if (Plank.Vendored.LZ4.Engine.LL32.LZ4_decompress_safe(input, output, block.Length, destination.Length) >= 0 ||
-                Plank.Vendored.LZ4.Engine.LL64.LZ4_decompress_safe(input, output, block.Length, destination.Length) >= 0)
+            if (Plank.K4os.LZ4.Engine.LL32.LZ4_decompress_safe(input, output, block.Length, destination.Length) >= 0 ||
+                Plank.K4os.LZ4.Engine.LL64.LZ4_decompress_safe(input, output, block.Length, destination.Length) >= 0)
                 throw new InvalidOperationException("A decoder accepted a zero match offset.");
         }
     }
@@ -43,7 +43,7 @@ internal sealed class Lz4OffsetTests
     public void VendoredTypesAreNotPublic()
     {
         if (typeof(ParquetDecompressor).Assembly.GetExportedTypes().Any(t =>
-                t.Namespace?.StartsWith("Plank.Vendored.LZ4", StringComparison.Ordinal) == true ||
+                t.Namespace?.StartsWith("Plank.K4os.LZ4", StringComparison.Ordinal) == true ||
                 t.Namespace?.StartsWith("K4os.Compression.LZ4", StringComparison.Ordinal) == true))
             throw new InvalidOperationException("The vendored LZ4 implementation leaked a public type.");
     }

@@ -58,6 +58,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Plank\Plank.csproj" />
+    <ProjectReference Include="..\third_party\Plank.K4os.LZ4\Plank.K4os.LZ4.csproj" />
     <ProjectReference Include="..\Plank.SourceGen\Plank.SourceGen.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 

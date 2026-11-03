@@ -11,6 +11,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <NoWarn>$(NoWarn);RS0026</NoWarn>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeLz4BuildOutput</TargetsForTfmSpecificBuildOutput>
   </PropertyGroup>
 
   <ItemGroup>
@@ -34,6 +35,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\third_party\Plank.K4os.LZ4\Plank.K4os.LZ4.csproj" PrivateAssets="all" />
     <ProjectReference Include="..\Plank.SourceGen\Plank.SourceGen.csproj"
                       OutputItemType="Analyzer"
                       IncludeAssets="analyzers"
@@ -45,10 +47,11 @@
                       PrivateAssets="all" />
   </ItemGroup>
 
-  <ItemGroup>
-    <AdditionalFiles Include="..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Codec.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\LZ4Level.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\**\*.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\**\*.cs"
-                     Exclude="..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Engine\Pubternal.cs;..\third_party\K4os.Compression.LZ4\src\K4os.Compression.LZ4\Internal\UnmanagedResources.cs" />
-  </ItemGroup>
+  <Target Name="IncludeLz4BuildOutput">
+    <ItemGroup>
+      <BuildOutputInPackage Include="$(MSBuildThisFileDirectory)..\third_party\Plank.K4os.LZ4\bin\$(Configuration)\$(TargetFramework)\Plank.K4os.LZ4.dll" />
+    </ItemGroup>
+  </Target>
 
   <Target Name="RequireVendoredLz4" BeforeTargets="CoreCompile" Condition="!Exists('$(MSBuildProjectDirectory)/../third_party/K4os.Compression.LZ4/src/K4os.Compression.LZ4/LZ4Codec.cs')">
     <Error Text="K4os LZ4 source is missing. Run git submodule update --init --recursive." />
