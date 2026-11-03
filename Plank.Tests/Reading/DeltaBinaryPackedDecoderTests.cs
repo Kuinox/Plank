@@ -9,36 +9,72 @@ namespace Plank.Tests.Reading;
 internal sealed class DeltaBinaryPackedDecoderTests
 {
     [Test]
-    public void LargeBlockExceedsImplementationLimit()
+    public void OversizedMiniBlockIsCorruptWhenPackedPayloadIsMissing()
     {
         // The reported page declares 2,527,943,296 values per block, four
         // mini-blocks, 5,000 values, and 20 bits for the first mini-block.
         byte[] payload = [0x80, 0xb5, 0xb5, 0xb5, 0x09, 4, 0x88, 0x27, 0,
             0, 20, 20, 20, 20];
-        Assert.Throws<NotSupportedException>(() => DeltaBinaryPackedDecoder.StartBatch(payload, 5000));
-        Assert.Throws<NotSupportedException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(payload, 5000));
-
-        byte[] oneValue = [0x80, 0xb5, 0xb5, 0xb5, 0x09, 4, 1, 42];
-        Assert.Throws<NotSupportedException>(() => DeltaBinaryPackedDecoder.StartBatch(oneValue, 1));
+        Assert.Throws<CorruptParquetException>(() =>
+        {
+            var batch = DeltaBinaryPackedDecoder.StartBatch(payload, 5000);
+            DeltaBinaryPackedDecoder.ReadInt32Batch(payload, new int[5000], ref batch);
+        });
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(payload, 5000));
     }
 
     [Test]
-    public void LargeSupportedBlockRejectsTruncatedPackedBytes()
+    public void LargeZeroWidthMiniBlockIsValid()
     {
-        // Both DELTA_LENGTH_BYTE_ARRAY and DELTA_BYTE_ARRAY use the scanner.
-        // Even with a supported block size, the packed byte count can exceed Int32.
-        const uint blockSize = 2147483520;
-        const int fourMiniBlocksValueCount = 1610612642;
-        foreach (var valueCount in new[] { 2, fourMiniBlocksValueCount })
-        {
-            var payload = new List<byte>();
-            WriteUnsignedVarIntReference(blockSize, payload);
-            WriteUnsignedVarIntReference(4, payload);
-            WriteUnsignedVarIntReference((uint)valueCount, payload);
-            payload.AddRange([0, 0, 64, 64, 64, 64]); // first value, min delta, widths
-            Assert.Throws<CorruptParquetException>(() =>
-                DeltaBinaryPackedDecoder.GetEncodedLength(payload.ToArray(), valueCount));
-        }
+        // A huge block may be legal when the used mini-block has no packed bytes.
+        byte[] payload = [0x80, 0xff, 0xff, 0xff, 0x0f, 1, 2, 42, 0, 0];
+        var state = DeltaBinaryPackedDecoder.StartBatch(payload, 2);
+        var values = new int[2];
+        DeltaBinaryPackedDecoder.ReadInt32Batch(payload, values, ref state);
+        var longs = new long[2];
+        var nullable = new int?[2];
+        var narrow = new byte[2];
+        DeltaBinaryPackedDecoder.ReadInt64(payload, longs);
+        DeltaBinaryPackedDecoder.ReadNullableInt32(payload, nullable, true);
+        DeltaBinaryPackedDecoder.ReadNarrowInt32<byte>(payload, narrow);
+        if (!values.SequenceEqual(new[] { 21, 21 }) || !longs.SequenceEqual(new long[] { 21, 21 }) ||
+            !nullable.SequenceEqual(new int?[] { 21, 21 }) || !narrow.SequenceEqual(new byte[] { 21, 21 }) ||
+            state.Offset != payload.Length || DeltaBinaryPackedDecoder.GetEncodedLength(payload, 2) != payload.Length)
+            throw new InvalidOperationException("Large zero-width mini-block did not decode.");
+    }
+
+    [Test]
+    public void MiniBlockWidthsRespectPhysicalTypeAndPayloadBounds()
+    {
+        var width33 = CreateDeclaredWidthPayload(33, 2);
+        var width65 = CreateDeclaredWidthPayload(65, 2);
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(width33, new int[2]));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNullableInt32(width33, new int?[2], true));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNarrowInt32<byte>(width33, new byte[2]));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(width33, 2));
+        var longs = new long[2];
+        DeltaBinaryPackedDecoder.ReadInt64(width33, longs);
+        if (!longs.SequenceEqual(new long[2]))
+            throw new InvalidOperationException("INT64 width 33 did not decode.");
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt64(width65, new long[2]));
+
+        // A partially filled mini-block still requires its full padded payload.
+        var truncated = CreateDeclaredWidthPayload(8, 2)[..^1];
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(truncated, new int[2]));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNullableInt32(truncated, new int?[2], true));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNarrowInt32<byte>(truncated, new byte[2]));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt64(truncated, new long[2]));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(truncated, 2));
+    }
+
+    [Test]
+    public void OversizedValueCountIsCorruptBeforeAllocation()
+    {
+        byte[] payload = [0x80, 1, 4, 0x80, 0x80, 0x80, 0x80, 8, 0];
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(payload));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt64(payload));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.StartBatch(payload, 0));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(payload, 0));
     }
 
     [Test]
@@ -290,7 +326,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
     [Test]
     public void ReadInt32PortableMiniBlocksHandleEveryPackedWidth()
     {
-        for (var width = 1; width <= 56; width++)
+        for (var width = 1; width <= 32; width++)
         foreach (var count in new[] { 2, 17, 33, 97 })
         {
             var residuals = new long[count == 97 ? 96 : 32];
@@ -962,9 +998,9 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
-    public void ReadInt32AcceptsDeclaredPackedWidthsZeroThrough64()
+    public void ReadInt32AcceptsDeclaredPackedWidthsZeroThrough32()
     {
-        for (var bitWidth = 0; bitWidth <= 64; bitWidth++)
+        for (var bitWidth = 0; bitWidth <= 32; bitWidth++)
         {
             var payload = CreateDeclaredWidthPayload(bitWidth, valueCount: 33);
             var decoded = new int[33];
@@ -1092,7 +1128,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
         WriteUnsignedVarIntReference(0, payload);
 
         var deltas = new long[128];
-        deltas[0] = (long)int.MaxValue + 1;
+        deltas[0] = int.MinValue;
         deltas[1] = int.MinValue;
         Array.Fill(deltas, (long)int.MinValue, 2, deltas.Length - 2);
         WriteDeltaBlockReference(deltas, int.MinValue, payload);
