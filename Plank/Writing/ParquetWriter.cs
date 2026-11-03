@@ -727,7 +727,7 @@ public sealed class ParquetWriter : IDisposable
             SerializedFileMetadata.Reset();
             var relocation = checked(importedChunk.DataPageOffset - checked((long)sourceChunk.DataPageOffset));
             ParquetMetadataThriftWriter.RelocateOffsetIndex(ref SerializedFileMetadata,
-                offsetIndex.Span[..checked((int)sourceChunk.OffsetIndexLength)], relocation);
+                offsetIndex.Span[..checked((int)sourceChunk.OffsetIndexLength)], relocation, _options.BufferPool);
             importedChunk.OffsetIndexOffset = FileOffset;
             importedChunk.OffsetIndexLength = checked((uint)SerializedFileMetadata.WrittenLength);
             WriteBuffer(ref SerializedFileMetadata);

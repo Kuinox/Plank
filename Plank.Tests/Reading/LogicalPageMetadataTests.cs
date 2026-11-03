@@ -317,6 +317,60 @@ internal sealed class LogicalPageMetadataTests
     }
 
     [Test]
+    [Arguments("duplicate")]
+    [Arguments("trailing")]
+    [Arguments("negative offset")]
+    [Arguments("negative size")]
+    [Arguments("negative row")]
+    public void ReaderAndMergerRejectSameInvalidOffsetIndex(string defect)
+    {
+        var (schema, bytes) = CreateFile(values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(bytes));
+        var chunk = physical.Metadata.ColumnChunk(0, 0);
+        var index = new List<byte> { 0x19, 0x5c }; // page_locations: five structs
+        for (var i = 0; i < 5; i++)
+            index.AddRange([0x16, (byte)(i == 0 && defect == "negative offset" ? 1 : 0),
+                0x15, (byte)(i == 0 && defect == "negative size" ? 1 : 2),
+                0x16, (byte)(i == 0 && defect == "negative row" ? 1 : 0), 0]);
+        if (defect == "duplicate")
+            index.AddRange([0x09, 0x02, 0x0c]); // explicit field 1, empty struct list
+        index.Add(0);
+        if (index.Count > chunk.OffsetIndexLength || defect == "trailing" && index.Count == chunk.OffsetIndexLength)
+            throw new InvalidOperationException("Fixture does not leave room for padding.");
+        var section = bytes.AsSpan(checked((int)chunk.OffsetIndexOffset), checked((int)chunk.OffsetIndexLength));
+        section.Clear();
+        index.ToArray().CopyTo(section);
+        var expected = defect switch
+        {
+            "duplicate" => "duplicate page_locations",
+            "trailing" => "trailing bytes",
+            _ => "Expected a non-negative"
+        };
+
+        void Check(Action action)
+        {
+            try { action(); }
+            catch (CorruptParquetException exception) when (exception.Message.Contains(expected, StringComparison.Ordinal))
+            { return; }
+            throw new InvalidOperationException($"{defect} was not rejected for the expected reason.");
+        }
+
+        Check(() =>
+        {
+            using var reader = schema.CreateReader(new MemoryStream(bytes));
+            using var pages = reader.RowGroups[0].GetColumnMetadata(0).OpenPages();
+        });
+        Check(() =>
+        {
+            using var source = new MemoryReadSource(bytes);
+            using var stream = new MemoryStream();
+            var destination = new StreamParquetSource(stream);
+            schema.CreateMerger(source, destination);
+        });
+    }
+
+    [Test]
     public void CorruptPageIndexIsRejected()
     {
         var (schema, bytes) = CreateFile();
@@ -415,7 +469,7 @@ internal sealed class LogicalPageMetadataTests
             throw new InvalidOperationException("The all-null fixture produced no null page.");
     }
 
-    static (ParquetSchema Schema, byte[] Bytes) CreateFile(bool writePageIndexes = true)
+    static (ParquetSchema Schema, byte[] Bytes) CreateFile(bool writePageIndexes = true, int[]? values = null)
     {
         var schema = new ParquetSchema([
             ColumnDefinition.Leaf("Value", ParquetPhysicalType.Int32)
@@ -427,7 +481,7 @@ internal sealed class LogicalPageMetadataTests
             WritePageIndexes = writePageIndexes
         });
         var column = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
-        column.Serialize([1, 2, 3, 4, 5, 6]);
+        column.Serialize(values ?? [1, 2, 3, 4, 5, 6]);
         writer.StartRowGroup().Write(column);
         writer.CloseFile();
         return (schema, stream.ToArray());
