@@ -89,6 +89,23 @@ internal sealed class ReaderCorrectnessDiscoveryTests
     }
 
     [Test]
+    public void SnappyRejectsLengthPreambleMismatch()
+    {
+        byte[][] payloads =
+        [
+            [0xFF, 0xFF, 0xFF, 0xFF, 0x0F], // uint.MaxValue
+            [0xFF, 0xFF, 0xFF, 0xFF, 0x07], // int.MaxValue
+            [0x80], // truncated varint
+            [0x80, 0x80, 0x80, 0x80, 0x10], // overflow
+            [0x05] // larger than destination
+        ];
+
+        foreach (var payload in payloads)
+            Assert.Throws<CorruptParquetException>(() =>
+                ParquetDecompressor.Decompress(payload, expectedLength: 4, CompressionKind.Snappy));
+    }
+
+    [Test]
     public void Lz4RejectsOutputShorterThanPageHeaderSize()
     {
         byte[] compressed = [0x40, 1, 2, 3, 4];
@@ -108,6 +125,35 @@ internal sealed class ReaderCorrectnessDiscoveryTests
         Assert.Throws<CorruptParquetException>(() =>
             ParquetDecompressor.Decompress(compressed.AsSpan(0, compressedLength),
                 expectedLength: 5, CompressionKind.Zstd));
+    }
+
+    [Test]
+    public void PageCursorRejectsSnappyLengthLargerThanPage()
+    {
+        var file = CreateSingleValueFile(CompressionKind.Snappy);
+        int pageOffset;
+        using (var source = new MemoryStream(file, writable: false))
+        using (var reader = new ParquetFileReader())
+        {
+            reader.Reset(source);
+            pageOffset = checked((int)reader.Metadata.ColumnChunk(0, 0).DataPageOffset);
+        }
+
+        var header = PageHeaderReader.Read(file.AsSpan(pageOffset));
+        if (!header.IsCompressed || header.UncompressedPageSize == 0 || header.CompressedPageSize < 5)
+            throw new InvalidOperationException("The compressed-page test fixture has an unexpected page header.");
+
+        byte[] oversizedLength = [0xFF, 0xFF, 0xFF, 0xFF, 0x07];
+        oversizedLength.CopyTo(file, pageOffset + header.HeaderLength);
+
+        Assert.Throws<CorruptParquetException>(() =>
+        {
+            using var source = new MemoryStream(file, writable: false);
+            using var reader = new ParquetFileReader();
+            reader.Reset(source);
+            using var cursor = reader.OpenPages(0, 0);
+            _ = cursor.MoveNext();
+        });
     }
 
     [Test]
