@@ -421,11 +421,8 @@ static partial class ColumnChunkReader
         var physicalSize = GetEncodedFixedWidth(column);
         if (header.Encoding == EncodingKind.Plain)
             ValidateFixedWidthPlainPayload(dataPayload, column, physicalCount, physicalSize);
-        else if (header.Encoding == EncodingKind.ByteStreamSplit &&
-                 (long)physicalCount * physicalSize > dataPayload.Length)
-            throw new CorruptParquetException(
-                $"ByteStreamSplit payload ({dataPayload.Length} bytes) is too short for " +
-                $"{physicalCount} {physicalSize}-byte values.");
+        else if (header.Encoding == EncodingKind.ByteStreamSplit)
+            RequireByteStreamSplitLanes(dataPayload, (uint)physicalCount, physicalSize, column);
         var reusableDictionaryValueCount = 0;
         if (header.Encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary)
         {
@@ -1506,6 +1503,8 @@ static partial class ColumnChunkReader
 
         if (physicalCount == 0)
         {
+            if (encoding == EncodingKind.ByteStreamSplit)
+                RequireByteStreamSplitLanes(payload, 0, GetEncodedFixedWidth(column), column);
             destination.Clear();
             return true;
         }
@@ -2541,6 +2540,7 @@ static partial class ColumnChunkReader
         ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool)
     {
         var valueLength = GetFixedBinaryLength(column);
+        RequireByteStreamSplitLanes(payload, (uint)physicalCount, valueLength, column);
         var payloadByteLength = GetFixedBinaryPayloadLength(payload, physicalCount, valueLength);
         var destination = state.GetBinaryValues(valueCount, payloadByteLength, bufferPool,
             out var destinationPayload);
@@ -3116,25 +3116,22 @@ static partial class ColumnChunkReader
 
     // ByteStreamSplit stores each byte of a value in its own lane, so decoding
     // value i reads payload[i], payload[count + i], ... one per byte of width.
-    // The int32/int64 decoders validate that the payload actually holds those
-    // lanes; the branches for the narrower CLR projections (byte, ushort, uint,
-    // decimal, temporal) indexed them directly and read past the end of a short
-    // payload, which surfaced as IndexOutOfRangeException.
+    // Each lane must contain exactly one byte per physical value; the format
+    // permits neither missing bytes nor padding after the lanes.
     static void RequireByteStreamSplitLanes(ReadOnlySpan<byte> payload, uint valueCount, int width,
         Column column)
     {
         var required = (long)valueCount * width;
-        if (required > payload.Length)
+        if (required != payload.Length)
             throw new CorruptParquetException(
-                $"ByteStreamSplit payload ({payload.Length} bytes) is too short for {valueCount} " +
+                $"ByteStreamSplit payload ({payload.Length} bytes) does not match {valueCount} " +
                 $"{width}-byte values in column '{column.Name}'.");
     }
 
     static bool TryDecodeByteStreamSplitIntoNative<T>(ReadOnlySpan<byte> payload, Column column,
         uint valueCount, Span<T> destination)
     {
-        RequireByteStreamSplitLanes(payload, valueCount,
-            column.PhysicalType == ParquetPhysicalType.Int64 ? sizeof(long) : sizeof(int), column);
+        RequireByteStreamSplitLanes(payload, valueCount, GetEncodedFixedWidth(column), column);
         switch (column.PhysicalType)
         {
             case ParquetPhysicalType.Int32 when typeof(T) == typeof(int):
