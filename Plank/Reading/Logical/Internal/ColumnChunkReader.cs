@@ -249,16 +249,17 @@ static partial class ColumnChunkReader
             destination.Clear();
         else if (encoding == EncodingKind.Rle)
             DecodeRleBitPackedLevels(payload, bitWidth, destination, levelName);
-        else if (encoding == EncodingKind.BitPacked)
-            LegacyBitPackedDecoder.Decode(payload, bitWidth, destination);
         else
-            throw new NotSupportedException($"{levelName} level encoding '{encoding}' is not supported.");
+            throw new NotSupportedException($"{levelName} level encoding '{FormatLevelEncoding(encoding)}' is not supported.");
 
         for (var i = 0; i < destination.Length; i++)
             if ((uint)destination[i] > (uint)maxLevel)
                 throw new CorruptParquetException(
                     $"{levelName} level {destination[i]} exceeds the schema maximum of {maxLevel}.");
     }
+
+    static string FormatLevelEncoding(EncodingKind encoding)
+        => encoding == EncodingKind.BitPacked ? "BIT_PACKED" : encoding.ToString();
 
     static void DecodeRleBitPackedLevels(ReadOnlySpan<byte> payload, int bitWidth, Span<int> destination,
         string levelName)
@@ -1168,24 +1169,8 @@ static partial class ColumnChunkReader
         Span<byte> destination, out int nonNullCount)
     {
         destination.Clear();
-        if (encoding == EncodingKind.BitPacked)
-        {
-            var requiredBytes = LegacyBitPackedDecoder.GetByteCount(valueCount, bitWidth: 1);
-            if (payload.Length < requiredBytes)
-                throw new CorruptParquetException(
-                    $"Legacy bit-packed payload ({payload.Length} bytes) is too short to decode {valueCount} values.");
-            var count = 0;
-            for (var i = 0; i < valueCount; i++)
-            {
-                var value = (payload[i >> 3] >> (7 - (i & 7))) & 1;
-                destination[i >> 3] |= (byte)(value << (i & 7));
-                count += value;
-            }
-            nonNullCount = count;
-            return;
-        }
         if (encoding != EncodingKind.Rle)
-            throw new NotSupportedException($"Definition level encoding '{encoding}' is not supported.");
+            throw new NotSupportedException($"Definition level encoding '{FormatLevelEncoding(encoding)}' is not supported.");
 
         var valueOffset = 0;
         var nonNulls = 0;
@@ -3465,13 +3450,9 @@ static partial class ColumnChunkReader
                 byteLength = ReadLengthPrefixedLevelPayloadLength(payload, levelName);
                 payloadOffset = sizeof(int);
                 break;
-            case EncodingKind.BitPacked:
-                byteLength = LegacyBitPackedDecoder.GetByteCount(checked((int)valueCount), bitWidth);
-                payloadOffset = 0;
-                break;
             default:
                 throw new NotSupportedException(
-                    $"DataPageV1 {levelName} level encoding '{encoding}' is not supported.");
+                    $"DataPageV1 {levelName} level encoding '{FormatLevelEncoding(encoding)}' is not supported.");
         }
 
         var totalLength = checked(payloadOffset + byteLength);
@@ -4700,23 +4681,8 @@ static partial class ColumnChunkReader
         if (!destination.IsEmpty && destination.Length < valueCount)
             throw new ArgumentException("Definition-level destination is too small.", nameof(destination));
 
-        if (encoding == EncodingKind.BitPacked)
-        {
-            if (destination.IsEmpty)
-            {
-                nonNullCount = LegacyBitPackedDecoder.CountSetBits(payload, valueCount);
-                return;
-            }
-
-            var levels = destination[..valueCount];
-            LegacyBitPackedDecoder.Decode(payload, bitWidth: 1, levels);
-            nonNullCount = 0;
-            for (var i = 0; i < levels.Length; i++)
-                nonNullCount += levels[i];
-            return;
-        }
         if (encoding != EncodingKind.Rle)
-            throw new NotSupportedException($"Definition level encoding '{encoding}' is not supported.");
+            throw new NotSupportedException($"Definition level encoding '{FormatLevelEncoding(encoding)}' is not supported.");
 
         var valueIndex = 0;
         var count = 0;
@@ -4763,26 +4729,8 @@ static partial class ColumnChunkReader
     static void DecodeCompactDefinitionLevels(ReadOnlySpan<byte> payload, EncodingKind encoding,
         Span<byte> destination, out int nonNullCount)
     {
-        if (encoding == EncodingKind.BitPacked)
-        {
-            var byteCount = LegacyBitPackedDecoder.GetByteCount(destination.Length, bitWidth: 1);
-            if (payload.Length < byteCount)
-                throw new CorruptParquetException(
-                    $"Legacy bit-packed payload ({payload.Length} bytes) is too short to decode " +
-                    $"{destination.Length} values.");
-
-            var count = 0;
-            for (var i = 0; i < destination.Length; i++)
-            {
-                var value = (byte)((payload[i >> 3] >> (7 - (i & 7))) & 1);
-                destination[i] = value;
-                count += value;
-            }
-            nonNullCount = count;
-            return;
-        }
         if (encoding != EncodingKind.Rle)
-            throw new NotSupportedException($"Definition level encoding '{encoding}' is not supported.");
+            throw new NotSupportedException($"Definition level encoding '{FormatLevelEncoding(encoding)}' is not supported.");
 
         var valueIndex = 0;
         var nonNulls = 0;
@@ -4835,10 +4783,8 @@ static partial class ColumnChunkReader
     static int CountCompactDefinitionLevels(ReadOnlySpan<byte> payload, EncodingKind encoding,
         int valueCount)
     {
-        if (encoding == EncodingKind.BitPacked)
-            return LegacyBitPackedDecoder.CountSetBits(payload, valueCount);
         if (encoding != EncodingKind.Rle)
-            throw new NotSupportedException($"Definition level encoding '{encoding}' is not supported.");
+            throw new NotSupportedException($"Definition level encoding '{FormatLevelEncoding(encoding)}' is not supported.");
 
         var valueIndex = 0;
         var nonNulls = 0;

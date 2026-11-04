@@ -17,45 +17,15 @@ internal sealed class LegacyBitPackedReaderTests
         "MDAxMmExODQzNGM1ODJiZDc0YzczYSkZHBwAAABzAQAAUEFSMQ==";
 
     [Test]
-    public async Task ReadsLegacyBitPackedDefinitionLevels()
+    public async Task ReadsParquetMrPageWithUnusedBitPackedLevels()
     {
         using var stream = new MemoryStream(Convert.FromBase64String(BinaryFixture));
         using var reader = new ParquetReader();
         reader.Reset(stream);
 
         var values = ReadAll(reader.RowGroups[0].Column<byte>(reader.Schema.LeafColumns[0]));
-
         await Assert.That(values)
             .IsEquivalentTo(Enumerable.Range(0, 12).Select(static value => (byte)value).ToArray());
-    }
-
-    [Test]
-    public async Task DecodesValuesMostSignificantBitFirst()
-    {
-        int[] values = new int[8];
-
-        LegacyBitPackedDecoder.Decode([0x05, 0x39, 0x77], bitWidth: 3, values);
-
-        await Assert.That(values).IsEquivalentTo(Enumerable.Range(0, 8).ToArray());
-    }
-
-    [Test]
-    public async Task DecodesDefinitionLevelPattern()
-    {
-        int[] values = new int[10];
-
-        LegacyBitPackedDecoder.Decode([0b1011_0010, 0b1100_0000], bitWidth: 1, values);
-
-        await Assert.That(values).IsEquivalentTo([1, 0, 1, 1, 0, 0, 1, 0, 1, 1]);
-    }
-
-    [Test]
-    public async Task RejectsTruncatedPayload()
-    {
-        var exception = Assert.Throws<CorruptParquetException>(() =>
-            LegacyBitPackedDecoder.Decode([0xFF], bitWidth: 3, new int[3]));
-
-        await Assert.That(exception.Message).Contains("too short");
     }
 
     static byte[] ReadAll(RowGroupColumn<byte> column)
