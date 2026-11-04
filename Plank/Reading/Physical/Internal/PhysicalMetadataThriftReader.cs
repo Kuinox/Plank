@@ -10,22 +10,17 @@ static class PhysicalMetadataThriftReader
     {
         var reader = new CompactProtocolReader(metadata.FooterBytes);
         reader.BeginRootStruct();
-        var seenFields = 0;
+        var required = new RequiredFields();
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
-            // Each FileMetaData field is defined at most once, but nothing in the
-            // compact protocol enforces that. A repeated field re-rents
-            // metadata.*Buffer on top of the previous rental — leaking it — while
-            // counters like ColumnCount keep accumulating across both passes, so
-            // the second ReadSchema indexed its freshly-sized column buffer out of
-            // bounds. Unknown field ids stay skippable; only the ones that own
-            // buffers or counters are rejected.
-            if (fieldId is 1 or 2 or 4 or 5 or 6)
+            // Repeated fields could re-rent metadata buffers over previous rentals, leaking them,
+            // while counters like ColumnCount accumulated, making a second ReadSchema index out of bounds.
+            // Reject duplicate known fields; unknown field ids remain skippable.
+            if (fieldId is >= 1 and <= 6)
             {
-                var fieldBit = 1 << fieldId;
-                if ((seenFields & fieldBit) != 0)
+                if ((required.Seen & (1u << fieldId)) != 0)
                     throw new CorruptParquetException($"File metadata repeats field {fieldId}.");
-                seenFields |= fieldBit;
+                required.Add(fieldId);
             }
 
             switch (fieldId)
@@ -35,6 +30,10 @@ static class PhysicalMetadataThriftReader
                     break;
                 case 2:
                     ReadSchema(ref reader, type, metadata, bufferPool);
+                    break;
+                case 3:
+                    if (reader.ReadI64(type) < 0)
+                        throw new CorruptParquetException("FileMetaData.num_rows cannot be negative.");
                     break;
                 case 4:
                     ReadRowGroups(ref reader, type, metadata, bufferPool);
@@ -55,6 +54,7 @@ static class PhysicalMetadataThriftReader
                     break;
             }
         }
+        required.Validate(ParquetRequiredFields.FileMetaData);
     }
 
     static void ReadKeyValueMetadata(ref CompactProtocolReader reader, CompactProtocolType wireType,

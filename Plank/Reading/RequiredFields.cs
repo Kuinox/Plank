@@ -46,6 +46,7 @@ internal static class ParquetRequiredFields
     internal static readonly RequiredFieldSet DataPageHeaderV2 = new("DataPageHeaderV2", (1, "num_values"), (2, "num_nulls"), (3, "num_rows"), (4, "encoding"), (5, "definition_levels_byte_length"), (6, "repetition_levels_byte_length"));
     internal static readonly RequiredFieldSet DictionaryPageHeader = new("DictionaryPageHeader", (1, "num_values"), (2, "encoding"));
     internal static readonly RequiredFieldSet ColumnMetaData = new("ColumnMetaData", (1, "type"), (2, "encodings"), (3, "path_in_schema"), (4, "codec"), (5, "num_values"), (6, "total_uncompressed_size"), (7, "total_compressed_size"), (9, "data_page_offset"));
+    internal static readonly RequiredFieldSet FileMetaData = new("FileMetaData", (1, "version"), (2, "schema"), (3, "num_rows"), (4, "row_groups"));
     internal static readonly RequiredFieldSet RowGroup = new("RowGroup", (1, "columns"), (2, "total_byte_size"), (3, "num_rows"));
     internal static readonly RequiredFieldSet KeyValue = new("KeyValue", (1, "key"));
     internal static readonly RequiredFieldSet SchemaElement = new("SchemaElement", (4, "name"));
