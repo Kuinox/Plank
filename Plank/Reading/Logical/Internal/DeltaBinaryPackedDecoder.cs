@@ -8,6 +8,9 @@ namespace Plank.Reading.Logical.Internal;
 
 static partial class DeltaBinaryPackedDecoder
 {
+    // Also consumed by the integer kernel generator.
+    const int MaxInt32BitWidth = 32;
+
     // The unit every decoder below works in. It is not the mini-block size — the
     // format only requires a mini-block to be a multiple of 32 values — but 32
     // values at any bit width occupy a whole number of bytes, so a mini-block is
@@ -169,7 +172,7 @@ static partial class DeltaBinaryPackedDecoder
             var widthsOffset = offset;
             offset += layout.MiniBlockCount;
             for (var i = 0; i < usedMiniBlocks; i++)
-                offset += ValidateMiniBlock(payload[widthsOffset + i], 32, layout.MiniBlockSize,
+                offset += ValidateMiniBlock(payload[widthsOffset + i], MaxInt32BitWidth, layout.MiniBlockSize,
                     payload.Length - offset);
             remaining -= (int)Math.Min((uint)remaining, (uint)layout.MiniBlockCount * layout.MiniBlockSize);
         }
@@ -417,7 +420,7 @@ static partial class DeltaBinaryPackedDecoder
             for (var miniBlock = 0; miniBlock < bitWidths.Length && index < destination.Length; miniBlock++)
             {
                 var bitWidth = bitWidths[miniBlock];
-                ValidateMiniBlock(bitWidth, 32, layout.MiniBlockSize, reader.RemainingBytes);
+                ValidateMiniBlock(bitWidth, MaxInt32BitWidth, layout.MiniBlockSize, reader.RemainingBytes);
                 var chunks = bitWidth == 0
                     ? Math.Min(layout.MiniBlockSize / MiniBlockChunk, ((uint)(destination.Length - index) + 31) / MiniBlockChunk)
                     : layout.MiniBlockSize / MiniBlockChunk;
@@ -435,37 +438,24 @@ static partial class DeltaBinaryPackedDecoder
                         index += count;
                         continue;
                     }
-                    if (bitWidth <= 56)
+                    var packed = reader.ReadBytesWithLookahead(
+                        bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
+                    if (Avx2.IsSupported && bitWidth is > 0 and <= 16 && count == MiniBlockChunk)
                     {
-                        var packed = reader.ReadBytesWithLookahead(
-                            bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
-                        if (Avx2.IsSupported && bitWidth is > 0 and <= 16 && count == MiniBlockChunk)
-                        {
-                            if (usePdep)
-                                DecodeInt32MiniBlockBmi2(packed, bitWidth, minDelta, ref previous,
-                                    destination.Slice(index, count));
-                            else
-                                DecodeInt32MiniBlockAvx2(packed, bitWidth, minDelta, ref previous,
-                                    destination.Slice(index, count));
-                        }
-                        else if (Avx2.IsSupported && bitWidth <= 16)
-                            DecodeInt32MiniBlockVectorized(packed, bitWidth, minDelta, ref previous,
-                                adjustedDeltas, destination.Slice(index, count));
-                        else
-                            DecodeInt32MiniBlock(packed, bitWidth, minDelta, ref previous,
+                        if (usePdep)
+                            DecodeInt32MiniBlockBmi2(packed, bitWidth, minDelta, ref previous,
                                 destination.Slice(index, count));
-                        index += count;
-                        continue;
+                        else
+                            DecodeInt32MiniBlockAvx2(packed, bitWidth, minDelta, ref previous,
+                                destination.Slice(index, count));
                     }
-
-                    for (var i = 0; i < MiniBlockChunk; i++)
-                    {
-                        var delta = reader.ReadPackedUnsigned(bitWidth);
-                        if (i >= count)
-                            continue;
-                        previous = unchecked(previous + minDelta + (long)delta);
-                        destination[index++] = NarrowInt32(previous);
-                    }
+                    else if (Avx2.IsSupported && bitWidth <= 16)
+                        DecodeInt32MiniBlockVectorized(packed, bitWidth, minDelta, ref previous,
+                            adjustedDeltas, destination.Slice(index, count));
+                    else
+                        DecodeInt32MiniBlock(packed, bitWidth, minDelta, ref previous,
+                            destination.Slice(index, count));
+                    index += count;
                 }
             }
         }
@@ -502,7 +492,7 @@ static partial class DeltaBinaryPackedDecoder
             for (var miniBlock = 0; miniBlock < bitWidths.Length && index < destination.Length; miniBlock++)
             {
                 var bitWidth = bitWidths[miniBlock];
-                ValidateMiniBlock(bitWidth, 32, layout.MiniBlockSize, reader.RemainingBytes);
+                ValidateMiniBlock(bitWidth, MaxInt32BitWidth, layout.MiniBlockSize, reader.RemainingBytes);
                 var chunks = bitWidth == 0
                     ? Math.Min(layout.MiniBlockSize / MiniBlockChunk, ((uint)(destination.Length - index) + 31) / MiniBlockChunk)
                     : layout.MiniBlockSize / MiniBlockChunk;
@@ -510,38 +500,25 @@ static partial class DeltaBinaryPackedDecoder
                 for (var chunk = 0U; chunk < chunks; chunk++)
                 {
                     var count = Math.Min(MiniBlockChunk, destination.Length - index);
-                    if (bitWidth <= 56)
+                    var packed = reader.ReadBytesWithLookahead(
+                        bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
+                    if (canonicalLayout && Avx2.IsSupported && bitWidth is > 0 and <= 16 &&
+                        count == MiniBlockChunk)
                     {
-                        var packed = reader.ReadBytesWithLookahead(
-                            bitWidth * PackedBytesPerBitWidth, PackedWordLookahead);
-                        if (canonicalLayout && Avx2.IsSupported && bitWidth is > 0 and <= 16 &&
-                            count == MiniBlockChunk)
-                        {
-                            if (usePdep)
-                                DecodeNullableInt32MiniBlockBmi2(packed, bitWidth, minDelta,
-                                    ref previous, destination.Slice(index, count));
-                            else
-                                DecodeNullableInt32MiniBlockAvx2(packed, bitWidth, minDelta,
-                                    ref previous, destination.Slice(index, count));
-                        }
-                        else if (canonicalLayout && Avx2.IsSupported && bitWidth <= 16)
-                            DecodeNullableInt32MiniBlockVectorized(packed, bitWidth, minDelta,
-                                ref previous, adjustedDeltas, destination.Slice(index, count));
-                        else
-                            DecodeNullableInt32MiniBlock(packed, bitWidth, minDelta,
+                        if (usePdep)
+                            DecodeNullableInt32MiniBlockBmi2(packed, bitWidth, minDelta,
                                 ref previous, destination.Slice(index, count));
-                        index += count;
-                        continue;
+                        else
+                            DecodeNullableInt32MiniBlockAvx2(packed, bitWidth, minDelta,
+                                ref previous, destination.Slice(index, count));
                     }
-
-                    for (var i = 0; i < MiniBlockChunk; i++)
-                    {
-                        var delta = reader.ReadPackedUnsigned(bitWidth);
-                        if (i >= count)
-                            continue;
-                        previous = unchecked(previous + minDelta + (long)delta);
-                        destination[index++] = NarrowInt32(previous);
-                    }
+                    else if (canonicalLayout && Avx2.IsSupported && bitWidth <= 16)
+                        DecodeNullableInt32MiniBlockVectorized(packed, bitWidth, minDelta,
+                            ref previous, adjustedDeltas, destination.Slice(index, count));
+                    else
+                        DecodeNullableInt32MiniBlock(packed, bitWidth, minDelta,
+                            ref previous, destination.Slice(index, count));
+                    index += count;
                 }
             }
         }
@@ -956,7 +933,7 @@ static partial class DeltaBinaryPackedDecoder
         // Each generated group reads eight values from bitWidth bytes. Seven
         // lookahead bytes make its final unaligned word load safe; partial
         // chunks and payload tails keep using the checked scalar decoder.
-        if (bitWidth is > 0 and <= 56 && destination.Length == MiniBlockChunk &&
+        if (destination.Length == MiniBlockChunk &&
             packed.Length >= bitWidth * PackedBytesPerBitWidth + PackedWordLookahead)
         {
             DecodeInt32MiniBlockFast(packed, bitWidth, minDelta, ref previous, destination);
@@ -1004,7 +981,7 @@ static partial class DeltaBinaryPackedDecoder
             return;
         }
 
-        if (bitWidth <= 56 && destination.Length == MiniBlockChunk &&
+        if (destination.Length == MiniBlockChunk &&
             packed.Length >= bitWidth * PackedBytesPerBitWidth + PackedWordLookahead)
         {
             DecodeNullableInt32MiniBlockFast(packed, bitWidth, minDelta, ref previous, destination);
@@ -1109,7 +1086,7 @@ static partial class DeltaBinaryPackedDecoder
             for (var miniBlock = 0; miniBlock < bitWidths.Length && index < destination.Length; miniBlock++)
             {
                 var bitWidth = bitWidths[miniBlock];
-                ValidateMiniBlock(bitWidth, 32, layout.MiniBlockSize, reader.RemainingBytes);
+                ValidateMiniBlock(bitWidth, MaxInt32BitWidth, layout.MiniBlockSize, reader.RemainingBytes);
                 var miniBlockValues = bitWidth == 0
                     ? Math.Min(layout.MiniBlockSize, valueCount - index)
                     : layout.MiniBlockSize;
