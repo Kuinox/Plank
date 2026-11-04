@@ -18,6 +18,7 @@ public struct ParquetPageCursor : IDisposable
     int _payloadLength;
     int _nextCandidatePageOrdinal;
     int _pendingPageOrdinal;
+    ulong _dataValueCount;
     bool _dictionaryPending;
 
     internal ParquetPageCursor(ParquetFileReader owner, int generation, int rowGroupOrdinal, int columnOrdinal)
@@ -34,6 +35,7 @@ public struct ParquetPageCursor : IDisposable
         _payloadLength = 0;
         _nextCandidatePageOrdinal = 0;
         _pendingPageOrdinal = -1;
+        _dataValueCount = 0;
         _dictionaryPending = false;
         CurrentHeader = default;
 
@@ -92,6 +94,7 @@ public struct ParquetPageCursor : IDisposable
             return MoveNextPruned(owner);
         if (_offset >= _chunkLength)
         {
+            ValidateDataValueCount();
             CurrentHeader = default;
             _payloadLength = 0;
             _borrowedPayload = default;
@@ -188,6 +191,13 @@ public struct ParquetPageCursor : IDisposable
         var compressedLength = checked((int)header.CompressedPageSize);
         var sourceOffset = _chunk.ChunkOffset + (ulong)_offset;
         _offset += compressedLength;
+        if (_pruner is null)
+        {
+            if (header.Type is PageHeaderType.DataPage or PageHeaderType.DataPageV2)
+                _dataValueCount += header.ValueCount;
+            if (_dataValueCount > _chunk.ValueCount || _offset == _chunkLength)
+                ValidateDataValueCount();
+        }
         if (!RequiresDecompression(header))
         {
             if (header.CompressedPageSize != header.UncompressedPageSize)
@@ -265,6 +275,13 @@ public struct ParquetPageCursor : IDisposable
         _payloadLength = uncompressedLength;
         CurrentHeader = header;
         return true;
+    }
+
+    void ValidateDataValueCount()
+    {
+        if (_dataValueCount != _chunk.ValueCount)
+            throw new CorruptParquetException(
+                $"Data pages in row group {_chunk.RowGroupOrdinal}, column {_chunk.ColumnOrdinal} have {_dataValueCount} values but the column chunk declares {_chunk.ValueCount}.");
     }
 
     public void Dispose()

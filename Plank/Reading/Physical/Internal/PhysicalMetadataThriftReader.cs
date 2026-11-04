@@ -588,9 +588,10 @@ static class PhysicalMetadataThriftReader
         for (var i = 0; i < columnCount; i++)
         {
             var valueCount = metadata.ColumnChunkStorage[columnStart + i].ValueCount;
-            if (!metadata.ColumnStorage[i].IsRepeated && valueCount != rowCount)
+            var repeated = metadata.ColumnStorage[i].IsRepeated;
+            if (repeated ? valueCount < rowCount : valueCount != rowCount)
                 throw new CorruptParquetException(
-                    $"Non-repeated column {i} has {valueCount} values but row group {ordinal} has {rowCount} rows.");
+                    $"{(repeated ? "Repeated" : "Non-repeated")} column {i} has {valueCount} values but row group {ordinal} has {rowCount} rows.");
         }
 
         if (columnChunkOffset == 0 && columnCount != 0)
@@ -817,6 +818,10 @@ static class PhysicalMetadataThriftReader
             }
         }
         requiredFields.Validate(ParquetRequiredFields.ColumnMetaData);
+        var column = metadata.ColumnStorage[expectedColumnOrdinal];
+        if (physicalType != column.PhysicalType)
+            throw new CorruptParquetException(
+                $"Column chunk physical type {physicalType} does not match schema column {expectedColumnOrdinal} physical type {column.PhysicalType}.");
     }
 
     static ParquetColumnChunkEncodings ReadEncodings(ref CompactProtocolReader reader,
