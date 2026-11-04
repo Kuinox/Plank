@@ -371,6 +371,68 @@ internal sealed class LogicalPageMetadataTests
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void OffsetIndexPointingAtDictionaryIsRejected(bool secondSample)
+    {
+        var bytes = Convert.FromBase64String(secondSample
+            ? "UEFyMRUEFUAVQEwVABUAAAAEAAAAAAAAAAQAAAABAAAABAAAAAIAAAAEAAAAAwAAABUAFRwVHCwVBhUQFQYVBhwYBAMAAAAYBAAAAAAWAigEAwAAABgEAAAAABERAAAACgAAAAUAAAAAAAADJDkZEQIZGAQAAAAAGRgEAwAAABUAGRYCABkcFggVehYAAAAVAhksSAZzY2hlbWEVAgAVDCUCGAFjABYQGRwZHCYAHBUMGTUAEAYZGAFjFQAWEBbUARbUASZiJggcGAQDAAAAGAQQAAAAFgIoBAMA/wAYBAAAAAAREQAAFooCFRQW3AEVLgAW6QEWECYIFtQBADkcHAAAAHQAAABQQVIx"
+            : "UGFSMRUEFUAVQEwVABUAAAAEAAAAAAAAAAQAAAABAAAABAAAAAIAAAAEAAAAAwAAABUAFRwVHCwVAhUQFQYVBhwYBAMAAAAYBAAAAAAWAigEAwAAABgEAAAAABERAAAABgAAAAUAAAAAAAADJDkZEQIZGAQAAAAAGRgEAwAAABUAGRYCABkcFggVehYAAAAVAhksSAZzY2hlbWEVAgAVDCUCGAFjABYQGRwZHCYAHBUMGTUAEAYZGAFjFQAWEBbUARbUASZiJggcGAQDAAAAGAQQ+P8AFgIoBAMA/wAYBAAAAAAREQAAFooCFRQW3AEVLgAW6QEWECYIFtQBADkcHAAAAHQAAABQQVIx");
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(bytes));
+        var chunk = physical.Metadata.ColumnChunk(0, 0);
+        if (chunk.DictionaryPageOffset != 4 || chunk.DataPageOffset != 49 ||
+            bytes[checked((int)chunk.OffsetIndexOffset) + 3] != 8)
+            throw new InvalidOperationException("The sample no longer points its offset index at the dictionary.");
+
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(bytes), static (in ParquetDataPageMetadata _) => true);
+        var error = Assert.Throws<CorruptParquetException>(() =>
+        {
+            foreach (var buffer in reader.RowGroups[0].Column<byte>(0))
+                _ = buffer.Values.Length;
+        });
+        if (!error.Message.Contains("data region", StringComparison.Ordinal))
+            throw new InvalidOperationException("The dictionary location was not rejected by location validation.");
+    }
+
+    [Test]
+    public void DictionaryAndOffsetIndexReadWithAndWithoutPruning()
+    {
+        var (schema, bytes) = CreateDictionaryFile();
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(bytes));
+        var chunk = physical.Metadata.ColumnChunk(0, 0);
+        if (chunk.DictionaryPageOffset == 0 || chunk.OffsetIndexLength == 0)
+            throw new InvalidOperationException("Expected a dictionary and offset index.");
+        using var reader = schema.CreateReader(new MemoryStream(bytes));
+        var plain = ReadValues(reader.RowGroups[0].Column<int>(0));
+        reader.Reset(new MemoryStream(bytes), static (in ParquetDataPageMetadata _) => true);
+        var pruned = ReadValues(reader.RowGroups[0].Column<int>(0));
+        if (!plain.SequenceEqual(new[] { 1, 1, 2, 2, 1, 2 }) || !pruned.SequenceEqual(plain))
+            throw new InvalidOperationException("Dictionary reads did not return the expected values.");
+    }
+
+    [Test]
+    public void IndexedNonDataPageInDataRegionIsRejected()
+    {
+        var (schema, bytes) = CreateFile();
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(bytes));
+        var chunk = physical.Metadata.ColumnChunk(0, 0);
+        if (chunk.ColumnIndexLength == 0 || chunk.OffsetIndexLength == 0)
+            throw new InvalidOperationException("Expected both page indexes.");
+        // Replace the first data header with a valid empty index-page header, in place.
+        byte[] header = [0x15, 0x02, 0x15, 0x00, 0x15, 0x00, 0x3c, 0x00, 0x00];
+        header.CopyTo(bytes, checked((int)chunk.DataPageOffset));
+        using var reader = schema.CreateReader(new MemoryStream(bytes),
+            pagePruner: static (in ParquetDataPageMetadata _) => true);
+        var error = Assert.Throws<CorruptParquetException>(() => ReadValues(reader.RowGroups[0].Column<int>(0)));
+        if (!error.Message.Contains("instead of a data page", StringComparison.Ordinal))
+            throw new InvalidOperationException("The selected page was not rejected for its type.");
+    }
+
+    [Test]
     public void CorruptPageIndexIsRejected()
     {
         var (schema, bytes) = CreateFile();

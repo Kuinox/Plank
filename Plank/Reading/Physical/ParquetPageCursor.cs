@@ -149,10 +149,11 @@ public struct ParquetPageCursor : IDisposable
         if (selected.CompressedSize > int.MaxValue)
             throw new NotSupportedException("Pages larger than Int32.MaxValue are not supported.");
         return ReadPage(owner, checked((int)(selected.Offset - _chunk.ChunkOffset)),
-            checked((int)selected.CompressedSize));
+            checked((int)selected.CompressedSize), requireDataPage: true);
     }
 
-    bool ReadPage(ParquetFileReader owner, int pageOffset, int? boundedPageLength = null)
+    bool ReadPage(ParquetFileReader owner, int pageOffset, int? boundedPageLength = null,
+        bool requireDataPage = false)
     {
         if ((uint)pageOffset >= (uint)_chunkLength)
         {
@@ -179,6 +180,9 @@ public struct ParquetPageCursor : IDisposable
         var maxUncompressedPageSize = (uint)Math.Min(_chunk.TotalUncompressedSize, uint.MaxValue);
         var header = PageHeaderProbe.Read(owner, pageFileOffset, maxHeaderLength, maxUncompressedPageSize,
             PageHeaderProbe.CursorInitialLength, allowBorrow: true, ref _payloadBuffer);
+        if (requireDataPage && header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2))
+            throw new CorruptParquetException(
+                $"Indexed page at offset {pageFileOffset} has type '{header.Type}' instead of a data page.");
         var totalPageLength = checked(header.HeaderLength + (int)header.CompressedPageSize);
         if (boundedPageLength.HasValue && totalPageLength > boundedPageLength.Value)
             throw new CorruptParquetException(
