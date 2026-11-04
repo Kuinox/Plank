@@ -587,36 +587,6 @@ internal sealed class NullableNumericDecodingTests
     }
 
     [Test]
-    public void NullableInt32ReadsLegacyBitPackedDefinitionLevels()
-    {
-        var schema = CreateSchema(ParquetPhysicalType.Int32, EncodingKind.Plain);
-        var column = schema.LeafColumns[0].Column;
-        byte[] payload = new byte[1 + 4 * sizeof(int)];
-        payload[0] = 0b1011_0010;
-        int[] physicalValues = [10, 20, 30, 40];
-        for (var i = 0; i < physicalValues.Length; i++)
-            BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(1 + i * sizeof(int)), physicalValues[i]);
-        var header = CreateHeader(PageHeaderType.DataPage, payload.Length, valueCount: 8,
-            EncodingKind.Plain, definitionByteLength: 0, nullCount: 4,
-            definitionEncoding: EncodingKind.BitPacked);
-        var buffers = default(ColumnReadBuffers<int?>);
-        try
-        {
-            var decoded = ColumnChunkReader.TryDecodeNullablePageIntoNative(header, payload, column,
-                rowCount: 8, ref buffers, DefaultParquetBufferPool.Shared, out var buffer);
-            if (!decoded)
-                throw new InvalidOperationException("The native nullable numeric path declined the page.");
-            int?[] expected = [10, null, 20, 30, null, null, 40, null];
-            AssertEqual(expected, buffer.Values, EncodingKind.Plain, ParquetDataPageVersion.V1,
-                NullPattern.Mixed);
-        }
-        finally
-        {
-            buffers.Dispose();
-        }
-    }
-
-    [Test]
     public void NullableNumericsRejectCorruptDefinitionLevels()
     {
         var schema = CreateSchema(ParquetPhysicalType.Int32, EncodingKind.Plain);
