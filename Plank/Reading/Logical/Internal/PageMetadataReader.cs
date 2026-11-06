@@ -358,7 +358,7 @@ static class PageMetadataReader
             chunk.TotalCompressedSize > reader.Source.Length - chunk.ChunkOffset)
             throw new CorruptParquetException("Column chunk exceeds the source length.");
         var chunkEnd = checked(chunk.ChunkOffset + chunk.TotalCompressedSize);
-        var previousEnd = chunk.ChunkOffset;
+        var previousEnd = chunk.DataPageOffset;
         for (var i = 0; i < entries.Length; i++)
         {
             var entry = entries[i];
@@ -366,7 +366,7 @@ static class PageMetadataReader
                 entry.Offset < previousEnd || entry.Offset >= chunkEnd ||
                 entry.CompressedSize > chunkEnd - entry.Offset)
                 throw new CorruptParquetException(
-                    $"Offset index page location {i} is outside its column chunk or overlaps an earlier page.");
+                    $"Offset index page location {i} is outside the column chunk's data region or overlaps an earlier page.");
             previousEnd = checked(entry.Offset + entry.CompressedSize);
         }
     }
