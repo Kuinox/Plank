@@ -48,6 +48,11 @@ static partial class ColumnChunkReader
             throw new CorruptParquetException(
                 $"Encoding '{header.Encoding}' does not support physical type '{column.PhysicalType}' for column '{column.Name}'.");
 
+        if (header.Type is PageHeaderType.DataPage or PageHeaderType.DataPageV2 &&
+            header.Encoding is EncodingKind.RleDictionary or EncodingKind.PlainDictionary &&
+            !state.HasDictionary)
+            throw new CorruptParquetException($"Dictionary page must precede dictionary-encoded data for column '{column.Name}'.");
+
         if (header.Type != PageHeaderType.DictionaryPage)
             return false;
 
