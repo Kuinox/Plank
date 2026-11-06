@@ -137,7 +137,7 @@ internal sealed class PageEncodingCompatibilityTests
     {
         var leaf = new ParquetSchema([ColumnDefinition.RequiredLeaf("Value", ParquetPhysicalType.Int32)]).LeafColumns[0];
         var column = leaf.Column;
-        var buffers = default(ColumnReadBuffers<int>);
+        var buffers = new ColumnReadBuffers<int> { HasDictionary = true };
         try
         {
             foreach (var pageType in new[] { PageHeaderType.DataPage, PageHeaderType.DataPageV2 })
