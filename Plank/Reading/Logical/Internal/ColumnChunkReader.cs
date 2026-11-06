@@ -278,8 +278,7 @@ static partial class ColumnChunkReader
                 var runLength = header >> 1;
                 if (runLength == 0)
                     throw new CorruptParquetException($"{levelName} levels contain an empty RLE run.");
-                var byteWidth = (bitWidth + 7) >> 3;
-                var repeated = ReadLittleEndian(ref payload, byteWidth);
+                var repeated = ReadRleRunValue(ref payload, bitWidth);
                 var copyLength = (int)Math.Min(runLength, checked((uint)(destination.Length - valueIndex)));
                 destination.Slice(valueIndex, copyLength).Fill(repeated);
                 valueIndex += copyLength;
@@ -1140,10 +1139,7 @@ static partial class ColumnChunkReader
                 var runLength = header >> 1;
                 if (runLength == 0)
                     throw new CorruptParquetException("Definition levels contain an empty RLE run.");
-                var repeated = ReadLittleEndian(ref payload, byteWidth: 1);
-                if ((uint)repeated > 1)
-                    throw new CorruptParquetException(
-                        $"Definition level {repeated} exceeds the schema maximum of 1.");
+                var repeated = ReadRleRunValue(ref payload, 1);
                 var runCopyLength = (int)Math.Min(runLength, checked((uint)(valueCount - valueOffset)));
                 if (repeated != 0)
                 {
@@ -1707,7 +1703,7 @@ static partial class ColumnChunkReader
                 var runLength = header >> 1;
                 if (runLength == 0)
                     throw new CorruptParquetException("Definition levels contain an empty RLE run.");
-                var repeated = ReadLittleEndian(ref definitionPayload, byteWidth: 1);
+                var repeated = ReadRleRunValue(ref definitionPayload, 1);
                 var copyLength = (int)Math.Min(runLength,
                     checked((uint)(destination.Length - valueIndex)));
                 if (repeated == 0)
@@ -4052,8 +4048,7 @@ static partial class ColumnChunkReader
             if ((header & 1U) == 0)
             {
                 var runLength = header >> 1;
-                var byteWidth = (bitWidth + 7) >> 3;
-                var dictionaryIndex = byteWidth == 0 ? 0 : ReadLittleEndian(ref payload, byteWidth);
+                var dictionaryIndex = ReadRleRunValue(ref payload, bitWidth);
                 if ((uint)dictionaryIndex >= (uint)dictionary.Length)
                     throw new CorruptParquetException(
                         $"Dictionary index {dictionaryIndex} is out of range for a dictionary of {dictionary.Length} entries.");
@@ -4099,8 +4094,7 @@ static partial class ColumnChunkReader
                 var runLength = header >> 1;
                 if (runLength == 0)
                     throw new CorruptParquetException("Dictionary RLE run length must be positive.");
-                var byteWidth = (bitWidth + 7) >> 3;
-                var dictionaryIndex = byteWidth == 0 ? 0 : ReadLittleEndian(ref payload, byteWidth);
+                var dictionaryIndex = ReadRleRunValue(ref payload, bitWidth);
                 ValidateDictionaryIndex(dictionaryIndex, dictionaryLength);
                 var copyLength = Math.Min(runLength, valueCount - valueIndex);
                 destination.Slice((int)valueIndex, (int)copyLength).Fill(dictionaryIndex);
@@ -4640,7 +4634,7 @@ static partial class ColumnChunkReader
             if ((header & 1U) == 0)
             {
                 var runLength = header >> 1;
-                var repeated = ReadLittleEndian(ref payload, byteWidth: 1);
+                var repeated = ReadRleRunValue(ref payload, 1);
                 var copyLength = (int)Math.Min(runLength, checked((uint)(valueCount - valueIndex)));
                 if (!destination.IsEmpty)
                     destination.Slice(valueIndex, copyLength).Fill(repeated);
@@ -4690,10 +4684,7 @@ static partial class ColumnChunkReader
                 var runLength = header >> 1;
                 if (runLength == 0)
                     throw new CorruptParquetException("Definition levels contain an empty RLE run.");
-                var repeated = ReadLittleEndian(ref payload, byteWidth: 1);
-                if ((uint)repeated > 1)
-                    throw new CorruptParquetException(
-                        $"Definition level {repeated} exceeds the schema maximum of 1.");
+                var repeated = ReadRleRunValue(ref payload, 1);
                 var runCopyLength = (int)Math.Min(runLength,
                     checked((uint)(destination.Length - valueIndex)));
                 destination.Slice(valueIndex, runCopyLength).Fill((byte)repeated);
@@ -4744,10 +4735,7 @@ static partial class ColumnChunkReader
                 var runLength = header >> 1;
                 if (runLength == 0)
                     throw new CorruptParquetException("Definition levels contain an empty RLE run.");
-                var repeated = ReadLittleEndian(ref payload, byteWidth: 1);
-                if ((uint)repeated > 1)
-                    throw new CorruptParquetException(
-                        $"Definition level {repeated} exceeds the schema maximum of 1.");
+                var repeated = ReadRleRunValue(ref payload, 1);
                 var copyLength = (int)Math.Min(runLength, checked((uint)(valueCount - valueIndex)));
                 if (repeated != 0)
                     nonNulls += copyLength;
@@ -4791,7 +4779,7 @@ static partial class ColumnChunkReader
             if ((header & 1U) == 0)
             {
                 var runLength = header >> 1;
-                var repeated = ReadLittleEndian(ref payload, 1) != 0;
+                var repeated = ReadRleRunValue(ref payload, 1) != 0;
                 var copyLength = Math.Min(runLength, destinationLength - valueIndex);
                 destination.Slice((int)valueIndex, (int)copyLength).Fill(repeated);
                 valueIndex += copyLength;
@@ -4870,6 +4858,19 @@ static partial class ColumnChunkReader
                 return value;
         }
         throw new CorruptParquetException("RLE/bit-pack UInt32 varint exceeds five bytes.");
+    }
+
+    static int ReadRleRunValue(ref ReadOnlySpan<byte> payload, int bitWidth)
+    {
+        if ((uint)bitWidth > 32)
+            throw new CorruptParquetException($"Unsupported RLE bit width '{bitWidth}'.");
+        if (bitWidth == 0)
+            return 0;
+        var byteWidth = (bitWidth + 7) >> 3;
+        var value = ReadLittleEndian(ref payload, byteWidth);
+        if (bitWidth < 32 && ((uint)value >> bitWidth) != 0)
+            throw new CorruptParquetException($"RLE run value {(uint)value} exceeds bit width {bitWidth}.");
+        return value;
     }
 
     static int ReadLittleEndian(ref ReadOnlySpan<byte> payload, int byteWidth)
