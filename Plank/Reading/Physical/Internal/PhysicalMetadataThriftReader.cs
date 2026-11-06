@@ -150,15 +150,17 @@ static class PhysicalMetadataThriftReader
             if (node.PhysicalType.HasValue)
             {
                 var repeated = false;
+                var hasDefinitionLevels = false;
                 var ancestor = ordinal;
                 while (ancestor >= 0 && schemaNodes[ancestor].ParentOrdinal >= 0)
                 {
                     repeated |= schemaNodes[ancestor].Repetition == ParquetRepetition.Repeated;
+                    hasDefinitionLevels |= schemaNodes[ancestor].Repetition != ParquetRepetition.Required;
                     ancestor = schemaNodes[ancestor].ParentOrdinal;
                 }
                 var columnOrdinal = metadata.ColumnCount++;
                 columns[columnOrdinal] = new ParquetColumnSchemaInfo(columnOrdinal, ordinal, depth,
-                    node.PhysicalType.Value, node.TypeLength, node.LogicalType, repeated);
+                    node.PhysicalType.Value, node.TypeLength, node.LogicalType, repeated, hasDefinitionLevels);
             }
 
             if (node.ChildCount <= 0)
