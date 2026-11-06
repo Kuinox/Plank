@@ -12,6 +12,24 @@ internal sealed class RleRunValueWidthTests
     // Optional BOOLEAN, V2: definitions 0a 01, values length 2 and run 26 fc.
     const string Sample = "UEFSMRUGFRAVEFwVChUAFQoVBhUEFQASPBgBARgBABYAKAEBGAEAEREAAAAKAQIAAAAm/BkRAhkYAQAZGAEBFQAZFgAAGRwWCBVgFgAAABUCGSxIBnNjaGVtYRUCABUAJQIYAWMAFgoZHBkcJgAcFQAZFQYZGAFjFQAWChZgFmAmCDwYAQEYAQAWACgBARgBABERAAAWigEVFBZoFSIAFmAWCiYIFmAAORwcAAAAXwAAAFBBUjE=";
 
+    // Optional INT64 dictionary page: 127 literal groups are declared with only two index bytes left.
+    const string ShortInt64IndexRun = "UEFSMRUEFUAVQEwVBBUAAAAAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAADAAAAAAAAABUAFRwVHCwVEBUQFQYVBhwYCAMAAAAAAAD/GAgAAAAAAAAAABYCKAgDAAAAAAAAABgIAAAAAAAAAAAREQAAAAYAAAAmAQIACAIB/0Q5GRECGRgIAAAAAAAAAAAZGAgDAAAAAAAAABUAGRYCABkcFmIVmgEWAAAAFQIZLEgGc2NoZW1hFQIAFQQlAhgBYwAWEBkcGRwmABwVBBk1ABAGGRgBYxUAFhAW9AEW9AEmYiYIHBgIAwAAAAAAAAAYCAAAAAAAAAAAFgIoCAMAAAAAAAAAGAgAAAAAAAAAABERAAAWugIVFhb8ARU+ABb0ARYQJggW9AEAORwcAAAAhAAAAFBBUjE=";
+
+    [Test]
+    public void NullableInt64DictionaryRejectsTruncatedLiteralRun()
+    {
+        var file = Convert.FromBase64String(ShortInt64IndexRun);
+        var error = Assert.Throws<CorruptParquetException>(() =>
+        {
+            using var reader = new ParquetReader();
+            reader.Reset(new MemoryStream(file, writable: false));
+            foreach (var buffer in reader.RowGroups[0].Column<long?>(0))
+                _ = buffer.Values.Length;
+        });
+        if (!error.Message.Contains("RLE literal run exceeds the remaining payload", StringComparison.Ordinal))
+            throw new InvalidOperationException("Expected the shared run parser to reject the complete literal run.");
+    }
+
     [Test]
     [Arguments(false)]
     [Arguments(true)]

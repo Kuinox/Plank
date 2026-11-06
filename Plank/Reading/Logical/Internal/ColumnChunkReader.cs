@@ -1140,9 +1140,6 @@ static partial class ColumnChunkReader
                 if (runLength == 0)
                     throw new CorruptParquetException("Definition levels contain an empty RLE run.");
                 var repeated = ReadRleRunValue(ref payload, 1);
-                if ((uint)repeated > 1)
-                    throw new CorruptParquetException(
-                        $"Definition level {repeated} exceeds the schema maximum of 1.");
                 var runCopyLength = (int)Math.Min(runLength, checked((uint)(valueCount - valueOffset)));
                 if (repeated != 0)
                 {
@@ -4688,9 +4685,6 @@ static partial class ColumnChunkReader
                 if (runLength == 0)
                     throw new CorruptParquetException("Definition levels contain an empty RLE run.");
                 var repeated = ReadRleRunValue(ref payload, 1);
-                if ((uint)repeated > 1)
-                    throw new CorruptParquetException(
-                        $"Definition level {repeated} exceeds the schema maximum of 1.");
                 var runCopyLength = (int)Math.Min(runLength,
                     checked((uint)(destination.Length - valueIndex)));
                 destination.Slice(valueIndex, runCopyLength).Fill((byte)repeated);
@@ -4742,9 +4736,6 @@ static partial class ColumnChunkReader
                 if (runLength == 0)
                     throw new CorruptParquetException("Definition levels contain an empty RLE run.");
                 var repeated = ReadRleRunValue(ref payload, 1);
-                if ((uint)repeated > 1)
-                    throw new CorruptParquetException(
-                        $"Definition level {repeated} exceeds the schema maximum of 1.");
                 var copyLength = (int)Math.Min(runLength, checked((uint)(valueCount - valueIndex)));
                 if (repeated != 0)
                     nonNulls += copyLength;
