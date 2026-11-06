@@ -161,7 +161,9 @@ static partial class DeltaBinaryPackedDecoder
         var remaining = Math.Max(0, expectedValueCount - 1);
         while (remaining > 0)
         {
-            SkipUnsignedVarInt(payload, ref offset);
+            var blockReader = new DeltaBinaryPackedReader(payload[offset..]);
+            _ = ReadInt32MinimumDelta(ref blockReader);
+            offset += blockReader.Offset;
             if (payload.Length - offset < layout.MiniBlockCount)
                 throw new CorruptParquetException(
                     "Unexpected end of delta-binary-packed bit widths.");
@@ -177,22 +179,6 @@ static partial class DeltaBinaryPackedDecoder
             remaining -= (int)Math.Min((uint)remaining, (uint)layout.MiniBlockCount * layout.MiniBlockSize);
         }
         return offset;
-    }
-
-    static void SkipUnsignedVarInt(ReadOnlySpan<byte> payload, ref int offset)
-    {
-        if ((uint)offset >= (uint)payload.Length)
-            throw new CorruptParquetException(
-                "Unexpected end of delta-binary-packed payload.");
-        if ((payload[offset++] & 0x80) == 0)
-            return;
-        for (var byteIndex = 1; byteIndex < 10; byteIndex++)
-            if ((uint)offset >= (uint)payload.Length)
-                throw new CorruptParquetException(
-                    "Unexpected end of delta-binary-packed payload.");
-            else if ((payload[offset++] & 0x80) == 0)
-                return;
-        throw new CorruptParquetException("Invalid delta-binary-packed UInt64 varint.");
     }
 
     internal static void ReadInt32Batch(ReadOnlySpan<byte> payload, Span<int> destination,
@@ -413,7 +399,7 @@ static partial class DeltaBinaryPackedDecoder
 
         while (index < destination.Length)
         {
-            var minDelta = reader.ReadZigZagInt64();
+            var minDelta = ReadInt32MinimumDelta(ref reader);
             for (var i = 0; i < bitWidths.Length; i++)
                 bitWidths[i] = reader.ReadByte();
 
@@ -485,7 +471,7 @@ static partial class DeltaBinaryPackedDecoder
 
         while (index < destination.Length)
         {
-            var minDelta = reader.ReadZigZagInt64();
+            var minDelta = ReadInt32MinimumDelta(ref reader);
             for (var i = 0; i < bitWidths.Length; i++)
                 bitWidths[i] = reader.ReadByte();
 
@@ -1079,7 +1065,7 @@ static partial class DeltaBinaryPackedDecoder
 
         while (index < valueCount)
         {
-            var minDelta = reader.ReadZigZagInt64();
+            var minDelta = ReadInt32MinimumDelta(ref reader);
             for (var i = 0; i < bitWidths.Length; i++)
                 bitWidths[i] = reader.ReadByte();
 
@@ -1506,14 +1492,21 @@ static partial class DeltaBinaryPackedDecoder
         Unsafe.As<Span<T>, Span<ushort>>(ref destination)[index] = unchecked((ushort)value);
     }
 
+    static long ReadInt32MinimumDelta(ref DeltaBinaryPackedReader reader)
+    {
+        var value = ReadHeaderVarUInt32(ref reader, "minimum delta");
+        return (int)(value >> 1) ^ -(int)(value & 1);
+    }
+
     static uint ReadValueCount(ref DeltaBinaryPackedReader reader)
         => ReadHeaderVarUInt32(ref reader, "value count", int.MaxValue);
 
     static uint ReadHeaderVarUInt32(ref DeltaBinaryPackedReader reader, string fieldName,
         uint maximum = uint.MaxValue)
     {
+        var start = reader.Offset;
         var value = reader.ReadUnsignedVarInt();
-        if (value > maximum)
+        if (reader.Offset - start > 5 || value > maximum)
             throw new CorruptParquetException(
                 $"Delta binary packed {fieldName} {value} exceeds the supported maximum.");
         return (uint)value;
