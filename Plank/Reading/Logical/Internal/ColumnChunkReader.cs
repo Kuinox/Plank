@@ -670,43 +670,6 @@ static partial class ColumnChunkReader
         ValidatePlainPayload(payload, checked((uint)physicalCount), checked((uint)physicalSize));
     }
 
-    static void MaterializeFixedWidthDictionaryValues<T>(ReadOnlySpan<byte> payload, Type physicalType,
-        int physicalCount, ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool)
-    {
-        if (physicalType == typeof(int))
-            MaterializeFixedWidthDictionaryValues<T, int>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(long))
-            MaterializeFixedWidthDictionaryValues<T, long>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(bool))
-            MaterializeFixedWidthDictionaryValues<T, bool>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(float))
-            MaterializeFixedWidthDictionaryValues<T, float>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(double))
-            MaterializeFixedWidthDictionaryValues<T, double>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(decimal))
-            MaterializeFixedWidthDictionaryValues<T, decimal>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(byte))
-            MaterializeFixedWidthDictionaryValues<T, byte>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(ushort))
-            MaterializeFixedWidthDictionaryValues<T, ushort>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(uint))
-            MaterializeFixedWidthDictionaryValues<T, uint>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(ulong))
-            MaterializeFixedWidthDictionaryValues<T, ulong>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(DateOnly))
-            MaterializeFixedWidthDictionaryValues<T, DateOnly>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(DateTime))
-            MaterializeFixedWidthDictionaryValues<T, DateTime>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(DateTimeOffset))
-            MaterializeFixedWidthDictionaryValues<T, DateTimeOffset>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(TimeOnly))
-            MaterializeFixedWidthDictionaryValues<T, TimeOnly>(payload, physicalCount, ref buffers, bufferPool);
-        else if (physicalType == typeof(Guid))
-            MaterializeFixedWidthDictionaryValues<T, Guid>(payload, physicalCount, ref buffers, bufferPool);
-        else
-            throw new InvalidOperationException($"Unsupported fixed-width physical type '{physicalType}'.");
-    }
-
     static bool TryPrepareReusableRequiredDictionaryValues<T>(ReadOnlySpan<byte> payload,
         int valueCount, ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool,
         out int reusableValueCount)
@@ -755,16 +718,6 @@ static partial class ColumnChunkReader
         DecodeDictionaryLiteralIndexes(payload[..reusableByteCount], bitWidth, dictionary, reusable);
         reusableValueCount = dictionary.Length;
         return true;
-    }
-
-    static void MaterializeFixedWidthDictionaryValues<T, TValue>(ReadOnlySpan<byte> payload,
-        int physicalCount, ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool)
-        where TValue : struct
-    {
-        var physical = MemoryMarshal.Cast<byte, TValue>(buffers.GetScratch(
-            checked(physicalCount * Unsafe.SizeOf<TValue>()), bufferPool));
-        DecodeDictionaryIndexesIntoBuffer(payload, checked((uint)physicalCount),
-            buffers.GetDictionary<TValue>(), physical);
     }
 
     static void DecodeFixedWidthBatch<T>(ReadOnlySpan<byte> payload, Column column,
@@ -4626,19 +4579,6 @@ static partial class ColumnChunkReader
             Unsafe.Add(ref target, valueIndex + lane) = dictionaryPointer[indexes.GetElement(lane)];
     }
 
-    static Array DecodeBooleanRle(ReadOnlySpan<byte> payload, uint valueCount, Type targetType)
-    {
-        if (targetType != typeof(bool))
-            throw new CorruptParquetException($"Boolean column cannot be projected to '{targetType}'.");
-
-        payload = ReadBooleanRlePayload(payload);
-        var ints = ReadRleBitPackedHybrid(payload, valueCount, bitWidth: 1);
-        var values = new bool[ints.Length];
-        for (var i = 0; i < ints.Length; i++)
-            values[i] = ints[i] != 0;
-        return values;
-    }
-
     static Span<byte> AsBytes<T>(Span<T> values)
     {
         if (values.IsEmpty)
@@ -4830,53 +4770,6 @@ static partial class ColumnChunkReader
         }
 
         return nonNulls;
-    }
-
-    static int[] ReadRleBitPackedHybrid(ReadOnlySpan<byte> payload, uint valueCount, bool hasBitWidthPrefix)
-    {
-        if (payload.IsEmpty)
-            return [];
-        var bitWidth = hasBitWidthPrefix ? payload[0] : 0;
-        if (hasBitWidthPrefix)
-            payload = payload[1..];
-        return ReadRleBitPackedHybrid(payload, valueCount, bitWidth);
-    }
-
-    static int[] ReadRleBitPackedHybrid(ReadOnlySpan<byte> payload, uint valueCount, int bitWidth)
-    {
-        var values = new int[(int)valueCount];
-        var valueIndex = 0U;
-        while (valueIndex < valueCount)
-        {
-            var header = ReadUnsignedVarInt(ref payload);
-            if ((header & 1U) == 0)
-            {
-                var runLength = header >> 1;
-                var byteWidth = (bitWidth + 7) >> 3;
-                var repeated = byteWidth == 0 ? 0 : ReadLittleEndian(ref payload, byteWidth);
-                var copyLength = Math.Min(runLength, valueCount - valueIndex);
-                Array.Fill(values, repeated, (int)valueIndex, (int)copyLength);
-                valueIndex += copyLength;
-                continue;
-            }
-
-            var literalGroupCount = header >> 1;
-            if (literalGroupCount > uint.MaxValue / 8)
-                throw new CorruptParquetException($"RLE literal run group count {literalGroupCount} is too large.");
-            var literalCount = literalGroupCount * 8U;
-            for (var i = 0U; i < literalCount && valueIndex < valueCount; i++)
-                values[(int)valueIndex++] = ReadBitPackedValue(ref payload, bitWidth, (int)i);
-
-            if (bitWidth > 0 && literalCount > (uint.MaxValue - 7) / (uint)bitWidth)
-                throw new CorruptParquetException($"RLE literal run bit count overflow (count={literalCount}, width={bitWidth}).");
-            var literalByteCount = bitWidth == 0 ? 0U : (literalCount * (uint)bitWidth + 7U) >> 3;
-            if (literalByteCount > (uint)payload.Length)
-                throw new CorruptParquetException(
-                    $"RLE literal group claims {literalByteCount} bytes but only {payload.Length} remain.");
-            payload = payload[(int)literalByteCount..];
-        }
-
-        return values;
     }
 
     static void DecodeBooleanRle(ReadOnlySpan<byte> payload, Span<bool> destination)
