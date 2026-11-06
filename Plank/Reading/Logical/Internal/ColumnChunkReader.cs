@@ -3408,6 +3408,9 @@ static partial class ColumnChunkReader
                     $"DataPageV1 {levelName} level encoding '{FormatLevelEncoding(encoding)}' is not supported.");
         }
 
+        if (byteLength == 0 && valueCount != 0 && bitWidth != 0)
+            throw new CorruptParquetException($"DataPageV1 {levelName} levels are empty for a page with values.");
+
         var totalLength = checked(payloadOffset + byteLength);
         if (totalLength > payload.Length)
             throw new CorruptParquetException(
