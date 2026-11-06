@@ -275,7 +275,7 @@ static partial class ColumnChunkReader
                 var runLength = header >> 1;
                 if (runLength == 0)
                     throw new CorruptParquetException("Definition levels contain an empty RLE run.");
-                var repeated = ReadLittleEndian(ref payload, byteWidth: 1);
+                var repeated = ReadRleRunValue(ref payload, 1);
                 if (repeated != 1)
                     throw new CorruptParquetException(
                         "Definition levels contain nulls but the page header declares none.");
@@ -997,33 +997,7 @@ static partial class ColumnChunkReader
         var written = 0;
         while (written < destination.Length)
         {
-            if (state.RunRemaining == 0)
-            {
-                var runPayload = payload[state.Offset..];
-                var before = runPayload.Length;
-                var header = ReadUnsignedVarInt(ref runPayload);
-                state.Offset += before - runPayload.Length;
-                state.LiteralRun = (header & 1U) != 0;
-                var runCount = header >> 1;
-                if (runCount == 0)
-                    throw new CorruptParquetException("RLE run length must be positive.");
-                if (state.LiteralRun)
-                {
-                    if (runCount > uint.MaxValue / 8)
-                        throw new CorruptParquetException(
-                            $"RLE literal run group count {runCount} is too large.");
-                    state.RunRemaining = runCount * 8;
-                }
-                else
-                {
-                    state.RunRemaining = runCount;
-                    var byteWidth = (state.BitWidth + 7) >> 3;
-                    runPayload = payload[state.Offset..];
-                    before = runPayload.Length;
-                    state.RepeatedValue = byteWidth == 0 ? 0 : ReadLittleEndian(ref runPayload, byteWidth);
-                    state.Offset += before - runPayload.Length;
-                }
-            }
+            EnsureRleRun(payload, ref state);
             var pageRemaining = state.ValueCount - state.ValuesRead;
             if (!state.LiteralRun)
             {
@@ -1114,33 +1088,7 @@ static partial class ColumnChunkReader
         var written = 0;
         while (written < destination.Length)
         {
-            if (state.RunRemaining == 0)
-            {
-                var runPayload = payload[state.Offset..];
-                var before = runPayload.Length;
-                var header = ReadUnsignedVarInt(ref runPayload);
-                state.Offset += before - runPayload.Length;
-                state.LiteralRun = (header & 1U) != 0;
-                var runCount = header >> 1;
-                if (runCount == 0)
-                    throw new CorruptParquetException("RLE run length must be positive.");
-                if (state.LiteralRun)
-                {
-                    if (runCount > uint.MaxValue / 8)
-                        throw new CorruptParquetException(
-                            $"RLE literal run group count {runCount} is too large.");
-                    state.RunRemaining = runCount * 8;
-                }
-                else
-                {
-                    state.RunRemaining = runCount;
-                    var byteWidth = (state.BitWidth + 7) >> 3;
-                    runPayload = payload[state.Offset..];
-                    before = runPayload.Length;
-                    state.RepeatedValue = byteWidth == 0 ? 0 : ReadLittleEndian(ref runPayload, byteWidth);
-                    state.Offset += before - runPayload.Length;
-                }
-            }
+            EnsureRleRun(payload, ref state);
             var pageRemaining = state.ValueCount - state.ValuesRead;
             if (!state.LiteralRun)
             {
@@ -1247,33 +1195,7 @@ static partial class ColumnChunkReader
         var written = 0;
         while (written < targetCount)
         {
-            if (state.RunRemaining == 0)
-            {
-                var runPayload = payload[state.Offset..];
-                var before = runPayload.Length;
-                var header = ReadUnsignedVarInt(ref runPayload);
-                state.Offset += before - runPayload.Length;
-                state.LiteralRun = (header & 1U) != 0;
-                var runCount = header >> 1;
-                if (runCount == 0)
-                    throw new CorruptParquetException("RLE run length must be positive.");
-                if (state.LiteralRun)
-                {
-                    if (runCount > uint.MaxValue / 8)
-                        throw new CorruptParquetException(
-                            $"RLE literal run group count {runCount} is too large.");
-                    state.RunRemaining = runCount * 8;
-                }
-                else
-                {
-                    state.RunRemaining = runCount;
-                    var byteWidth = (state.BitWidth + 7) >> 3;
-                    runPayload = payload[state.Offset..];
-                    before = runPayload.Length;
-                    state.RepeatedValue = byteWidth == 0 ? 0 : ReadLittleEndian(ref runPayload, byteWidth);
-                    state.Offset += before - runPayload.Length;
-                }
-            }
+            EnsureRleRun(payload, ref state);
             var pageRemaining = state.ValueCount - state.ValuesRead;
             if (!state.LiteralRun)
             {
@@ -1535,10 +1457,9 @@ static partial class ColumnChunkReader
         }
 
         state.RunRemaining = count;
-        var byteWidth = (state.BitWidth + 7) >> 3;
         remaining = payload[state.Offset..];
         before = remaining.Length;
-        state.RepeatedValue = byteWidth == 0 ? 0 : ReadLittleEndian(ref remaining, byteWidth);
+        state.RepeatedValue = ReadRleRunValue(ref remaining, state.BitWidth);
         state.Offset += before - remaining.Length;
     }
 
