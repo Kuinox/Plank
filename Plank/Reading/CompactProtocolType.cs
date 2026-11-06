@@ -14,5 +14,6 @@ enum CompactProtocolType : byte
     List = 9,
     Set = 10,
     Map = 11,
-    Struct = 12
+    Struct = 12,
+    Uuid = 13
 }
