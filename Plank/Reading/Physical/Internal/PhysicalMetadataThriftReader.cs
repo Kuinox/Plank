@@ -149,18 +149,18 @@ static class PhysicalMetadataThriftReader
             schemaNodes[ordinal] = node;
             if (node.PhysicalType.HasValue)
             {
-                var repeated = false;
-                var hasDefinitionLevels = false;
+                var maxRepetitionLevel = 0;
+                var maxDefinitionLevel = 0;
                 var ancestor = ordinal;
                 while (ancestor >= 0 && schemaNodes[ancestor].ParentOrdinal >= 0)
                 {
-                    repeated |= schemaNodes[ancestor].Repetition == ParquetRepetition.Repeated;
-                    hasDefinitionLevels |= schemaNodes[ancestor].Repetition != ParquetRepetition.Required;
+                    if (schemaNodes[ancestor].Repetition == ParquetRepetition.Repeated) maxRepetitionLevel++;
+                    if (schemaNodes[ancestor].Repetition != ParquetRepetition.Required) maxDefinitionLevel++;
                     ancestor = schemaNodes[ancestor].ParentOrdinal;
                 }
                 var columnOrdinal = metadata.ColumnCount++;
                 columns[columnOrdinal] = new ParquetColumnSchemaInfo(columnOrdinal, ordinal, depth,
-                    node.PhysicalType.Value, node.TypeLength, node.LogicalType, repeated, hasDefinitionLevels);
+                    node.PhysicalType.Value, node.TypeLength, node.LogicalType, maxRepetitionLevel, maxDefinitionLevel);
             }
 
             if (node.ChildCount <= 0)
@@ -829,20 +829,7 @@ static class PhysicalMetadataThriftReader
             throw new CorruptParquetException(
                 $"Column chunk physical type {physicalType} does not match schema column {expectedColumnOrdinal} physical type {column.PhysicalType}.");
         if (sizeStatistics.IsSet)
-        {
-            var repetition = 0;
-            var definition = 0;
-            var nodes = metadata.SchemaNodeStorage;
-            var ordinal = column.NodeOrdinal;
-            while (ordinal >= 0 && nodes[ordinal].ParentOrdinal >= 0)
-            {
-                var node = nodes[ordinal];
-                if (node.Repetition == ParquetRepetition.Repeated) repetition++;
-                if (node.Repetition != ParquetRepetition.Required) definition++;
-                ordinal = node.ParentOrdinal;
-            }
-            sizeStatistics.Validate(repetition, definition, column.PhysicalType);
-        }
+            sizeStatistics.Validate(column.MaxRepetitionLevel, column.MaxDefinitionLevel, column.PhysicalType);
     }
 
     // Values are consumed but not retained: only their presence and lengths matter here.

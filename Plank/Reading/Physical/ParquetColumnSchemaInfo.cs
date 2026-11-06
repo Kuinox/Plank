@@ -5,18 +5,20 @@ namespace Plank.Reading.Physical;
 public readonly struct ParquetColumnSchemaInfo
 {
     internal readonly int NodeOrdinal;
-    // These flags describe the leaf and its ancestors below the schema root.
-    internal readonly bool IsRepeated;
-    internal readonly bool HasDefinitionLevels;
+    // Levels describe the leaf and its ancestors below the schema root.
+    internal readonly int MaxRepetitionLevel;
+    internal readonly int MaxDefinitionLevel;
+    internal bool IsRepeated => MaxRepetitionLevel > 0;
+    internal bool HasDefinitionLevels => MaxDefinitionLevel > 0;
 
     internal ParquetColumnSchemaInfo(int ordinal, int nodeOrdinal, int pathSegmentCount,
-        ParquetPhysicalType physicalType, uint typeLength, LogicalTypeInfo logicalType, bool isRepeated,
-        bool hasDefinitionLevels)
+        ParquetPhysicalType physicalType, uint typeLength, LogicalTypeInfo logicalType, int maxRepetitionLevel,
+        int maxDefinitionLevel)
     {
         Ordinal = ordinal;
         NodeOrdinal = nodeOrdinal;
-        IsRepeated = isRepeated;
-        HasDefinitionLevels = hasDefinitionLevels;
+        MaxRepetitionLevel = maxRepetitionLevel;
+        MaxDefinitionLevel = maxDefinitionLevel;
         PathSegmentCount = pathSegmentCount;
         PhysicalType = physicalType;
         TypeLength = typeLength;

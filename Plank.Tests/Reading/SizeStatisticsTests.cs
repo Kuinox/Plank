@@ -31,6 +31,20 @@ internal sealed class SizeStatisticsTests
         => Open(BuildFile(shape, 1, Histograms(repetitions, definitions)));
 
     [Test]
+    [Arguments(0, 0, 0)]
+    [Arguments(1, 0, 1)]
+    [Arguments(2, 1, 3)]
+    public void StoresSchemaLevelsWithoutStatistics(int shape, int repetition, int definition)
+    {
+        using var reader = new ParquetFileReader();
+        reader.Reset(new MemoryStream(BuildFile(shape, 1, null)));
+        var column = reader.Metadata.ColumnSchema(0);
+        if (column.MaxRepetitionLevel != repetition || column.MaxDefinitionLevel != definition ||
+            column.IsRepeated != (repetition > 0) || column.HasDefinitionLevels != (definition > 0))
+            throw new InvalidOperationException("Physical schema levels or derived flags are incorrect.");
+    }
+
+    [Test]
     public void AcceptsMissingStatisticsAndByteArrayBytes()
     {
         Open(BuildFile(0, 1, null));

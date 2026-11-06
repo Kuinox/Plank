@@ -183,7 +183,7 @@ internal sealed class EmptyV2LevelsTests
             IsCompressed: false, RepetitionLevelEncoding: EncodingKind.Rle,
             DefinitionLevelEncoding: EncodingKind.Rle, RowCount: 0);
         var repeated = new ParquetColumnSchemaInfo(0, 0, 1, ParquetPhysicalType.Int32, 0, default,
-            isRepeated: true, hasDefinitionLevels: true);
+            maxRepetitionLevel: 1, maxDefinitionLevel: 1);
         ParquetPageCursor.ValidateV2Levels(header, repeated);
         ParquetPageCursor.ValidateV2Levels(header with { ValueCount = 1 }, default);
     }
