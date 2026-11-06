@@ -138,7 +138,7 @@ ref struct CompactProtocolReader
             return false;
         }
 
-        type = (CompactProtocolType)(header & 0x0F);
+        type = ValidateCompactType(header & 0x0F);
         var delta = header >> 4;
         fieldId = delta == 0 ? ReadI16() : _lastFieldId + delta;
         if (fieldId is < short.MinValue or > short.MaxValue)
@@ -240,12 +240,31 @@ ref struct CompactProtocolReader
             $"Expected a varint value no greater than {available} but got {length}.");
     }
 
+    static CompactProtocolType ValidateCompactType(int value)
+    {
+        if (value > (int)CompactProtocolType.Uuid)
+            throw new CorruptParquetException($"Invalid compact protocol type '{value}'.");
+        return (CompactProtocolType)value;
+    }
+
+    // Each skipped collection element consumes at least one byte. Preserve the
+    // distinction between an incomplete page-header probe and corrupt input.
+    void RequireCollectionBytes(uint count, uint bytesPerEntry)
+    {
+        if (count <= Remaining / bytesPerEntry)
+            return;
+        var required = (ulong)count * bytesPerEntry;
+        if (required > int.MaxValue)
+            throw new CorruptParquetException("Compact protocol collection is too large.");
+        EnsureAvailable((int)required);
+    }
+
     (uint Count, CompactProtocolType ElementType) ReadListHeader()
     {
         EnsureAvailable(1);
         var header = _buffer[_offset++];
         var countNibble = header >> 4;
-        var type = (CompactProtocolType)(header & 0x0F);
+        var type = ValidateCompactType(header & 0x0F);
         var count = countNibble == 15 ? ReadVarU32() : (uint)countNibble;
         return (count, type);
     }
@@ -278,6 +297,10 @@ ref struct CompactProtocolReader
                 EnsureAvailable(sizeof(double));
                 _offset += sizeof(double);
                 return;
+            case CompactProtocolType.Uuid:
+                EnsureAvailable(16);
+                _offset += 16;
+                return;
             case CompactProtocolType.Binary:
             {
                 // The length has to land in a local first: ReadBinaryLength
@@ -298,8 +321,25 @@ ref struct CompactProtocolReader
             case CompactProtocolType.Set:
             {
                 var (count, elementType) = ReadListHeader();
+                RequireCollectionBytes(count, 1);
                 for (var i = 0U; i < count; i++)
                     Skip(elementType, remainingDepth: remainingDepth - 1);
+                return;
+            }
+            case CompactProtocolType.Map:
+            {
+                var count = ReadVarUInt32();
+                if (count == 0)
+                    return;
+                var types = ReadByte();
+                var keyType = ValidateCompactType(types >> 4);
+                var valueType = ValidateCompactType(types & 0x0F);
+                RequireCollectionBytes(count, 2);
+                for (var i = 0U; i < count; i++)
+                {
+                    Skip(keyType, remainingDepth: remainingDepth - 1);
+                    Skip(valueType, remainingDepth: remainingDepth - 1);
+                }
                 return;
             }
             default:
