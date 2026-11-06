@@ -180,6 +180,7 @@ public struct ParquetPageCursor : IDisposable
         var maxUncompressedPageSize = (uint)Math.Min(_chunk.TotalUncompressedSize, uint.MaxValue);
         var header = PageHeaderProbe.Read(owner, pageFileOffset, maxHeaderLength, maxUncompressedPageSize,
             PageHeaderProbe.CursorInitialLength, allowBorrow: true, ref _payloadBuffer);
+        ValidateV2Levels(header, owner.Metadata.ColumnSchema(_chunk.ColumnOrdinal));
         if (requireDataPage && header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2))
             throw new CorruptParquetException(
                 $"Indexed page at offset {pageFileOffset} has type '{header.Type}' instead of a data page.");
@@ -279,6 +280,16 @@ public struct ParquetPageCursor : IDisposable
         _payloadLength = uncompressedLength;
         CurrentHeader = header;
         return true;
+    }
+
+    internal static void ValidateV2Levels(PageHeader header, ParquetColumnSchemaInfo column)
+    {
+        if (header.Type != PageHeaderType.DataPageV2 || header.ValueCount == 0)
+            return;
+        if (column.IsRepeated && header.RepetitionLevelsByteLength == 0)
+            throw new CorruptParquetException("DataPageV2 repetition levels are empty for a nonempty page.");
+        if (column.HasDefinitionLevels && header.DefinitionLevelsByteLength == 0)
+            throw new CorruptParquetException("DataPageV2 definition levels are empty for a nonempty page.");
     }
 
     void ValidateDataValueCount()
