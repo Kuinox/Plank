@@ -1527,6 +1527,9 @@ static partial class ColumnChunkReader
             if (count > uint.MaxValue / 8)
                 throw new CorruptParquetException(
                     $"RLE literal run group count {count} is too large.");
+            var byteCount = (ulong)count * (uint)state.BitWidth;
+            if (byteCount > (ulong)(payload.Length - state.Offset))
+                throw new CorruptParquetException("RLE literal run exceeds the remaining payload.");
             state.RunRemaining = count * 8;
             return;
         }

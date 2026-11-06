@@ -160,7 +160,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
     public void ReadIntegerResidualsPreserveLanesTailsAndWrapping(int bitWidth)
     {
         foreach (var count in new[] { 32, 33, 34, 128, 129, 130, 257 })
-        foreach (var minDelta in new[] { -17L, int.MaxValue, long.MaxValue - ushort.MaxValue })
+        foreach (var minDelta in new[] { -17L, int.MaxValue, (long)int.MinValue })
         {
             var payload = new List<byte>();
             WriteUnsignedVarIntReference(128, payload);
@@ -1092,7 +1092,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
-    public async Task ReadInt32WrapsASumThatLeavesTheInt64Range()
+    public void ReadInt32RejectsInt64WidthMinimumDelta()
     {
         var payload = new List<byte>();
         WriteUnsignedVarIntReference(128, payload);
@@ -1108,14 +1108,8 @@ internal sealed class DeltaBinaryPackedDecoderTests
         Array.Fill(deltas, long.MaxValue, 4, deltas.Length - 4);
         WriteDeltaBlockReference(deltas, long.MaxValue, payload);
 
-        var destination = new int[5];
-        DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), destination);
-
-        // No conformant encoder produces Int64-wide deltas for an INT32 column, so
-        // this is a corrupt payload. It still has to decode to something definite
-        // rather than crash, and modular arithmetic is what the format specifies —
-        // there is no way to tell it apart from a legitimate wrap.
-        await Assert.That(destination).IsEquivalentTo(new[] { 0, 0, -1, -1, -2 });
+        Assert.Throws<CorruptParquetException>(() =>
+            DeltaBinaryPackedDecoder.ReadInt32(payload.ToArray(), new int[5]));
     }
 
     [Test]
