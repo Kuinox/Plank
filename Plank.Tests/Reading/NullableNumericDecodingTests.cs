@@ -664,9 +664,6 @@ internal sealed class NullableNumericDecodingTests
             Assert.Throws<CorruptParquetException>(() =>
                 ColumnChunkReader.TryStartFixedWidthPageBatches(header, payload, column,
                     rowCount: valueCount, ref buffers, DefaultParquetBufferPool.Shared, ref page, out _));
-            Assert.Throws<CorruptParquetException>(() =>
-                ColumnChunkReader.TryDecodeNullablePageIntoNative(header, payload, column,
-                    rowCount: valueCount, ref buffers, DefaultParquetBufferPool.Shared, out _));
         }
         finally
         {

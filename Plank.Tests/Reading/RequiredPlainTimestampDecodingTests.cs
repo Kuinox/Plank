@@ -1,7 +1,8 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using Plank.Reading;
-using Plank.Reading.Logical.Internal;
+using Plank.Reading.Logical;
+using Plank.Writing.Thrift;
 using Plank.Schema;
 using Plank.Writing;
 
@@ -77,25 +78,9 @@ internal sealed class RequiredPlainTimestampDecodingTests
     [Test]
     public void PayloadShorterThanDeclaredValueCountIsRejectedAcrossPageVersions()
     {
-        PageHeaderType[] pageTypes = [PageHeaderType.DataPage, PageHeaderType.DataPageV2];
-        foreach (var pageType in pageTypes)
-        {
-            var payload = new byte[sizeof(long)];
-            var schema = CreateSchema(TimeUnit.Micros, adjustedToUtc: true);
-            var header = CreateHeader(pageType, payload.Length, valueCount: 2);
-            var buffers = default(ColumnReadBuffers<DateTime>);
-            try
-            {
-                Assert.Throws<CorruptParquetException>(() =>
-                    ColumnChunkReader.TryDecodeRequiredPageIntoNative(
-                        header, payload, schema.LeafColumns[0].Column, rowCount: 2, ref buffers,
-                        DefaultParquetBufferPool.Shared, out _));
-            }
-            finally
-            {
-                buffers.Dispose();
-            }
-        }
+        foreach (var pageType in new[] { PageHeaderType.DataPage, PageHeaderType.DataPageV2 })
+            Assert.Throws<CorruptParquetException>(() => ReadFile(
+                CreateFile([0], TimeUnit.Micros, true, pageType, 2)));
     }
 
     [Test]
@@ -135,26 +120,53 @@ internal sealed class RequiredPlainTimestampDecodingTests
     }
 
     static DateTime[] Decode(long[] rawValues, TimeUnit unit, bool adjustedToUtc, PageHeaderType pageType)
-    {
-        var payload = new byte[checked(rawValues.Length * sizeof(long))];
-        for (var i = 0; i < rawValues.Length; i++)
-            BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(i * sizeof(long)), rawValues[i]);
+        => ReadFile(CreateFile(rawValues, unit, adjustedToUtc, pageType, rawValues.Length));
 
+    static DateTime[] ReadFile(byte[] file)
+    {
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(file));
+        var result = new List<DateTime>();
+        foreach (var buffer in reader.RowGroups[0].Column<DateTime>(0))
+            result.AddRange(buffer.Values);
+        return result.ToArray();
+    }
+
+    static byte[] CreateFile(long[] rawValues, TimeUnit unit, bool adjustedToUtc,
+        PageHeaderType pageType, int declaredCount)
+    {
         var schema = CreateSchema(unit, adjustedToUtc);
-        var header = CreateHeader(pageType, payload.Length, checked((uint)rawValues.Length));
-        var buffers = default(ColumnReadBuffers<DateTime>);
-        try
+        using var output = new MemoryStream();
+        using (var writer = schema.CreateWriter(output, new ParquetWriterOptions
         {
-            if (!ColumnChunkReader.TryDecodeRequiredPageIntoNative(
-                    header, payload, schema.LeafColumns[0].Column, checked((uint)rawValues.Length), ref buffers,
-                    DefaultParquetBufferPool.Shared, out var values))
-                throw new InvalidOperationException("Required Plain timestamp fast path was not used.");
-            return values.Values.ToArray();
-        }
-        finally
+            Compression = CompressionKind.None,
+            DataPageVersion = pageType == PageHeaderType.DataPage ? ParquetDataPageVersion.V1 : ParquetDataPageVersion.V2
+        }))
         {
-            buffers.Dispose();
+            var column = writer.CreateSerializedColumn<DateTime>(schema.LeafColumns[0]);
+            var epoch = DateTime.SpecifyKind(DateTime.UnixEpoch,
+                adjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified);
+            column.Serialize(Enumerable.Repeat(epoch, declaredCount).ToArray());
+            ref var page = ref column.Pages[0];
+            page.Content.Reset();
+            foreach (var raw in rawValues)
+            {
+                BinaryPrimitives.WriteInt64LittleEndian(page.Content.GetSpan(sizeof(long)), raw);
+                page.Content.Advance(sizeof(long));
+            }
+            var length = page.Content.WrittenLength;
+            page.UncompressedContentSize = length;
+            page.Header.Reset();
+            if (pageType == PageHeaderType.DataPage)
+                ParquetMetadataThriftWriter.WriteDataPageHeaderV1(ref page.Header, (uint)declaredCount,
+                    EncodingKind.Plain, length, length, default, null);
+            else
+                ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, (uint)declaredCount,
+                    (uint)declaredCount, 0, 0, 0, EncodingKind.Plain, length, length, false, default, null);
+            writer.StartRowGroup().Write(column);
+            writer.CloseFile();
         }
+        return output.ToArray();
     }
 
     static ParquetSchema CreateSchema(TimeUnit unit, bool adjustedToUtc)
@@ -163,13 +175,6 @@ internal sealed class RequiredPlainTimestampDecodingTests
                 new ColumnOptions(encodings: ImmutableArray.Create(EncodingKind.Plain)),
                 new LogicalType.Timestamp(unit, adjustedToUtc))
         ]);
-
-    static PageHeader CreateHeader(PageHeaderType pageType, int payloadLength, uint valueCount)
-        => new(pageType, checked((uint)payloadLength), checked((uint)payloadLength), valueCount,
-            EncodingKind.Plain, HeaderLength: 1, RepetitionLevelsByteLength: 0,
-            DefinitionLevelsByteLength: 0, NullCount: 0, IsCompressed: false,
-            RepetitionLevelEncoding: EncodingKind.Rle, DefinitionLevelEncoding: EncodingKind.Rle,
-            RowCount: valueCount);
 
     static void AssertRejected(long[] rawValues, TimeUnit unit, bool adjustedToUtc, PageHeaderType pageType)
     {

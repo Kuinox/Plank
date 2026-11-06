@@ -1,11 +1,13 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using Plank.Reading;
+using Plank.Reading.Logical;
 using Plank.Reading.Logical.Internal;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.Encoding;
 using Plank.Writing.PageStrategy;
+using Plank.Writing.Thrift;
 
 namespace Plank.Tests.Reading;
 
@@ -313,57 +315,38 @@ internal sealed class NonPlainTimestampDecodingTests
         {
             var schema = new ParquetSchema([
                 ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int64,
-                    new ColumnOptions(ParquetRepetition.Optional,
-                        ImmutableArray.Create(EncodingKind.DeltaBinaryPacked)),
+                    new ColumnOptions(ParquetRepetition.Optional, ImmutableArray.Create(EncodingKind.DeltaBinaryPacked)),
                     new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true))
             ]);
-            var column = schema.LeafColumns[0].Column;
-            var writer = new BufferWriter(DefaultParquetBufferPool.Shared, 1024, 1024);
-            var buffers = default(ColumnReadBuffers<DateTime?>);
-            try
+            using var output = new MemoryStream();
+            using (var fileWriter = schema.CreateWriter(output, new ParquetWriterOptions
+                { Compression = CompressionKind.None, DataPageVersion = pageVersion }))
             {
-                DeltaBinaryPackedEncoding.WriteInt64([0, 1, long.MaxValue, 3], ref writer);
-                var encodedValues = new byte[writer.WrittenLength];
-                writer.CopyTo(encodedValues);
-
-                byte[] payload;
-                uint definitionByteLength;
+                var column = fileWriter.CreateSerializedColumn<DateTime?>(schema.LeafColumns[0]);
+                column.Serialize([DateTime.UnixEpoch, DateTime.UnixEpoch, DateTime.UnixEpoch, DateTime.UnixEpoch]);
+                ref var page = ref column.Pages[0];
+                page.Content.Reset();
+                if (pageVersion == ParquetDataPageVersion.V1) page.Content.Write([2, 0, 0, 0]);
+                page.Content.Write([8, 1]);
+                DeltaBinaryPackedEncoding.WriteInt64([0, 1, long.MaxValue, 3], ref page.Content);
+                var size = page.Content.WrittenLength;
+                page.UncompressedContentSize = size;
+                page.Header.Reset();
                 if (pageVersion == ParquetDataPageVersion.V1)
-                {
-                    payload = new byte[sizeof(int) + 2 + encodedValues.Length];
-                    BinaryPrimitives.WriteInt32LittleEndian(payload, 2);
-                    payload[sizeof(int)] = 8; // Four-value RLE run.
-                    payload[sizeof(int) + 1] = 1; // Present.
-                    encodedValues.CopyTo(payload, sizeof(int) + 2);
-                    definitionByteLength = 0;
-                }
+                    ParquetMetadataThriftWriter.WriteDataPageHeaderV1(ref page.Header, 4,
+                        EncodingKind.DeltaBinaryPacked, size, size, default, null);
                 else
-                {
-                    payload = new byte[2 + encodedValues.Length];
-                    payload[0] = 8; // Four-value RLE run.
-                    payload[1] = 1; // Present.
-                    encodedValues.CopyTo(payload, 2);
-                    definitionByteLength = 2;
-                }
-
-                var header = new PageHeader(
-                    pageVersion == ParquetDataPageVersion.V1 ? PageHeaderType.DataPage : PageHeaderType.DataPageV2,
-                    UncompressedPageSize: checked((uint)payload.Length),
-                    CompressedPageSize: checked((uint)payload.Length), ValueCount: 4,
-                    Encoding: EncodingKind.DeltaBinaryPacked, HeaderLength: 1,
-                    RepetitionLevelsByteLength: 0, DefinitionLevelsByteLength: definitionByteLength,
-                    NullCount: 0, IsCompressed: false, RepetitionLevelEncoding: EncodingKind.Rle,
-                    DefinitionLevelEncoding: EncodingKind.Rle, RowCount: 4);
-
-                Assert.Throws<CorruptParquetException>(() =>
-                    ColumnChunkReader.TryDecodeNullablePageIntoNative(header, payload, column,
-                        rowCount: 4, ref buffers, DefaultParquetBufferPool.Shared, out _));
+                    ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, 4, 4, 0,
+                        0, 2, EncodingKind.DeltaBinaryPacked, size, size, false, default, null);
+                fileWriter.StartRowGroup().Write(column);
+                fileWriter.CloseFile();
             }
-            finally
+            Assert.Throws<CorruptParquetException>(() =>
             {
-                buffers.Dispose();
-                writer.Dispose();
-            }
+                using var reader = new ParquetReader();
+                reader.Reset(new MemoryStream(output.ToArray()));
+                foreach (var buffer in reader.RowGroups[0].Column<DateTime?>(0)) _ = buffer.Values.Length;
+            });
         }
     }
 
