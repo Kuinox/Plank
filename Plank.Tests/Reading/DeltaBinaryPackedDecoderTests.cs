@@ -17,7 +17,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
             0, 20, 20, 20, 20];
         Assert.Throws<CorruptParquetException>(() =>
         {
-            var batch = DeltaBinaryPackedDecoder.StartBatch(payload, 5000);
+            var batch = DeltaBinaryPackedDecoder.StartBatch(payload, 5000, isInt64: false);
             DeltaBinaryPackedDecoder.ReadInt32Batch(payload, new int[5000], ref batch);
         });
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(payload, 5000));
@@ -28,7 +28,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
     {
         // A huge block may be legal when the used mini-block has no packed bytes.
         byte[] payload = [0x80, 0xff, 0xff, 0xff, 0x0f, 1, 2, 42, 0, 0];
-        var state = DeltaBinaryPackedDecoder.StartBatch(payload, 2);
+        var state = DeltaBinaryPackedDecoder.StartBatch(payload, 2, isInt64: false);
         var values = new int[2];
         DeltaBinaryPackedDecoder.ReadInt32Batch(payload, values, ref state);
         var longs = new long[2];
@@ -73,7 +73,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
         byte[] payload = [0x80, 1, 4, 0x80, 0x80, 0x80, 0x80, 8, 0];
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(payload));
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt64(payload));
-        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.StartBatch(payload, 0));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.StartBatch(payload, 0, isInt64: false));
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(payload, 0));
     }
 
@@ -105,7 +105,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
             if (consumed != bytes.Length || !decoded.AsSpan(1, count).SequenceEqual(expected)
                 || decoded[0] != 123456789 || decoded[^1] != 123456789)
                 throw new InvalidOperationException($"Constant delta {delta}, count {count} failed.");
-            var batch = DeltaBinaryPackedDecoder.StartBatch(bytes, count);
+            var batch = DeltaBinaryPackedDecoder.StartBatch(bytes, count, isInt64: true);
             var batched = new long[count];
             while (batch.Active)
             {
@@ -202,7 +202,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
             if (consumed != bytes.Length || !decoded.AsSpan(1, count).SequenceEqual(expected) ||
                 decoded[0] != 123456789 || decoded[^1] != 123456789)
                 throw new InvalidOperationException($"Int32 width {bitWidth}, count {count} failed.");
-            var batchState = DeltaBinaryPackedDecoder.StartBatch(bytes, count);
+            var batchState = DeltaBinaryPackedDecoder.StartBatch(bytes, count, isInt64: false);
             var batched = new int[count];
             while (batchState.Active)
             {
@@ -218,7 +218,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
             if (consumed != bytes.Length || !longs.AsSpan(1, count).SequenceEqual(expectedLongs) ||
                 longs[0] != 123456789 || longs[^1] != 123456789)
                 throw new InvalidOperationException($"Int64 width {bitWidth}, count {count} failed.");
-            batchState = DeltaBinaryPackedDecoder.StartBatch(bytes, count);
+            batchState = DeltaBinaryPackedDecoder.StartBatch(bytes, count, isInt64: true);
             var batchedLongs = new long[count];
             while (batchState.Active)
             {
