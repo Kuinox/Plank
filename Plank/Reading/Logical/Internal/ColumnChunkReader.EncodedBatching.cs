@@ -873,13 +873,7 @@ static partial class ColumnChunkReader
 
     static RleBatchState StartDictionaryRleBatch(ReadOnlySpan<byte> payload, int valueCount)
     {
-        if (valueCount != 0 && payload.IsEmpty)
-            throw new CorruptParquetException(
-                "Dictionary payload is empty but value count is non-zero.");
-        var bitWidth = payload.IsEmpty ? 0 : payload[0];
-        if (bitWidth > 32)
-            throw new CorruptParquetException(
-                $"Dictionary bit width {bitWidth} exceeds the maximum of 32.");
+        var bitWidth = ReadDictionaryBitWidth(payload, valueCount);
         return StartRleBatch(payload, valueCount, bitWidth, payload.IsEmpty ? 0 : 1);
     }
 

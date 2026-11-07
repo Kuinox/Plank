@@ -444,12 +444,6 @@ static partial class ColumnChunkReader
         {
             if (!buffers.HasDictionary)
                 return false;
-            if (physicalCount != 0 && dataPayload.IsEmpty)
-                throw new CorruptParquetException(
-                    "Dictionary payload is empty but value count is non-zero.");
-            if (!dataPayload.IsEmpty && dataPayload[0] > 32)
-                throw new CorruptParquetException(
-                    $"Dictionary bit width {dataPayload[0]} exceeds the maximum of 32.");
             if (isRequired)
             {
                 if (converter is not null || physicalType != typeof(T) ||
@@ -703,8 +697,8 @@ static partial class ColumnChunkReader
             valueCount < (long)dictionary.Length * 2 || (valueCount & 7) != 0)
             return false;
 
-        var bitWidth = payload[0];
-        if (bitWidth is 0 or > 32)
+        var bitWidth = ReadDictionaryBitWidth(payload, valueCount);
+        if (bitWidth == 0)
             return false;
         payload = payload[1..];
         var header = ReadUnsignedVarInt(ref payload);
@@ -3684,17 +3678,26 @@ static partial class ColumnChunkReader
         DecodeByteStreamSplitUInt64(payload, longDestination);
     }
 
-    static void DecodeDictionaryIndexesIntoBuffer<T>(ReadOnlySpan<byte> payload, uint valueCount,
-        ReadOnlySpan<T> dictionary, Span<T> destination)
+    static byte ReadDictionaryBitWidth(ReadOnlySpan<byte> payload, long valueCount)
     {
-        if (valueCount == 0)
-            return;
-
         if (payload.IsEmpty)
-            throw new CorruptParquetException("Dictionary payload is empty but value count is non-zero.");
+        {
+            // Arrow accepts an absent index stream when the page has no present values.
+            if (valueCount == 0)
+                return 0;
+            throw new CorruptParquetException("Dictionary payload is missing its bit width byte.");
+        }
         var bitWidth = payload[0];
         if (bitWidth > 32)
             throw new CorruptParquetException($"Dictionary bit width {bitWidth} exceeds the maximum of 32.");
+        return bitWidth;
+    }
+
+    static void DecodeDictionaryIndexesIntoBuffer<T>(ReadOnlySpan<byte> payload, uint valueCount,
+        ReadOnlySpan<T> dictionary, Span<T> destination)
+    {
+        var bitWidth = ReadDictionaryBitWidth(payload, valueCount);
+        if (payload.IsEmpty) return;
         payload = payload[1..];
         var valueIndex = 0U;
         while (valueIndex < valueCount)
@@ -3731,14 +3734,8 @@ static partial class ColumnChunkReader
     static void DecodeDictionaryIndexesIntoBuffer(ReadOnlySpan<byte> payload, uint valueCount,
         int dictionaryLength, Span<int> destination)
     {
-        if (valueCount == 0)
-            return;
-        if (payload.IsEmpty)
-            throw new CorruptParquetException("Dictionary payload is empty but value count is non-zero.");
-
-        var bitWidth = payload[0];
-        if (bitWidth > 32)
-            throw new CorruptParquetException($"Dictionary bit width {bitWidth} exceeds the maximum of 32.");
+        var bitWidth = ReadDictionaryBitWidth(payload, valueCount);
+        if (payload.IsEmpty) return;
         payload = payload[1..];
         var valueIndex = 0U;
         while (valueIndex < valueCount)
