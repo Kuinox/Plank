@@ -149,18 +149,18 @@ static class PhysicalMetadataThriftReader
             schemaNodes[ordinal] = node;
             if (node.PhysicalType.HasValue)
             {
-                var repeated = false;
-                var hasDefinitionLevels = false;
+                var maxRepetitionLevel = 0;
+                var maxDefinitionLevel = 0;
                 var ancestor = ordinal;
                 while (ancestor >= 0 && schemaNodes[ancestor].ParentOrdinal >= 0)
                 {
-                    repeated |= schemaNodes[ancestor].Repetition == ParquetRepetition.Repeated;
-                    hasDefinitionLevels |= schemaNodes[ancestor].Repetition != ParquetRepetition.Required;
+                    if (schemaNodes[ancestor].Repetition == ParquetRepetition.Repeated) maxRepetitionLevel++;
+                    if (schemaNodes[ancestor].Repetition != ParquetRepetition.Required) maxDefinitionLevel++;
                     ancestor = schemaNodes[ancestor].ParentOrdinal;
                 }
                 var columnOrdinal = metadata.ColumnCount++;
                 columns[columnOrdinal] = new ParquetColumnSchemaInfo(columnOrdinal, ordinal, depth,
-                    node.PhysicalType.Value, node.TypeLength, node.LogicalType, repeated, hasDefinitionLevels);
+                    node.PhysicalType.Value, node.TypeLength, node.LogicalType, maxRepetitionLevel, maxDefinitionLevel);
             }
 
             if (node.ChildCount <= 0)
@@ -767,6 +767,7 @@ static class PhysicalMetadataThriftReader
         ref ulong bloomFilterOffset, ref uint bloomFilterLength, int expectedColumnOrdinal)
     {
         var requiredFields = new RequiredFields();
+        var sizeStatistics = default(SizeStatistics);
         reader.BeginStruct(wireType);
         while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
         {
@@ -809,6 +810,9 @@ static class PhysicalMetadataThriftReader
                 case 15:
                     bloomFilterLength = reader.ReadI32AsU32(type);
                     break;
+                case 16 when type == CompactProtocolType.Struct:
+                    sizeStatistics = ReadSizeStatistics(ref reader, type);
+                    break;
                 case 17:
                     geospatialOffset = reader.Offset;
                     reader.SkipStruct(type);
@@ -824,6 +828,60 @@ static class PhysicalMetadataThriftReader
         if (physicalType != column.PhysicalType)
             throw new CorruptParquetException(
                 $"Column chunk physical type {physicalType} does not match schema column {expectedColumnOrdinal} physical type {column.PhysicalType}.");
+        if (sizeStatistics.IsSet)
+            sizeStatistics.Validate(column.MaxRepetitionLevel, column.MaxDefinitionLevel, column.PhysicalType);
+    }
+
+    // Values are consumed but not retained: only their presence and lengths matter here.
+    static SizeStatistics ReadSizeStatistics(ref CompactProtocolReader reader, CompactProtocolType type)
+    {
+        var statistics = default(SizeStatistics);
+        reader.BeginStruct(type);
+        while (reader.TryReadFieldHeader(out var fieldId, out var fieldType, out var inlineBool))
+        {
+            if (fieldId == 1 && fieldType == CompactProtocolType.I64)
+            {
+                _ = reader.ReadI64(fieldType);
+                statistics.HasUnencodedBytes = true;
+            }
+            else if (fieldId is 2 or 3 && fieldType == CompactProtocolType.List)
+            {
+                var (count, _) = reader.ReadListHeader(fieldType);
+                if (count > reader.Remaining)
+                    throw new CorruptParquetException("Size statistics histogram exceeds remaining input bytes.");
+                // Thrift's generated list reader reads i64 elements regardless of the list element tag.
+                for (var i = 0U; i < count; i++)
+                    _ = reader.ReadI64(CompactProtocolType.I64);
+                if (fieldId == 2) statistics.RepetitionCount = count;
+                else statistics.DefinitionCount = count;
+            }
+            else
+                reader.Skip(fieldType, inlineBool);
+        }
+        return statistics;
+    }
+
+    struct SizeStatistics
+    {
+        internal uint RepetitionCount;
+        internal uint DefinitionCount;
+        internal bool HasUnencodedBytes;
+        internal readonly bool IsSet => RepetitionCount != 0 || DefinitionCount != 0 || HasUnencodedBytes;
+
+        internal readonly void Validate(int repetition, int definition, ParquetPhysicalType physicalType)
+        {
+            ValidateHistogram(RepetitionCount, repetition, "Repetition");
+            ValidateHistogram(DefinitionCount, definition, "Definition");
+            if (HasUnencodedBytes && physicalType != ParquetPhysicalType.ByteArray)
+                throw new CorruptParquetException($"Unencoded byte array data bytes does not support {physicalType}.");
+        }
+
+        static void ValidateHistogram(uint count, int maxLevel, string name)
+        {
+            if (count != 0 && count != (uint)maxLevel + 1)
+                throw new CorruptParquetException(
+                    $"{name} level histogram size mismatch, size: {count}, expected: {maxLevel + 1}.");
+        }
     }
 
     static ParquetColumnChunkEncodings ReadEncodings(ref CompactProtocolReader reader,
