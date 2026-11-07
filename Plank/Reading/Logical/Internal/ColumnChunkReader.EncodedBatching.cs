@@ -110,7 +110,7 @@ static partial class ColumnChunkReader
         buffer = default;
         page = default;
         if (header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2) ||
-            header.ValueCount == 0 || column.Options.Repetition == ParquetRepetition.Repeated ||
+            column.Options.Repetition == ParquetRepetition.Repeated ||
             RuntimeHelpers.IsReferenceOrContainsReferences<T>())
             return false;
         if (header.ValueCount > rowCount)
@@ -253,6 +253,16 @@ static partial class ColumnChunkReader
                 RequireByteStreamSplitLanes(dataPayload, (uint)physicalCount, state.BinaryFixedLength, column);
                 _ = GetFixedBinaryPayloadLength(dataPayload, physicalCount, state.BinaryFixedLength);
                 break;
+        }
+
+        if (valueCount == 0)
+        {
+            if (decoderKind == EncodedDecoderKind.PlainBinary)
+                _ = TryDecodeBinaryValues(dataPayload, default, [], 0, 0, column,
+                    header.Encoding, [], ref buffers, bufferPool, out _);
+            ValidateEmptyTimestampProjection(column, physicalType, header.Encoding);
+            buffer = buffers.CreateNativeBuffer(0);
+            return true;
         }
 
         page = state;

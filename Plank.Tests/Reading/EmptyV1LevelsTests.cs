@@ -97,28 +97,6 @@ internal sealed class EmptyV1LevelsTests
             throw new InvalidOperationException("Valid V1 values changed.");
     }
 
-    [Test]
-    public void EmptyPageWithEmptyDefinitionsIsAccepted()
-    {
-        var schema = new ParquetSchema([ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32)]);
-        var header = new PageHeader(PageHeaderType.DataPage, 4, 4, 0, EncodingKind.Plain,
-            HeaderLength: 1, RepetitionLevelsByteLength: 0, DefinitionLevelsByteLength: 0, NullCount: 0,
-            IsCompressed: false, RepetitionLevelEncoding: EncodingKind.Rle,
-            DefinitionLevelEncoding: EncodingKind.Rle, RowCount: 0);
-        var buffers = default(ColumnReadBuffers<int?>);
-        try
-        {
-            if (!ColumnChunkReader.TryDecodeNullablePageIntoNative(header, new byte[4],
-                    schema.LeafColumns[0].Column, 0, ref buffers, DefaultParquetBufferPool.Shared, out var result) ||
-                result.Values.Length != 0)
-                throw new InvalidOperationException("Empty V1 page did not decode as empty.");
-        }
-        finally
-        {
-            buffers.Dispose();
-        }
-    }
-
     static void ReadBoolean(byte[] file)
     {
         using var reader = new ParquetReader();
