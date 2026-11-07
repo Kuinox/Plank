@@ -225,7 +225,8 @@ static partial class ColumnChunkReader
                 state.Rle = StartDictionaryRleBatch(dataPayload, physicalCount);
                 break;
             case EncodedDecoderKind.DeltaBinaryPacked:
-                state.Delta = DeltaBinaryPackedDecoder.StartBatch(dataPayload, physicalCount);
+                state.Delta = DeltaBinaryPackedDecoder.StartBatch(dataPayload, physicalCount,
+                    isInt64: column.PhysicalType == ParquetPhysicalType.Int64);
                 break;
             case EncodedDecoderKind.Alp:
                 state.Alp = AlpDecoder.StartBatch(dataPayload, physicalCount);
@@ -233,7 +234,7 @@ static partial class ColumnChunkReader
             case EncodedDecoderKind.DeltaLengthByteArray:
             {
                 var lengthBytes = DeltaBinaryPackedDecoder.GetEncodedLength(dataPayload, physicalCount);
-                state.Delta = DeltaBinaryPackedDecoder.StartBatch(dataPayload, physicalCount);
+                state.Delta = DeltaBinaryPackedDecoder.StartBatch(dataPayload, physicalCount, isInt64: false);
                 state.BinaryDataOffset = lengthBytes;
                 break;
             }
@@ -242,8 +243,8 @@ static partial class ColumnChunkReader
                 var prefixBytes = DeltaBinaryPackedDecoder.GetEncodedLength(dataPayload, physicalCount);
                 var suffixPayload = dataPayload[prefixBytes..];
                 var suffixBytes = DeltaBinaryPackedDecoder.GetEncodedLength(suffixPayload, physicalCount);
-                state.Delta = DeltaBinaryPackedDecoder.StartBatch(dataPayload, physicalCount);
-                state.Delta2 = DeltaBinaryPackedDecoder.StartBatch(suffixPayload, physicalCount);
+                state.Delta = DeltaBinaryPackedDecoder.StartBatch(dataPayload, physicalCount, isInt64: false);
+                state.Delta2 = DeltaBinaryPackedDecoder.StartBatch(suffixPayload, physicalCount, isInt64: false);
                 state.BinaryAuxOffset = prefixBytes;
                 state.BinaryDataOffset = checked(prefixBytes + suffixBytes);
                 break;

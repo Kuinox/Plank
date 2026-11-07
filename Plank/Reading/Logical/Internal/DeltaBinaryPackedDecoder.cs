@@ -113,7 +113,7 @@ static partial class DeltaBinaryPackedDecoder
         return (int)(bytesPerBit * bitWidth);
     }
 
-    internal static BatchState StartBatch(ReadOnlySpan<byte> payload, int expectedValueCount)
+    internal static BatchState StartBatch(ReadOnlySpan<byte> payload, int expectedValueCount, bool isInt64)
     {
         var reader = new DeltaBinaryPackedReader(payload);
         var layout = ReadBlockLayout(ref reader);
@@ -127,7 +127,7 @@ static partial class DeltaBinaryPackedDecoder
             throw new CorruptParquetException(
                 $"Delta binary packed value count {valueCount} exceeds what {payload.Length - reader.Offset} bytes could encode.");
 
-        var previous = reader.ReadZigZagInt64();
+        var previous = isInt64 ? reader.ReadZigZagInt64() : ReadInt32FirstValue(ref reader);
         return new BatchState
         {
             Offset = reader.Offset,
@@ -156,7 +156,7 @@ static partial class DeltaBinaryPackedDecoder
             throw new CorruptParquetException(
                 $"Delta binary packed value count {valueCount} exceeds what {payload.Length - reader.Offset} bytes could encode.");
 
-        _ = reader.ReadZigZagInt64();
+        _ = ReadInt32FirstValue(ref reader);
         var offset = reader.Offset;
         var remaining = Math.Max(0, expectedValueCount - 1);
         while (remaining > 0)
@@ -326,7 +326,7 @@ static partial class DeltaBinaryPackedDecoder
 
         if (valueCount == 0)
         {
-            _ = reader.ReadUnsignedVarInt();
+            _ = ReadInt32FirstValue(ref reader);
             return ([], reader.Offset);
         }
 
@@ -347,7 +347,7 @@ static partial class DeltaBinaryPackedDecoder
 
         if (valueCount == 0)
         {
-            _ = reader.ReadUnsignedVarInt();
+            _ = ReadInt32FirstValue(ref reader);
             return reader.Offset;
         }
 
@@ -368,7 +368,7 @@ static partial class DeltaBinaryPackedDecoder
 
         if (valueCount == 0)
         {
-            _ = reader.ReadUnsignedVarInt();
+            _ = ReadInt32FirstValue(ref reader);
             return reader.Offset;
         }
 
@@ -383,7 +383,7 @@ static partial class DeltaBinaryPackedDecoder
         // Reconstructed in Int64 and narrowed on store: the running sum is what
         // the vector paths widen to, and the narrowing is a truncation, because
         // the encoder's deltas wrap in 32 bits. See NarrowInt32.
-        var previous = reader.ReadZigZagInt64();
+        long previous = ReadInt32FirstValue(ref reader);
         destination[0] = NarrowInt32(previous);
         ReadInt32Blocks(ref reader, destination[1..], layout, ref previous);
     }
@@ -451,7 +451,7 @@ static partial class DeltaBinaryPackedDecoder
     static void ReadNullableInt32Values(ref DeltaBinaryPackedReader reader,
         Span<int?> destination, BlockLayout layout, bool canonicalLayout)
     {
-        var previous = reader.ReadZigZagInt64();
+        long previous = ReadInt32FirstValue(ref reader);
         destination[0] = NarrowInt32(previous);
         ReadNullableInt32Blocks(ref reader, destination[1..], layout, ref previous,
             canonicalLayout);
@@ -1053,11 +1053,11 @@ static partial class DeltaBinaryPackedDecoder
 
         if (valueCount == 0)
         {
-            _ = reader.ReadUnsignedVarInt();
+            _ = ReadInt32FirstValue(ref reader);
             return reader.Offset;
         }
 
-        var previous = reader.ReadZigZagInt64();
+        long previous = ReadInt32FirstValue(ref reader);
         StoreNarrowInt32(destination, 0, NarrowInt32(previous));
         var index = 1U;
         Span<byte> bitWidthStorage = stackalloc byte[MaxMiniBlockCount];
@@ -1490,6 +1490,12 @@ static partial class DeltaBinaryPackedDecoder
         }
 
         Unsafe.As<Span<T>, Span<ushort>>(ref destination)[index] = unchecked((ushort)value);
+    }
+
+    static int ReadInt32FirstValue(ref DeltaBinaryPackedReader reader)
+    {
+        var value = ReadHeaderVarUInt32(ref reader, "first value");
+        return (int)(value >> 1) ^ -(int)(value & 1);
     }
 
     static long ReadInt32MinimumDelta(ref DeltaBinaryPackedReader reader)
