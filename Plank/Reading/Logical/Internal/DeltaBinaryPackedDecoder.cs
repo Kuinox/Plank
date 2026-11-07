@@ -1510,11 +1510,21 @@ static partial class DeltaBinaryPackedDecoder
     static uint ReadHeaderVarUInt32(ref DeltaBinaryPackedReader reader, string fieldName,
         uint maximum = uint.MaxValue)
     {
-        var start = reader.Offset;
-        var value = reader.ReadUnsignedVarInt();
-        if (reader.Offset - start > 5 || value > maximum)
-            throw new CorruptParquetException(
-                $"Delta binary packed {fieldName} {value} exceeds the supported maximum.");
-        return (uint)value;
+        uint value = 0;
+        for (var shift = 0; shift < 35; shift += 7)
+        {
+            var b = reader.ReadByte();
+            if (shift == 28 && b > 15)
+                break;
+            value |= (uint)(b & 0x7f) << shift;
+            if ((b & 0x80) == 0)
+            {
+                if (value <= maximum)
+                    return value;
+                break;
+            }
+        }
+        throw new CorruptParquetException(
+            $"Delta binary packed {fieldName} exceeds the supported maximum.");
     }
 }
