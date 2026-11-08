@@ -422,6 +422,9 @@ static partial class ColumnChunkReader
         int physicalCount;
         if (definitionLength == 0)
             physicalCount = valueCount;
+        else if (header.Type == PageHeaderType.DataPageV2 && header.NullCount == 0)
+            DecodeDefinitionLevelsCore(payload.Slice(definitionOffset, definitionLength), valueCount,
+                definitionEncoding, [], [], out physicalCount);
         else
         {
             definitionBitsetLength = checked((valueCount + 7) / 8);
@@ -1134,6 +1137,10 @@ static partial class ColumnChunkReader
 
     static void DecodeDefinitionBitset(ReadOnlySpan<byte> payload, int valueCount, EncodingKind encoding,
         Span<byte> destination, out int nonNullCount)
+        => DecodeDefinitionLevelsCore(payload, valueCount, encoding, destination, [], out nonNullCount);
+
+    static void DecodeDefinitionLevelsCore(ReadOnlySpan<byte> payload, int valueCount, EncodingKind encoding,
+        Span<byte> destination, Span<int> levels, out int nonNullCount)
     {
         destination.Clear();
         if (encoding != EncodingKind.Rle)
@@ -1151,9 +1158,12 @@ static partial class ColumnChunkReader
                     throw new CorruptParquetException("Definition levels contain an empty RLE run.");
                 var repeated = ReadRleRunValue(ref payload, 1);
                 var runCopyLength = (int)Math.Min(runLength, checked((uint)(valueCount - valueOffset)));
+                if (!levels.IsEmpty)
+                    levels.Slice(valueOffset, runCopyLength).Fill(repeated);
                 if (repeated != 0)
                 {
-                    SetDefinitionBits(destination, valueOffset, runCopyLength);
+                    if (!destination.IsEmpty)
+                        SetDefinitionBits(destination, valueOffset, runCopyLength);
                     nonNulls += runCopyLength;
                 }
                 valueOffset += runCopyLength;
@@ -1170,8 +1180,28 @@ static partial class ColumnChunkReader
                 throw new CorruptParquetException(
                     $"Definition level literal group claims {literalByteCount} bytes but only {payload.Length} remain.");
             var literalCopyLength = (int)Math.Min(literalCount, checked((uint)(valueCount - valueOffset)));
-            CopyDefinitionBits(payload[..literalByteCount], destination, valueOffset, literalCopyLength,
-                ref nonNulls);
+            if (!destination.IsEmpty)
+                CopyDefinitionBits(payload[..literalByteCount], destination, valueOffset, literalCopyLength,
+                    ref nonNulls);
+            else if (!levels.IsEmpty)
+                for (var i = 0; i < literalCopyLength; i++)
+                {
+                    var level = (payload[i >> 3] >> (i & 7)) & 1;
+                    levels[valueOffset + i] = level;
+                    nonNulls += level;
+                }
+            else
+            {
+                var fullBytes = literalCopyLength >> 3;
+                var i = 0;
+                for (; i <= fullBytes - sizeof(ulong); i += sizeof(ulong))
+                    nonNulls += BitOperations.PopCount(BinaryPrimitives.ReadUInt64LittleEndian(payload[i..]));
+                for (; i < fullBytes; i++)
+                    nonNulls += BitOperations.PopCount((uint)payload[i]);
+                var remaining = literalCopyLength & 7;
+                if (remaining != 0)
+                    nonNulls += BitOperations.PopCount((uint)(payload[fullBytes] & ((1 << remaining) - 1)));
+            }
             valueOffset += literalCopyLength;
             payload = payload[literalByteCount..];
         }
@@ -1694,21 +1724,39 @@ static partial class ColumnChunkReader
         ReadOnlySpan<byte> dataPayload;
         if (header.Type == PageHeaderType.DataPageV2)
         {
-            if (header.NullCount != 0)
-                return false;
+            if (header.NullCount > header.ValueCount)
+                throw new CorruptParquetException(
+                    $"Page null count ({header.NullCount}) exceeds value count ({header.ValueCount}).");
             var levelBytes = checked((int)(header.RepetitionLevelsByteLength +
                 header.DefinitionLevelsByteLength));
             if ((uint)levelBytes > (uint)payload.Length)
                 throw new CorruptParquetException(
                     $"Level bytes ({levelBytes}) exceed page payload size ({payload.Length}).");
+            var definitionLength = checked((int)header.DefinitionLevelsByteLength);
+            if (definitionLength != 0)
+            {
+                DecodeDefinitionLevels(payload.Slice(checked((int)header.RepetitionLevelsByteLength), definitionLength),
+                    PageValueCount(header, "values"), EncodingKind.Rle, [], out var physicalCount);
+                if (physicalCount != header.ValueCount - header.NullCount)
+                    throw new CorruptParquetException(
+                        $"Definition levels contain {physicalCount} values, expected {header.ValueCount - header.NullCount}.");
+            }
+            if (header.NullCount != 0)
+                return false;
             dataPayload = payload[levelBytes..];
         }
-        else
+        else if (column.Options.Repetition == ParquetRepetition.Optional)
         {
-            if (column.Options.Repetition == ParquetRepetition.Optional)
+            var length = GetDataPageV1LevelPayloadLength(payload, header.ValueCount,
+                header.DefinitionLevelEncoding, bitWidth: 1, "definition", out var offset);
+            DecodeDefinitionLevels(payload.Slice(offset, length), PageValueCount(header, "values"),
+                header.DefinitionLevelEncoding, [], out var physicalCount);
+            if (physicalCount != header.ValueCount)
                 return false;
-            dataPayload = payload;
+            dataPayload = payload[(offset + length)..];
         }
+        else
+            dataPayload = payload;
 
         var valueCount = PageValueCount(header, "values");
         if (converter is not null)
@@ -4285,49 +4333,7 @@ static partial class ColumnChunkReader
         if (!destination.IsEmpty && destination.Length < valueCount)
             throw new ArgumentException("Definition-level destination is too small.", nameof(destination));
 
-        if (encoding != EncodingKind.Rle)
-            throw new NotSupportedException($"Definition level encoding '{FormatLevelEncoding(encoding)}' is not supported.");
-
-        var valueIndex = 0;
-        var count = 0;
-        while (valueIndex < valueCount)
-        {
-            var header = ReadUnsignedVarInt(ref payload);
-            if ((header & 1U) == 0)
-            {
-                var runLength = header >> 1;
-                var repeated = ReadRleRunValue(ref payload, 1);
-                var copyLength = (int)Math.Min(runLength, checked((uint)(valueCount - valueIndex)));
-                if (!destination.IsEmpty)
-                    destination.Slice(valueIndex, copyLength).Fill(repeated);
-                if (repeated != 0)
-                    count += copyLength;
-                valueIndex += copyLength;
-                continue;
-            }
-
-            var literalGroupCount = header >> 1;
-            if (literalGroupCount > uint.MaxValue / 8)
-                throw new CorruptParquetException(
-                    $"Definition levels literal run group count {literalGroupCount} is too large.");
-            var literalCount = literalGroupCount * 8U;
-            for (var i = 0U; i < literalCount && valueIndex < valueCount; i++)
-            {
-                var value = ReadBitPackedValue(ref payload, bitWidth: 1, checked((int)i));
-                if (!destination.IsEmpty)
-                    destination[valueIndex] = value;
-                valueIndex++;
-                count += value;
-            }
-
-            var literalByteCount = (literalCount + 7U) >> 3;
-            if (literalByteCount > (uint)payload.Length)
-                throw new CorruptParquetException(
-                    $"Definition level literal group claims {literalByteCount} bytes but only {payload.Length} remain.");
-            payload = payload[checked((int)literalByteCount)..];
-        }
-
-        nonNullCount = count;
+        DecodeDefinitionLevelsCore(payload, valueCount, encoding, [], destination, out nonNullCount);
     }
 
     static void DecodeBooleanRle(ReadOnlySpan<byte> payload, Span<bool> destination)
