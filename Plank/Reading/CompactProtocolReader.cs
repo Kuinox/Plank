@@ -240,12 +240,17 @@ ref struct CompactProtocolReader
             $"Expected a varint value no greater than {available} but got {length}.");
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static CompactProtocolType ValidateCompactType(int value)
     {
         if (value > (int)CompactProtocolType.Uuid)
-            throw new CorruptParquetException($"Invalid compact protocol type '{value}'.");
+            ThrowInvalidCompactType(value);
         return (CompactProtocolType)value;
     }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void ThrowInvalidCompactType(int value)
+        => throw new CorruptParquetException($"Invalid compact protocol type '{value}'.");
 
     // Each skipped collection element consumes at least one byte. Preserve the
     // distinction between an incomplete page-header probe and corrupt input.
