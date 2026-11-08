@@ -172,11 +172,8 @@ static partial class ColumnChunkReader
         if (definitionLength == 0)
             physicalCount = valueCount;
         else if (header.Type == PageHeaderType.DataPageV2 && header.NullCount == 0)
-        {
-            ValidateAllPresentDefinitionLevels(
-                payload.Slice(definitionOffset, definitionLength), valueCount, definitionEncoding);
-            physicalCount = valueCount;
-        }
+            DecodeDefinitionLevelsCore(payload.Slice(definitionOffset, definitionLength), valueCount,
+                definitionEncoding, [], [], out physicalCount);
         else
         {
             definitionBitsetLength = checked((valueCount + 7) / 8);
@@ -268,56 +265,6 @@ static partial class ColumnChunkReader
         page = state;
         buffer = DecodeNextEncodedBatch(payload, column, ref buffers, bufferPool, ref page);
         return true;
-    }
-
-    static void ValidateAllPresentDefinitionLevels(ReadOnlySpan<byte> payload, int valueCount,
-        EncodingKind encoding)
-    {
-        if (encoding != EncodingKind.Rle)
-            throw new NotSupportedException(
-                $"Definition level encoding '{encoding}' is not supported for data page v2.");
-
-        var valueOffset = 0;
-        while (valueOffset < valueCount)
-        {
-            var header = ReadUnsignedVarInt(ref payload);
-            if ((header & 1U) == 0)
-            {
-                var runLength = header >> 1;
-                if (runLength == 0)
-                    throw new CorruptParquetException("Definition levels contain an empty RLE run.");
-                var repeated = ReadRleRunValue(ref payload, 1);
-                if (repeated != 1)
-                    throw new CorruptParquetException(
-                        "Definition levels contain nulls but the page header declares none.");
-                valueOffset += (int)Math.Min(runLength,
-                    checked((uint)(valueCount - valueOffset)));
-                continue;
-            }
-
-            var literalGroupCount = header >> 1;
-            if (literalGroupCount == 0 || literalGroupCount > uint.MaxValue / 8)
-                throw new CorruptParquetException(
-                    $"Definition levels literal run group count {literalGroupCount} is invalid.");
-            var literalByteCount = checked((int)literalGroupCount);
-            if (literalByteCount > payload.Length)
-                throw new CorruptParquetException(
-                    $"Definition level literal group claims {literalByteCount} bytes but only {payload.Length} remain.");
-            var literalValueCount = (int)Math.Min(literalGroupCount * 8,
-                checked((uint)(valueCount - valueOffset)));
-            var fullBytes = literalValueCount >> 3;
-            for (var i = 0; i < fullBytes; i++)
-                if (payload[i] != byte.MaxValue)
-                    throw new CorruptParquetException(
-                        "Definition levels contain nulls but the page header declares none.");
-            var remainingBits = literalValueCount & 7;
-            if (remainingBits != 0 &&
-                (payload[fullBytes] & ((1 << remainingBits) - 1)) != (1 << remainingBits) - 1)
-                throw new CorruptParquetException(
-                    "Definition levels contain nulls but the page header declares none.");
-            valueOffset += literalValueCount;
-            payload = payload[literalByteCount..];
-        }
     }
 
     static EncodedDecoderKind GetEncodedDecoderKind(EncodingKind encoding, Column column,
