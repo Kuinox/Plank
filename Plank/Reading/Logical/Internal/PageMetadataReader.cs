@@ -34,7 +34,7 @@ static class PageMetadataReader
             {
                 ParseOffsetIndex(offsetIndex.Span[..checked((int)chunk.OffsetIndexLength)], reader.BufferPool,
                     ref entries, ref capacity, ref count);
-                ValidateLocations(reader, chunk, Entries(entries, count));
+                ValidateLocations(reader, chunk, Entries(entries, count), rowCount);
                 if (columnIndex.IsEmpty)
                     PopulateHeaderStatistics(reader, chunk, definition, Entries(entries, count),
                         ref statisticsBuilder);
@@ -351,9 +351,18 @@ static class PageMetadataReader
         }
     }
 
-    static void ValidateLocations(ParquetFileReader reader, ParquetColumnChunkInfo chunk,
-        ReadOnlySpan<PageMetadataEntry> entries)
+    internal static void ValidateLocations(ParquetFileReader reader, ParquetColumnChunkInfo chunk,
+        ReadOnlySpan<PageMetadataEntry> entries, ulong rowCount)
     {
+        if (rowCount != 0 && entries.IsEmpty)
+            throw new CorruptParquetException("Offset index has no data pages for a nonempty row group.");
+        if (!entries.IsEmpty && entries[0].FirstRowIndex != 0)
+            throw new CorruptParquetException("Offset index must begin at row 0.");
+        for (var i = 0; i < entries.Length; i++)
+            if (entries[i].FirstRowIndex >= rowCount ||
+                i > 0 && entries[i].FirstRowIndex <= entries[i - 1].FirstRowIndex)
+                throw new CorruptParquetException("Offset index first_row_index values must be strictly increasing and within the row group.");
+
         if (chunk.ChunkOffset > reader.Source.Length ||
             chunk.TotalCompressedSize > reader.Source.Length - chunk.ChunkOffset)
             throw new CorruptParquetException("Column chunk exceeds the source length.");
@@ -368,6 +377,44 @@ static class PageMetadataReader
                 throw new CorruptParquetException(
                     $"Offset index page location {i} is outside the column chunk's data region or overlaps an earlier page.");
             previousEnd = checked(entry.Offset + entry.CompressedSize);
+        }
+        // Check gaps as well as the prefix and suffix: an omitted data page
+        // otherwise looks like a larger row range on a neighbouring page. Some
+        // writers put a dictionary at data_page_offset, so non-data pages are OK.
+        var gapStart = chunk.DataPageOffset;
+        for (var i = 0; i <= entries.Length; i++)
+        {
+            var gapEnd = i == entries.Length ? chunkEnd : entries[i].Offset;
+            if (gapStart < gapEnd)
+                ValidateLocationGap(reader, chunk, gapStart, gapEnd);
+            if (i < entries.Length)
+                gapStart = entries[i].Offset + entries[i].CompressedSize;
+        }
+    }
+
+    static void ValidateLocationGap(ParquetFileReader reader, ParquetColumnChunkInfo chunk, ulong offset, ulong end)
+    {
+        var statistics = new StatisticsBufferBuilder(reader.BufferPool);
+        try
+        {
+            while (offset < end)
+            {
+                var remaining = end - offset;
+                if (remaining > int.MaxValue)
+                    throw new NotSupportedException("Column chunks larger than Int32.MaxValue are not supported.");
+                var header = ReadPageHeader(reader, offset, (int)remaining, chunk.TotalUncompressedSize,
+                    copyStatistics: false, ref statistics, out _);
+                if (header.Type is PageHeaderType.DataPage or PageHeaderType.DataPageV2)
+                    throw new CorruptParquetException("Offset index omits a data page.");
+                var pageSize = (ulong)header.HeaderLength + header.CompressedPageSize;
+                if (pageSize > remaining)
+                    throw new CorruptParquetException("Offset index overlaps an earlier page.");
+                offset += pageSize;
+            }
+        }
+        finally
+        {
+            statistics.Dispose();
         }
     }
 

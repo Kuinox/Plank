@@ -20,6 +20,7 @@ public struct ParquetPageCursor : IDisposable
     int _pendingPageOrdinal;
     ulong _dataValueCount;
     bool _dictionaryPending;
+    bool _skippedDataPage;
 
     internal ParquetPageCursor(ParquetFileReader owner, int generation, int rowGroupOrdinal, int columnOrdinal)
     {
@@ -37,6 +38,7 @@ public struct ParquetPageCursor : IDisposable
         _pendingPageOrdinal = -1;
         _dataValueCount = 0;
         _dictionaryPending = false;
+        _skippedDataPage = false;
         CurrentHeader = default;
 
         if (_chunk.TotalCompressedSize > int.MaxValue)
@@ -117,7 +119,10 @@ public struct ParquetPageCursor : IDisposable
                 var accepted = _pruner!(in page);
                 owner.ValidateGeneration(_generation);
                 if (!accepted)
+                {
+                    _skippedDataPage = true;
                     continue;
+                }
                 _pendingPageOrdinal = ordinal;
                 break;
             }
@@ -125,6 +130,8 @@ public struct ParquetPageCursor : IDisposable
 
         if (_pendingPageOrdinal < 0)
         {
+            if (!_skippedDataPage)
+                ValidateDataValueCount();
             CurrentHeader = default;
             _payloadLength = 0;
             _borrowedPayload = default;
@@ -196,13 +203,10 @@ public struct ParquetPageCursor : IDisposable
         var compressedLength = checked((int)header.CompressedPageSize);
         var sourceOffset = _chunk.ChunkOffset + (ulong)_offset;
         _offset += compressedLength;
-        if (_pruner is null)
-        {
-            if (header.Type is PageHeaderType.DataPage or PageHeaderType.DataPageV2)
-                _dataValueCount += header.ValueCount;
-            if (_dataValueCount > _chunk.ValueCount || _offset == _chunkLength)
-                ValidateDataValueCount();
-        }
+        if (header.Type is PageHeaderType.DataPage or PageHeaderType.DataPageV2)
+            _dataValueCount += header.ValueCount;
+        if (_pruner is null && (_dataValueCount > _chunk.ValueCount || _offset == _chunkLength))
+            ValidateDataValueCount();
         if (!RequiresDecompression(header))
         {
             if (header.CompressedPageSize != header.UncompressedPageSize)

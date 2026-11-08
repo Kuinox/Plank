@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Immutable;
 using Plank.Reading;
 using Plank.Reading.Logical;
+using Plank.Reading.Logical.Internal;
 using Plank.Reading.Physical;
 using Plank.Schema;
 using Plank.Writing;
@@ -368,6 +369,100 @@ internal sealed class LogicalPageMetadataTests
             var destination = new StreamParquetSource(stream);
             schema.CreateMerger(source, destination);
         });
+    }
+
+    [Test]
+    public void EmptyOffsetIndexDoesNotChangePlainReadAndIsRejectedWhenPruning()
+    {
+        var bytes = Convert.FromBase64String("AIB/MRUEFSAVIEwVBBUAAAAbDwAAJAEKDsoRXeLU+zQAFQYVBhUOXBUKFQAVChUQFQAVABE8GAgHAAAAAAD//BgIBP/8AAAAAAAWACgIBwAAAAAAAAAYCAUAAAAAAAAAEREAAAALAYABAxQDGRECGRgIBQAAAAAAAAAZGAgHAAAAAAAAABUAGRYAABkMFkIVlgEWABEAFQIZLEgGc2NoZW1hFQIAFQQlABgBYwAWChkcGRwmABwVBBklABAZGAFjFQgWChbIARbQASZCJggcGAgHAAAAAAAAABgIBQAAAAAAAAAWACgIBwAAAAAAAAAYCAUAAAAAAAAAEREAABaWAhUWFtgBNT4AFsgBFgomCBbQAQA5HBwAAACDAAAAUEFSMQ==");
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(bytes));
+        var values = new List<long>();
+        foreach (var buffer in reader.RowGroups[0].Column<long>(0))
+            values.AddRange(buffer.Values);
+        if (!values.SequenceEqual(new long[] { 5, 5, 7, 5, 7 }))
+            throw new InvalidOperationException("Plain read changed.");
+        reader.Reset(new MemoryStream(bytes), static (in ParquetDataPageMetadata _) => true);
+        Assert.Throws<CorruptParquetException>(() =>
+        {
+            foreach (var buffer in reader.RowGroups[0].Column<long>(0))
+                _ = buffer.Values.Length;
+        });
+    }
+
+    [Test]
+    [Arguments("first row")]
+    [Arguments("decreasing")]
+    [Arguments("repeated")]
+    [Arguments("past end")]
+    [Arguments("skip first page")]
+    public void InvalidOffsetIndexCoverageIsRejected(string defect)
+    {
+        var (schema, bytes) = CreateFile();
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(bytes));
+        var chunk = physical.Metadata.ColumnChunk(0, 0);
+        var index = bytes.AsSpan(checked((int)chunk.OffsetIndexOffset), checked((int)chunk.OffsetIndexLength));
+        if (index[0] != 0x19 || index[1] != 0x3c)
+            throw new InvalidOperationException("Expected three page locations.");
+        var position = 2;
+        var offsets = new int[3];
+        var sizes = new int[3];
+        var rows = new int[3];
+        for (var i = 0; i < 3; i++)
+        {
+            if (index[position++] != 0x16) throw new InvalidOperationException("Unexpected offset field.");
+            offsets[i] = position;
+            while ((index[position++] & 0x80) != 0) { }
+            if (index[position++] != 0x15) throw new InvalidOperationException("Unexpected size field.");
+            sizes[i] = position;
+            while ((index[position++] & 0x80) != 0) { }
+            if (index[position++] != 0x16) throw new InvalidOperationException("Unexpected row field.");
+            rows[i] = position;
+            while ((index[position++] & 0x80) != 0) { }
+            if (index[position++] != 0) throw new InvalidOperationException("Unexpected location end.");
+        }
+        switch (defect)
+        {
+            case "first row": index[rows[0]] = 2; break;
+            case "decreasing": index[rows[1]] = 10; index[rows[2]] = 8; break;
+            case "repeated": index[rows[1]] = index[rows[2]]; break;
+            case "past end": index[rows[2]] = 12; break;
+            case "skip first page": index[offsets[0]] += 2; index[sizes[0]] -= 2; break;
+        }
+        using var reader = schema.CreateReader(new MemoryStream(bytes),
+            pagePruner: static (in ParquetDataPageMetadata _) => true);
+        Assert.Throws<CorruptParquetException>(() => ReadValues(reader.RowGroups[0].Column<int>(0)));
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(2)]
+    public void OmittedDataPageIsRejected(int omitted)
+    {
+        var (schema, bytes) = CreateFile();
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(bytes));
+        var chunk = physical.Metadata.ColumnChunk(0, 0);
+        using var reader = schema.CreateReader(new MemoryStream(bytes));
+        using var pages = reader.RowGroups[0].GetColumnMetadata(0).OpenPages();
+        var locations = new List<PageMetadataEntry>();
+        for (var i = 0; i < pages.Count; i++)
+        {
+            if (i == omitted) continue;
+            var page = pages[i];
+            locations.Add(new PageMetadataEntry
+            {
+                Offset = page.Offset,
+                CompressedSize = page.CompressedSize,
+                FirstRowIndex = locations.Count == 0 ? 0 : page.FirstRowIndex!.Value,
+                HasLocation = true,
+                HasFirstRowIndex = true
+            });
+        }
+        Assert.Throws<CorruptParquetException>(() =>
+            PageMetadataReader.ValidateLocations(physical, chunk, locations.ToArray(), 6));
     }
 
     [Test]
