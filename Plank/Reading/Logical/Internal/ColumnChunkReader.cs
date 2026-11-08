@@ -2408,6 +2408,7 @@ static partial class ColumnChunkReader
         return byteLength;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     static int AddBinaryLength(int currentLength, int valueLength)
     {
         if (valueLength < 0 || valueLength > int.MaxValue - currentLength)
@@ -3772,6 +3773,7 @@ static partial class ColumnChunkReader
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeDictionaryLiteralIndexes(ReadOnlySpan<byte> payload, int bitWidth,
         int dictionaryLength, Span<int> destination)
     {
@@ -3806,6 +3808,7 @@ static partial class ColumnChunkReader
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     static void ValidateDictionaryIndex(int dictionaryIndex, int dictionaryLength)
     {
         if ((uint)dictionaryIndex >= (uint)dictionaryLength)
@@ -3813,6 +3816,7 @@ static partial class ColumnChunkReader
                 $"Dictionary index {dictionaryIndex} is out of range for a dictionary of {dictionaryLength} entries.");
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeDictionaryLiteralIndexes<T>(ReadOnlySpan<byte> payload, int bitWidth,
         ReadOnlySpan<T> dictionary,
         Span<T> destination)
@@ -3957,6 +3961,7 @@ static partial class ColumnChunkReader
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeDictionaryLiteralInt32Indexes11Bit(ReadOnlySpan<byte> payload,
         ReadOnlySpan<int> dictionary, Span<int> destination)
     {
@@ -3985,6 +3990,7 @@ static partial class ColumnChunkReader
         DecodeDictionaryLiteralInt32Indexes11BitCore(payload, dictionary, destination);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static unsafe void DecodeDictionaryLiteralInt32Indexes11BitCore(ReadOnlySpan<byte> payload,
         ReadOnlySpan<int> dictionary, Span<int> destination)
     {
@@ -4019,6 +4025,7 @@ static partial class ColumnChunkReader
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeDictionaryLiteralInt64Indexes11Bit(ReadOnlySpan<byte> payload,
         ReadOnlySpan<long> dictionary, Span<long> destination)
     {
@@ -4047,6 +4054,7 @@ static partial class ColumnChunkReader
         DecodeDictionaryLiteralInt64Indexes11BitCore(payload, dictionary, destination);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static int GetRepeatedDictionaryBlockCount(ReadOnlySpan<byte> payload, int valueCount,
         int blockValueCount, int blockByteCount)
     {
@@ -4063,6 +4071,7 @@ static partial class ColumnChunkReader
             : 0;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void RepeatDictionaryValues<T>(Span<T> destination, int blockValueCount,
         int repeatedBlockCount)
     {
@@ -4076,6 +4085,7 @@ static partial class ColumnChunkReader
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeDictionaryLiteralInt64Indexes11BitCore(ReadOnlySpan<byte> payload,
         ReadOnlySpan<long> dictionary, Span<long> destination)
     {
@@ -4394,6 +4404,7 @@ static partial class ColumnChunkReader
         return (int)(bits & mask);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     static uint ReadUnsignedVarInt(ref ReadOnlySpan<byte> payload)
     {
         uint value = 0;
@@ -4412,6 +4423,7 @@ static partial class ColumnChunkReader
         throw new CorruptParquetException("RLE/bit-pack UInt32 varint exceeds five bytes.");
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     static int ReadRleRunValue(ref ReadOnlySpan<byte> payload, int bitWidth)
     {
         if ((uint)bitWidth > 32)
@@ -4425,6 +4437,7 @@ static partial class ColumnChunkReader
         return value;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     static int ReadLittleEndian(ref ReadOnlySpan<byte> payload, int byteWidth)
     {
         if (byteWidth > payload.Length)

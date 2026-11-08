@@ -93,6 +93,40 @@ internal sealed class RleRunValueWidthTests
     }
 
     [Test]
+    public void DenseNullableDictionaryRunStillValidatesWidthAndLiteralLength()
+    {
+        var schema = new ParquetSchema([ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32,
+            new ColumnOptions(encodings: [EncodingKind.RleDictionary]), pageStrategy: new DictionaryPage())]);
+        using var stream = new MemoryStream();
+        using (var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        { Compression = CompressionKind.None, DataPageVersion = ParquetDataPageVersion.V2 }))
+        {
+            var column = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
+            column.Serialize(Enumerable.Range(0, 32).Select(i => (int?)(i % 2)).ToArray());
+            writer.StartRowGroup().Write(column);
+            writer.CloseFile();
+        }
+        var file = stream.ToArray();
+        int offset;
+        using (var physical = new ParquetFileReader())
+        {
+            physical.Reset(new MemoryStream(file, writable: false));
+            offset = checked((int)physical.Metadata.ColumnChunk(0, 0).DataPageOffset);
+        }
+        var header = PageHeaderReader.Read(file.AsSpan(offset));
+        var payload = offset + header.HeaderLength + checked((int)(header.RepetitionLevelsByteLength +
+            header.DefinitionLevelsByteLength));
+        file[payload] = 1;
+        file[payload + 1] = 64; // repeat 32 times
+        file[payload + 2] = 1;
+        ReadNullableDictionary(file);
+        file[payload + 2] = 2;
+        Assert.Throws<CorruptParquetException>(() => ReadNullableDictionary(file));
+        file[payload + 1] = 127; // literal run exceeds the available payload
+        Assert.Throws<CorruptParquetException>(() => ReadNullableDictionary(file));
+    }
+
+    [Test]
     [Arguments(false)]
     [Arguments(true)]
     public void NestedLevelsRespectWidthAndSchemaMaximum(bool repetition)
@@ -143,6 +177,14 @@ internal sealed class RleRunValueWidthTests
         else
             foreach (var buffer in reader.RowGroups[0].Column<bool?>(0))
                 _ = buffer.Values.Length;
+    }
+
+    static void ReadNullableDictionary(byte[] file)
+    {
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(file, writable: false));
+        foreach (var buffer in reader.RowGroups[0].Column<int?>(0))
+            _ = buffer.Values.Length;
     }
 
     static void ReadDictionary(byte[] file, bool nested)

@@ -7,6 +7,7 @@ readonly unsafe struct BinaryValueDescriptor
     readonly int _offsetPlusOne;
     readonly int _length;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     internal BinaryValueDescriptor(int offset, int length)
     {
         if (offset < 0)
