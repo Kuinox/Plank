@@ -390,17 +390,21 @@ static partial class ColumnChunkReader
         var targetCount = Math.Max(1, DecodeBatchSizeBytes / page.BatchElementSize);
         if (page.DefinitionBitsetLength == 0 &&
             page.DecoderKind == EncodedDecoderKind.Dictionary && page.IsNullable &&
-            column.Converter is null && column.PhysicalType == ParquetPhysicalType.Int64 &&
-            typeof(T) == typeof(long?) && NullableInt64HasCanonicalLayout &&
-            Avx2.IsSupported && Bmi2.X64.IsSupported && page.Rle.BitWidth is >= 1 and <= 4)
+            column.Converter is null && Avx2.IsSupported && Bmi2.X64.IsSupported &&
+            ((column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(long?) &&
+              NullableInt64HasCanonicalLayout && page.Rle.BitWidth is >= 1 and <= 4) ||
+             (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int?) &&
+              NullableInt32HasCanonicalLayout && page.Rle.BitWidth is 1 or 2)))
         {
             var remaining = page.ValueCount - page.ValueOffset;
             var target = Math.Min(targetCount, remaining);
             var capacity = Math.Min(checked(target + 7), remaining);
             var values = buffers.GetValues<T>(capacity, bufferPool);
-            var decoded = DecodeNullableInt64DictionaryNarrowRleBatch(dataPayload,
-                buffers.GetDictionary<long>(), Unsafe.As<Span<T>, Span<long?>>(ref values),
-                target, ref page.Rle);
+            var decoded = typeof(T) == typeof(int?)
+                ? DecodeNullableInt32DictionaryNarrowRleBatch(dataPayload, buffers.GetDictionary<int>(),
+                    Unsafe.As<Span<T>, Span<int?>>(ref values), target, ref page.Rle)
+                : DecodeNullableInt64DictionaryNarrowRleBatch(dataPayload, buffers.GetDictionary<long>(),
+                    Unsafe.As<Span<T>, Span<long?>>(ref values), target, ref page.Rle);
             page.ValueOffset += decoded;
             page.PhysicalOffset += decoded;
             if (!page.Active && page.PhysicalOffset != page.PhysicalCount)
@@ -674,8 +678,8 @@ static partial class ColumnChunkReader
                 var nullable = Unsafe.As<Span<T>, Span<int?>>(ref values);
                 if (NullableInt32HasCanonicalLayout && Avx2.IsSupported &&
                     Bmi2.X64.IsSupported && page.Rle.BitWidth is 1 or 2)
-                    DecodeNullableInt32DictionaryNarrowRleBatch(payload, dictionary,
-                        nullable, ref page.Rle);
+                    _ = DecodeNullableInt32DictionaryNarrowRleBatch(payload, dictionary,
+                        nullable, nullable.Length, ref page.Rle);
                 else
                     DecodeNullableInt32DictionaryRleBatch(payload, dictionary,
                         nullable, ref page.Rle);
@@ -886,6 +890,7 @@ static partial class ColumnChunkReader
             BitWidth = bitWidth
         };
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static int PlanRleBatch(ReadOnlySpan<byte> payload, int targetCount, RleBatchState state)
     {
         var destination = targetCount;
@@ -955,7 +960,9 @@ static partial class ColumnChunkReader
         }
     }
 
-    // Keep tiered PGO here: it inlines the large generic literal decoder.
+    // Bounded batches may finish before tiered call counting promotes these hot loops.
+    // Compile from first use; steady-state dictionary probes also cover the loss of PGO.
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void DecodeDictionaryRleBatch<T>(ReadOnlySpan<byte> payload,
         ReadOnlySpan<T> dictionary, Span<T> destination, ref RleBatchState state)
     {
@@ -1087,11 +1094,11 @@ static partial class ColumnChunkReader
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    static unsafe void DecodeNullableInt32DictionaryNarrowRleBatch(ReadOnlySpan<byte> payload,
-        ReadOnlySpan<int> dictionary, Span<int?> destination, ref RleBatchState state)
+    static unsafe int DecodeNullableInt32DictionaryNarrowRleBatch(ReadOnlySpan<byte> payload,
+        ReadOnlySpan<int> dictionary, Span<int?> destination, int targetCount, ref RleBatchState state)
     {
         var written = 0;
-        while (written < destination.Length)
+        while (written < targetCount)
         {
             EnsureRleRun(payload, ref state);
             var pageRemaining = state.ValueCount - state.ValuesRead;
@@ -1099,7 +1106,7 @@ static partial class ColumnChunkReader
             {
                 ValidateDictionaryIndex(state.RepeatedValue, dictionary.Length);
                 var count = (int)Math.Min(state.RunRemaining,
-                    checked((uint)Math.Min(destination.Length - written, pageRemaining)));
+                    checked((uint)Math.Min(targetCount - written, pageRemaining)));
                 destination.Slice(written, count).Fill(dictionary[state.RepeatedValue]);
                 state.RunRemaining -= checked((uint)count);
                 state.ValuesRead += count;
@@ -1107,11 +1114,11 @@ static partial class ColumnChunkReader
                 continue;
             }
 
-            var remaining = Math.Min(destination.Length - written, pageRemaining);
+            var remaining = Math.Min(targetCount - written, pageRemaining);
             var groups = Math.Max(1, (remaining + 7) / 8);
             var encodedValues = checked(groups * 8);
             var countToConsume = Math.Min(checked((uint)encodedValues), state.RunRemaining);
-            var countToExpose = Math.Min(checked((int)countToConsume), remaining);
+            var countToExpose = Math.Min(checked((int)countToConsume), pageRemaining);
             var bytes = checked((int)(countToConsume / 8) * state.BitWidth);
             if ((uint)state.Offset > (uint)payload.Length || payload.Length - state.Offset < bytes)
                 throw new CorruptParquetException(
@@ -1190,6 +1197,7 @@ static partial class ColumnChunkReader
             state.ValuesRead += countToExpose;
             written += countToExpose;
         }
+        return written;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
@@ -1328,7 +1336,7 @@ static partial class ColumnChunkReader
         }
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     static unsafe void DecodeNullableInt32DictionaryNineBit(ReadOnlySpan<byte> payload,
         ReadOnlySpan<int> dictionary, Span<int?> destination)
     {
@@ -1355,7 +1363,7 @@ static partial class ColumnChunkReader
         }
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     static unsafe void DecodeNullableInt32DictionaryBytes(ReadOnlySpan<byte> indexes,
         ReadOnlySpan<int> dictionary, Span<int?> destination)
     {
@@ -1377,7 +1385,7 @@ static partial class ColumnChunkReader
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     static void ValidateNullableInt32DictionaryIndexes(Vector256<int> indexes,
         int dictionaryLength, Vector256<int> maximumIndex)
     {
@@ -1388,7 +1396,7 @@ static partial class ColumnChunkReader
             ValidateDictionaryIndex(indexes.GetElement(lane), dictionaryLength);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     static void StoreNullableInt32Values(Vector256<int> values, ref ulong target, int valueIndex)
     {
         var present = Vector128.Create(1U);
@@ -1437,14 +1445,26 @@ static partial class ColumnChunkReader
         }
     }
 
+    // Called for every run from fully optimized batch decoders, including short runs.
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void EnsureRleRun(ReadOnlySpan<byte> payload, ref RleBatchState state)
     {
         if (state.RunRemaining != 0)
             return;
         var remaining = payload[state.Offset..];
-        var before = remaining.Length;
-        var header = ReadUnsignedVarInt(ref remaining);
-        state.Offset += before - remaining.Length;
+        uint header;
+        if (!remaining.IsEmpty && remaining[0] < 128)
+        {
+            header = remaining[0];
+            remaining = remaining[1..];
+            state.Offset++;
+        }
+        else
+        {
+            var before = remaining.Length;
+            header = ReadUnsignedVarInt(ref remaining);
+            state.Offset += before - remaining.Length;
+        }
         state.LiteralRun = (header & 1U) != 0;
         var count = header >> 1;
         if (count == 0)
@@ -1462,12 +1482,23 @@ static partial class ColumnChunkReader
         }
 
         state.RunRemaining = count;
-        remaining = payload[state.Offset..];
-        before = remaining.Length;
-        state.RepeatedValue = ReadRleRunValue(ref remaining, state.BitWidth);
-        state.Offset += before - remaining.Length;
+        if (state.BitWidth is >= 1 and <= 8 && !remaining.IsEmpty)
+        {
+            var value = remaining[0];
+            if ((value >> state.BitWidth) != 0)
+                throw new CorruptParquetException($"RLE run value {value} exceeds bit width {state.BitWidth}.");
+            state.RepeatedValue = value;
+            state.Offset++;
+        }
+        else
+        {
+            var before = remaining.Length;
+            state.RepeatedValue = ReadRleRunValue(ref remaining, state.BitWidth);
+            state.Offset += before - remaining.Length;
+        }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     static void RequireRleBytes(ReadOnlySpan<byte> payload, int offset, int byteCount)
     {
         if ((uint)offset > (uint)payload.Length || payload.Length - offset < byteCount)

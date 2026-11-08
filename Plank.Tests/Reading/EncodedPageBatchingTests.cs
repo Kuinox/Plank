@@ -63,6 +63,18 @@ internal sealed class EncodedPageBatchingTests
     [Test]
     [Arguments(2)]
     [Arguments(3)]
+    public void DenseOptionalInt32DictionaryMixedRunsCrossBatchBoundaries(int distinctCount)
+    {
+        var expected = new int?[180_003];
+        for (var i = 0; i < expected.Length; i++)
+            expected[i] = i % 137 < 19 ? (i / 137) % distinctCount : (i * 7 + i / 11) % distinctCount;
+        AssertOptional(expected, ParquetPhysicalType.Int32, EncodingKind.RleDictionary,
+            dictionary: true);
+    }
+
+    [Test]
+    [Arguments(2)]
+    [Arguments(3)]
     [Arguments(7)]
     [Arguments(10)]
     public void LargeDenseOptionalInt64DictionaryBatchesNarrowBitWidths(int distinctCount)
