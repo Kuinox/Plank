@@ -1072,17 +1072,6 @@ static class PlainEncoding
             return;
         }
 
-        // INT96 and FIXED_LEN_BYTE_ARRAY columns carry payloads of a known width and are written
-        // without a length prefix. Only the byte[] row shape has ever taken this branch: the memory
-        // shape falls through to the length-prefixed layout, which is wrong for these physical types
-        // but is pre-existing behaviour this refactor deliberately preserves.
-        if (typeof(TRow) == typeof(byte[])
-            && column.PhysicalType is ParquetPhysicalType.FixedLenByteArray or ParquetPhysicalType.Int96)
-        {
-            WriteOptionalFixedLengthPayloads<TRow, TRowAccess>(column, rows, ref writer);
-            return;
-        }
-
         WriteLengthPrefixedPayloads<TRow, TRowAccess>(column, rows, knownPayloadBytes, ref writer);
     }
 
@@ -1235,31 +1224,6 @@ static class PlainEncoding
         if (offset != byteCount)
             throw new InvalidOperationException("The measured optional BYTE_ARRAY present count changed while encoding.");
         writer.Advance(byteCount);
-    }
-
-    static void WriteOptionalFixedLengthPayloads<TRow, TRowAccess>(Column column, ReadOnlySpan<TRow> rows,
-        ref BufferWriter writer)
-        where TRowAccess : IByteArrayRow<TRow>
-    {
-        var valueLength = column.PhysicalType == ParquetPhysicalType.Int96
-            ? 12
-            : EncodingPrimitives.GetFixedLength(column);
-        var presentCount = ByteArrayRows.CountPresent<TRow, TRowAccess>(rows);
-
-        var destination = writer.GetSpan(checked(presentCount * valueLength));
-        var offset = 0;
-        for (var i = 0; i < rows.Length; i++)
-        {
-            if (!ByteArrayRows.TryGetPayload<TRow, TRowAccess>(column, in rows[i], out var payload))
-                continue;
-            if (payload.Length != valueLength)
-                throw new InvalidOperationException(
-                    $"Column '{column.Name}' expects fixed-length values of {valueLength} bytes, but got {payload.Length}.");
-            payload.CopyTo(destination[offset..]);
-            offset += valueLength;
-        }
-
-        writer.Advance(offset);
     }
 
     static void WriteInt96Values<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)

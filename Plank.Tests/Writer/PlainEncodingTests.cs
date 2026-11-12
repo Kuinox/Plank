@@ -314,6 +314,7 @@ internal sealed class PlainEncodingTests
 
         AssertEqual(first.Concat(second), Encode(fixedColumn, fixedValues));
         AssertEqual(first.Concat(second), EncodeOptionalByteArrays(fixedColumn, optionalFixedValues));
+        AssertEqual(first.Concat(second), EncodeOptionalByteArrays(fixedColumn, optionalFixedValues, 32));
 
         var int96First = first[..12];
         var int96Second = second[..12];
@@ -321,6 +322,9 @@ internal sealed class PlainEncodingTests
         AssertEqual(int96First.Concat(int96Second), Encode(int96Column, new[] { int96First, int96Second }));
         AssertEqual(int96First.Concat(int96Second),
             EncodeOptionalByteArrays(int96Column, new byte[][] { null!, int96First, int96Second, null! }));
+
+        AssertEqual(int96First.Concat(int96Second),
+            EncodeOptionalByteArrays(int96Column, new byte[][] { null!, int96First, int96Second, null! }, 24));
 
         Guid[] guids =
         [
