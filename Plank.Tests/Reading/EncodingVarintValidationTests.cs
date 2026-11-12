@@ -36,19 +36,51 @@ internal sealed class EncodingVarintValidationTests
     }
 
     [Test]
-    public void DeltaVarintRejectsTenthByteBeyondUInt64()
+    public void DeltaVarintValidatesEveryPossibleTenthByte()
     {
-        byte[] payload = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02];
-        var reader = new DeltaBinaryPackedReader(payload);
-        try
+        // Include a trailing byte so continuation bits cannot pass as truncation errors.
+        byte[] payload = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0];
+        for (var lastByte = 0; lastByte <= byte.MaxValue; lastByte++)
         {
-            _ = reader.ReadUnsignedVarInt();
+            payload[9] = (byte)lastByte;
+            var reader = new DeltaBinaryPackedReader(payload);
+            if (lastByte <= 1)
+            {
+                var expected = lastByte == 0 ? long.MaxValue : ulong.MaxValue;
+                if (reader.ReadUnsignedVarInt() != expected || reader.Offset != 10)
+                    throw new InvalidOperationException("A valid tenth byte changed value or consumed trailing data.");
+                continue;
+            }
+
+            try
+            {
+                _ = reader.ReadUnsignedVarInt();
+            }
+            catch (CorruptParquetException) when (reader.Offset == 10)
+            {
+                continue;
+            }
+            throw new InvalidOperationException($"Delta varint accepted invalid tenth byte {lastByte}.");
         }
-        catch (CorruptParquetException)
+    }
+
+    [Test]
+    public void DeltaVarintRejectsTruncatedContinuations()
+    {
+        byte[] payload = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80];
+        for (var length = 0; length <= payload.Length; length++)
         {
-            return;
+            var reader = new DeltaBinaryPackedReader(payload.AsSpan(0, length));
+            try
+            {
+                _ = reader.ReadUnsignedVarInt();
+            }
+            catch (CorruptParquetException)
+            {
+                continue;
+            }
+            throw new InvalidOperationException("A truncated delta varint decoded as a value.");
         }
-        throw new InvalidOperationException("An overflowing delta varint decoded as a value.");
     }
 
     [Test]
