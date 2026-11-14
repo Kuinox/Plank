@@ -165,6 +165,81 @@ internal sealed class AppendFileTests
         var schema = CreateSchema(ParquetPhysicalType.Double);
         await CheckAppendedSorting<double>(schema, new ParquetSortingColumn(0), [1], [2, 3], true).ConfigureAwait(false);
         await CheckAppendedSorting<double>(schema, new ParquetSortingColumn(0), [1], [double.NaN], false).ConfigureAwait(false);
+        await CheckAppendedSorting<float>(CreateSchema(ParquetPhysicalType.Float),
+            new ParquetSortingColumn(0, descending: true), [3, 2], [1, 0], true).ConfigureAwait(false);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task AppendingAcrossSignedZeroPreservesSorting(bool singlePrecision)
+    {
+        if (singlePrecision)
+            await CheckAppendedSorting<float>(CreateSchema(ParquetPhysicalType.Float),
+                new ParquetSortingColumn(0, descending: true), [+0.0f], [-0.0f], true).ConfigureAwait(false);
+        else
+            await CheckAppendedSorting<double>(CreateSchema(ParquetPhysicalType.Double),
+                new ParquetSortingColumn(0), [-0.0d], [+0.0d], true).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task AppendingAcrossSignedZeroDropsIncorrectSorting()
+    {
+        await CheckAppendedSorting<double>(CreateSchema(ParquetPhysicalType.Double),
+            new ParquetSortingColumn(0), [+0.0d], [-0.0d], false).ConfigureAwait(false);
+    }
+
+    [Test]
+    [Arguments(EncodingKind.Plain)]
+    [Arguments(EncodingKind.RleDictionary)]
+    [Arguments(EncodingKind.ByteStreamSplit)]
+    [Arguments(EncodingKind.Alp)]
+    public async Task FloatingAppendPreservesFiniteMonotonicOrder(EncodingKind encoding)
+    {
+        double[][] cases = [
+            [-5.5, -1.25, 0.5, 2.75, 8.125],
+            [1, 1, 1, 1, 1],
+            [-float.MaxValue, -float.Epsilon, 0, float.Epsilon, float.MaxValue],
+            [-1, -0.0d, +0.0d, 1, 2],
+            Enumerable.Range(0, 2050).Select(i => i / 8.0 - 128).ToArray()
+        ];
+        foreach (var physicalType in new[] { ParquetPhysicalType.Float, ParquetPhysicalType.Double })
+        foreach (var descending in new[] { false, true })
+        foreach (var optional in new[] { false, true })
+        foreach (var sample in cases)
+        {
+            var values = descending ? sample.Reverse().ToArray() : sample;
+            var schema = new ParquetSchema([
+                ColumnDefinition.Leaf("Value", physicalType,
+                    new ColumnOptions(repetition: optional ? ParquetRepetition.Optional : ParquetRepetition.Required,
+                        encodings: [encoding]))
+            ]);
+            var sorting = new ParquetSortingColumn(0, descending, nullsFirst: true);
+            var options = new ParquetWriterOptions
+            {
+                SortingColumns = [sorting], Compression = CompressionKind.None,
+                TargetDataPageSizeBytes = 256
+            };
+            var split = values.Length / 2;
+            if (physicalType == ParquetPhysicalType.Float)
+            {
+                var typed = values.Select(v => (float)v).ToArray();
+                if (optional)
+                    await CheckAppendedSorting<float?>(schema, sorting,
+                        new float?[] { null }.Concat(typed[..split].Select(v => (float?)v)).ToArray(),
+                        typed[split..].Select(v => (float?)v).ToArray(), true, options, options).ConfigureAwait(false);
+                else
+                    await CheckAppendedSorting(schema, sorting, typed[..split], typed[split..],
+                        true, options, options).ConfigureAwait(false);
+            }
+            else if (optional)
+                await CheckAppendedSorting<double?>(schema, sorting,
+                    new double?[] { null }.Concat(values[..split].Select(v => (double?)v)).ToArray(),
+                    values[split..].Select(v => (double?)v).ToArray(), true, options, options).ConfigureAwait(false);
+            else
+                await CheckAppendedSorting(schema, sorting, values[..split], values[split..],
+                    true, options, options).ConfigureAwait(false);
+        }
     }
 
     [Test]
@@ -212,6 +287,14 @@ internal sealed class AppendFileTests
             await Assert.That(reader.Metadata.RowGroupCount).IsEqualTo(1);
             await Assert.That(reader.Metadata.RowGroups[0].RowCount).IsEqualTo((ulong)(retained.Length + incoming.Length));
             await Assert.That(reader.Metadata.RowGroupSortingColumns(0).Length).IsEqualTo(expectedSorting ? 1 : 0);
+            if (typeof(T) != typeof(string))
+            {
+                using var logicalReader = schema.CreateReader(new MemoryStream(File.ReadAllBytes(path)));
+                var actual = new List<T>();
+                foreach (var buffer in logicalReader.RowGroups[0].Column<T>(0))
+                    actual.AddRange(buffer.Values);
+                await Assert.That(actual.ToArray()).IsEquivalentTo(retained.Concat(incoming).ToArray());
+            }
         }
         finally
         {

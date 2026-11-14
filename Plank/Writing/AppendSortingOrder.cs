@@ -127,9 +127,10 @@ sealed class AppendSortingOrder(ParquetSortingColumn[] columns)
     };
 
     static int? CompareFloating(double left, double right)
-        => double.IsNaN(left) || double.IsNaN(right) ||
-            (left == 0 && right == 0 && double.IsNegative(left) != double.IsNegative(right))
-            ? null : left.CompareTo(right);
+        => double.IsNaN(left) || double.IsNaN(right) ? null
+            : left == 0 && right == 0
+                ? double.IsNegative(right).CompareTo(double.IsNegative(left))
+                : left.CompareTo(right);
 
     static int? CompareBinary(Column column, ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
