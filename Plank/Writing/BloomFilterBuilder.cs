@@ -204,6 +204,13 @@ static class BloomFilterBuilder
     static void InsertValues<T>(Column column, ReadOnlySpan<T> values, Span<byte> bitset)
         where T : notnull
     {
+        if (typeof(T) == typeof(decimal))
+        {
+            var typed = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
+            for (var i = 0; i < typed.Length; i++)
+                InsertHash(bitset, HashDecimal(column, typed[i]));
+            return;
+        }
         if (typeof(T) == typeof(int))
         {
             var typed = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values);
@@ -320,6 +327,7 @@ static class BloomFilterBuilder
     {
         var hash = value switch
         {
+            decimal decimalValue => HashDecimal(column, decimalValue),
             byte byteValue when column.PhysicalType == ParquetPhysicalType.Int32
                 => ParquetBloomFilterHash.Hash((int)byteValue),
             ushort ushortValue when column.PhysicalType == ParquetPhysicalType.Int32
@@ -352,4 +360,22 @@ static class BloomFilterBuilder
 
     static void InsertHash(Span<byte> bitset, ulong hash)
         => SplitBlockBloomFilter.InsertHash(bitset, hash);
+
+    static ulong HashDecimal(Column column, decimal value)
+    {
+        if (column.PhysicalType == ParquetPhysicalType.Int32)
+            return ParquetBloomFilterHash.Hash(ParquetDecimalConverter.ToInt32(value, column));
+        if (column.PhysicalType == ParquetPhysicalType.Int64)
+            return ParquetBloomFilterHash.Hash(ParquetDecimalConverter.ToInt64(value, column));
+        if (column.PhysicalType == ParquetPhysicalType.FixedLenByteArray)
+        {
+            var length = checked((int)column.Options.TypeLength);
+            Span<byte> bytes = length <= 256 ? stackalloc byte[length] : new byte[length];
+            ParquetDecimalConverter.WriteFixedBigEndian(value, column, bytes);
+            return ParquetBloomFilterHash.Hash(bytes);
+        }
+        Span<byte> encoded = stackalloc byte[16];
+        var count = ParquetDecimalConverter.WriteBigEndian(value, column, encoded);
+        return ParquetBloomFilterHash.Hash(encoded[..count]);
+    }
 }
