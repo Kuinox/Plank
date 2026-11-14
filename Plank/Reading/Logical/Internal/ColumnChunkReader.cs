@@ -397,6 +397,10 @@ static partial class ColumnChunkReader
             : EncodingKind.Rle;
         if (header.Type == PageHeaderType.DataPageV2)
         {
+            if (column.Options.Repetition == ParquetRepetition.Required &&
+                (header.NullCount != 0 || header.DefinitionLevelsByteLength != 0 ||
+                 header.RepetitionLevelsByteLength != 0))
+                throw new CorruptParquetException("Required flat columns cannot contain nulls or level streams.");
             if (header.NullCount > header.ValueCount)
                 throw new CorruptParquetException(
                     $"Page null count ({header.NullCount}) exceeds value count ({header.ValueCount}).");
