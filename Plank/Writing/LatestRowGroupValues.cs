@@ -112,7 +112,7 @@ sealed class LatestRowGroupValues
         {
             int number => ConvertInt32<T>(number, column),
             long number => ConvertInt64<T>(number, column),
-            byte[] bytes => ConvertBinary<T>(bytes),
+            byte[] bytes => ConvertBinary<T>(bytes, column),
             _ => throw Unsupported<T>(column)
         };
         return (T)converted;
@@ -121,6 +121,8 @@ sealed class LatestRowGroupValues
     static object ConvertInt32<T>(int value, Column column)
     {
         var target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        if (target == typeof(decimal))
+            return ParquetDecimalConverter.FromInt32(value, column);
         if (target == typeof(byte))
             return checked((byte)value);
         if (target == typeof(ushort))
@@ -137,6 +139,8 @@ sealed class LatestRowGroupValues
     static object ConvertInt64<T>(long value, Column column)
     {
         var target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        if (target == typeof(decimal))
+            return ParquetDecimalConverter.FromInt64(value, column);
         if (target == typeof(ulong))
             return unchecked((ulong)value);
         if (target == typeof(TimeOnly))
@@ -153,9 +157,11 @@ sealed class LatestRowGroupValues
         throw Unsupported<T>(column);
     }
 
-    static object ConvertBinary<T>(byte[] value)
+    static object ConvertBinary<T>(byte[] value, Column column)
     {
         var target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        if (target == typeof(decimal))
+            return ParquetDecimalConverter.ReadBigEndian(value, column);
         if (target == typeof(ReadOnlyMemory<byte>))
             return new ReadOnlyMemory<byte>(value);
         if (target == typeof(string))
