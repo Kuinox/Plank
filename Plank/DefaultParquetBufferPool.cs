@@ -181,7 +181,9 @@ public sealed unsafe class DefaultParquetBufferPool : IParquetBufferPool, IDispo
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
-        Trim();
+        // A finalizer also runs when constructor validation failed.
+        if (_buckets is not null)
+            Trim();
     }
 
     bool TryReserveRetainedBytes(int allocationByteLength)
