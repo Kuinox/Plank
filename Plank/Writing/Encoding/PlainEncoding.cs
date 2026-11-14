@@ -1065,6 +1065,21 @@ static class PlainEncoding
         int knownPayloadBytes, ref BufferWriter writer)
         where TRowAccess : IByteArrayRow<TRow>
     {
+        if (column.PhysicalType is ParquetPhysicalType.FixedLenByteArray or ParquetPhysicalType.Int96 &&
+            typeof(TRow) != typeof(byte[]))
+        {
+            var valueLength = column.PhysicalType == ParquetPhysicalType.Int96
+                ? 12 : EncodingPrimitives.GetFixedLength(column);
+            for (var i = 0; i < rows.Length; i++)
+            {
+                if (!ByteArrayRows.TryGetPayload<TRow, TRowAccess>(column, in rows[i], out var payload))
+                    continue;
+                if (payload.Length != valueLength)
+                    throw new InvalidOperationException($"Column '{column.Name}' expects {valueLength}-byte values.");
+                writer.Write(payload);
+            }
+            return;
+        }
         if (typeof(TRow) == typeof(byte[]))
         {
             WriteOptionalByteArrayPayloads(column,
