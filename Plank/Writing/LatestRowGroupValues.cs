@@ -122,7 +122,7 @@ sealed class LatestRowGroupValues
     {
         var target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
         if (target == typeof(decimal))
-            return ParquetDecimalConverter.FromInt32(value, column);
+            return ParquetDecimalConverter.FromPhysical(value, column);
         if (target == typeof(byte))
             return checked((byte)value);
         if (target == typeof(ushort))
@@ -140,7 +140,7 @@ sealed class LatestRowGroupValues
     {
         var target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
         if (target == typeof(decimal))
-            return ParquetDecimalConverter.FromInt64(value, column);
+            return ParquetDecimalConverter.FromPhysical(value, column);
         if (target == typeof(ulong))
             return unchecked((ulong)value);
         if (target == typeof(TimeOnly))
@@ -161,7 +161,7 @@ sealed class LatestRowGroupValues
     {
         var target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
         if (target == typeof(decimal))
-            return ParquetDecimalConverter.ReadBigEndian(value, column);
+            return ParquetDecimalConverter.FromPhysical(value, column);
         if (target == typeof(ReadOnlyMemory<byte>))
             return new ReadOnlyMemory<byte>(value);
         if (target == typeof(string))

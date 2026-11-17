@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 
 namespace Plank.Schema;
 
-static class ParquetDecimalConverter
+static partial class ParquetDecimalConverter
 {
     const int MaximumClrPrecision = 29;
     const int MaximumClrScale = 28;

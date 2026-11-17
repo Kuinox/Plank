@@ -262,8 +262,7 @@ public sealed record ColumnDefinition
             return (
                 $"Decimal scale must be non-negative and no greater than precision for column '{name}'.",
                 nameof(logicalType));
-        if (physicalType is not (ParquetPhysicalType.Int32 or ParquetPhysicalType.Int64 or
-            ParquetPhysicalType.ByteArray or ParquetPhysicalType.FixedLenByteArray))
+        if (!ParquetDecimalConverter.SupportsPhysicalType(physicalType))
             return (
                 $"Logical type '{nameof(LogicalType.Decimal)}' is not compatible with physical type '{physicalType}' for column '{name}'.",
                 nameof(physicalType));

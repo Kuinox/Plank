@@ -8,7 +8,7 @@ using Plank.Schema;
 
 namespace Plank.Writing.Encoding;
 
-static class PlainEncoding
+static partial class PlainEncoding
 {
     internal static void WriteValues<T>(Column column, ReadOnlySpan<T> values, ref BufferWriter writer)
         where T : notnull
@@ -151,9 +151,7 @@ static class PlainEncoding
         if (typeof(T) == typeof(decimal))
         {
             var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
-            for (var i = 0; i < decimalValues.Length; i++)
-                BinaryPrimitives.WriteInt32LittleEndian(destination[(i * sizeof(int))..],
-                    ParquetDecimalConverter.ToInt32(decimalValues[i], column));
+            WriteDecimalInt32Values(column, decimalValues, destination);
             writer.Advance(byteCount);
             return;
         }
@@ -297,9 +295,7 @@ static class PlainEncoding
         if (typeof(T) == typeof(decimal))
         {
             var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
-            for (var i = 0; i < decimalValues.Length; i++)
-                BinaryPrimitives.WriteInt64LittleEndian(destination[(i * sizeof(long))..],
-                    ParquetDecimalConverter.ToInt64(decimalValues[i], column));
+            WriteDecimalInt64Values(column, decimalValues, destination);
             writer.Advance(byteCount);
             return;
         }
@@ -747,24 +743,7 @@ static class PlainEncoding
         if (typeof(T) == typeof(decimal))
         {
             var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
-            var byteCount = 0;
-            for (var i = 0; i < decimalValues.Length; i++)
-                byteCount = checked(byteCount + sizeof(int) +
-                    ParquetDecimalConverter.GetByteCount(decimalValues[i], column));
-            if (byteCount == 0)
-                return;
-
-            var destination = writer.GetSpan(byteCount);
-            var offset = 0;
-            for (var i = 0; i < decimalValues.Length; i++)
-            {
-                var length = ParquetDecimalConverter.GetByteCount(decimalValues[i], column);
-                BinaryPrimitives.WriteInt32LittleEndian(destination[offset..], length);
-                offset += sizeof(int);
-                offset += ParquetDecimalConverter.WriteBigEndian(decimalValues[i], column,
-                    destination.Slice(offset, length));
-            }
-            writer.Advance(offset);
+            WriteDecimalByteArrayValues(column, decimalValues, ref writer);
             return;
         }
 
@@ -1056,105 +1035,6 @@ static class PlainEncoding
     }
 
     /// <summary>
-    /// Writes one page of optional plain BYTE_ARRAY payloads. <paramref name="knownPayloadBytes"/> is how
-    /// many bytes they occupy once encoded, or -1 when the caller does not know; the page sizer already
-    /// measured every row to place the page boundary, so handing that total over saves walking the value
-    /// references a second time just to size the destination.
-    /// </summary>
-    internal static void WriteOptionalValues<TRow, TRowAccess>(Column column, ReadOnlySpan<TRow> rows,
-        int knownPayloadBytes, ref BufferWriter writer)
-        where TRowAccess : IByteArrayRow<TRow>
-    {
-        if (column.PhysicalType is ParquetPhysicalType.FixedLenByteArray or ParquetPhysicalType.Int96 &&
-            typeof(TRow) != typeof(byte[]))
-        {
-            var valueLength = column.PhysicalType == ParquetPhysicalType.Int96
-                ? 12 : EncodingPrimitives.GetFixedLength(column);
-            for (var i = 0; i < rows.Length; i++)
-            {
-                if (!ByteArrayRows.TryGetPayload<TRow, TRowAccess>(column, in rows[i], out var payload))
-                    continue;
-                if (payload.Length != valueLength)
-                    throw new InvalidOperationException($"Column '{column.Name}' expects {valueLength}-byte values.");
-                writer.Write(payload);
-            }
-            return;
-        }
-        if (typeof(TRow) == typeof(byte[]))
-        {
-            WriteOptionalByteArrayPayloads(column,
-                Unsafe.As<ReadOnlySpan<TRow>, ReadOnlySpan<byte[]>>(ref rows), knownPayloadBytes, ref writer);
-            return;
-        }
-
-        WriteLengthPrefixedPayloads<TRow, TRowAccess>(column, rows, knownPayloadBytes, ref writer);
-    }
-
-    static void WriteOptionalByteArrayPayloads(Column column, ReadOnlySpan<byte[]> values,
-        int knownPayloadBytes, ref BufferWriter writer)
-    {
-        if (column.PhysicalType is ParquetPhysicalType.FixedLenByteArray or ParquetPhysicalType.Int96)
-        {
-            var valueLength = column.PhysicalType == ParquetPhysicalType.Int96
-                ? 12
-                : EncodingPrimitives.GetFixedLength(column);
-            var fixedByteCount = knownPayloadBytes;
-            if (fixedByteCount < 0)
-            {
-                var presentCount = 0;
-                for (var i = 0; i < values.Length; i++)
-                    if (values[i] is not null)
-                        presentCount++;
-                fixedByteCount = checked(presentCount * valueLength);
-            }
-
-            var destination = writer.GetSpan(fixedByteCount);
-            var offset = 0;
-            for (var i = 0; i < values.Length; i++)
-            {
-                var value = values[i];
-                if (value is null)
-                    continue;
-                if (value.Length != valueLength)
-                    throw new InvalidOperationException(
-                        $"Column '{column.Name}' expects fixed-length values of {valueLength} bytes, but got {value.Length}.");
-                EncodingPrimitives.CopyPayload(value, destination[offset..]);
-                offset += valueLength;
-            }
-
-            writer.Advance(offset);
-            return;
-        }
-
-        var byteCount = knownPayloadBytes;
-        if (byteCount < 0)
-        {
-            byteCount = 0;
-            for (var i = 0; i < values.Length; i++)
-                if (values[i] is { } value)
-                    byteCount = checked(byteCount + sizeof(int) + value.Length);
-        }
-
-        if (byteCount == 0)
-            return;
-
-        var lengthPrefixedDestination = writer.GetSpan(byteCount);
-        var lengthPrefixedOffset = 0;
-        for (var i = 0; i < values.Length; i++)
-        {
-            var value = values[i];
-            if (value is null)
-                continue;
-            BinaryPrimitives.WriteInt32LittleEndian(lengthPrefixedDestination[lengthPrefixedOffset..], value.Length);
-            lengthPrefixedOffset += sizeof(int);
-            EncodingPrimitives.CopyPayload(value, lengthPrefixedDestination[lengthPrefixedOffset..]);
-            lengthPrefixedOffset += value.Length;
-        }
-
-        writer.Advance(lengthPrefixedOffset);
-    }
-
-    /// <summary>
     /// Writes optional plain BYTE_ARRAY values after the page measurement pass established that every
     /// present payload contains exactly one byte. The little-endian caller lets each non-final eight-byte
     /// store overlap the next value's length prefix, then writes the final five-byte value without overlap.
@@ -1292,15 +1172,7 @@ static class PlainEncoding
         if (typeof(T) == typeof(decimal))
         {
             var decimalValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<decimal>>(ref values);
-            var decimalByteCount = checked(decimalValues.Length * valueLength);
-            if (decimalByteCount == 0)
-                return;
-
-            var decimalDestination = writer.GetSpan(decimalByteCount);
-            for (var i = 0; i < decimalValues.Length; i++)
-                ParquetDecimalConverter.WriteFixedBigEndian(decimalValues[i], column,
-                    decimalDestination.Slice(i * valueLength, valueLength));
-            writer.Advance(decimalByteCount);
+            WriteDecimalFixedLenByteArrayValues(column, decimalValues, valueLength, ref writer);
             return;
         }
 

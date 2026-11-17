@@ -2717,53 +2717,8 @@ static partial class ColumnChunkReader
             return true;
         }
         if (typeof(T) == typeof(decimal))
-        {
-            var typed = Unsafe.As<Span<T>, Span<decimal>>(ref destination);
-            switch (column.PhysicalType)
-            {
-                case ParquetPhysicalType.Int32:
-                    ValidatePlainPayload(payload, valueCount, sizeof(int));
-                    for (var i = 0; i < typed.Length; i++)
-                        typed[i] = ParquetDecimalConverter.FromInt32(
-                            BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * sizeof(int), sizeof(int))),
-                            column);
-                    return true;
-                case ParquetPhysicalType.Int64:
-                    ValidatePlainPayload(payload, valueCount, sizeof(long));
-                    for (var i = 0; i < typed.Length; i++)
-                        typed[i] = ParquetDecimalConverter.FromInt64(
-                            BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * sizeof(long), sizeof(long))),
-                            column);
-                    return true;
-                case ParquetPhysicalType.FixedLenByteArray:
-                {
-                    var valueLength = GetFixedBinaryLength(column);
-                    ValidatePlainPayload(payload, valueCount, checked((uint)valueLength));
-                    for (var i = 0; i < typed.Length; i++)
-                        typed[i] = ParquetDecimalConverter.ReadBigEndian(
-                            payload.Slice(i * valueLength, valueLength), column);
-                    return true;
-                }
-                case ParquetPhysicalType.ByteArray:
-                {
-                    var offset = 0;
-                    for (var i = 0; i < typed.Length; i++)
-                    {
-                        if (payload.Length - offset < sizeof(int))
-                            throw new CorruptParquetException(
-                                $"Plain decimal payload ended before length prefix {i}.");
-                        var length = BinaryPrimitives.ReadInt32LittleEndian(payload[offset..]);
-                        offset += sizeof(int);
-                        if (length <= 0 || length > payload.Length - offset)
-                            throw new CorruptParquetException(
-                                $"Plain decimal value {i} declares invalid length {length}.");
-                        typed[i] = ParquetDecimalConverter.ReadBigEndian(payload.Slice(offset, length), column);
-                        offset += length;
-                    }
-                    return true;
-                }
-            }
-        }
+            return TryDecodePlainDecimalValues(payload, column, valueCount,
+                Unsafe.As<Span<T>, Span<decimal>>(ref destination));
 
         return false;
     }
