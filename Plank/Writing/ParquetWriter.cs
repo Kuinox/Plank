@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Immutable;
 using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Schema;
@@ -19,7 +20,7 @@ public sealed class ParquetWriter : IDisposable
     ParquetKeyValueMetadata[] _keyValueMetadata;
     internal readonly Column[] ColumnsByOrdinal;
     readonly PageStrategyContext[] _pageStrategyContextsByOrdinal;
-    internal readonly string[][] ColumnPathsByOrdinal;
+    internal readonly ImmutableArray<ImmutableArray<string>> ColumnPathsByOrdinal;
     internal readonly LeafProjectionInfo[] ColumnProjectionInfosByOrdinal;
     internal readonly int ColumnCount;
     internal readonly BufferWriterFactory BufferWriters;
@@ -95,9 +96,7 @@ public sealed class ParquetWriter : IDisposable
         _createdBy = null;
         _keyValueMetadata = [];
         ColumnsByOrdinal = _schema.Columns.IsDefault ? [] : _schema.Columns.ToArray();
-        ColumnPathsByOrdinal = _schema.LeafPaths.IsDefault || _schema.LeafPaths.Length == 0
-            ? ColumnsByOrdinal.Select(static c => new[] { c.Name }).ToArray()
-            : _schema.LeafPaths.Select(static p => p.ToArray()).ToArray();
+        ColumnPathsByOrdinal = _schema.LeafPaths;
         ColumnProjectionInfosByOrdinal = _schema.LeafProjectionInfos.IsDefault || _schema.LeafProjectionInfos.Length == 0
             ? ColumnsByOrdinal.Select(static c => new LeafProjectionInfo(IsList: false, ListOptional: false,
                 ElementOptional: false, MaxRepetitionLevel: 0,
@@ -289,7 +288,7 @@ public sealed class ParquetWriter : IDisposable
         if (ColumnCount == 0)
         {
             ParquetMetadataThriftWriter.WriteRowGroup(ref SerializedRowGroupsMetadata, ColumnsByOrdinal,
-                ColumnPathsByOrdinal, OpenRowGroupColumnMetadata, SortingColumns, 0);
+                ColumnPathsByOrdinal.AsSpan(), OpenRowGroupColumnMetadata, SortingColumns, 0);
             CompleteOpenRowGroup(0);
         }
 
@@ -734,7 +733,7 @@ public sealed class ParquetWriter : IDisposable
         }
 
         ParquetMetadataThriftWriter.WriteImportedRowGroup(ref SerializedRowGroupsMetadata, ColumnsByOrdinal,
-            ColumnPathsByOrdinal, OpenRowGroupColumnMetadata, sourceMetadata, rowGroupOrdinal, rowGroup.RowCount);
+            ColumnPathsByOrdinal.AsSpan(), OpenRowGroupColumnMetadata, sourceMetadata, rowGroupOrdinal, rowGroup.RowCount);
         _rowGroupCount++;
         _totalRowCount = checked(_totalRowCount + checked((long)rowGroup.RowCount));
     }

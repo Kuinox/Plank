@@ -184,7 +184,7 @@ public sealed class RowGroupWriter
         if (writePageIndexes)
             WritePageIndexes(_writer.OpenRowGroupColumnMetadata);
         ParquetMetadataThriftWriter.WriteRowGroup(ref _writer.SerializedRowGroupsMetadata, _writer.ColumnsByOrdinal,
-            _writer.ColumnPathsByOrdinal, _writer.OpenRowGroupColumnMetadata, _writer.SortingColumns,
+            _writer.ColumnPathsByOrdinal.AsSpan(), _writer.OpenRowGroupColumnMetadata, _writer.SortingColumns,
             _rowCount.GetValueOrDefault());
         _writer.CompleteOpenRowGroup(_rowCount.GetValueOrDefault());
         Array.Clear(_serializedColumnsByOrdinal);
@@ -199,7 +199,7 @@ public sealed class RowGroupWriter
         if (shapes is null || shapes.Length != mapProjections.Length)
             throw new InvalidOperationException("Map serialization did not retain its row shapes.");
 
-        var path = _writer.ColumnPathsByOrdinal[columnOrdinal];
+        var path = _writer.ColumnPathsByOrdinal[columnOrdinal].AsSpan();
         var mapKeyShapes = _mapKeyShapes ??= [];
         for (var i = 0; i < mapProjections.Length; i++)
         {
@@ -217,7 +217,7 @@ public sealed class RowGroupWriter
         }
     }
 
-    static void ValidateMapRowShape(RepeatedRowShape expectedShape, RepeatedRowShape actualShape, string[] path,
+    static void ValidateMapRowShape(RepeatedRowShape expectedShape, RepeatedRowShape actualShape, ReadOnlySpan<string> path,
         int mapPathLength, bool isKey)
     {
         var expectedOffsets = expectedShape.RowOffsets!;
@@ -236,7 +236,7 @@ public sealed class RowGroupWriter
             if (!expected.SequenceEqual(actual))
             {
                 var columns = isKey ? "key columns" : "key and value columns";
-                var mapPath = string.Join('.', path.AsSpan(0, mapPathLength).ToArray());
+                var mapPath = string.Join('.', path[..mapPathLength]);
                 throw new InvalidOperationException(
                     $"Map {columns} have different cardinalities at row {rowIndex} for '{mapPath}'.");
             }
