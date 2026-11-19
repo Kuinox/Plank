@@ -18,11 +18,12 @@ static class PageMetadataReader
     {
         var chunk = reader.Metadata.ColumnChunk(rowGroupOrdinal, physicalColumnOrdinal);
         var columnIndex = ReadSection(reader, chunk.ColumnIndexOffset, chunk.ColumnIndexLength, "column index");
-        var offsetIndex = ReadSection(reader, chunk.OffsetIndexOffset, chunk.OffsetIndexLength, "offset index");
+        ParquetBuffer offsetIndex = default;
         ParquetBuffer entries = default;
         var statisticsBuilder = new StatisticsBufferBuilder(reader.BufferPool);
         try
         {
+            offsetIndex = ReadSection(reader, chunk.OffsetIndexOffset, chunk.OffsetIndexLength, "offset index");
             var count = -1;
             var capacity = 0;
             var boundaryOrder = ParquetBoundaryOrder.Unknown;
