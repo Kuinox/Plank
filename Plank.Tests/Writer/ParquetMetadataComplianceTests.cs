@@ -222,6 +222,40 @@ internal sealed class ParquetMetadataComplianceTests
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void GeospatialTypesOmitBoundsAndColumnIndex(bool geography)
+    {
+        // LogicalTypes.md: the sort order of GEOMETRY and GEOGRAPHY is undefined and no min/max may be saved.
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.ByteArray,
+                logicalType: geography ? new LogicalType.Geography() : new LogicalType.Geometry())
+        ]);
+        var file = WriteFile(schema, new ParquetWriterOptions { WritePageIndexes = true }, writer =>
+        {
+            var column = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+            var rowGroup = writer.StartRowGroup();
+            var point = new byte[21]; // little-endian WKB POINT (1 2)
+            point[0] = 1;
+            BinaryPrimitives.WriteInt32LittleEndian(point.AsSpan(1), 1);
+            BinaryPrimitives.WriteDoubleLittleEndian(point.AsSpan(5), 1);
+            BinaryPrimitives.WriteDoubleLittleEndian(point.AsSpan(13), 2);
+            column.Serialize([point, null!]);
+            rowGroup.Write(column);
+        });
+
+        var metadata = ReadMetadata(file).Column;
+        var bounds = metadata.Statistics;
+        if (bounds.HasLegacyMin || bounds.HasLegacyMax || bounds.HasModernMin || bounds.HasModernMax)
+            throw new InvalidOperationException("A geospatial chunk must not publish min/max bounds.");
+        var page = PageHeaderReader.Read(file.AsSpan(checked((int)metadata.DataPageOffset)));
+        if (page.Statistics.HasMinimum || page.Statistics.HasMaximum)
+            throw new InvalidOperationException("A geospatial page must not publish min/max bounds.");
+        if (metadata.ColumnIndexOffset != -1)
+            throw new InvalidOperationException("A geospatial chunk must not have a ColumnIndex.");
+    }
+
+    [Test]
     public void DictionaryFirstChunkOffsetsPointToDictionaryPage()
     {
         var schema = new ParquetSchema([

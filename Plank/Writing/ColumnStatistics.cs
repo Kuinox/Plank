@@ -87,9 +87,11 @@ internal readonly struct ColumnStatistics
         HasStatistics = hasStatistics;
     }
 
-    // This writer always emits TYPE_ORDER, not INT96_TIMESTAMP_ORDER.
+    // This writer always emits TYPE_ORDER, not INT96_TIMESTAMP_ORDER. LogicalTypes.md leaves INTERVAL, GEOMETRY
+    // and GEOGRAPHY unordered.
     internal static bool HasDefinedOrder(Column column)
-        => column.PhysicalType != ParquetPhysicalType.Int96 && column.LogicalType is not LogicalType.Interval;
+        => column.PhysicalType != ParquetPhysicalType.Int96
+           && column.LogicalType is not (LogicalType.Interval or LogicalType.Geometry or LogicalType.Geography);
 
     internal static ColumnStatistics Empty(long nullCount)
         => new(null, null, nullCount, true);
