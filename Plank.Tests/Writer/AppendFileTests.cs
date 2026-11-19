@@ -406,6 +406,56 @@ internal sealed class AppendFileTests
     }
 
     [Test]
+    public async Task AppendingTypedTimesPreservesRetainedNanoseconds()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("Timestamp", ParquetPhysicalType.Int64,
+                logicalType: new LogicalType.Timestamp(TimeUnit.Nanos, IsAdjustedToUtc: true)),
+            ColumnDefinition.OptionalLeaf("Time", ParquetPhysicalType.Int64,
+                logicalType: new LogicalType.Time(TimeUnit.Nanos, IsAdjustedToUtc: false))
+        ]);
+        using var stream = new MemoryStream();
+        using (var writer = schema.CreateWriter(stream))
+        {
+            var timestamp = writer.CreateSerializedColumn<long>(schema.LeafColumns[0]);
+            var time = writer.CreateSerializedColumn<long?>(schema.LeafColumns[1]);
+            timestamp.Serialize([-150L, 1L]);
+            time.Serialize([null, 149L]);
+            var group = writer.StartRowGroup();
+            group.Write(timestamp);
+            group.Write(time);
+            writer.CloseFile();
+        }
+
+        using var appendStream = new MemoryStream();
+        appendStream.Write(stream.ToArray());
+        appendStream.Position = 0;
+        using (var writer = schema.CreateAppender(appendStream, new ParquetAppendOptions { AppendToLatestRowGroup = true }))
+        {
+            var timestamp = writer.CreateSerializedColumn<DateTime>(schema.LeafColumns[0]);
+            var time = writer.CreateSerializedColumn<TimeOnly?>(schema.LeafColumns[1]);
+            timestamp.Serialize([DateTime.UnixEpoch.AddTicks(2)]);
+            time.Serialize([new TimeOnly(2)]);
+            var group = writer.StartRowGroup();
+            group.Write(timestamp);
+            group.Write(time);
+            writer.CloseFile();
+        }
+
+        using var readStream = new MemoryStream(appendStream.ToArray());
+        using var reader = schema.CreateReader(readStream);
+        await Assert.That(reader.RowGroups.Count).IsEqualTo(1);
+        var timestamps = new List<long>();
+        foreach (var buffer in reader.RowGroups[0].Column<long>(0))
+            timestamps.AddRange(buffer.Values.ToArray());
+        var times = new List<long?>();
+        foreach (var buffer in reader.RowGroups[0].Column<long?>(1))
+            times.AddRange(buffer.Values.ToArray());
+        await Assert.That(timestamps.ToArray()).IsEquivalentTo([-150L, 1L, 200L]);
+        await Assert.That(times.ToArray()).IsEquivalentTo(new long?[] { null, 149L, 200L });
+    }
+
+    [Test]
     public async Task AppendsDecodedOptionalStringsToLatestRowGroup()
     {
         var path = NewPath();
