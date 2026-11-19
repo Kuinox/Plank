@@ -1494,6 +1494,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         page.UncompressedContentSize = uncompressedContentSize;
         page.Header.Reset();
+        if (!ColumnStatistics.HasDefinedOrder(_column))
+            page.Statistics = ColumnStatistics.Empty(page.NullCount);
         if (_owner.DataPageVersion == ParquetDataPageVersion.V1)
         {
             ParquetMetadataThriftWriter.WriteDataPageHeaderV1(ref page.Header, page.ValueCount, page.Encoding,

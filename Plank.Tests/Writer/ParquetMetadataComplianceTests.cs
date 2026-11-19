@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using Plank.Reading;
+using Plank.Reading.Physical;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
@@ -105,6 +106,46 @@ internal sealed class ParquetMetadataComplianceTests
                 "Unsigned bounds were emitted in legacy min/max fields, whose ordering is signed.");
         if (!statistics.HasModernMin || !statistics.HasModernMax)
             throw new InvalidOperationException("Unsigned bounds were not emitted in the modern min_value/max_value fields.");
+    }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    public void UndefinedTypeOrderOmitsBoundsAndColumnIndex(bool interval, bool allNull)
+    {
+        var schema = new ParquetSchema([
+            interval
+                ? ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.FixedLenByteArray,
+                    new ColumnOptions(typeLength: 12), new LogicalType.Interval())
+                : ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int96)
+        ]);
+        var file = WriteFile(schema, new ParquetWriterOptions { WritePageIndexes = true }, writer =>
+        {
+            var column = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+            var rowGroup = writer.StartRowGroup();
+            var value = new byte[12];
+            if (!interval)
+                BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(8), 2440588);
+            column.Serialize(allNull ? [null!] : [value, null!]);
+            rowGroup.Write(column);
+        });
+
+        var metadata = ReadMetadata(file).Column;
+        var bounds = metadata.Statistics;
+        if (bounds.HasLegacyMin || bounds.HasLegacyMax || bounds.HasModernMin || bounds.HasModernMax)
+            throw new InvalidOperationException("An undefined-order chunk must not publish min/max bounds.");
+        var page = PageHeaderReader.Read(file.AsSpan(checked((int)metadata.DataPageOffset)));
+        if (page.Statistics.HasMinimum || page.Statistics.HasMaximum)
+            throw new InvalidOperationException("An undefined-order page must not publish min/max bounds.");
+        if (!page.Statistics.HasNullCount || page.Statistics.NullCount != 1)
+            throw new InvalidOperationException("The page must retain its observed null count.");
+        if (metadata.ColumnIndexOffset != -1)
+            throw new InvalidOperationException("An undefined-order chunk must not have a ColumnIndex.");
+        using var reader = new ParquetFileReader();
+        reader.Reset(new MemoryStream(file, writable: false));
+        if (reader.Metadata.ColumnChunk(0, 0).OffsetIndexLength == 0)
+            throw new InvalidOperationException("The OffsetIndex must be retained.");
     }
 
     [Test]

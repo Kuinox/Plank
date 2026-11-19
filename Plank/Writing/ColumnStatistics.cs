@@ -87,6 +87,10 @@ internal readonly struct ColumnStatistics
         HasStatistics = hasStatistics;
     }
 
+    // This writer always emits TYPE_ORDER, not INT96_TIMESTAMP_ORDER.
+    internal static bool HasDefinedOrder(Column column)
+        => column.PhysicalType != ParquetPhysicalType.Int96 && column.LogicalType is not LogicalType.Interval;
+
     internal static ColumnStatistics Empty(long nullCount)
         => new(null, null, nullCount, true);
 
