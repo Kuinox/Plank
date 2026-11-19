@@ -247,11 +247,7 @@ static class ParquetMetadataThriftWriter
     }
 
     internal static void WriteRowGroup(ref BufferWriter destination, ReadOnlySpan<Column> columns,
-        ReadOnlySpan<ColumnChunkMetadata> metadata, uint rowCount)
-        => WriteRowGroup(ref destination, columns, default, metadata, default, rowCount);
-
-    internal static void WriteRowGroup(ref BufferWriter destination, ReadOnlySpan<Column> columns,
-        ReadOnlySpan<string[]> columnPaths, ReadOnlySpan<ColumnChunkMetadata> metadata,
+        ReadOnlySpan<ImmutableArray<string>> columnPaths, ReadOnlySpan<ColumnChunkMetadata> metadata,
         ReadOnlySpan<ParquetSortingColumn> sortingColumns, uint rowCount)
     {
         var writer = new CompactWriter(ref destination);
@@ -264,7 +260,7 @@ static class ParquetMetadataThriftWriter
         for (var i = 0; i < columns.Length; i++)
         {
             ref readonly var chunk = ref metadata[i];
-            var path = columnPaths.IsEmpty ? GetPathSegments(columns[i].Name) : columnPaths[i];
+            var path = columnPaths[i].AsSpan();
             WriteColumnChunk(ref writer, columns[i], path, chunk);
             totalUncompressedSize = checked(totalUncompressedSize + chunk.TotalUncompressedSize);
             totalCompressedSize = checked(totalCompressedSize + chunk.TotalCompressedSize);
@@ -291,7 +287,7 @@ static class ParquetMetadataThriftWriter
     }
 
     internal static void WriteImportedRowGroup(ref BufferWriter destination, ReadOnlySpan<Column> columns,
-        ReadOnlySpan<string[]> columnPaths, ReadOnlySpan<ColumnChunkMetadata> relocatedMetadata,
+        ReadOnlySpan<ImmutableArray<string>> columnPaths, ReadOnlySpan<ColumnChunkMetadata> relocatedMetadata,
         ParquetFileMetadata sourceMetadata, int sourceRowGroupOrdinal, ulong rowCount)
     {
         var writer = new CompactWriter(ref destination);
@@ -305,7 +301,7 @@ static class ParquetMetadataThriftWriter
         {
             ref readonly var relocated = ref relocatedMetadata[i];
             var source = sourceMetadata.ColumnChunk(sourceRowGroupOrdinal, i);
-            var path = columnPaths.IsEmpty ? GetPathSegments(columns[i].Name) : columnPaths[i];
+            var path = columnPaths[i].AsSpan();
             WriteImportedColumnChunk(ref writer, columns[i], path, relocated, source, sourceMetadata.FooterBytes);
             totalUncompressedSize = checked(totalUncompressedSize + relocated.TotalUncompressedSize);
             totalCompressedSize = checked(totalCompressedSize + relocated.TotalCompressedSize);
@@ -1016,14 +1012,6 @@ static class ParquetMetadataThriftWriter
         writer.WriteListHeader(encodings.Count, CompactType.I32);
         for (var i = 0; i < encodings.Count; i++)
             writer.WriteI32(GetEncoding(encodings[i]));
-    }
-
-    static string[] GetPathSegments(string columnName)
-    {
-        if (columnName.IndexOf('.') < 0)
-            return [columnName];
-
-        return columnName.Split('.', StringSplitOptions.None);
     }
 
     static void WritePath(ref CompactWriter writer, ReadOnlySpan<string> path)
