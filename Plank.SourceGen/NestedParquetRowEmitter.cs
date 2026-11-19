@@ -48,7 +48,7 @@ static class NestedParquetRowEmitter
                 hasDiagnostics = true;
             }
         if (!hasDiagnostics)
-            context.AddSource(GetHintName(schemaType), BuildSource(schemaType, model));
+            context.AddSource(ParquetRowGenerator.GetHintName(schemaType), BuildSource(schemaType, model));
         return true;
     }
 
@@ -1562,9 +1562,6 @@ static class NestedParquetRowEmitter
                 attribute.AttributeClass?.ToDisplayString() == "Plank.Schema.ParquetSchemaAttribute")?
             .NamedArguments.Any(static argument =>
                 argument.Key == "AllowAllocatingValues" && argument.Value.Value is true) == true;
-
-    static string GetHintName(INamedTypeSymbol schemaType)
-        => ToIdentifier(schemaType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)) + ".NestedSchemaApi.g.cs";
 
     static string GetAccessibilityKeyword(Accessibility accessibility)
         => accessibility == Accessibility.Public ? "public" : "internal";

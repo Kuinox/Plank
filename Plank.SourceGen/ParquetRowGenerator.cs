@@ -281,7 +281,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return true;
     }
 
-    static string GetHintName(INamedTypeSymbol schemaType)
+    internal static string GetHintName(INamedTypeSymbol schemaType)
     {
         var typeName = schemaType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         using var sha256 = SHA256.Create();
