@@ -96,22 +96,17 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     public void Serialize(ReadOnlySpan<T> values)
     {
         _owner.ThrowIfDisposed();
-        SerializeValues(values);
-        PreparePages();
-    }
-
-    void SerializeValues(ReadOnlySpan<T> values)
-    {
         if (_bloomFilterRetained)
             throw new InvalidOperationException(
                 "SerializedColumn's Bloom filter is retained by an incomplete row group.");
 
         if (_retainedValues is { } retainedValues)
         {
-            _retainedValues = null;
             if (retainedValues is not T[] typedRetained)
             {
                 SerializeAppendedNanoseconds(retainedValues, values);
+                PreparePages();
+                _retainedValues = null;
                 return;
             }
 
@@ -121,10 +116,18 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var comparisons = _owner.LatestSortingOrder?.CompareIncoming(
                 _column, checked((int)_owner.GetColumnOrdinal(_leafColumn)), typedRetained, values);
             SerializeValues(combined.AsSpan());
+            PreparePages();
             AppendSortingComparisons = comparisons;
+            _retainedValues = null;
             return;
         }
 
+        SerializeValues(values);
+        PreparePages();
+    }
+
+    void SerializeValues(ReadOnlySpan<T> values)
+    {
         if (_column.Options.Repetition == ParquetRepetition.Repeated)
         {
             SerializeRepeated(values);
