@@ -52,6 +52,46 @@ internal sealed class MergeFileTests
     }
 
     [Test]
+    public void ImportedInt96ColumnIndexIsNotRelabelledAsTypeOrder()
+    {
+        var sourceBytes = ParquetTestingCorpus.ReadAllBytes("data/int96_timestamp_order.parquet");
+        using var discoverySource = new MemoryReadSource(sourceBytes);
+        using var discovery = new Plank.Reading.Logical.ParquetReader();
+        discovery.Reset(discoverySource);
+        using var destination = new MemoryParquetSource();
+        using var source = new MemoryReadSource(sourceBytes);
+        var merger = discovery.Schema.CreateMerger(source, destination);
+        merger.CloseFile();
+
+        using var merged = new MemoryStream(destination.ToArray(), writable: false);
+        using var reader = new ParquetFileReader();
+        reader.Reset(merged);
+        var chunk = reader.Metadata.ColumnChunk(0, 0);
+        if (chunk.OffsetIndexLength == 0)
+            throw new InvalidOperationException("The merged file should retain the offset index.");
+        if (chunk.ColumnIndexLength == 0 && !chunk.Statistics.HasMinimum && !chunk.Statistics.HasMaximum)
+            return;
+
+        var footer = new CompactProtocolReader(reader.Metadata.FooterBytes);
+        footer.BeginRootStruct();
+        while (footer.TryReadFieldHeader(out var id, out var type, out var inlineBool))
+        {
+            if (id == 7) // column_orders
+            {
+                var (count, _) = footer.ReadListHeader(type);
+                if (count == 0)
+                    break;
+                footer.BeginRootStruct();
+                if (footer.TryReadFieldHeader(out var order, out _, out _) && order == 3)
+                    return; // INT96_TIMESTAMP_ORDER
+                break;
+            }
+            footer.Skip(type, inlineBool);
+        }
+        throw new InvalidOperationException("Merged INT96 bounds require INT96_TIMESTAMP_ORDER, not TYPE_ORDER.");
+    }
+
+    [Test]
     public async Task PreservesSortingColumnsForEachImportedRowGroup()
     {
         var schema = new ParquetSchema([
