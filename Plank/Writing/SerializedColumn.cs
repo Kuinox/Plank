@@ -1494,16 +1494,19 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         page.UncompressedContentSize = uncompressedContentSize;
         page.Header.Reset();
+        var writeLegacyBinaryStatistics = ParquetMetadataThriftWriter.HasSignedBinaryStatisticsOrder(_column);
         if (_owner.DataPageVersion == ParquetDataPageVersion.V1)
         {
             ParquetMetadataThriftWriter.WriteDataPageHeaderV1(ref page.Header, page.ValueCount, page.Encoding,
-                uncompressedContentSize, page.Content.WrittenLength, page.Statistics, GetPageCrc(ref page));
+                uncompressedContentSize, page.Content.WrittenLength, page.Statistics, GetPageCrc(ref page),
+                writeLegacyBinaryStatistics);
             return;
         }
 
         ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, page.RowCount, page.ValueCount,
             page.NullCount, page.RepetitionLevelsByteLength, page.DefinitionLevelsByteLength, page.Encoding,
-            uncompressedContentSize, page.Content.WrittenLength, compressed, page.Statistics, GetPageCrc(ref page));
+            uncompressedContentSize, page.Content.WrittenLength, compressed, page.Statistics, GetPageCrc(ref page),
+            writeLegacyBinaryStatistics);
     }
 
     bool PrepareDataPageV1(ref Page page, ResolvedCompression compression, int uncompressedContentSize)

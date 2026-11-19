@@ -108,6 +108,55 @@ internal sealed class ParquetMetadataComplianceTests
     }
 
     [Test]
+    [Arguments(ParquetPhysicalType.ByteArray, 0U)]
+    [Arguments(ParquetPhysicalType.FixedLenByteArray, 1U)]
+    public void UnsignedBinaryBoundsAreNotWrittenToLegacyFields(ParquetPhysicalType physicalType, uint typeLength)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("value", physicalType, new ColumnOptions(typeLength: typeLength))
+        ]);
+        var file = WriteFile(schema, new ParquetWriterOptions(), writer =>
+        {
+            var column = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+            var rowGroup = writer.StartRowGroup();
+            column.Serialize([[0x01], [0xff]]);
+            rowGroup.Write(column);
+        });
+        var metadata = ReadMetadata(file);
+        AssertModernOnly(metadata.Column.Statistics);
+
+        var reader = new CompactProtocolReader(file.AsSpan(checked((int)metadata.Column.DataPageOffset)));
+        reader.BeginRootStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
+        {
+            if (fieldId == 8) // DataPageHeaderV2
+            {
+                reader.BeginRootStruct();
+                while (reader.TryReadFieldHeader(out fieldId, out type, out inlineBool))
+                {
+                    if (fieldId == 8) // Statistics
+                    {
+                        AssertModernOnly(ReadStatistics(ref reader));
+                        return;
+                    }
+                    reader.Skip(type, inlineBool);
+                }
+                break;
+            }
+            reader.Skip(type, inlineBool);
+        }
+        throw new InvalidOperationException("Expected V2 page statistics.");
+
+        static void AssertModernOnly(StatisticsMetadata statistics)
+        {
+            if (statistics.HasLegacyMin || statistics.HasLegacyMax)
+                throw new InvalidOperationException("Unsigned byte bounds were written to signed-only legacy fields.");
+            if (!statistics.HasModernMin || !statistics.HasModernMax)
+                throw new InvalidOperationException("Expected modern unsigned byte bounds.");
+        }
+    }
+
+    [Test]
     public void DictionaryFirstChunkOffsetsPointToDictionaryPage()
     {
         var schema = new ParquetSchema([

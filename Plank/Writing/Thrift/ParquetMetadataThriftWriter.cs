@@ -16,7 +16,8 @@ static class ParquetMetadataThriftWriter
 
     internal static void WriteDataPageHeaderV2(ref BufferWriter destination, uint rowCount, uint valueCount, uint nullCount,
         uint repetitionLevelsByteLength, uint definitionLevelsByteLength, EncodingKind encoding, int uncompressedPageSize,
-        int compressedPageSize, bool isCompressed, in ColumnStatistics statistics, uint? crc)
+        int compressedPageSize, bool isCompressed, in ColumnStatistics statistics, uint? crc,
+        bool writeLegacyBinaryStatistics = false)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
@@ -35,14 +36,15 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI32(5, checked((int)definitionLevelsByteLength));
         writer.WriteFieldI32(6, checked((int)repetitionLevelsByteLength));
         writer.WriteFieldBool(7, isCompressed);
-        WriteStatistics(ref writer, 8, statistics);
+        WriteStatistics(ref writer, 8, statistics, writeLegacyBinaryStatistics);
         writer.EndStruct(previousData);
 
         writer.EndStruct(previous);
     }
 
     internal static void WriteDataPageHeaderV1(ref BufferWriter destination, uint valueCount, EncodingKind encoding,
-        int uncompressedPageSize, int compressedPageSize, in ColumnStatistics statistics, uint? crc)
+        int uncompressedPageSize, int compressedPageSize, in ColumnStatistics statistics, uint? crc,
+        bool writeLegacyBinaryStatistics = false)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
@@ -58,7 +60,7 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI32(2, GetEncoding(encoding));
         writer.WriteFieldI32(3, GetEncoding(EncodingKind.Rle));
         writer.WriteFieldI32(4, GetEncoding(EncodingKind.Rle));
-        WriteStatistics(ref writer, 5, statistics);
+        WriteStatistics(ref writer, 5, statistics, writeLegacyBinaryStatistics);
         writer.EndStruct(previousData);
 
         writer.EndStruct(previous);
@@ -798,7 +800,7 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI64(9, metadata.DataPageOffset);
         if (metadata.HasDictionaryPage)
             writer.WriteFieldI64(11, metadata.DictionaryPageOffset);
-        WriteStatistics(ref writer, 12, metadata.Statistics);
+        WriteStatistics(ref writer, 12, metadata.Statistics, HasSignedBinaryStatisticsOrder(column));
         if (metadata.BloomFilterLength > 0)
         {
             writer.WriteFieldI64(14, metadata.BloomFilterOffset);
@@ -867,17 +869,25 @@ static class ParquetMetadataThriftWriter
     static long GetColumnChunkStartOffset(in ColumnChunkMetadata metadata)
         => metadata.HasDictionaryPage ? metadata.DictionaryPageOffset : metadata.DataPageOffset;
 
-    static void WriteStatistics(ref CompactWriter writer, int fieldId, in ColumnStatistics statistics)
+    // Most binary types sort as unsigned bytes. DECIMAL is signed, even when physically binary.
+    internal static bool HasSignedBinaryStatisticsOrder(Column column)
+        => column.LogicalType is LogicalType.Decimal;
+
+    static void WriteStatistics(ref CompactWriter writer, int fieldId, in ColumnStatistics statistics,
+        bool writeLegacyBinaryStatistics)
     {
         if (!statistics.HasStatistics)
             return;
 
         writer.WriteFieldHeader(fieldId, CompactType.Struct);
         var previous = writer.BeginStruct();
-        var writeLegacyMinMax = statistics.ValueKind is not
-            (ColumnStatistics.ColumnStatisticsValueKind.None or
-            ColumnStatistics.ColumnStatisticsValueKind.UInt32 or
-            ColumnStatistics.ColumnStatisticsValueKind.UInt64);
+        var writeLegacyMinMax = statistics.ValueKind switch
+        {
+            ColumnStatistics.ColumnStatisticsValueKind.None or ColumnStatistics.ColumnStatisticsValueKind.UInt32
+                or ColumnStatistics.ColumnStatisticsValueKind.UInt64 => false,
+            ColumnStatistics.ColumnStatisticsValueKind.Binary => writeLegacyBinaryStatistics,
+            _ => true
+        };
         if (writeLegacyMinMax)
         {
             WriteStatisticsValue(ref writer, 1, statistics, writeMax: true);
