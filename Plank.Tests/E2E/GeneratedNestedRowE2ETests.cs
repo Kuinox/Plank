@@ -155,6 +155,40 @@ internal sealed class GeneratedNestedRowE2ETests
     }
 
     [Test]
+    [Arguments(false, true)]
+    [Arguments(true, false)]
+    public void StrictGeneratedReaderRejectsNestedRepetitionChanges(bool optionalList, bool optionalElement)
+    {
+        var element = optionalElement
+            ? ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32)
+            : ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int32);
+        var schema = new Plank.Schema.ParquetSchema([
+            ColumnDefinition.List("Values", element, optionalList
+                ? ParquetRepetition.Optional
+                : ParquetRepetition.Required)
+        ]);
+        using var output = new MemoryStream();
+        var writer = schema.CreateWriter(output, new ParquetWriterOptions { Compression = CompressionKind.None });
+        var rowGroup = writer.StartRowGroup();
+        if (optionalElement)
+        {
+            var column = rowGroup.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
+            column.Serialize([[1]]);
+            rowGroup.Write(column);
+        }
+        else
+        {
+            var column = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
+            column.Serialize([[1]]);
+            rowGroup.Write(column);
+        }
+        writer.CloseFile();
+
+        Assert.Throws<InvalidOperationException>(() =>
+            GeneratedListRowSchema.CreateRowReader(new MemoryStream(output.ToArray(), writable: false)));
+    }
+
+    [Test]
     [Arguments(ParquetSharp.ParquetDataPageVersion.V1)]
     [Arguments(ParquetSharp.ParquetDataPageVersion.V2)]
     public void GeneratedListReaderReadsParquetSharpPages(ParquetSharp.ParquetDataPageVersion pageVersion)

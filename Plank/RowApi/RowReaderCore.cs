@@ -485,7 +485,7 @@ public sealed class RowReaderCore : IDisposable
         for (var i = 0; i < _states.Length; i++)
         {
             var state = _states[i];
-            var ordinal = ResolveColumnOrdinal(fileSchema, state.Column, _schema.LeafPaths[i], state.Column.Name,
+            var ordinal = ResolveColumnOrdinal(fileSchema, state.Column, i, _schema.LeafPaths[i], state.Column.Name,
                 state.PropertyName, state.Projected);
             if (ordinal < 0)
             {
@@ -563,8 +563,8 @@ public sealed class RowReaderCore : IDisposable
             ? state.CurrentIndex
             : checked(state.CurrentIndex + _currentBatchOffset);
 
-    int ResolveColumnOrdinal(ParquetSchema fileSchema, Column expected, ImmutableArray<string> expectedPath,
-        string columnName, string propertyName, bool projected)
+    int ResolveColumnOrdinal(ParquetSchema fileSchema, Column expected, int expectedOrdinal,
+        ImmutableArray<string> expectedPath, string columnName, string propertyName, bool projected)
     {
         if (!projected)
             return -1;
@@ -580,6 +580,7 @@ public sealed class RowReaderCore : IDisposable
             ValidatePhysicalType(actual, expected, columnName);
             ValidateLogicalType(actual, expected, columnName);
             ValidateRepetition(actual, expected, columnName);
+            ValidateNestedSchema(fileSchema, i, expectedOrdinal, columnName);
             ValidateMaterializedType(actual, expected, columnName, propertyName);
             return i;
         }
@@ -630,6 +631,67 @@ public sealed class RowReaderCore : IDisposable
                 $"Column '{columnName}' became optional, but row API non-null materialization is not safe.");
         throw new InvalidOperationException(
             $"Column '{columnName}' has repetition {actualRepetition}, expected {expectedRepetition}.");
+    }
+
+    void ValidateNestedSchema(ParquetSchema fileSchema, int actualOrdinal, int expectedOrdinal, string columnName)
+    {
+        var actualPath = GetSchemaPath(fileSchema, actualOrdinal);
+        var expectedPath = GetSchemaPath(_schema, expectedOrdinal);
+        if (expectedPath.Count <= 1)
+            return;
+        if (actualPath.Count != expectedPath.Count)
+            throw new InvalidOperationException(
+                $"Column '{columnName}' has a different nested schema structure than the row API schema.");
+
+        for (var i = 0; i < actualPath.Count; i++)
+            if (actualPath[i] != expectedPath[i])
+                throw new InvalidOperationException(
+                    $"Column '{columnName}' has a different nested schema structure or repetition than the row API schema.");
+    }
+
+    static List<(NodeKind Kind, ParquetRepetition Repetition)> GetSchemaPath(ParquetSchema schema, int ordinal)
+    {
+        var leafPath = schema.LeafPaths[ordinal];
+        var result = new List<(NodeKind, ParquetRepetition)>(leafPath.Length);
+        for (var i = 0; i < schema.Definitions.Length; i++)
+        {
+            var definition = schema.Definitions[i];
+            if (definition.Name == leafPath[0] && TryCollectSchemaPath(definition, leafPath, 0, result))
+                return result;
+            result.Clear();
+        }
+        throw new InvalidOperationException("The projected leaf path was not found in its schema definitions.");
+    }
+
+    static bool TryCollectSchemaPath(ColumnDefinition node, ImmutableArray<string> leafPath, int pathIndex,
+        List<(NodeKind Kind, ParquetRepetition Repetition)> result)
+    {
+        result.Add((node.Kind, NormalizeRepetition(node.Repetition)));
+        switch (node.Kind)
+        {
+            case NodeKind.Leaf:
+                return pathIndex == leafPath.Length - 1;
+            case NodeKind.List:
+                return pathIndex + 2 < leafPath.Length && leafPath[pathIndex + 1] == "list" &&
+                    leafPath[pathIndex + 2] == "element" &&
+                    TryCollectSchemaPath(node.Children[0], leafPath, pathIndex + 2, result);
+            case NodeKind.Map:
+            {
+                if (pathIndex + 2 >= leafPath.Length || leafPath[pathIndex + 1] != "key_value")
+                    return false;
+                var childIndex = leafPath[pathIndex + 2] == "key" ? 0 :
+                    leafPath[pathIndex + 2] == "value" ? 1 : -1;
+                return (uint)childIndex < (uint)node.Children.Length &&
+                    TryCollectSchemaPath(node.Children[childIndex], leafPath, pathIndex + 2, result);
+            }
+            case NodeKind.Group:
+                for (var i = 0; i < node.Children.Length; i++)
+                    if (pathIndex + 1 < leafPath.Length && node.Children[i].Name == leafPath[pathIndex + 1])
+                        return TryCollectSchemaPath(node.Children[i], leafPath, pathIndex + 1, result);
+                return false;
+            default:
+                return false;
+        }
     }
 
     void ValidateMaterializedType(Column actual, Column expected, string columnName, string propertyName)
