@@ -8,10 +8,13 @@ readonly struct EncodedStatistics
     const byte HasDistinctCountFlag = 8;
     const byte MinimumExactFlag = 16;
     const byte MaximumExactFlag = 32;
+    const byte LegacyMinimumFlag = 64;
+    const byte LegacyMaximumFlag = 128;
 
     internal EncodedStatistics(int minimumOffset, int minimumLength, int maximumOffset, int maximumLength,
         long nullCount, long distinctCount, bool hasMinimum, bool hasMaximum, bool hasNullCount,
-        bool hasDistinctCount, bool minimumExact, bool maximumExact)
+        bool hasDistinctCount, bool minimumExact, bool maximumExact,
+        bool legacyMinimum = false, bool legacyMaximum = false)
     {
         MinimumOffset = minimumOffset;
         MinimumLength = minimumLength;
@@ -25,7 +28,9 @@ readonly struct EncodedStatistics
             (hasNullCount ? HasNullCountFlag : 0) |
             (hasDistinctCount ? HasDistinctCountFlag : 0) |
             (minimumExact ? MinimumExactFlag : 0) |
-            (maximumExact ? MaximumExactFlag : 0));
+            (maximumExact ? MaximumExactFlag : 0) |
+            (legacyMinimum ? LegacyMinimumFlag : 0) |
+            (legacyMaximum ? LegacyMaximumFlag : 0));
     }
 
     internal int MinimumOffset { get; }
@@ -59,6 +64,17 @@ readonly struct EncodedStatistics
 
     internal bool IsMaximumExact
         => HasMaximum && (Flags & MaximumExactFlag) != 0;
+
+    internal bool HasLegacyMinimum => (Flags & LegacyMinimumFlag) != 0;
+
+    internal bool HasLegacyMaximum => (Flags & LegacyMaximumFlag) != 0;
+
+    internal bool HasLegacyBounds => (Flags & (LegacyMinimumFlag | LegacyMaximumFlag)) != 0;
+
+    internal EncodedStatistics WithoutLegacyBounds()
+        => new(MinimumOffset, MinimumLength, MaximumOffset, MaximumLength, NullCount, DistinctCount,
+            HasMinimum && !HasLegacyMinimum, HasMaximum && !HasLegacyMaximum, HasNullCount,
+            HasDistinctCount, IsMinimumExact, IsMaximumExact);
 
     internal bool HasValues
         => HasMinimum || HasMaximum || HasNullCount || HasDistinctCount;
