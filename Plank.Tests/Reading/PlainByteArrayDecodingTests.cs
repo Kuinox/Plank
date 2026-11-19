@@ -108,14 +108,10 @@ internal sealed class PlainByteArrayDecodingTests
         {
             Assert.Throws<CorruptParquetException>(() =>
             {
-                if (optional)
-                    ColumnChunkReader.TryDecodeNullablePageIntoNative(
-                        header, payload, schema.LeafColumns[0].Column, valueCount, ref buffers,
-                        DefaultParquetBufferPool.Shared, out _);
-                else
-                    ColumnChunkReader.TryDecodeRequiredPageIntoNative(
-                        header, payload, schema.LeafColumns[0].Column, valueCount, ref buffers,
-                        DefaultParquetBufferPool.Shared, out _);
+                var page = default(ColumnChunkReader.EncodedPageState);
+                ColumnChunkReader.TryStartEncodedPageBatches(
+                    header, payload, default, schema.LeafColumns[0].Column, valueCount, ref buffers,
+                    DefaultParquetBufferPool.Shared, ref page, out _);
             });
         }
         finally
