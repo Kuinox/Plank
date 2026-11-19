@@ -1022,6 +1022,11 @@ static class NestedParquetRowEmitter
     static void AppendMaterializers(StringBuilder builder, GeneratedMemberNames names, Model model)
     {
         if (model.Leaves.Any(static leaf => leaf.MaxRepetitionLevel > 0 &&
+                leaf.Node.Scalar!.NonNullableUserType == "string"))
+            builder.AppendLine("    static readonly global::System.Text.UTF8Encoding " +
+                names.Root("GeneratedStrictUtf8") + " = new(false, true);");
+
+        if (model.Leaves.Any(static leaf => leaf.MaxRepetitionLevel > 0 &&
                 leaf.Node.Scalar!.NonNullableUserType is "global::System.DateTime" or
                     "global::System.DateTimeOffset"))
         {
@@ -1441,7 +1446,7 @@ static class NestedParquetRowEmitter
         {
             "byte" or "ushort" or "uint" or "ulong" =>
                 ConvertUnsignedInteger(leaf, expression, scalar.StorageType),
-            "string" => $"{expression} is null ? null! : global::System.Text.Encoding.UTF8.GetBytes({expression}!)",
+            "string" => $"{expression} is null ? null! : {names.Root("GeneratedStrictUtf8")}.GetBytes({expression}!)",
             "global::System.ReadOnlyMemory<byte>" => scalar.UserType.EndsWith("?", StringComparison.Ordinal)
                 ? $"{expression}.HasValue ? {expression}!.Value.ToArray() : null!"
                 : $"{expression}.ToArray()",

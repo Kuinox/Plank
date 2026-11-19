@@ -479,12 +479,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 $"Converter physical CLR type '{typeof(TPhysical)}' is not supported for column '{_column.Name}'.");
     }
 
+    static readonly System.Text.UTF8Encoding StrictUtf8 = new(false, true);
+
     void SerializeStrings(ReadOnlySpan<string> values)
     {
         var encoded = new byte[values.Length][];
         for (var i = 0; i < values.Length; i++)
             if (values[i] is { } value)
-                encoded[i] = System.Text.Encoding.UTF8.GetBytes(value);
+                encoded[i] = StrictUtf8.GetBytes(value);
 
         if (_column.Options.Repetition == ParquetRepetition.Optional)
             SerializeOptionalReference(encoded);
