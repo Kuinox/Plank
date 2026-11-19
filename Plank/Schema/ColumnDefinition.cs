@@ -249,11 +249,6 @@ public sealed record ColumnDefinition
                 $"Logical type '{nameof(LogicalType.Variant)}' requires a group for column '{name}'.",
                 nameof(logicalType));
 
-        if (logicalType is LogicalType.Unknown && options.Repetition != ParquetRepetition.Optional)
-            return (
-                $"Logical type '{nameof(LogicalType.Unknown)}' requires an optional column because all values must be null for column '{name}'.",
-                nameof(logicalType));
-
         if (logicalType is not LogicalType.Decimal decimalType)
             return null;
         if (decimalType.Precision <= 0)
