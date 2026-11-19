@@ -60,7 +60,8 @@ public sealed class ParquetFileMerger
                 _writer = new ParquetWriter(existingSource, destination, schema, new ParquetAppendOptions
                 {
                     WriterOptions = options.WriterOptions,
-                    PreserveExistingMetadata = options.PreserveFirstFileMetadata
+                    PreserveExistingMetadata = options.PreserveFirstFileMetadata,
+                    DeferFooterTruncation = true
                 });
             }
         }
