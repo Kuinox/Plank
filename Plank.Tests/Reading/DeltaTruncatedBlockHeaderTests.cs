@@ -50,7 +50,7 @@ internal sealed class DeltaTruncatedBlockHeaderTests
         });
         byte[] encoded = [0x80, 1, 4, 5, 0, 0xad, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0];
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(encoded, new int[5]));
-        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNullableInt32(encoded, new int?[5], true));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoderTests.ReadNullableInt32Batched(encoded, new int?[5], true));
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNarrowInt32<byte>(encoded, new byte[5]));
     }
 }
