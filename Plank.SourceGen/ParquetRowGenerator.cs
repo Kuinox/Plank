@@ -184,6 +184,18 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             return;
         }
 
+        foreach (var property in schemaType.GetMembers().OfType<IPropertySymbol>())
+        {
+            if (property.IsStatic || property.IsIndexer || property.ExplicitInterfaceImplementations.IsEmpty)
+                continue;
+
+            context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
+                property.Locations.FirstOrDefault(),
+                $"Schema property '{property.Name}' explicitly implements an interface and cannot be a column. " +
+                "Use an implicitly implemented property or a separate schema DTO."));
+            return;
+        }
+
         if (NestedParquetRowEmitter.TryEmit(context, schemaType, compilation))
             return;
 
