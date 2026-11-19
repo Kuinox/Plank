@@ -184,6 +184,8 @@ public sealed class ParquetWriter : IDisposable
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(stream);
+        if (_rowGroupOpen)
+            throw new InvalidOperationException("Cannot reset while a row group is open.");
         if (_destination is StreamParquetSource streamSource)
         {
             if (ReferenceEquals(stream, streamSource.Stream))
