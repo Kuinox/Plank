@@ -212,10 +212,7 @@ public sealed record ParquetSchema
                     var repetition = nextRepeatedLevel > 0
                         ? ParquetRepetition.Repeated
                         : nextDefinitionLevel > 0 ? ParquetRepetition.Optional : ParquetRepetition.Required;
-                    var options = node.Options ?? ColumnOptions.Default;
-                    if (options.Repetition != repetition)
-                        options = new ColumnOptions(repetition, options.Encodings, options.TypeLength,
-                            options.Compression, options.CompressionLevel, options.BloomFilter);
+                    var options = (node.Options ?? ColumnOptions.Default).WithRepetition(repetition);
                     var path = ImmutableArray.Create<string>(CollectionsMarshal.AsSpan(pathBuffer));
                     var columnName = string.Join(".", path);
                     // Every leaf in the schema is constructed here, so this is the one place that has to decide
