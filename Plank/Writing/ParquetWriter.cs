@@ -186,23 +186,37 @@ public sealed class ParquetWriter : IDisposable
         ArgumentNullException.ThrowIfNull(stream);
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot reset while a row group is open.");
-        if (_destination is StreamParquetSource streamSource)
+        var streamSource = _destination as StreamParquetSource;
+        if (ReferenceEquals(stream, streamSource?.Stream))
         {
-            if (ReferenceEquals(stream, streamSource.Stream))
-            {
-                Reset(_destination);
-                return;
-            }
-
-            CloseCurrentFile();
-            streamSource.Reset(stream);
-            if (stream.CanSeek)
-                streamSource.SetLength(0);
-            OpenFile(_destination);
+            Reset(_destination);
             return;
         }
 
-        Reset(new StreamParquetSource(stream));
+        CloseCurrentFile();
+        try
+        {
+            if (streamSource is null)
+                streamSource = new StreamParquetSource(stream);
+            else
+            {
+                streamSource.Reset(stream);
+                if (stream.CanSeek)
+                    streamSource.SetLength(0);
+            }
+
+            OpenFile(streamSource);
+        }
+        catch
+        {
+            // Ownership has transferred, even when positioning, truncating, or writing the header fails.
+            _fileClosed = true;
+            if (streamSource is not null && ReferenceEquals(stream, streamSource.Stream))
+                streamSource.Close();
+            else
+                stream.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Starts a new file on a caller-owned destination while retaining the writer's reusable buffers.</summary>
