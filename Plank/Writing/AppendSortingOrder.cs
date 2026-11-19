@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Numerics;
 using Plank.Schema;
 using Plank.Writing.Encoding;
 using TextEncoding = System.Text.Encoding;
@@ -139,8 +138,7 @@ sealed class AppendSortingOrder(ParquetSortingColumn[] columns)
         if (column.LogicalType is LogicalType.Timestamp)
             return left.Length == 12 && right.Length == 12 ? ColumnStatistics.CompareTimestamp96(left, right) : null;
         if (column.LogicalType is LogicalType.Decimal)
-            return new BigInteger(left, isUnsigned: false, isBigEndian: true)
-                .CompareTo(new BigInteger(right, isUnsigned: false, isBigEndian: true));
+            return ColumnStatistics.CompareDecimalBytes(left, right);
         if (column.LogicalType is LogicalType.Float16)
             return left.Length == 2 && right.Length == 2
                 ? CompareFloating((double)BitConverter.UInt16BitsToHalf(BinaryPrimitives.ReadUInt16LittleEndian(left)),

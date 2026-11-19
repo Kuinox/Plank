@@ -1505,7 +1505,7 @@ internal readonly struct ColumnStatistics
             .CompareTo(BinaryPrimitives.ReadUInt64LittleEndian(right));
     }
 
-    static int CompareDecimalBytes(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
+    internal static int CompareDecimalBytes(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
         if (left.IsEmpty)
             return right.IsEmpty ? 0 : CompareZeroToDecimal(right);
