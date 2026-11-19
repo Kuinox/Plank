@@ -42,6 +42,13 @@ static class PageHeaderProbe
             }
             length = wanted;
             probes++;
+            // Exact probing parses many prefixes of one header; measure those without the parser's truncation
+            // exception and parse once the header is whole. A malformed prefix, or one asking for more than the
+            // boundary allows, goes to the parser too, so errors read as before.
+            if (initialLength < CursorInitialLength &&
+                CompactStructLength.Measure(bytes, out _, out missingBytes) == CompactStructLength.Result.NeedMore &&
+                missingBytes <= maximumLength - length)
+                continue;
             if (PageHeaderReader.TryRead(bytes, maxUncompressedPageSize, out var header, out missingBytes))
                 return header;
         }
