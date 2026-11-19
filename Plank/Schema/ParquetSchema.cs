@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 using Plank.Reading;
 using Plank.Reading.Logical;
 using Plank.Writing;
@@ -215,7 +216,7 @@ public sealed record ParquetSchema
                     if (options.Repetition != repetition)
                         options = new ColumnOptions(repetition, options.Encodings, options.TypeLength,
                             options.Compression, options.CompressionLevel, options.BloomFilter);
-                    var path = pathBuffer.ToArray().ToImmutableArray();
+                    var path = ImmutableArray.Create<string>(CollectionsMarshal.AsSpan(pathBuffer));
                     var columnName = string.Join(".", path);
                     // Every leaf in the schema is constructed here, so this is the one place that has to decide
                     // whether the logical/physical pair is acceptable. Reporting it as a value rather than letting
