@@ -177,6 +177,26 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             return;
         }
 
+        if (schemaType.IsFileLocal || schemaType.DeclaringSyntaxReferences.Any(static reference =>
+                reference.GetSyntax() is TypeDeclarationSyntax declaration &&
+                !declaration.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PartialKeyword)))
+        {
+            var reason = schemaType.IsFileLocal ? "is file-local" : "is not partial";
+            context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
+                schemaType.Locations.FirstOrDefault(),
+                $"Schema type '{schemaType.Name}' {reason}. Declare a non-file-local partial class or record."));
+            return;
+        }
+
+        if (compilation is Microsoft.CodeAnalysis.CSharp.CSharpCompilation csharp &&
+            csharp.LanguageVersion < Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp12)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
+                schemaType.Locations.FirstOrDefault(),
+                $"Schema type '{schemaType.Name}' requires C# 12 or later for generated APIs. Set LangVersion to 12.0 or later."));
+            return;
+        }
+
         if (!ValidateDtoInheritance(schemaType, out var inheritanceError))
         {
             context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
