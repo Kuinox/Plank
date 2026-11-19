@@ -520,7 +520,7 @@ static class ParquetMetadataThriftWriter
                 writer.WriteFieldI32(6, (int)ConvertedType.Date);
                 WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
-                WriteDateLogicalType(ref writer);
+                WriteEmptyLogicalType(ref writer, 6);
                 return;
             case LogicalType.Time time:
                 if (time.Unit == TimeUnit.Millis)
@@ -529,7 +529,7 @@ static class ParquetMetadataThriftWriter
                     writer.WriteFieldI32(6, (int)ConvertedType.TimeMicros);
                 WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
-                WriteTimeLogicalType(ref writer, time.IsAdjustedToUtc, time.Unit);
+                WriteTemporalLogicalType(ref writer, 7, time.IsAdjustedToUtc, time.Unit);
                 return;
             case LogicalType.Timestamp timestamp:
                 if (timestamp.Unit == TimeUnit.Millis)
@@ -538,7 +538,7 @@ static class ParquetMetadataThriftWriter
                     writer.WriteFieldI32(6, (int)ConvertedType.TimestampMicros);
                 WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
-                WriteTimestampLogicalType(ref writer, timestamp.IsAdjustedToUtc, timestamp.Unit);
+                WriteTemporalLogicalType(ref writer, 8, timestamp.IsAdjustedToUtc, timestamp.Unit);
                 return;
             case LogicalType.Int integer:
                 writer.WriteFieldI32(6, GetConvertedType(integer));
@@ -550,13 +550,13 @@ static class ParquetMetadataThriftWriter
                 writer.WriteFieldI32(6, (int)ConvertedType.Utf8);
                 WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
-                WriteStringLogicalType(ref writer);
+                WriteEmptyLogicalType(ref writer, 1);
                 return;
             case LogicalType.Json:
                 writer.WriteFieldI32(6, (int)ConvertedType.Json);
                 WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
-                WriteJsonLogicalType(ref writer);
+                WriteEmptyLogicalType(ref writer, 12);
                 return;
             case LogicalType.Bson:
                 writer.WriteFieldI32(6, (int)ConvertedType.Bson);
@@ -573,7 +573,7 @@ static class ParquetMetadataThriftWriter
             case LogicalType.Uuid:
                 WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
-                WriteUuidLogicalType(ref writer);
+                WriteEmptyLogicalType(ref writer, 14);
                 return;
             case LogicalType.Float16:
                 WriteSchemaFieldId(ref writer, fieldId);
@@ -623,63 +623,15 @@ static class ParquetMetadataThriftWriter
             writer.WriteFieldI32(9, value);
     }
 
-    static void WriteDateLogicalType(ref CompactWriter writer)
+    static void WriteTemporalLogicalType(ref CompactWriter writer, int fieldId, bool isAdjustedToUtc, TimeUnit unit)
     {
         var previous = writer.BeginStruct();
-        writer.WriteFieldHeader(6, CompactType.Struct);
-        var previousDate = writer.BeginStruct();
-        writer.EndStruct(previousDate);
-        writer.EndStruct(previous);
-    }
-
-    static void WriteTimeLogicalType(ref CompactWriter writer, bool isAdjustedToUtc, TimeUnit unit)
-    {
-        var previous = writer.BeginStruct();
-        writer.WriteFieldHeader(7, CompactType.Struct);
-        var previousTime = writer.BeginStruct();
+        writer.WriteFieldHeader(fieldId, CompactType.Struct);
+        var previousValue = writer.BeginStruct();
         writer.WriteFieldBool(1, isAdjustedToUtc);
         writer.WriteFieldHeader(2, CompactType.Struct);
         WriteTimeUnit(ref writer, unit);
-        writer.EndStruct(previousTime);
-        writer.EndStruct(previous);
-    }
-
-    static void WriteTimestampLogicalType(ref CompactWriter writer, bool isAdjustedToUtc, TimeUnit unit)
-    {
-        var previous = writer.BeginStruct();
-        writer.WriteFieldHeader(8, CompactType.Struct);
-        var previousTimestamp = writer.BeginStruct();
-        writer.WriteFieldBool(1, isAdjustedToUtc);
-        writer.WriteFieldHeader(2, CompactType.Struct);
-        WriteTimeUnit(ref writer, unit);
-        writer.EndStruct(previousTimestamp);
-        writer.EndStruct(previous);
-    }
-
-    static void WriteStringLogicalType(ref CompactWriter writer)
-    {
-        var previous = writer.BeginStruct();
-        writer.WriteFieldHeader(1, CompactType.Struct);
-        var previousString = writer.BeginStruct();
-        writer.EndStruct(previousString);
-        writer.EndStruct(previous);
-    }
-
-    static void WriteJsonLogicalType(ref CompactWriter writer)
-    {
-        var previous = writer.BeginStruct();
-        writer.WriteFieldHeader(12, CompactType.Struct);
-        var previousJson = writer.BeginStruct();
-        writer.EndStruct(previousJson);
-        writer.EndStruct(previous);
-    }
-
-    static void WriteUuidLogicalType(ref CompactWriter writer)
-    {
-        var previous = writer.BeginStruct();
-        writer.WriteFieldHeader(14, CompactType.Struct);
-        var previousUuid = writer.BeginStruct();
-        writer.EndStruct(previousUuid);
+        writer.EndStruct(previousValue);
         writer.EndStruct(previous);
     }
 
