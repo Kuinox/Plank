@@ -43,6 +43,68 @@ internal static class GeneratorTestHarness
                 .ToImmutableArray());
     }
 
+    internal static GeneratorDriverRunResult RunAfterUnrelatedEdit(params SourceFile[] sources)
+    {
+        var syntaxTrees = sources.Select(source =>
+                CSharpSyntaxTree.ParseText(source.Text, ParseOptions, source.Path, Encoding.UTF8))
+            .ToList();
+        var unrelatedTree = CSharpSyntaxTree.ParseText(
+            "internal static class Unrelated { internal const int Value = 1; }",
+            ParseOptions, "Unrelated.cs", Encoding.UTF8);
+        syntaxTrees.Add(unrelatedTree);
+        var compilation = CSharpCompilation.Create(
+            "GeneratorIncrementalTests",
+            syntaxTrees,
+            MetadataReferences,
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                allowUnsafe: true,
+                nullableContextOptions: NullableContextOptions.Enable));
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(
+            [new global::Plank.SourceGen.ParquetRowGenerator().AsSourceGenerator()],
+            parseOptions: ParseOptions,
+            driverOptions: new GeneratorDriverOptions(
+                IncrementalGeneratorOutputKind.None, trackIncrementalGeneratorSteps: true));
+
+        driver = driver.RunGenerators(compilation);
+        var editedTree = CSharpSyntaxTree.ParseText(
+            "internal static class Unrelated { internal const int Value = 2; }",
+            ParseOptions, "Unrelated.cs", Encoding.UTF8);
+        compilation = compilation.ReplaceSyntaxTree(unrelatedTree, editedTree);
+        driver = driver.RunGenerators(compilation);
+        return driver.GetRunResult();
+    }
+
+    internal static GeneratorDriverRunResult RunAfterSchemaEdit(SourceFile initialSource,
+        SourceFile updatedSource, params SourceFile[] unchangedSources)
+    {
+        var initialTree = CSharpSyntaxTree.ParseText(
+            initialSource.Text, ParseOptions, initialSource.Path, Encoding.UTF8);
+        var syntaxTrees = unchangedSources
+            .Select(source => CSharpSyntaxTree.ParseText(source.Text, ParseOptions, source.Path, Encoding.UTF8))
+            .Prepend(initialTree);
+        var compilation = CSharpCompilation.Create(
+            "GeneratorIncrementalTests",
+            syntaxTrees,
+            MetadataReferences,
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                allowUnsafe: true,
+                nullableContextOptions: NullableContextOptions.Enable));
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(
+            [new global::Plank.SourceGen.ParquetRowGenerator().AsSourceGenerator()],
+            parseOptions: ParseOptions,
+            driverOptions: new GeneratorDriverOptions(
+                IncrementalGeneratorOutputKind.None, trackIncrementalGeneratorSteps: true));
+
+        driver = driver.RunGenerators(compilation);
+        var updatedTree = CSharpSyntaxTree.ParseText(
+            updatedSource.Text, ParseOptions, updatedSource.Path, Encoding.UTF8);
+        compilation = compilation.ReplaceSyntaxTree(initialTree, updatedTree);
+        driver = driver.RunGenerators(compilation);
+        return driver.GetRunResult();
+    }
+
     static ImmutableArray<MetadataReference> CreateMetadataReferences()
     {
         var trustedPlatformAssemblies = (string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")

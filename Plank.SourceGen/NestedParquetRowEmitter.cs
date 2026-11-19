@@ -11,44 +11,43 @@ static class NestedParquetRowEmitter
             SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers |
             SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier);
 
-    internal static bool TryEmit(SourceProductionContext context, INamedTypeSymbol schemaType, Compilation compilation)
+    internal static bool TryGenerate(INamedTypeSymbol schemaType, Compilation compilation, Location? location,
+        out GenerationResult result)
     {
         if (!RequiresNestedEmitter(schemaType))
+        {
+            result = null!;
             return false;
+        }
 
         if (!AllowsAllocatingValues(schemaType))
         {
-            context.ReportDiagnostic(Diagnostic.Create(ParquetRowGenerator.AllocatingValueNotAllowed,
-                schemaType.Locations.FirstOrDefault(),
+            result = GenerationResult.Diagnostic(ParquetRowGenerator.AllocatingValueNotAllowed, location,
                 $"Schema '{schemaType.Name}' contains a collection or nested object, which allocates during row materialization. " +
-                "Set [ParquetSchema(AllowAllocatingValues = true)] to opt in."));
+                "Set [ParquetSchema(AllowAllocatingValues = true)] to opt in.");
             return true;
         }
 
         if (!TryCreateModel(schemaType, out var model, out var error))
         {
-            context.ReportDiagnostic(Diagnostic.Create(ParquetRowGenerator.UnsupportedSchemaDeclaration,
-                schemaType.Locations.FirstOrDefault(), error));
+            result = GenerationResult.Diagnostic(ParquetRowGenerator.UnsupportedSchemaDeclaration, location, error);
             return true;
         }
 
         if (!ValidateNestedSetters(model.Roots, schemaType, compilation, out error))
         {
-            context.ReportDiagnostic(Diagnostic.Create(ParquetRowGenerator.UnsupportedSchemaDeclaration,
-                schemaType.Locations.FirstOrDefault(), error));
+            result = GenerationResult.Diagnostic(ParquetRowGenerator.UnsupportedSchemaDeclaration, location, error);
             return true;
         }
 
-        var hasDiagnostics = false;
+        var diagnostics = ImmutableArray.CreateBuilder<GenerationDiagnostic>();
         foreach (var leaf in model.Leaves)
             foreach (var diagnostic in ParquetRowGenerator.ValidateSchemaColumns([leaf.Node.Scalar!.Column]))
-            {
-                context.ReportDiagnostic(Diagnostic.Create(diagnostic.Descriptor,
-                    schemaType.Locations.FirstOrDefault(), diagnostic.Message));
-                hasDiagnostics = true;
-            }
-        if (!hasDiagnostics)
-            context.AddSource(GetHintName(schemaType), BuildSource(schemaType, model));
+                diagnostics.Add(GenerationDiagnostic.Create(diagnostic.Descriptor, location, diagnostic.Message));
+
+        result = diagnostics.Count == 0
+            ? GenerationResult.Source(GetHintName(schemaType), BuildSource(schemaType, model))
+            : GenerationResult.Diagnostics(diagnostics.ToImmutable());
         return true;
     }
 

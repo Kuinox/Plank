@@ -153,51 +153,46 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        var schemaTypes = context.SyntaxProvider.ForAttributeWithMetadataName(
-            fullyQualifiedMetadataName: "Plank.Schema.ParquetSchemaAttribute",
-            predicate: static (node, _) => node is ClassDeclarationSyntax or RecordDeclarationSyntax,
-            transform: static (ctx, _) => (Type: (INamedTypeSymbol)ctx.TargetSymbol,
-                Compilation: ctx.SemanticModel.Compilation));
+        var schemaResults = context.SyntaxProvider.ForAttributeWithMetadataName(
+                fullyQualifiedMetadataName: "Plank.Schema.ParquetSchemaAttribute",
+                predicate: static (node, _) => node is ClassDeclarationSyntax or RecordDeclarationSyntax,
+                transform: static (ctx, _) => Generate(
+                    (INamedTypeSymbol)ctx.TargetSymbol, ctx.SemanticModel.Compilation))
+            .WithTrackingName("SchemaResults");
 
-        context.RegisterSourceOutput(schemaTypes, static (sourceContext, schema) =>
-            Emit(sourceContext, schema.Type, schema.Compilation));
+        context.RegisterSourceOutput(schemaResults, static (sourceContext, result) => result.Emit(sourceContext));
     }
 
-    static void Emit(SourceProductionContext context, INamedTypeSymbol schemaType, Compilation compilation)
+    static GenerationResult Generate(INamedTypeSymbol schemaType, Compilation compilation)
     {
+        var location = schemaType.Locations.FirstOrDefault();
         if (schemaType.TypeKind != TypeKind.Class || schemaType.Arity != 0 || schemaType.ContainingType is not null)
         {
             if (schemaType.TypeKind != TypeKind.Class || schemaType.Arity != 0)
-                context.ReportDiagnostic(Diagnostic.Create(InvalidTarget, schemaType.Locations.FirstOrDefault(), schemaType.Name));
+                return GenerationResult.Diagnostic(InvalidTarget, location, schemaType.Name);
             else
-                context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
-                    schemaType.Locations.FirstOrDefault(),
+                return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration, location,
                     $"Schema type '{schemaType.ToDisplayString()}' is declared inside another type. " +
-                    "Declare [ParquetSchema] classes directly in a namespace or the global namespace."));
-            return;
+                    "Declare [ParquetSchema] classes directly in a namespace or the global namespace.");
         }
 
         if (!ValidateDtoInheritance(schemaType, out var inheritanceError))
         {
-            context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
-                schemaType.Locations.FirstOrDefault(), inheritanceError));
-            return;
+            return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration, location, inheritanceError);
         }
 
-        if (NestedParquetRowEmitter.TryEmit(context, schemaType, compilation))
-            return;
+        if (NestedParquetRowEmitter.TryGenerate(schemaType, compilation, location, out var nestedResult))
+            return nestedResult;
 
         if (!TryExtractColumns(schemaType, out var columns, out var extractError))
         {
             if (extractError.Length == 0)
             {
-                context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration, schemaType.Locations.FirstOrDefault(),
-                    $"Schema type '{schemaType.Name}' does not declare any supported non-static properties."));
-                return;
+                return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration, location,
+                    $"Schema type '{schemaType.Name}' does not declare any supported non-static properties.");
             }
 
-            context.ReportDiagnostic(Diagnostic.Create(InvalidTypeHint, schemaType.Locations.FirstOrDefault(), extractError));
-            return;
+            return GenerationResult.Diagnostic(InvalidTypeHint, location, extractError);
         }
 
         if (!AllowsAllocatingValues(schemaType))
@@ -207,40 +202,35 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (!IsStringClr(column.ClrTypeName))
                     continue;
 
-                context.ReportDiagnostic(Diagnostic.Create(AllocatingValueNotAllowed,
-                    schemaType.Locations.FirstOrDefault(),
+                return GenerationResult.Diagnostic(AllocatingValueNotAllowed, location,
                     $"Column '{column.Name}' uses string, which allocates during UTF-8 conversion. " +
-                    "Set [ParquetSchema(AllowAllocatingValues = true)] to opt in."));
-                return;
+                    "Set [ParquetSchema(AllowAllocatingValues = true)] to opt in.");
             }
         }
 
         var schemaDiagnostics = ValidateSchemaColumns(columns);
-        for (var i = 0; i < schemaDiagnostics.Length; i++)
-            context.ReportDiagnostic(Diagnostic.Create(schemaDiagnostics[i].Descriptor,
-                schemaType.Locations.FirstOrDefault(), schemaDiagnostics[i].Message));
         if (schemaDiagnostics.Length > 0)
-            return;
+            return GenerationResult.Diagnostics(schemaDiagnostics.Select(diagnostic =>
+                GenerationDiagnostic.Create(diagnostic.Descriptor, location, diagnostic.Message)));
 
         var mappedColumns = ImmutableArray.CreateBuilder<MappedColumn>(columns.Length);
         foreach (var column in columns)
         {
             if (!TryMapColumn(column, out var mapped))
             {
-                context.ReportDiagnostic(Diagnostic.Create(
+                return GenerationResult.Diagnostic(
                     UnsupportedPropertyType,
-                    schemaType.Locations.FirstOrDefault(),
+                    location,
                     column.Name,
                     schemaType.Name,
                     column.Repetition,
-                    column.PhysicalType));
-                return;
+                    column.PhysicalType);
             }
             mappedColumns.Add(mapped);
         }
 
         var source = BuildSource(schemaType, columns, mappedColumns.ToImmutable());
-        context.AddSource(GetHintName(schemaType), source);
+        return GenerationResult.Source(GetHintName(schemaType), source);
     }
 
     internal static bool ValidateDtoInheritance(INamedTypeSymbol type, out string error)
