@@ -54,7 +54,7 @@ internal sealed class DeltaInt32FirstValueTests
             Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.StartBatch(payload, 1, isInt64: false));
             Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(payload, 1));
             // The same VLQ is valid for an INT64 first value.
-            _ = DeltaBinaryPackedDecoder.ReadInt64(payload);
+            _ = DeltaBinaryPackedDecoder.ReadInt64(payload, new long[1]);
             _ = DeltaBinaryPackedDecoder.StartBatch(payload, 1, isInt64: true);
 
             payload[3] = 0; // zero-value streams still consume the first-value field
