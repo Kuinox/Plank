@@ -321,8 +321,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         for (var i = 0; i < schemaColumns.Length; i++)
         {
             var schemaColumn = schemaColumns[i];
-            builder.Append("        global::Plank.Schema.ColumnDefinition.Leaf(\"").Append(Escape(schemaColumn.Name))
-                .Append("\", global::Plank.Schema.ParquetPhysicalType.").Append(schemaColumn.PhysicalType)
+            builder.Append("        global::Plank.Schema.ColumnDefinition.Leaf(").Append(StringLiteral(schemaColumn.Name))
+                .Append(", global::Plank.Schema.ParquetPhysicalType.").Append(schemaColumn.PhysicalType)
                 .Append(", ").Append(GetColumnOptionsExpression(schemaColumn));
             if (schemaColumn.LogicalType is { } logicalType)
                 builder.Append(", ").Append(GetLogicalTypeExpression(logicalType));
@@ -487,9 +487,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        internal " + names.Root("PipelineWriter") + "(global::Plank.Writing.IParquetWriteSource file, global::Plank.Writing.ParquetFilePath filePath, global::Plank.Writing.ParquetWriterOptions options)");
         builder.Append("            : base(file, filePath, ").Append(names.Root("Schema"))
-            .Append(", options.RowApiMaxParallelism, null, options, options.RowApiInitialRowCapacity, \"Plank")
-            .Append(Escape(schemaType.Name))
-            .AppendLine("RowApiWorker\")");
+            .Append(", options.RowApiMaxParallelism, null, options, options.RowApiInitialRowCapacity, ")
+            .Append(StringLiteral($"Plank{schemaType.Name}RowApiWorker")).AppendLine(")");
         builder.AppendLine("        {");
         if (rowSizePlan.IsFixed)
             builder.Append("            " + names.Helper("_rowsPerGroup") + " = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
@@ -507,9 +506,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        internal " + names.Root("PipelineWriter") + "(global::System.IO.Stream stream, uint maxParallelism, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
         builder.Append("            : base(stream, ").Append(names.Root("Schema"))
-            .Append(", maxParallelism, onFlush, options, options.RowApiInitialRowCapacity, \"Plank")
-            .Append(Escape(schemaType.Name))
-            .AppendLine("RowApiWorker\")");
+            .Append(", maxParallelism, onFlush, options, options.RowApiInitialRowCapacity, ")
+            .Append(StringLiteral($"Plank{schemaType.Name}RowApiWorker")).AppendLine(")");
         builder.AppendLine("        {");
         if (rowSizePlan.IsFixed)
             builder.Append("            " + names.Helper("_rowsPerGroup") + " = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
@@ -767,8 +765,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append("    static readonly global::Plank.RowApi.RowApiColumnDescriptor<")
                 .Append(columns[i].ClrTypeName).Append("> ")
                 .Append(names.Helper(GetRowApiColumnFieldName(columns[i].PropertyName)))
-                .Append(" = new(\"").Append(Escape(columns[i].PropertyName))
-                .Append("\", ").Append(schemaMemberName).Append(".LeafColumns[").Append(i).AppendLine("]);");
+                .Append(" = new(").Append(StringLiteral(columns[i].PropertyName))
+                .Append(", ").Append(schemaMemberName).Append(".LeafColumns[").Append(i).AppendLine("]);");
         }
         builder.AppendLine();
         builder.AppendLine("    static readonly global::Plank.RowApi.RowApiColumnDescriptor[] " + names.Root("s_rowApiColumns") + " = [");
@@ -1112,8 +1110,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static bool IsAdditionalFixedBinaryMapping(SchemaColumn column, string clrType)
         => column.LogicalType?.Kind is "Float16" or "Interval" && IsUtf8ByteArrayClr(clrType);
 
-    static string Escape(string value)
-        => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: false);
+    internal static string StringLiteral(string value)
+        => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: true);
 
     static string EscapeIdentifier(string value)
         => Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(value) ==
