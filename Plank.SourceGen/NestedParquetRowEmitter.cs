@@ -162,6 +162,13 @@ static class NestedParquetRowEmitter
     static bool TryCreatePropertyNode(IPropertySymbol property, HashSet<INamedTypeSymbol> activeTypes,
         out Node node, out string error)
     {
+        if (property.GetMethod is null)
+        {
+            node = default!;
+            error = ParquetRowGenerator.MissingGetterMessage(property);
+            return false;
+        }
+
         var parquetName = property.Name;
         if (!TryReadNameOverride(property, ref parquetName, out error))
         {

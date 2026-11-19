@@ -199,6 +199,16 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         if (NestedParquetRowEmitter.TryEmit(context, schemaType, compilation))
             return;
 
+        foreach (var property in schemaType.GetMembers().OfType<IPropertySymbol>())
+        {
+            if (property.IsStatic || property.IsIndexer || property.IsImplicitlyDeclared || property.GetMethod is not null)
+                continue;
+
+            context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
+                property.Locations.FirstOrDefault(), MissingGetterMessage(property)));
+            return;
+        }
+
         if (!TryExtractColumns(schemaType, out var columns, out var extractError))
         {
             if (extractError.Length == 0)
@@ -1154,6 +1164,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 return true;
         return false;
     }
+
+    internal static string MissingGetterMessage(IPropertySymbol property)
+        => $"Schema property '{property.ContainingType.Name}.{property.Name}' must have a getter to write its value.";
 
     static bool TryExtractColumns(INamedTypeSymbol schemaType, out ImmutableArray<SchemaColumn> columns, out string error)
     {
