@@ -64,6 +64,7 @@ static partial class ColumnChunkReader
         internal AlpDecoder.BatchState Alp;
         internal bool IsNullable;
         internal bool IsBinary;
+        internal bool AllowFastparquetPadding;
         internal ReadOnlyMemory<byte> BorrowedDataPayload;
 
         internal readonly bool Active
@@ -105,7 +106,7 @@ static partial class ColumnChunkReader
     internal static bool TryStartEncodedPageBatches<T>(PageHeader header,
         ReadOnlySpan<byte> payload, ReadOnlyMemory<byte> borrowedPayload, Column column,
         ulong rowCount, ref ColumnReadBuffers<T> buffers, IParquetBufferPool bufferPool,
-        ref EncodedPageState page, out ColumnBuffer<T> buffer)
+        ref EncodedPageState page, out ColumnBuffer<T> buffer, bool isFastparquet = false)
     {
         buffer = default;
         page = default;
@@ -210,6 +211,8 @@ static partial class ColumnChunkReader
             DecoderKind = decoderKind,
             IsNullable = isNullable,
             IsBinary = isBinary,
+            AllowFastparquetPadding = isFastparquet && header.Type == PageHeaderType.DataPage &&
+                decoderKind == EncodedDecoderKind.PlainBinary,
             BorrowedDataPayload = borrowedPayload.IsEmpty ? default : borrowedPayload[dataOffset..]
         };
 
@@ -1542,9 +1545,7 @@ static partial class ColumnChunkReader
             page.DecoderKind is EncodedDecoderKind.PlainBinary or
                 EncodedDecoderKind.DeltaLengthByteArray or EncodedDecoderKind.DeltaByteArray &&
             page.BinaryDataOffset + page.BinaryPayloadOffset != payload.Length)
-            throw new CorruptParquetException(
-                $"{page.DecoderKind} payload contains " +
-                $"{payload.Length - page.BinaryDataOffset - page.BinaryPayloadOffset} trailing bytes.");
+            ValidateBinaryPageTail(payload[(page.BinaryDataOffset + page.BinaryPayloadOffset)..], page);
 
         return borrowedValues.IsEmpty
             ? buffers.CreateNativeBuffer(logicalCount)
@@ -1637,11 +1638,19 @@ static partial class ColumnChunkReader
                     $"Definition levels consumed {page.PhysicalOffset} physical values, " +
                     $"expected {page.PhysicalCount}.");
             if (page.BinaryPayloadOffset != payload.Length)
-                throw new CorruptParquetException(
-                    $"PlainBinary payload contains " +
-                    $"{payload.Length - page.BinaryPayloadOffset} trailing bytes.");
+                ValidateBinaryPageTail(payload[page.BinaryPayloadOffset..], page);
         }
         return buffers.CreateNativeBinaryBuffer(logicalCount, descriptorCapacity);
+    }
+
+    static void ValidateBinaryPageTail(ReadOnlySpan<byte> tail, in EncodedPageState page)
+    {
+        // Fastparquet's V1 writer appends eight zero bytes after the PLAIN values and includes them
+        // in the page size. Only recognize that exact suffix after consuming the declared values.
+        if (page.AllowFastparquetPadding && tail.Length == sizeof(ulong) &&
+            BinaryPrimitives.ReadUInt64LittleEndian(tail) == 0)
+            return;
+        throw new CorruptParquetException($"{page.DecoderKind} payload contains {tail.Length} trailing bytes.");
     }
 
     static int DecodeBorrowedPlainBinaryBatch<T>(ReadOnlySpan<byte> payload,
