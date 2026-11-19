@@ -146,11 +146,16 @@ public sealed class ParquetFileReader : IDisposable
             return;
 
         _disposed = true;
+        _ownedSource = null;
+        ClearSource();
+    }
+
+    internal void ClearSource()
+    {
         _generation++;
+        _source = null;
         ReturnMetadataBuffers();
         DisposeOwnedStream();
-        _ownedSource = null;
-        _source = null;
     }
 
     void DisposeOwnedStream()
