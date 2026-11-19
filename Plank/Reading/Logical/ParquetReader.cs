@@ -66,6 +66,8 @@ public sealed class ParquetReader : IDisposable
     /// <remarks>
     /// Earlier row group and column handles are invalidated before opening the source. If opening or schema
     /// validation fails, logical metadata is cleared; the reader can be reset again with another source.
+    /// The reader owns the stream once it starts the reset and closes it on replacement, disposal,
+    /// or a failure to open or bind the file. Use the random-access overload to keep ownership.
     /// </remarks>
     public void Reset(Stream stream, ParquetPagePruner? pagePruner = null)
     {
@@ -73,7 +75,7 @@ public sealed class ParquetReader : IDisposable
         ArgumentNullException.ThrowIfNull(stream);
         var previousFooter = InvalidateLogicalState();
         PhysicalReader.Reset(stream);
-        ResetLogicalState(previousFooter, pagePruner);
+        BindOrClearSource(previousFooter, pagePruner);
     }
 
     /// <summary>Opens a source and loads its logical schema and row groups.</summary>
@@ -87,7 +89,20 @@ public sealed class ParquetReader : IDisposable
         ArgumentNullException.ThrowIfNull(source);
         var previousFooter = InvalidateLogicalState();
         PhysicalReader.Reset(source);
-        ResetLogicalState(previousFooter, pagePruner);
+        BindOrClearSource(previousFooter, pagePruner);
+    }
+
+    void BindOrClearSource(InternalParquetFooter previousFooter, ParquetPagePruner? pagePruner)
+    {
+        try
+        {
+            ResetLogicalState(previousFooter, pagePruner);
+        }
+        catch
+        {
+            PhysicalReader.ClearSource();
+            throw;
+        }
     }
 
     InternalParquetFooter InvalidateLogicalState()
