@@ -63,6 +63,9 @@ public struct ParquetPageCursor : IDisposable
 
     public PageHeader CurrentHeader { get; private set; }
 
+    internal bool SkippedDataPage
+        => _skippedDataPage;
+
     public ParquetPage Current
         => new(CurrentHeader, CurrentPayload);
 
