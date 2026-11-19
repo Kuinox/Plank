@@ -97,6 +97,13 @@ static class Encoding
             return false;
         }
 
+        // Non-nullable values on a leaf with definition levels (an optional leaf, or one under an optional group)
+        // are all present. They still need the definition levels the column declares, so they take the optional
+        // page layout with every level at the maximum.
+        if (leafProjectionInfo.MaxDefinitionLevel != 0)
+            return EncodeAllPresentOptional(bufferWriters, column, values, strategyContext, pages, dataPageVersion,
+                leafProjectionInfo, dictionaryState, ref binaryMinMax);
+
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
         var dictionaryEncoding = EncodingKindResolver.GetDictionaryEncodingKind(column);
         var useDictionary = TryWriteDictionaryPage(bufferWriters, column, values, strategyContext, pages, dictionaryState,
@@ -963,7 +970,7 @@ static class Encoding
             var memoryDictionary = (ReusableDictionaryState<ReadOnlyMemory<byte>>)(object)dictionaryState;
             EncodeOptionalFlatByteArrays<ReadOnlyMemory<byte>?, ReadOnlyMemory<byte>,
                 NullableValueRow<ReadOnlyMemory<byte>>, OptionalMemoryRow>(bufferWriters, column, memoryValues,
-                strategyContext, pages, dataPageVersion, memoryDictionary, ref binaryMinMax);
+                strategyContext, pages, dataPageVersion, memoryDictionary, ref binaryMinMax, definitionLevel: 1);
             return;
         }
 
@@ -973,13 +980,47 @@ static class Encoding
         CopyPresentValues<T?, T, NullableValueRow<T>>(values, densePresentValues);
         try
         {
-            EncodeOptionalFlatValues(bufferWriters, column, values, strategyContext, pages, dataPageVersion,
-                densePresentValues, dictionaryState);
+            EncodeOptionalFlatValues<T, T?, T, NullableValueRow<T>>(bufferWriters, column, values, strategyContext,
+                pages, dataPageVersion, densePresentValues, dictionaryState, definitionLevel: 1);
         }
         finally
         {
             bufferWriters.ReturnScratch(rentedValues);
         }
+    }
+
+    /// <summary>
+    /// Writes non-nullable values to a leaf that carries definition levels. Every row is present, so the
+    /// values are their own dense payload and each definition level is the leaf's maximum. Returns whether
+    /// <paramref name="dictionaryState"/> holds the distinct values, as <see cref="Encode{T}"/> does.
+    /// </summary>
+    static bool EncodeAllPresentOptional<T>(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<T> values, PageStrategyContext strategyContext, PageList pages,
+        ParquetDataPageVersion dataPageVersion, LeafProjectionInfo leafProjectionInfo,
+        ReusableDictionaryState<T> dictionaryState, ref PlainBinaryMinMax binaryMinMax)
+        where T : notnull
+    {
+        if (leafProjectionInfo.MaxRepetitionLevel != 0)
+            throw new NotSupportedException(
+                $"Column '{column.Name}' optional flat encoding requires a non-repeated leaf.");
+
+        var definitionLevel = leafProjectionInfo.MaxDefinitionLevel;
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+        {
+            if (typeof(T) != typeof(ReadOnlyMemory<byte>))
+                throw new NotSupportedException($"Optional value column type '{typeof(T)}' is not supported.");
+
+            var memoryValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>>>(ref values);
+            var memoryDictionary = (ReusableDictionaryState<ReadOnlyMemory<byte>>)(object)dictionaryState;
+            EncodeOptionalFlatByteArrays<ReadOnlyMemory<byte>, ReadOnlyMemory<byte>,
+                RequiredRow<ReadOnlyMemory<byte>>, RequiredMemoryRow>(bufferWriters, column, memoryValues,
+                strategyContext, pages, dataPageVersion, memoryDictionary, ref binaryMinMax, definitionLevel);
+            return false;
+        }
+
+        var useDictionary = EncodeOptionalFlatValues<T, T, T, RequiredRow<T>>(bufferWriters, column, values,
+            strategyContext, pages, dataPageVersion, values, dictionaryState, definitionLevel);
+        return useDictionary && typeof(T) != typeof(bool);
     }
 
     internal static void EncodeOptionalConverted<TSource, TPhysical>(BufferWriterFactory bufferWriters, Column column,
@@ -1003,8 +1044,9 @@ static class Encoding
         if (values.Length == 0)
             return;
 
-        EncodeOptionalFlatValues(bufferWriters, column, values, strategyContext, pages, dataPageVersion,
-            densePresentValues, dictionaryState);
+        EncodeOptionalFlatValues<TPhysical, TSource?, TSource, NullableValueRow<TSource>>(bufferWriters, column,
+            values, strategyContext, pages, dataPageVersion, densePresentValues, dictionaryState,
+            definitionLevel: 1);
     }
 
     /// <summary>
@@ -2522,7 +2564,8 @@ static class Encoding
         var byteArrays = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<byte[]>>(ref values);
         var byteArrayDictionary = (ReusableDictionaryState<byte[]>)(object)dictionaryState;
         EncodeOptionalFlatByteArrays<byte[], byte[], ReferenceRow<byte[]>, OptionalByteArrayRow>(bufferWriters,
-            column, byteArrays, strategyContext, pages, dataPageVersion, byteArrayDictionary, ref binaryMinMax);
+            column, byteArrays, strategyContext, pages, dataPageVersion, byteArrayDictionary, ref binaryMinMax,
+            definitionLevel: 1);
     }
 
     static bool TryWriteDictionaryPage<T>(BufferWriterFactory bufferWriters, Column column, ReadOnlySpan<T> values,
@@ -2931,13 +2974,14 @@ static class Encoding
         return dictionaryState.GetOrAddIndex(value);
     }
 
-    static void EncodeOptionalFlatValues<T, TSource>(BufferWriterFactory bufferWriters, Column column,
-        ReadOnlySpan<TSource?> values,
+    static bool EncodeOptionalFlatValues<T, TRow, TSource, TProbe>(BufferWriterFactory bufferWriters, Column column,
+        ReadOnlySpan<TRow> values,
         PageStrategyContext strategyContext, PageList pages, ParquetDataPageVersion dataPageVersion,
         ReadOnlySpan<T> denseValues,
-        ReusableDictionaryState<T> dictionaryState)
-        where T : struct
-        where TSource : struct
+        ReusableDictionaryState<T> dictionaryState, int definitionLevel)
+        where T : notnull
+        where TSource : notnull
+        where TProbe : IOptionalRow<TRow, TSource>
     {
         var strategy = strategyContext.Strategy;
         var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
@@ -2999,7 +3043,7 @@ static class Encoding
                 {
                     while (rowsWritten < values.Length)
                     {
-                        var rowBytes = GetOptionalRowBytes<TSource?, TSource, NullableValueRow<TSource>>(
+                        var rowBytes = GetOptionalRowBytes<TRow, TSource, TProbe>(
                             column, in values[rowsWritten], presentValueBytes);
                         if (pageRowCount > 0 && pageBytes + rowBytes > targetPageBytes)
                             break;
@@ -3018,17 +3062,14 @@ static class Encoding
                 var nullCount = 0;
                 var presentRows = 0;
                 int definitionLength;
-                if (allPresentDictionary)
+                if (allPresentDictionary || TProbe.ValueRequired)
                 {
                     presentRows = pageRowCount;
-                    var lengthPrefix = ReserveLevelLengthPrefix(dataPageVersion == ParquetDataPageVersion.V1,
-                        ref page.Content);
-                    var definitionStart = page.Content.WrittenLength;
-                    EncodingPrimitives.WriteRleRun(1, pageRowCount, 1, ref page.Content);
-                    definitionLength = CompleteLevelEncoding(definitionStart, lengthPrefix, ref page.Content);
+                    definitionLength = WriteAllPresentDefinitionLevels(pageRowCount, definitionLevel,
+                        dataPageVersion == ParquetDataPageVersion.V1, ref page.Content);
                 }
                 else
-                    definitionLength = WriteOptionalDefinitionLevels<TSource?, TSource, NullableValueRow<TSource>>(
+                    definitionLength = WriteOptionalDefinitionLevels<TRow, TSource, TProbe>(
                         pageRows, ref nullCount, ref presentRows, dataPageVersion == ParquetDataPageVersion.V1,
                         ref page.Content);
                 var pageDenseValues = denseValues.Slice(denseOffset, presentRows);
@@ -3059,6 +3100,8 @@ static class Encoding
         {
             dictionaryIndexesBuffer.Dispose();
         }
+
+        return useDictionary;
     }
 
     /// <summary>
@@ -3207,7 +3250,7 @@ static class Encoding
     static void EncodeOptionalFlatByteArrays<TRow, TValue, TProbe, TRowAccess>(BufferWriterFactory bufferWriters,
         Column column, ReadOnlySpan<TRow> values, PageStrategyContext strategyContext, PageList pages,
         ParquetDataPageVersion dataPageVersion, ReusableDictionaryState<TValue> dictionaryState,
-        ref PlainBinaryMinMax binaryMinMax)
+        ref PlainBinaryMinMax binaryMinMax, int definitionLevel)
         where TValue : notnull
         where TProbe : IOptionalRow<TRow, TValue>
         where TRowAccess : IByteArrayRow<TRow>
@@ -3289,7 +3332,13 @@ static class Encoding
                 }
 
                 var pageRows = values.Slice(pageStart, pageRowCount);
-                if (definitionLength < 0)
+                if (definitionLength < 0 && TProbe.ValueRequired)
+                {
+                    presentRows = pageRowCount;
+                    definitionLength = WriteAllPresentDefinitionLevels(pageRowCount, definitionLevel,
+                        dataPageVersion == ParquetDataPageVersion.V1, ref page.Content);
+                }
+                else if (definitionLength < 0)
                     definitionLength = WriteOptionalDefinitionLevels<TRow, TValue, TProbe>(pageRows, ref nullCount,
                         ref presentRows, dataPageVersion == ParquetDataPageVersion.V1, ref page.Content);
                 if (useDictionary)
@@ -3662,8 +3711,8 @@ static class Encoding
     }
 
     static bool TryGetDirectOptionalPlainNumericRowBytes<T, TSource>(Column column, out int rowBytes)
-        where T : struct
-        where TSource : struct
+        where T : notnull
+        where TSource : notnull
     {
         rowBytes = column.PhysicalType switch
         {
@@ -3690,6 +3739,17 @@ static class Encoding
     static int GetOptionalPresentValueBytes<T>(Column column, T value, int presentValueBytes)
         where T : notnull
         => presentValueBytes > 0 ? presentValueBytes : GetVariablePlainValueBytes(column, value);
+
+    /// <summary>One run of <paramref name="rowCount"/> present rows, each at <paramref name="definitionLevel"/>.</summary>
+    static int WriteAllPresentDefinitionLevels(int rowCount, int definitionLevel, bool writeLengthPrefix,
+        ref BufferWriter writer)
+    {
+        var lengthPrefix = ReserveLevelLengthPrefix(writeLengthPrefix, ref writer);
+        var start = writer.WrittenLength;
+        EncodingPrimitives.WriteRleRun(definitionLevel, rowCount,
+            EncodingPrimitives.GetBitWidthFromMaxValue(definitionLevel), ref writer);
+        return CompleteLevelEncoding(start, lengthPrefix, ref writer);
+    }
 
     static int WriteOptionalDefinitionLevels<TRow, TValue, TProbe>(ReadOnlySpan<TRow> values, ref int nullCount,
         ref int presentRows, bool writeLengthPrefix, ref BufferWriter writer)

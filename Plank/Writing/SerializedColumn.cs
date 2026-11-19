@@ -351,12 +351,10 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         if (!converter.SupportsValueType(typeof(T)))
             throw new InvalidOperationException(
                 $"Column '{_column.Name}' uses a converter for '{converter.ValueType}' and cannot serialize '{typeof(T)}'.");
-        var nullable = converter.IsNullableValueType(typeof(T));
-        var optional = _column.Options.Repetition == ParquetRepetition.Optional;
-        if (nullable != optional)
+        // Non-nullable values on an optional column are simply all present; only nulls need an optional column.
+        if (converter.IsNullableValueType(typeof(T)) && _column.Options.Repetition != ParquetRepetition.Optional)
             throw new InvalidOperationException(
-                $"Column '{_column.Name}' is {(optional ? "optional" : "required")} and cannot serialize " +
-                $"converter values of type '{typeof(T)}'.");
+                $"Column '{_column.Name}' is required and cannot serialize converter values of type '{typeof(T)}'.");
         if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
             throw new NotSupportedException(
                 $"Custom converter value type '{typeof(T)}' must be unmanaged.");
