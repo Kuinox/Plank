@@ -198,13 +198,24 @@ internal sealed class ColumnStatisticsTests
         var optionalColumn = new Plank.Schema.Column("value", ParquetPhysicalType.ByteArray,
             new ColumnOptions(ParquetRepetition.Optional));
         byte[][] optionalValues = [null!, middle, high, commonPrefix, low, null!];
-        var optional = ColumnStatistics.CreateOptional(optionalColumn, optionalValues);
-        if (!optional.MinValue!.AsSpan().SequenceEqual(commonPrefix))
-            throw new InvalidOperationException("Optional binary minimum statistic mismatch.");
-        if (!optional.MaxValue!.AsSpan().SequenceEqual(high))
-            throw new InvalidOperationException("Optional binary maximum statistic mismatch.");
-        if (optional.NullCount != 2)
-            throw new InvalidOperationException($"Expected two nulls, got {optional.NullCount}.");
+        ParquetBuffer minBuffer = default;
+        ParquetBuffer maxBuffer = default;
+        try
+        {
+            var optional = ColumnStatistics.CreateOptionalWithReusableBinaryBuffers(optionalColumn,
+                optionalValues, ref minBuffer, ref maxBuffer, DefaultParquetBufferPool.Shared);
+            if (!optional.GetMinValue().SequenceEqual(commonPrefix))
+                throw new InvalidOperationException("Optional binary minimum statistic mismatch.");
+            if (!optional.GetMaxValue().SequenceEqual(high))
+                throw new InvalidOperationException("Optional binary maximum statistic mismatch.");
+            if (optional.NullCount != 2)
+                throw new InvalidOperationException($"Expected two nulls, got {optional.NullCount}.");
+        }
+        finally
+        {
+            minBuffer.Dispose();
+            maxBuffer.Dispose();
+        }
     }
 
     [Test]
