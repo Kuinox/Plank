@@ -27,6 +27,45 @@ internal sealed class PageSizeTests
     }
 
     [Test]
+    public void SmallTargetPagesDoNotReserveAFullChunkEach()
+    {
+        // Each page keeps its header and content writers until the row group is written. Both used to rent a full
+        // BufferChunkSizeBytes chunk, so 1,000 one-row pages held 128 MiB of buffers for a few KiB of data.
+        var pool = new CountingPool();
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.Leaf("id", ParquetPhysicalType.Int32)
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            BufferPool = pool,
+            TargetDataPageSizeBytes = 1
+        });
+        var column = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        column.Serialize(Enumerable.Range(0, 1000).ToArray());
+
+        var dataPages = 0;
+        for (var i = 0; i < column.Pages.Count; i++)
+            if (column.Pages[i].Kind != PageKind.Dictionary)
+                dataPages++;
+        if (dataPages != 1000)
+            throw new InvalidOperationException($"Expected 1000 one-row pages, got {dataPages}.");
+        if (pool.RentedBytes > 16L * 1024 * 1024)
+            throw new InvalidOperationException($"1000 one-row pages rented {pool.RentedBytes >> 20} MiB of buffers.");
+    }
+
+    sealed class CountingPool : IParquetBufferPool
+    {
+        internal long RentedBytes;
+
+        public ParquetBuffer Rent(uint minimumByteLength)
+        {
+            RentedBytes += minimumByteLength;
+            return DefaultParquetBufferPool.Shared.Rent(minimumByteLength);
+        }
+    }
+
+    [Test]
     public void RequiredVariableWidthColumnSplitsByTargetPageSize()
     {
         var schema = new PlankParquetSchema([
