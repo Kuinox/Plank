@@ -149,10 +149,7 @@ public sealed record ColumnDefinition
         ColumnOptions? options, LogicalType? logicalType, IPageStrategy? pageStrategy,
         int? fieldId, ParquetValueConverter? converter)
     {
-        var normalizedOptions = options ?? ColumnOptions.Default;
-        if (normalizedOptions.Repetition != repetition)
-            normalizedOptions = new ColumnOptions(repetition, normalizedOptions.Encodings, normalizedOptions.TypeLength,
-                normalizedOptions.Compression, normalizedOptions.CompressionLevel, normalizedOptions.BloomFilter);
+        var normalizedOptions = (options ?? ColumnOptions.Default).WithRepetition(repetition);
         EncodingCompatibility.Validate(name, physicalType, normalizedOptions);
         ValidateLogicalType(name, physicalType, normalizedOptions, logicalType);
         ValidateConverter(name, physicalType, normalizedOptions, converter);
