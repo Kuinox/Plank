@@ -261,8 +261,6 @@ static class ParquetMetadataThriftWriter
 
         long totalUncompressedSize = 0;
         long totalCompressedSize = 0;
-        long rowGroupOffset = 0;
-        var hasRowGroupOffset = false;
         for (var i = 0; i < columns.Length; i++)
         {
             ref readonly var chunk = ref metadata[i];
@@ -270,19 +268,10 @@ static class ParquetMetadataThriftWriter
             WriteColumnChunk(ref writer, columns[i], path, chunk);
             totalUncompressedSize = checked(totalUncompressedSize + chunk.TotalUncompressedSize);
             totalCompressedSize = checked(totalCompressedSize + chunk.TotalCompressedSize);
-            if (hasRowGroupOffset)
-                continue;
-            rowGroupOffset = GetColumnChunkStartOffset(chunk);
-            hasRowGroupOffset = true;
         }
 
-        writer.WriteFieldI64(2, totalUncompressedSize);
-        writer.WriteFieldI64(3, rowCount);
-        if (!sortingColumns.IsEmpty)
-            WriteSortingColumns(ref writer, sortingColumns);
-        if (hasRowGroupOffset)
-            writer.WriteFieldI64(5, rowGroupOffset);
-        writer.WriteFieldI64(6, totalCompressedSize);
+        WriteRowGroupFields(ref writer, totalUncompressedSize, rowCount, sortingColumns,
+            columns.IsEmpty ? null : GetColumnChunkStartOffset(metadata[0]), totalCompressedSize);
         writer.EndStruct(previous);
     }
 
@@ -322,15 +311,23 @@ static class ParquetMetadataThriftWriter
             totalCompressedSize = checked(totalCompressedSize + relocated.TotalCompressedSize);
         }
 
-        writer.WriteFieldI64(2, totalUncompressedSize);
-        writer.WriteFieldI64(3, checked((long)rowCount));
+        var signedRowCount = checked((long)rowCount);
         var sortingColumns = sourceMetadata.RowGroupSortingColumns(sourceRowGroupOrdinal);
+        WriteRowGroupFields(ref writer, totalUncompressedSize, signedRowCount, sortingColumns,
+            columns.IsEmpty ? null : GetColumnChunkStartOffset(relocatedMetadata[0]), totalCompressedSize);
+        writer.EndStruct(previous);
+    }
+
+    static void WriteRowGroupFields(ref CompactWriter writer, long totalUncompressedSize, long rowCount,
+        ReadOnlySpan<ParquetSortingColumn> sortingColumns, long? rowGroupOffset, long totalCompressedSize)
+    {
+        writer.WriteFieldI64(2, totalUncompressedSize);
+        writer.WriteFieldI64(3, rowCount);
         if (!sortingColumns.IsEmpty)
             WriteSortingColumns(ref writer, sortingColumns);
-        if (columns.Length != 0)
-            writer.WriteFieldI64(5, GetColumnChunkStartOffset(relocatedMetadata[0]));
+        if (rowGroupOffset is { } offset)
+            writer.WriteFieldI64(5, offset);
         writer.WriteFieldI64(6, totalCompressedSize);
-        writer.EndStruct(previous);
     }
 
     static void WriteSchema(ref CompactWriter writer, ParquetSchema schema)
