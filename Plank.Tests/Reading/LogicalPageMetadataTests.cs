@@ -102,6 +102,35 @@ internal sealed class LogicalPageMetadataTests
         await Assert.That(values).IsEquivalentTo(new[] { 1, 2, 3, 4, 5, 6, 7, 8 });
     }
 
+    /// <remarks>
+    /// parquet-mr writes -1 ("unknown") into the column index null_counts when statistics are disabled, as in the
+    /// parquet-testing checksum files. Rejecting the whole index made every pruned scan of such a file fail.
+    /// </remarks>
+    [Test]
+    public async Task UnknownColumnIndexNullCountsAreExposedAsUnknown()
+    {
+        if (!ParquetTesting.ParquetTestingCorpus.IsAvailable)
+            throw new InvalidOperationException(ParquetTesting.ParquetTestingCorpus.MissingMessage);
+        var bytes = ParquetTesting.ParquetTestingCorpus.ReadAllBytes("data/datapage_v1-uncompressed-checksum.parquet");
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(bytes, writable: false), static (in ParquetDataPageMetadata _) => true);
+
+        var pages = 0;
+        using (var metadata = reader.RowGroups[0].GetColumnMetadata(0).OpenPages())
+            foreach (var page in metadata)
+            {
+                if (page.Statistics.NullCount is not null)
+                    throw new InvalidOperationException("A -1 null count must be reported as unknown.");
+                pages++;
+            }
+        var values = 0;
+        foreach (var buffer in reader.RowGroups[0].Column<int>(0))
+            values += buffer.Values.Length;
+
+        await Assert.That(pages).IsGreaterThan(0);
+        await Assert.That(values).IsEqualTo(5120);
+    }
+
     public enum WriterKind
     {
         Int32,
