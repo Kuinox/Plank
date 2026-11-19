@@ -9,7 +9,7 @@ internal struct ColumnChunkMetadata
     internal long ValueCount;
     internal long TotalUncompressedSize;
     internal long TotalCompressedSize;
-    internal EncodingKind DataEncoding;
+    internal uint Encodings;
     internal CompressionKind Compression;
     internal ColumnStatistics Statistics;
     internal bool HasDictionaryPage;

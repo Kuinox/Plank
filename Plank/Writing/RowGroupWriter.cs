@@ -1,5 +1,4 @@
 using Plank.Schema;
-using Plank.Writing.Encoding;
 using Plank.Writing.Thrift;
 
 namespace Plank.Writing;
@@ -90,13 +89,14 @@ public sealed class RowGroupWriter
         var pageLocations = writePageIndexes ? _pageLocationsByColumn[columnOrdinal] : [];
         var dataPageCount = 0;
         var firstRowIndex = 0L;
-        var dataEncoding = EncodingKindResolver.GetDataEncodingKind(column);
+        uint encodings = 0;
         for (var i = 0; i < pages.Count; i++)
         {
             ref var page = ref pages[i];
             var pageOffset = _writer.FileOffset;
             var pageKind = page.Kind;
             var storedContentSize = page.Content.WrittenLength;
+            encodings |= 1U << (int)page.Encoding;
 
             switch (pageKind)
             {
@@ -115,11 +115,10 @@ public sealed class RowGroupWriter
                     valueCount = checked(valueCount + page.ValueCount);
                     nullCount = checked(nullCount + page.NullCount);
 
+                    if (page.DefinitionLevelsByteLength != 0 || page.RepetitionLevelsByteLength != 0)
+                        encodings |= 1U << (int)EncodingKind.Rle;
                     if (dataPageOffset < 0)
-                    {
                         dataPageOffset = pageOffset;
-                        dataEncoding = page.Encoding;
-                    }
                     break;
                 }
                 default:
@@ -156,7 +155,7 @@ public sealed class RowGroupWriter
         columnMetadata.ValueCount = valueCount;
         columnMetadata.TotalUncompressedSize = totalUncompressedSize;
         columnMetadata.TotalCompressedSize = totalCompressedSize;
-        columnMetadata.DataEncoding = dataEncoding;
+        columnMetadata.Encodings = encodings;
         columnMetadata.Compression = compression.Kind;
         columnMetadata.Statistics = state.Statistics.HasStatistics
             ? state.Statistics.WithNullCount(nullCount)
