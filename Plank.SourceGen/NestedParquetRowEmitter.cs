@@ -96,6 +96,13 @@ static class NestedParquetRowEmitter
         var activeTypes = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default) { schemaType };
         foreach (var property in GetProperties(schemaType))
         {
+            if (!CanExposeType(property.Type, schemaType.DeclaredAccessibility == Accessibility.Public))
+            {
+                model = default!;
+                error = $"Type '{property.Type.ToDisplayString()}' of schema property '{property.Name}' is less accessible " +
+                    $"than schema '{schemaType.Name}' and cannot appear in its generated row API.";
+                return false;
+            }
             if (!TryCreatePropertyNode(property, activeTypes, out var root, out error))
             {
                 model = default!;
@@ -140,6 +147,19 @@ static class NestedParquetRowEmitter
         model = new Model(roots.ToImmutableArray(), leaves.ToImmutableArray());
         error = string.Empty;
         return true;
+    }
+
+    static bool CanExposeType(ITypeSymbol type, bool isPublicApi)
+    {
+        if (type is IArrayTypeSymbol array)
+            return CanExposeType(array.ElementType, isPublicApi);
+        if (type is not INamedTypeSymbol named)
+            return true;
+        if (named.IsFileLocal || named.DeclaredAccessibility != Accessibility.Public &&
+            (isPublicApi || named.DeclaredAccessibility is not (Accessibility.Internal or Accessibility.ProtectedOrInternal)))
+            return false;
+        return (named.ContainingType is null || CanExposeType(named.ContainingType, isPublicApi)) &&
+            named.TypeArguments.All(argument => CanExposeType(argument, isPublicApi));
     }
 
     static bool ValidateSiblingNames(IEnumerable<Node> nodes, out string error)
