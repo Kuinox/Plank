@@ -917,13 +917,24 @@ static class NestedParquetRowEmitter
         builder.AppendLine(");");
         builder.AppendLine("            set");
         builder.AppendLine("            {");
-        for (var i = 0; i < root.Leaves.Count; i++)
+        // Project every leaf before mutating the row. User getters and conversions can throw.
+        if (root.Leaves.Count == 1)
         {
-            var leaf = root.Leaves[i];
-            builder.Append("                ")
-                .Append(element(leaf))
-                .Append(" = ")
+            var leaf = root.Leaves[0];
+            builder.Append("                ").Append(element(leaf)).Append(" = ")
                 .Append(names.Get("project:" + leaf.UniqueName, "Project" + leaf.UniqueName)).AppendLine("(value);");
+        }
+        else
+        {
+            for (var i = 0; i < root.Leaves.Count; i++)
+            {
+                var leaf = root.Leaves[i];
+                builder.Append("                var projected").Append(i).Append(" = ")
+                    .Append(names.Get("project:" + leaf.UniqueName, "Project" + leaf.UniqueName)).AppendLine("(value);");
+            }
+            for (var i = 0; i < root.Leaves.Count; i++)
+                builder.Append("                ").Append(element(root.Leaves[i])).Append(" = projected")
+                    .Append(i).AppendLine(";");
         }
         builder.AppendLine("            }");
         builder.AppendLine("        }");
