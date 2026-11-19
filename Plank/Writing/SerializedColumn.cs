@@ -43,6 +43,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     T[]? _retainedValues;
     internal sbyte[]? AppendSortingComparisons { get; private set; }
     object? _dictionaryState;
+    byte[][]? _stringPayloadScratch;
     ParquetBuffer _statisticsMinValueBuffer;
     ParquetBuffer _statisticsMaxValueBuffer;
     ParquetBuffer _bloomFilterBuffer;
@@ -481,15 +482,33 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     void SerializeStrings(ReadOnlySpan<string> values)
     {
-        var encoded = new byte[values.Length][];
-        for (var i = 0; i < values.Length; i++)
-            if (values[i] is { } value)
-                encoded[i] = System.Text.Encoding.UTF8.GetBytes(value);
+        // Keep at most 4096 managed references per string column; large batches use temporary storage.
+        const int maxRetainedRows = 4096;
+        var reuse = values.Length is > 0 and <= maxRetainedRows;
+        var encoded = reuse && _stringPayloadScratch is { } scratch && scratch.Length >= values.Length
+            ? scratch : values.IsEmpty ? [] : new byte[values.Length][];
+        if (reuse)
+            _stringPayloadScratch = null; // Do not lend the active scratch to a reentrant caller.
+        var payloads = encoded.AsSpan(0, values.Length);
+        try
+        {
+            for (var i = 0; i < values.Length; i++)
+                if (values[i] is { } value)
+                    payloads[i] = System.Text.Encoding.UTF8.GetBytes(value);
 
-        if (_column.Options.Repetition == ParquetRepetition.Optional)
-            SerializeOptionalReference(encoded);
-        else
-            SerializeTyped(encoded);
+            if (_column.Options.Repetition == ParquetRepetition.Optional)
+                SerializeOptionalReference<byte[]>(payloads);
+            else
+                SerializeTyped<byte[]>(payloads);
+        }
+        finally
+        {
+            if (reuse)
+            {
+                payloads.Clear();
+                _stringPayloadScratch = encoded;
+            }
+        }
     }
 
     void SerializeGuids(ReadOnlySpan<Guid> values)
@@ -1583,6 +1602,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     internal void ReleaseBuffers()
     {
+        _stringPayloadScratch = null;
         Pages.ReleaseBuffers();
         _compressedContent.Dispose();
         _compressionInput.Dispose();
