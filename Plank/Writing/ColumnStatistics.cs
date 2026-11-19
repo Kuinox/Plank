@@ -238,19 +238,7 @@ internal readonly struct ColumnStatistics
             return CreateNullableFloat(AsNullableSpan<T, float>(values));
         if (typeof(T) == typeof(double))
             return CreateNullableDouble(AsNullableSpan<T, double>(values));
-        if (typeof(T) == typeof(decimal))
-            return CreateNullableDecimal(column, AsNullableSpan<T, decimal>(values));
-        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
-            return CreateNullableMemory(column, AsNullableSpan<T, ReadOnlyMemory<byte>>(values));
 
-        return Empty(CountNulls(values));
-    }
-
-    internal static ColumnStatistics CreateOptional<T>(Column column, ReadOnlySpan<T> values)
-        where T : class
-    {
-        if (typeof(T) == typeof(byte[]))
-            return CreateOptionalByteArray(column, AsAnySpan<T, byte[]>(values));
         return Empty(CountNulls(values));
     }
 
@@ -276,7 +264,7 @@ internal readonly struct ColumnStatistics
         if (typeof(T) == typeof(byte[]))
             return CreateOptionalByteArray(column, AsAnySpan<T, byte[]>(values), ref minBuffer, ref maxBuffer,
                 bufferPool);
-        return CreateOptional(column, values);
+        return Empty(CountNulls(values));
     }
 
     internal ReadOnlySpan<byte> GetMinValue()
@@ -637,25 +625,7 @@ internal readonly struct ColumnStatistics
         if (!TryGetDecimalMinMax(values, out var min, out var max))
             return Empty(nullCount);
 
-        var minLength = GetDecimalEncodedLength(column, min);
-        var maxLength = GetDecimalEncodedLength(column, max);
-        EnsureReusableBuffer(minLength, ref minBuffer, bufferPool);
-        EnsureReusableBuffer(maxLength, ref maxBuffer, bufferPool);
-        EncodeDecimal(column, min, minBuffer.Span[..minLength]);
-        EncodeDecimal(column, max, maxBuffer.Span[..maxLength]);
-        return new ColumnStatistics(minBuffer, minLength, maxBuffer, maxLength, nullCount, true);
-    }
-
-    static ColumnStatistics CreateNullableDecimal(Column column, ReadOnlySpan<decimal?> values)
-    {
-        if (!TryGetNullableDecimalMinMax(values, out var min, out var max, out var nullCount))
-            return Empty(nullCount);
-
-        var minValue = new byte[GetDecimalEncodedLength(column, min)];
-        var maxValue = new byte[GetDecimalEncodedLength(column, max)];
-        EncodeDecimal(column, min, minValue);
-        EncodeDecimal(column, max, maxValue);
-        return new ColumnStatistics(minValue, maxValue, nullCount, true);
+        return FromDecimalBounds(column, min, max, nullCount, ref minBuffer, ref maxBuffer, bufferPool);
     }
 
     static ColumnStatistics CreateNullableDecimal(Column column, ReadOnlySpan<decimal?> values,
@@ -664,6 +634,12 @@ internal readonly struct ColumnStatistics
         if (!TryGetNullableDecimalMinMax(values, out var min, out var max, out var nullCount))
             return Empty(nullCount);
 
+        return FromDecimalBounds(column, min, max, nullCount, ref minBuffer, ref maxBuffer, bufferPool);
+    }
+
+    static ColumnStatistics FromDecimalBounds(Column column, decimal min, decimal max, long nullCount,
+        ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
+    {
         var minLength = GetDecimalEncodedLength(column, min);
         var maxLength = GetDecimalEncodedLength(column, max);
         EnsureReusableBuffer(minLength, ref minBuffer, bufferPool);
@@ -870,39 +846,6 @@ internal readonly struct ColumnStatistics
         return new ColumnStatistics(minBuffer, min.Length, maxBuffer, max.Length, nullCount, true);
     }
 
-    static ColumnStatistics CreateOptionalByteArray(Column column, ReadOnlySpan<byte[]> values)
-    {
-        if (column.LogicalType is LogicalType.Float16)
-            return CreateFloat16(values, 0);
-
-        byte[]? min = null;
-        byte[]? max = null;
-        var nullCount = 0L;
-        for (var i = 0; i < values.Length; i++)
-        {
-            var value = values[i];
-            if (value is null)
-            {
-                nullCount++;
-                continue;
-            }
-
-            if (min is null)
-            {
-                min = value;
-                max = value;
-                continue;
-            }
-
-            if (CompareBinary(column, value, min) < 0)
-                min = value;
-            if (CompareBinary(column, value, max!) > 0)
-                max = value;
-        }
-
-        return min is null ? Empty(nullCount) : new ColumnStatistics(min.ToArray(), max!.ToArray(), nullCount, true);
-    }
-
     static ColumnStatistics CreateOptionalByteArray(Column column, ReadOnlySpan<byte[]> values,
         ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
     {
@@ -989,39 +932,6 @@ internal readonly struct ColumnStatistics
         CopyToReusableBuffer(min, ref minBuffer, bufferPool);
         CopyToReusableBuffer(max, ref maxBuffer, bufferPool);
         return new ColumnStatistics(minBuffer, min.Length, maxBuffer, max.Length, nullCount, true);
-    }
-
-    static ColumnStatistics CreateNullableMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>?> values)
-    {
-        if (column.LogicalType is LogicalType.Float16)
-            return CreateFloat16(values);
-
-        byte[]? min = null;
-        byte[]? max = null;
-        var nullCount = 0L;
-        for (var i = 0; i < values.Length; i++)
-        {
-            if (values[i] is not { } memory)
-            {
-                nullCount++;
-                continue;
-            }
-
-            var value = memory.Span;
-            if (min is null)
-            {
-                min = value.ToArray();
-                max = min;
-                continue;
-            }
-
-            if (CompareBinary(column, value, min) < 0)
-                min = value.ToArray();
-            if (CompareBinary(column, value, max!) > 0)
-                max = value.ToArray();
-        }
-
-        return min is null ? Empty(nullCount) : new ColumnStatistics(min, max, nullCount, true);
     }
 
     static ColumnStatistics CreateNullableMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>?> values,
