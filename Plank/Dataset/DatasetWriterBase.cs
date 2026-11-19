@@ -278,7 +278,7 @@ public abstract class DatasetWriterBase<TRow>
     {
         state.LastUse = unchecked(++_clock);
         if (state.RolloverPending)
-            Rollover(state);
+            Rollover(state, -1);
         try
         {
             CopyRow(row, state.SlotIndex, state.Slot.Count);
@@ -397,7 +397,14 @@ public abstract class DatasetWriterBase<TRow>
         }
         catch (Exception exception)
         {
+            // Rows that were not drained yet stay parked under their key, as they do when the
+            // first Open fails, so a later promotion or Dispose still writes them.
             var failure = ExceptionDispatchInfo.Capture(exception);
+            if (state.Active)
+            {
+                key.Path = state.Path;
+                state.Path = default;
+            }
             try
             {
                 ReleaseAfterFailure(state);
@@ -405,8 +412,11 @@ public abstract class DatasetWriterBase<TRow>
             catch
             {
             }
-            ExceptionDispatchInfo? cleanupFailure = null;
-            DiscardPendingPartition(keyIndex, ref cleanupFailure);
+            if (key.RowCount == 0 || key.Path.IsEmpty)
+            {
+                ExceptionDispatchInfo? cleanupFailure = null;
+                DiscardPendingPartition(keyIndex, ref cleanupFailure);
+            }
             failure.Throw();
             throw;
         }
@@ -427,7 +437,7 @@ public abstract class DatasetWriterBase<TRow>
             }
 
             if (state.RolloverPending)
-                Rollover(state);
+                Rollover(state, keyIndex);
 
             _parkedRows.MoveRowTo(current, state.Slot, state.Slot.Count);
             state.Slot.NextSized();
@@ -600,7 +610,7 @@ public abstract class DatasetWriterBase<TRow>
             state.RolloverPending = true;
     }
 
-    void Rollover(PartitionState state)
+    void Rollover(PartitionState state, int pendingKeyIndex)
     {
         if (!state.Active || state.Writer is null || state.File is not { } file)
             throw new InvalidOperationException("The partition does not have an active writer.");
@@ -632,6 +642,12 @@ public abstract class DatasetWriterBase<TRow>
             state.File = null;
             state.Active = false;
             ReturnFile(file);
+            if (pendingKeyIndex >= 0)
+            {
+                // The pending key still owns its undrained parked rows: give it its path back.
+                _pendingKeys[pendingKeyIndex].Path = state.Path;
+                state.Path = default;
+            }
             ReleaseState(state);
             throw;
         }

@@ -313,6 +313,143 @@ internal sealed class DatasetWriterTests
     }
 
     [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    public async Task RolloverSelectorFailurePreservesAcceptedRows(bool parked, bool failOpen)
+    {
+        var directory = Directory.CreateTempSubdirectory("plank-selector-");
+        try
+        {
+            using var file = new TestParquetSource();
+            var failed = false;
+            var parkedKey = "b"u8.ToArray();
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, SelectFile, [file],
+                new DatasetWriterOptions
+                {
+                    PendingRowCapacity = parked ? 3u : 0u,
+                    WriterOptions = new ParquetWriterOptions { TargetRowGroupSizeBytes = 1, TargetFileSizeBytes = 1 }
+                }))
+            {
+                if (parked)
+                {
+                    writer.Queue(new DatasetRowSchema { Value = 1, Path = "a"u8.ToArray() });
+                    writer.Queue(new DatasetRowSchema { Value = 2, Path = parkedKey });
+                    writer.Queue(new DatasetRowSchema { Value = 3, Path = parkedKey });
+                    // Row 4 was parked before the rollover failed, so it stays queued like rows 2 and 3.
+                    await Assert.That(() => writer.Queue(new DatasetRowSchema { Value = 4, Path = parkedKey }))
+                        .Throws<IOException>();
+                    file.FailOpen = false;
+                }
+                else
+                {
+                    writer.Queue(new DatasetRowSchema { Value = 2, Path = parkedKey });
+                    // The active rollover fails before row 3 is copied, so the caller queues it again.
+                    await Assert.That(() => writer.Queue(new DatasetRowSchema { Value = 3, Path = parkedKey }))
+                        .Throws<IOException>();
+                    file.FailOpen = false;
+                    writer.Queue(new DatasetRowSchema { Value = 3, Path = parkedKey });
+                }
+            }
+
+            var actual = new List<int>();
+            foreach (var part in directory.GetFiles("*.parquet"))
+            {
+                if (part.Length == 0)
+                    continue;
+                using var reader = DatasetRowSchema.CreateRowReader(part.OpenRead());
+                while (reader.MoveNext())
+                    actual.Add(reader.Current.Value);
+            }
+            actual.Sort();
+            int[] expected = parked ? [1, 2, 3, 4] : [2, 3];
+            await Assert.That(actual).IsEquivalentTo(expected);
+
+            ReadOnlySpan<byte> SelectFile(ReadOnlySpan<byte> key, ulong index, IParquetBufferPool pool,
+                out ParquetBuffer? allocation)
+            {
+                allocation = null;
+                if (index == (parked ? 2UL : 1UL) && !failed)
+                {
+                    failed = true;
+                    if (!failOpen)
+                        throw new IOException("Rollover selector failed.");
+                    file.FailOpen = true;
+                }
+                return Encoding.UTF8.GetBytes(Path.Combine(directory.FullName, $"{index}.parquet"));
+            }
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task PromotionOpenFailureKeepsParkedRowsQueued()
+    {
+        var directory = Directory.CreateTempSubdirectory("plank-promotion-");
+        try
+        {
+            using var file = new TestParquetSource();
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, SelectFile, [file],
+                new DatasetWriterOptions
+                {
+                    PendingRowCapacity = 2,
+                    WriterOptions = new ParquetWriterOptions
+                    {
+                        RowApiInitialRowCapacity = 1,
+                        TargetRowGroupSizeBytes = ulong.MaxValue,
+                        TargetFileSizeBytes = ulong.MaxValue
+                    }
+                }))
+            {
+                writer.Queue(new DatasetRowSchema { Value = 10, Path = "p0"u8.ToArray() });
+                writer.Queue(new DatasetRowSchema { Value = 11, Path = "p1"u8.ToArray() });
+                // Parking row 21 fills the pool. Promoting p2 evicts p0, then opening p2 fails:
+                // both parked rows, including this call's, stay queued.
+                file.FailOpen = true;
+                await Assert.That(() => writer.Queue(new DatasetRowSchema { Value = 21, Path = "p2"u8.ToArray() }))
+                    .Throws<IOException>();
+                file.FailOpen = false;
+                // The pool is still full: this promotes p2, then parks row 12 next to p1's row.
+                writer.Queue(new DatasetRowSchema { Value = 12, Path = "p1"u8.ToArray() });
+            }
+
+            await Assert.That(ReadPartition("p0")).IsEquivalentTo([10]);
+            await Assert.That(ReadPartition("p1")).IsEquivalentTo([11, 12]);
+            await Assert.That(ReadPartition("p2")).IsEquivalentTo([21]);
+
+            List<int> ReadPartition(string key)
+            {
+                var result = new List<int>();
+                foreach (var part in directory.GetFiles($"{key}-*.parquet"))
+                {
+                    if (part.Length == 0)
+                        continue;
+                    using var reader = DatasetRowSchema.CreateRowReader(part.OpenRead());
+                    while (reader.MoveNext())
+                        result.Add(reader.Current.Value);
+                }
+                return result;
+            }
+
+            ReadOnlySpan<byte> SelectFile(ReadOnlySpan<byte> key, ulong index, IParquetBufferPool pool,
+                out ParquetBuffer? allocation)
+            {
+                allocation = null;
+                return Encoding.UTF8.GetBytes(
+                    Path.Combine(directory.FullName, $"{Encoding.UTF8.GetString(key)}-{index}.parquet"));
+            }
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Test]
     public async Task RollsPartitionRowsIntoTargetSizedFiles()
     {
         using var paths = new DatasetPartPaths();
