@@ -1248,6 +1248,13 @@ static class NestedParquetRowEmitter
         string source, int depth, int indent, List<string> indexes)
     {
         var padding = new string(' ', indent * 4);
+        if (node.Kind is NodeKind.Leaf or NodeKind.Group && !node.Optional && node.TypeSymbol.IsReferenceType)
+        {
+            var message = $"Required generated property '{node.PropertyName}' cannot be null.";
+            source = $"({source} ?? throw new global::System.InvalidOperationException(" +
+                Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(message, quote: true) + "))";
+        }
+
         if (node.Kind == NodeKind.Leaf)
         {
             builder.Append(padding).Append(target).Append(" = ").Append(ConvertToStorage(names, leaf, source))
@@ -1457,7 +1464,9 @@ static class NestedParquetRowEmitter
         {
             "byte" or "ushort" or "uint" or "ulong" =>
                 ConvertUnsignedInteger(leaf, expression, scalar.StorageType),
-            "string" => $"{expression} is null ? null! : {names.Root("GeneratedStrictUtf8")}.GetBytes({expression}!)",
+            "string" => leaf.Node.Optional
+                ? $"{expression} is null ? null! : {names.Root("GeneratedStrictUtf8")}.GetBytes({expression}!)"
+                : $"{names.Root("GeneratedStrictUtf8")}.GetBytes({expression})",
             "global::System.ReadOnlyMemory<byte>" => scalar.UserType.EndsWith("?", StringComparison.Ordinal)
                 ? $"{expression}.HasValue ? {expression}!.Value.ToArray() : null!"
                 : $"{expression}.ToArray()",
