@@ -9,18 +9,29 @@ namespace Plank.Schema;
 public sealed record ParquetSchema
 {
     public ParquetSchema(ImmutableArray<ColumnDefinition> definitions)
+        : this(definitions, ProjectOrThrow(definitions))
+    {
+    }
+
+    ParquetSchema(ImmutableArray<ColumnDefinition> definitions,
+        (ImmutableArray<Column> Columns, ImmutableArray<ImmutableArray<string>> Paths,
+            ImmutableArray<LeafProjectionInfo> Infos) projection)
     {
         Definitions = definitions.IsDefault ? [] : definitions;
-        if (!TryProjectLeafColumns(Definitions, out var projectedColumns, out var projectedPaths, out var projectedInfos,
-                out var error))
+        Columns = projection.Columns;
+        LeafColumns = BuildLeafColumns(projection.Columns, projection.Infos);
+        LeafPaths = projection.Paths;
+        LeafProjectionInfos = projection.Infos;
+    }
+
+    static (ImmutableArray<Column> Columns, ImmutableArray<ImmutableArray<string>> Paths,
+        ImmutableArray<LeafProjectionInfo> Infos) ProjectOrThrow(ImmutableArray<ColumnDefinition> definitions)
+    {
+        if (!TryProjectLeafColumns(definitions, out var columns, out var paths, out var infos, out var error))
             throw error is { } reason
                 ? new ArgumentException(reason.Message, reason.ParameterName)
                 : new ArgumentException("Schema definitions must form a valid, projectable schema.", nameof(definitions));
-
-        Columns = projectedColumns;
-        LeafColumns = BuildLeafColumns(projectedColumns, projectedInfos);
-        LeafPaths = projectedPaths;
-        LeafProjectionInfos = projectedInfos;
+        return (columns, paths, infos);
     }
 
     /// <summary>
@@ -33,8 +44,7 @@ public sealed record ParquetSchema
     internal static bool TryCreate(ImmutableArray<ColumnDefinition> definitions,
         [NotNullWhen(true)] out ParquetSchema? schema, out string? error)
     {
-        var normalized = definitions.IsDefault ? [] : definitions;
-        if (!TryProjectLeafColumns(normalized, out _, out _, out _, out var reason))
+        if (!TryProjectLeafColumns(definitions, out var columns, out var paths, out var infos, out var reason))
         {
             schema = null;
             error = reason?.Message;
@@ -43,7 +53,7 @@ public sealed record ParquetSchema
 
         error = null;
 
-        schema = new ParquetSchema(normalized);
+        schema = new ParquetSchema(definitions, (columns, paths, infos));
         return true;
     }
 
