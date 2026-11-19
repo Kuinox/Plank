@@ -144,9 +144,15 @@ public readonly struct RowGroup
         var physicalColumnOrdinal = columnChunk.PhysicalColumnOrdinal >= 0
             ? columnChunk.PhysicalColumnOrdinal
             : columnOrdinal;
+        var definition = reader.Schema.LeafColumns[columnOrdinal];
+        var physical = reader.Metadata.Schema.LeafColumns[physicalColumnOrdinal];
+        // Materialize with the requested column (including any converter), but decode wire levels
+        // using the file schema. A required file leaf requested as optional has no definition stream.
+        if (definition.MaxRepetitionLevel != physical.MaxRepetitionLevel ||
+            definition.MaxDefinitionLevel != physical.MaxDefinitionLevel)
+            definition = new LeafColumn(definition.Column, definition.Ordinal, physical.ProjectionInfo);
         return new NestedColumnBufferEnumerable<T>(reader.PhysicalReader, Metadata.RowGroupOrdinal,
-            physicalColumnOrdinal, reader.Schema.LeafColumns[columnOrdinal], reader.Options.BufferPool,
-            Metadata.RowCount, reader.PagePruner);
+            physicalColumnOrdinal, definition, reader.Options.BufferPool, Metadata.RowCount, reader.PagePruner);
     }
 
     internal VariableLengthNestedColumnBufferEnumerable<T> EnumerateVariableLengthNestedBuffers<T>(Column column,
