@@ -346,6 +346,7 @@ static partial class DeltaBinaryPackedDecoder
         return reader.Offset;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void ReadInt32Values(ref DeltaBinaryPackedReader reader, Span<int> destination,
         BlockLayout layout)
     {
@@ -416,7 +417,6 @@ static partial class DeltaBinaryPackedDecoder
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void ReadNullableInt32Blocks(ref DeltaBinaryPackedReader reader,
         Span<int?> destination, BlockLayout layout, ref long previous,
         bool canonicalLayout)
