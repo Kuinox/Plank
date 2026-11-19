@@ -57,8 +57,8 @@ public struct ParquetPageCursor : IDisposable
     {
         _pageMetadata = pageMetadata;
         _pruner = pruner;
-        _dictionaryPending = _chunk.DictionaryPageOffset != 0 &&
-            _chunk.DictionaryPageOffset < _chunk.DataPageOffset;
+        // Resolved before the first selected page: the dictionary precedes the first data page.
+        _dictionaryPending = true;
     }
 
     public PageHeader CurrentHeader { get; private set; }
@@ -142,9 +142,14 @@ public struct ParquetPageCursor : IDisposable
         if (_dictionaryPending)
         {
             _dictionaryPending = false;
-            var dictionaryOffset = checked((int)(_chunk.DictionaryPageOffset - _chunk.ChunkOffset));
-            var dictionaryLength = checked((int)(_chunk.DataPageOffset - _chunk.DictionaryPageOffset));
-            return ReadPage(owner, dictionaryOffset, dictionaryLength);
+            // A dictionary sits at dictionary_page_offset when the writer set it, and otherwise often at
+            // data_page_offset (parquet-mr, Impala); either way it is the chunk's first page, ahead of the first
+            // data page. Location validation allows only non-data pages there.
+            var firstDataPage = metadata.GetMetadata(0).Offset;
+            if (firstDataPage > _chunk.ChunkOffset &&
+                ReadPage(owner, 0, checked((int)(firstDataPage - _chunk.ChunkOffset))) &&
+                CurrentHeader.Type == PageHeaderType.DictionaryPage)
+                return true;
         }
 
         var selected = metadata.GetMetadata(_pendingPageOrdinal);

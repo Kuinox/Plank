@@ -102,6 +102,65 @@ internal sealed class LogicalPageMetadataTests
         await Assert.That(values).IsEquivalentTo(new[] { 1, 2, 3, 4, 5, 6, 7, 8 });
     }
 
+    /// <remarks>
+    /// parquet-mr, Impala and Hadoop writers often leave dictionary_page_offset unset and put the dictionary page
+    /// at data_page_offset. A plain scan walks the chunk from its start and finds it; a pruned scan only looked for it
+    /// at dictionary_page_offset, so any reader-level pruner made these files unreadable.
+    /// </remarks>
+    [Test]
+    [Arguments("data/alltypes_tiny_pages.parquet")]
+    [Arguments("data/datapage_v2.snappy.parquet")]
+    [Arguments("data/nullable.impala.parquet")]
+    public void PrunedScanFindsDictionaryAtDataPageOffset(string relativePath)
+    {
+        if (!ParquetTesting.ParquetTestingCorpus.IsAvailable)
+            throw new InvalidOperationException(ParquetTesting.ParquetTestingCorpus.MissingMessage);
+        var bytes = ParquetTesting.ParquetTestingCorpus.ReadAllBytes(relativePath);
+
+        var plain = ReadAllLeaves(bytes, pruner: null);
+        var pruned = ReadAllLeaves(bytes, static (in ParquetDataPageMetadata _) => true);
+
+        if (!plain.SequenceEqual(pruned))
+            throw new InvalidOperationException("A keep-all pruned scan returned different levels or values.");
+    }
+
+    static List<string> ReadAllLeaves(byte[] bytes, ParquetPagePruner? pruner)
+    {
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(bytes, writable: false), pruner);
+        var output = new List<string>();
+        foreach (var rowGroup in reader.RowGroups)
+            for (var column = 0; column < reader.Schema.LeafColumns.Length; column++)
+                switch (reader.Schema.LeafColumns[column].PhysicalType)
+                {
+                    case ParquetPhysicalType.Boolean: ReadLeaf<bool>(rowGroup, column, output); break;
+                    case ParquetPhysicalType.Int32: ReadLeaf<int>(rowGroup, column, output); break;
+                    case ParquetPhysicalType.Int64: ReadLeaf<long>(rowGroup, column, output); break;
+                    case ParquetPhysicalType.Float: ReadLeaf<float>(rowGroup, column, output); break;
+                    case ParquetPhysicalType.Double: ReadLeaf<double>(rowGroup, column, output); break;
+                    default: ReadLeaf<byte>(rowGroup, column, output); break;
+                }
+        return output;
+    }
+
+    static void ReadLeaf<T>(RowGroup rowGroup, int column, List<string> output)
+        where T : unmanaged
+    {
+        foreach (var buffer in rowGroup.NestedColumn<T>(column))
+        {
+            output.Add(string.Join(",", buffer.RepetitionLevels.ToArray()));
+            output.Add(string.Join(",", buffer.DefinitionLevels.ToArray()));
+            if (typeof(T) == typeof(byte))
+            {
+                var values = (ColumnBuffer<byte>)(object)buffer.Values;
+                for (var i = 0; i < values.Count; i++)
+                    output.Add(Convert.ToHexString(values.GetValue(i)));
+            }
+            else
+                output.Add(string.Join(",", buffer.Values.Values.ToArray()));
+        }
+    }
+
     public enum WriterKind
     {
         Int32,
