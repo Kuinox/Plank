@@ -1552,6 +1552,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         page.UncompressedContentSize = uncompressedContentSize;
         page.Header.Reset();
+        if (!ColumnStatistics.HasDefinedOrder(_column))
+            page.Statistics = ColumnStatistics.Empty(page.NullCount);
         var writeLegacyBinaryStatistics = ParquetMetadataThriftWriter.HasSignedBinaryStatisticsOrder(_column);
         if (_owner.DataPageVersion == ParquetDataPageVersion.V1)
         {
