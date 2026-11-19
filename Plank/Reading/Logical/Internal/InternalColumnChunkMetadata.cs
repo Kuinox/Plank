@@ -6,42 +6,25 @@ namespace Plank.Reading.Logical.Internal;
 
 readonly struct InternalColumnChunkMetadata
 {
-    internal InternalColumnChunkMetadata(ulong dataPageOffset, ulong dictionaryPageOffset, ulong totalCompressedSize,
-        ulong totalUncompressedSize, ulong valueCount, CompressionKind compression, EncodingKind[] encodings, string path,
-        ParquetPhysicalType physicalType,
-        ulong columnIndexOffset = 0, uint columnIndexLength = 0, ulong offsetIndexOffset = 0,
-        uint offsetIndexLength = 0, ulong bloomFilterOffset = 0, uint bloomFilterLength = 0,
-        int physicalColumnOrdinal = -1,
-        EncodedStatistics statistics = default)
+    internal InternalColumnChunkMetadata(ParquetColumnChunkInfo chunk, EncodingKind[] encodings)
     {
-        Path = path;
-        PhysicalType = physicalType;
-        PhysicalColumnOrdinal = physicalColumnOrdinal;
-        DataPageOffset = dataPageOffset;
-        DictionaryPageOffset = dictionaryPageOffset;
-        TotalCompressedSize = totalCompressedSize;
-        TotalUncompressedSize = totalUncompressedSize;
-        ValueCount = valueCount;
-        Compression = compression;
-        Encodings = encodings ?? [];
-        ColumnIndexOffset = columnIndexOffset;
-        ColumnIndexLength = columnIndexLength;
-        OffsetIndexOffset = offsetIndexOffset;
-        OffsetIndexLength = offsetIndexLength;
-        BloomFilterOffset = bloomFilterOffset;
-        BloomFilterLength = bloomFilterLength;
-        Statistics = statistics;
+        PhysicalType = chunk.PhysicalType;
+        PhysicalColumnOrdinal = chunk.ColumnOrdinal;
+        DataPageOffset = chunk.DataPageOffset;
+        DictionaryPageOffset = chunk.DictionaryPageOffset;
+        TotalCompressedSize = chunk.TotalCompressedSize;
+        TotalUncompressedSize = chunk.TotalUncompressedSize;
+        ValueCount = chunk.ValueCount;
+        Compression = chunk.Compression;
+        Encodings = encodings;
+        ColumnIndexOffset = chunk.ColumnIndexOffset;
+        ColumnIndexLength = chunk.ColumnIndexLength;
+        OffsetIndexOffset = chunk.OffsetIndexOffset;
+        OffsetIndexLength = chunk.OffsetIndexLength;
+        BloomFilterOffset = chunk.BloomFilterOffset;
+        BloomFilterLength = chunk.BloomFilterLength;
+        Statistics = chunk.Statistics;
     }
-
-    internal InternalColumnChunkMetadata(ParquetColumnChunkInfo chunk, EncodingKind[] encodings, string path)
-        : this(chunk.DataPageOffset, chunk.DictionaryPageOffset, chunk.TotalCompressedSize,
-            chunk.TotalUncompressedSize, chunk.ValueCount, chunk.Compression, encodings, path, chunk.PhysicalType,
-            chunk.ColumnIndexOffset, chunk.ColumnIndexLength, chunk.OffsetIndexOffset, chunk.OffsetIndexLength,
-            chunk.BloomFilterOffset, chunk.BloomFilterLength, chunk.ColumnOrdinal, chunk.Statistics)
-    {
-    }
-
-    internal string Path { get; }
 
     internal ParquetPhysicalType PhysicalType { get; }
 
