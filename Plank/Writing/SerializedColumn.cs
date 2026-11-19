@@ -145,13 +145,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         if (typeof(T) == typeof(int?))
         {
-            SerializeOptionalTyped(AsNullableSpan<int>(values));
+            SerializeNullableInt32(AsNullableSpan<int>(values));
             return;
         }
 
         if (typeof(T) == typeof(int))
         {
-            SerializeTyped(AsSpan<int>(values));
+            SerializeInt32(AsSpan<int>(values));
             return;
         }
 
@@ -193,13 +193,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         if (typeof(T) == typeof(long?))
         {
-            SerializeOptionalTyped(AsNullableSpan<long>(values));
+            SerializeNullableInt64(AsNullableSpan<long>(values));
             return;
         }
 
         if (typeof(T) == typeof(long))
         {
-            SerializeTyped(AsSpan<long>(values));
+            SerializeInt64(AsSpan<long>(values));
             return;
         }
 
@@ -423,9 +423,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         else if (typeof(TPhysical) == typeof(bool))
             SerializeTyped(Reinterpret<TPhysical, bool>(values));
         else if (typeof(TPhysical) == typeof(int?))
-            SerializeOptionalTyped(Reinterpret<TPhysical, int?>(values));
+            SerializeNullableInt32(Reinterpret<TPhysical, int?>(values));
         else if (typeof(TPhysical) == typeof(int))
-            SerializeTyped(Reinterpret<TPhysical, int>(values));
+            SerializeInt32(Reinterpret<TPhysical, int>(values));
         else if (typeof(TPhysical) == typeof(byte?))
             SerializeNullableByte(Reinterpret<TPhysical, byte?>(values));
         else if (typeof(TPhysical) == typeof(byte))
@@ -439,9 +439,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         else if (typeof(TPhysical) == typeof(uint))
             SerializeUInt32(Reinterpret<TPhysical, uint>(values));
         else if (typeof(TPhysical) == typeof(long?))
-            SerializeOptionalTyped(Reinterpret<TPhysical, long?>(values));
+            SerializeNullableInt64(Reinterpret<TPhysical, long?>(values));
         else if (typeof(TPhysical) == typeof(long))
-            SerializeTyped(Reinterpret<TPhysical, long>(values));
+            SerializeInt64(Reinterpret<TPhysical, long>(values));
         else if (typeof(TPhysical) == typeof(ulong?))
             SerializeNullableUInt64(Reinterpret<TPhysical, ulong?>(values));
         else if (typeof(TPhysical) == typeof(ulong))
@@ -608,6 +608,64 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         {
             _owner.BufferWriters.ReturnScratch(rented);
         }
+    }
+
+    bool IsUnsignedInteger => _column.LogicalType is LogicalType.Int { IsSigned: false };
+
+    void SerializeInt32(ReadOnlySpan<int> values)
+    {
+        SerializeTyped(values);
+        if (IsUnsignedInteger)
+            AssignUnsignedStatistics(MemoryMarshal.Cast<int, uint>(values));
+    }
+
+    void SerializeNullableInt32(ReadOnlySpan<int?> values)
+    {
+        SerializeOptionalTyped(values);
+        if (IsUnsignedInteger)
+            AssignUnsignedStatistics(MemoryMarshal.CreateReadOnlySpan(
+                ref Unsafe.As<int?, uint?>(ref MemoryMarshal.GetReference(values)), values.Length));
+    }
+
+    void SerializeInt64(ReadOnlySpan<long> values)
+    {
+        SerializeTyped(values);
+        if (IsUnsignedInteger)
+            AssignUnsignedStatistics(MemoryMarshal.Cast<long, ulong>(values));
+    }
+
+    void SerializeNullableInt64(ReadOnlySpan<long?> values)
+    {
+        SerializeOptionalTyped(values);
+        if (IsUnsignedInteger)
+            AssignUnsignedStatistics(MemoryMarshal.CreateReadOnlySpan(
+                ref Unsafe.As<long?, ulong?>(ref MemoryMarshal.GetReference(values)), values.Length));
+    }
+
+    // Physical int/long values of an unsigned column (given directly or produced by a converter) were encoded and
+    // their statistics taken in signed order; replace them with the unsigned ones the uint/ulong entry points compute.
+    void AssignUnsignedStatistics(ReadOnlySpan<uint> values)
+    {
+        Statistics = ColumnStatistics.CreateUInt32(values, 0);
+        AssignUInt32PageStatistics(values);
+    }
+
+    void AssignUnsignedStatistics(ReadOnlySpan<uint?> values)
+    {
+        Statistics = ColumnStatistics.CreateNullableUInt32(values);
+        AssignNullableUInt32PageStatistics(values);
+    }
+
+    void AssignUnsignedStatistics(ReadOnlySpan<ulong> values)
+    {
+        Statistics = ColumnStatistics.CreateUInt64(values, 0);
+        AssignUInt64PageStatistics(values);
+    }
+
+    void AssignUnsignedStatistics(ReadOnlySpan<ulong?> values)
+    {
+        Statistics = ColumnStatistics.CreateNullableUInt64(values);
+        AssignNullableUInt64PageStatistics(values);
     }
 
     void SerializeUInt32(ReadOnlySpan<uint> values)
