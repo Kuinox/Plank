@@ -270,12 +270,6 @@ static partial class DeltaBinaryPackedDecoder
         return values;
     }
 
-    internal static long[] ReadInt64(ReadOnlySpan<byte> payload)
-    {
-        var (values, _) = ReadInt64Core(payload);
-        return values;
-    }
-
     internal static int ReadInt32(ReadOnlySpan<byte> payload, Span<int> destination)
         => ReadInt32Core(payload, destination);
 
@@ -1089,29 +1083,6 @@ static partial class DeltaBinaryPackedDecoder
         }
 
         return reader.Offset;
-    }
-
-    static (long[] Values, int ConsumedBytes) ReadInt64Core(ReadOnlySpan<byte> payload)
-    {
-        var reader = new DeltaBinaryPackedReader(payload);
-        var layout = ReadBlockLayout(ref reader);
-        var valueCount = ReadValueCount(ref reader);
-
-        var maxPossibleValues = MaxPossibleValues(layout, payload.Length - reader.Offset);
-        if (valueCount > maxPossibleValues)
-            throw new CorruptParquetException(
-                $"Delta binary packed value count {valueCount} exceeds what {payload.Length - reader.Offset} bytes could encode.");
-
-        if (valueCount == 0)
-        {
-            _ = reader.ReadUnsignedVarInt();
-            return ([], reader.Offset);
-        }
-
-        var values = new long[(int)valueCount];
-        ReadInt64Values(ref reader, values, layout);
-
-        return (values, reader.Offset);
     }
 
     static int ReadInt64Core(ReadOnlySpan<byte> payload, Span<long> destination)

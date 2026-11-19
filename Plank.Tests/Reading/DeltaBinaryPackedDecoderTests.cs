@@ -72,7 +72,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
     {
         byte[] payload = [0x80, 1, 4, 0x80, 0x80, 0x80, 0x80, 8, 0];
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(payload));
-        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt64(payload));
+        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.StartBatch(payload, 0, isInt64: true));
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.StartBatch(payload, 0, isInt64: false));
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(payload, 0));
     }
@@ -926,7 +926,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
     }
 
     [Test]
-    public void ReadInt64ArrayRoundTripsMixedMiniBlockWidths()
+    public void ReadInt64SpanRoundTripsMixedMiniBlockWidths()
     {
         int[][] widthPatterns =
         [
@@ -949,11 +949,12 @@ internal sealed class DeltaBinaryPackedDecoderTests
                 var payload = new byte[writer.WrittenLength];
                 writer.CopyTo(payload);
 
-                var decoded = DeltaBinaryPackedDecoder.ReadInt64(payload);
+                var decoded = new long[values.Length];
+                DeltaBinaryPackedDecoder.ReadInt64(payload, decoded);
 
                 if (!decoded.SequenceEqual(values))
                     throw new InvalidOperationException(
-                        $"Int64 array decode did not round-trip widths {string.Join(", ", widths)}.");
+                        $"Int64 span decode did not round-trip widths {string.Join(", ", widths)}.");
             }
             finally
             {
