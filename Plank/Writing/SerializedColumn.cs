@@ -1048,7 +1048,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
 
         var statisticsValues = hasDictionaryStatistics && typeof(TValue) != typeof(float)
-            && typeof(TValue) != typeof(double)
+            && typeof(TValue) != typeof(double) && _column.LogicalType is not LogicalType.Float16
             ? dictionaryState.AsSpan()
             : values;
         // The BYTE_ARRAY sizing or encode pass already compared every value on its way into the page buffer, so

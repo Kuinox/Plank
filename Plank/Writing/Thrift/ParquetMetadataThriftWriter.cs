@@ -968,6 +968,13 @@ static class ParquetMetadataThriftWriter
                 writer.WriteBinary(value);
                 return;
             }
+            case ColumnStatistics.ColumnStatisticsValueKind.Float16:
+            {
+                Span<byte> value = stackalloc byte[sizeof(ushort)];
+                BinaryPrimitives.WriteUInt16LittleEndian(value, checked((ushort)bits));
+                writer.WriteBinary(value);
+                return;
+            }
             case ColumnStatistics.ColumnStatisticsValueKind.Float:
             {
                 Span<byte> value = stackalloc byte[sizeof(float)];

@@ -153,9 +153,8 @@ internal readonly struct ColumnStatistics
     /// instead of walking the values again.
     /// </summary>
     /// <remarks>
-    /// The encoder orders values unsigned lexicographically, which is what
-    /// <see cref="CompareBinary"/> does for every BYTE_ARRAY column except a decimal one. Callers must
-    /// check <see cref="OrdersBinaryValuesLexicographically"/> before using an encoder-supplied result.
+    /// The encoder orders values unsigned lexicographically. Callers must check
+    /// <see cref="OrdersBinaryValuesLexicographically"/> before using an encoder-supplied result.
     /// </remarks>
     internal static ColumnStatistics CreateBinaryFromKnownExtremes<T>(Column column, ReadOnlySpan<T> values,
         int minIndex, int maxIndex, long nullCount, ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer,
@@ -202,13 +201,13 @@ internal readonly struct ColumnStatistics
     }
 
     /// <summary>
-    /// Whether the column's BYTE_ARRAY values compare as plain unsigned byte sequences. Decimals do
-    /// not: their bytes are a two's complement number, so they are ordered by sign and magnitude.
+    /// Whether binary bounds can be collected by comparing unsigned byte sequences.
+    /// DECIMAL and FLOAT16 require numeric comparisons.
     /// </summary>
     internal static bool OrdersBinaryValuesLexicographically(Column column)
     {
         ArgumentNullException.ThrowIfNull(column);
-        return column.LogicalType is not LogicalType.Decimal;
+        return column.LogicalType is not (LogicalType.Decimal or LogicalType.Float16);
     }
 
     static ColumnStatistics CreateRepeated<T>(Column column, ReadOnlySpan<T> values, long nullCount)
@@ -751,8 +750,78 @@ internal readonly struct ColumnStatistics
         }
     }
 
+    static ColumnStatistics CreateFloat16(ReadOnlySpan<byte[]> values, long nullCount)
+    {
+        var accumulator = new Float16Accumulator();
+        foreach (var value in values)
+        {
+            if (value is null)
+                nullCount++;
+            else
+                accumulator.Add(value);
+        }
+        return accumulator.ToStatistics(nullCount);
+    }
+
+    static ColumnStatistics CreateFloat16(ReadOnlySpan<ReadOnlyMemory<byte>> values, long nullCount)
+    {
+        var accumulator = new Float16Accumulator();
+        foreach (var value in values)
+            accumulator.Add(value.Span);
+        return accumulator.ToStatistics(nullCount);
+    }
+
+    static ColumnStatistics CreateFloat16(ReadOnlySpan<ReadOnlyMemory<byte>?> values)
+    {
+        var accumulator = new Float16Accumulator();
+        var nullCount = 0L;
+        foreach (var value in values)
+        {
+            if (value is { } memory)
+                accumulator.Add(memory.Span);
+            else
+                nullCount++;
+        }
+        return accumulator.ToStatistics(nullCount);
+    }
+
+    struct Float16Accumulator
+    {
+        int _min = int.MaxValue;
+        int _max = int.MinValue;
+        long _nanCount;
+
+        public Float16Accumulator() { }
+
+        internal void Add(ReadOnlySpan<byte> value)
+        {
+            var bits = BinaryPrimitives.ReadUInt16LittleEndian(value);
+            var magnitude = bits & 0x7fff;
+            if (magnitude > 0x7c00)
+            {
+                _nanCount++;
+                return;
+            }
+
+            // Binary16 magnitude bits already increase with magnitude, including subnormals.
+            var key = (bits & 0x8000) == 0 ? magnitude : -magnitude;
+            _min = Math.Min(_min, key);
+            _max = Math.Max(_max, key);
+        }
+
+        internal readonly ColumnStatistics ToStatistics(long nullCount)
+            => _min == int.MaxValue
+                ? EmptyFloating(nullCount, _nanCount)
+                : new ColumnStatistics(ColumnStatisticsValueKind.Float16,
+                    _min <= 0 ? 0x8000 - _min : _min, _max < 0 ? 0x8000 - _max : _max,
+                    nullCount, true, _nanCount);
+    }
+
     static ColumnStatistics CreateByteArray(Column column, ReadOnlySpan<byte[]> values, long nullCount)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values, nullCount);
+
         if (values.Length == 0)
             return Empty(nullCount);
 
@@ -773,6 +842,9 @@ internal readonly struct ColumnStatistics
     static ColumnStatistics CreateByteArray(Column column, ReadOnlySpan<byte[]> values, long nullCount,
         ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values, nullCount);
+
         if (values.Length == 0)
             return Empty(nullCount);
 
@@ -794,6 +866,9 @@ internal readonly struct ColumnStatistics
 
     static ColumnStatistics CreateOptionalByteArray(Column column, ReadOnlySpan<byte[]> values)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values, 0);
+
         byte[]? min = null;
         byte[]? max = null;
         var nullCount = 0L;
@@ -825,6 +900,9 @@ internal readonly struct ColumnStatistics
     static ColumnStatistics CreateOptionalByteArray(Column column, ReadOnlySpan<byte[]> values,
         ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values, 0);
+
         ReadOnlySpan<byte> min = default;
         ReadOnlySpan<byte> max = default;
         var hasValue = false;
@@ -862,6 +940,9 @@ internal readonly struct ColumnStatistics
 
     static ColumnStatistics CreateMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>> values, long nullCount)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values, nullCount);
+
         if (values.Length == 0)
             return Empty(nullCount);
 
@@ -882,6 +963,9 @@ internal readonly struct ColumnStatistics
     static ColumnStatistics CreateMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>> values, long nullCount,
         ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values, nullCount);
+
         if (values.Length == 0)
             return Empty(nullCount);
 
@@ -903,6 +987,9 @@ internal readonly struct ColumnStatistics
 
     static ColumnStatistics CreateNullableMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>?> values)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values);
+
         byte[]? min = null;
         byte[]? max = null;
         var nullCount = 0L;
@@ -934,6 +1021,9 @@ internal readonly struct ColumnStatistics
     static ColumnStatistics CreateNullableMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>?> values,
         ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values);
+
         ReadOnlySpan<byte> min = default;
         ReadOnlySpan<byte> max = default;
         var hasValue = false;
@@ -1514,12 +1604,14 @@ internal readonly struct ColumnStatistics
         UInt64,
         Float,
         Double,
+        Float16,
         Binary
     }
 
     struct RepeatedAccumulator
     {
         readonly Column _column;
+        Float16Accumulator _float16;
         bool _hasValue;
         bool _minBool;
         bool _maxBool;
@@ -1542,6 +1634,7 @@ internal readonly struct ColumnStatistics
         internal RepeatedAccumulator(Column column)
         {
             _column = column;
+            _float16 = new Float16Accumulator();
             _hasValue = false;
             _minBool = true;
             _maxBool = false;
@@ -1586,6 +1679,9 @@ internal readonly struct ColumnStatistics
 
         internal ColumnStatistics ToStatistics(long nullCount)
         {
+            if (_column.LogicalType is LogicalType.Float16)
+                return _float16.ToStatistics(nullCount);
+
             if (!_hasValue)
                 return _column.PhysicalType is ParquetPhysicalType.Float or ParquetPhysicalType.Double
                     ? EmptyFloating(nullCount, _nanCount)
@@ -1627,6 +1723,9 @@ internal readonly struct ColumnStatistics
                     return;
                 case ParquetPhysicalType.Double:
                     AddDouble((double)value);
+                    return;
+                case ParquetPhysicalType.FixedLenByteArray when _column.LogicalType is LogicalType.Float16:
+                    _float16.Add(value is byte[] bytes ? bytes : ((ReadOnlyMemory<byte>)value).Span);
                     return;
                 case ParquetPhysicalType.ByteArray:
                 case ParquetPhysicalType.FixedLenByteArray:
