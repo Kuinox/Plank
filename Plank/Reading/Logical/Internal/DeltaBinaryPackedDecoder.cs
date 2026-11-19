@@ -273,10 +273,6 @@ static partial class DeltaBinaryPackedDecoder
     internal static int ReadInt32(ReadOnlySpan<byte> payload, Span<int> destination)
         => ReadInt32Core(payload, destination);
 
-    internal static int ReadNullableInt32(ReadOnlySpan<byte> payload, Span<int?> destination,
-        bool canonicalLayout)
-        => ReadNullableInt32Core(payload, destination, canonicalLayout);
-
     internal static int ReadNarrowInt32<T>(ReadOnlySpan<byte> payload, Span<T> destination)
         where T : unmanaged
         => ReadNarrowInt32Core(payload, destination);
@@ -350,27 +346,6 @@ static partial class DeltaBinaryPackedDecoder
         return reader.Offset;
     }
 
-    static int ReadNullableInt32Core(ReadOnlySpan<byte> payload, Span<int?> destination,
-        bool canonicalLayout)
-    {
-        var reader = new DeltaBinaryPackedReader(payload);
-        var layout = ReadBlockLayout(ref reader);
-        var valueCount = ReadValueCount(ref reader);
-        if ((uint)destination.Length != valueCount)
-            throw new CorruptParquetException(
-                $"DeltaBinaryPacked encoded value count {valueCount} does not match expected {destination.Length}.");
-
-        if (valueCount == 0)
-        {
-            _ = ReadInt32FirstValue(ref reader);
-            return reader.Offset;
-        }
-
-        ReadNullableInt32Values(ref reader, destination, layout, canonicalLayout);
-        return reader.Offset;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void ReadInt32Values(ref DeltaBinaryPackedReader reader, Span<int> destination,
         BlockLayout layout)
     {
@@ -442,15 +417,6 @@ static partial class DeltaBinaryPackedDecoder
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    static void ReadNullableInt32Values(ref DeltaBinaryPackedReader reader,
-        Span<int?> destination, BlockLayout layout, bool canonicalLayout)
-    {
-        long previous = ReadInt32FirstValue(ref reader);
-        destination[0] = NarrowInt32(previous);
-        ReadNullableInt32Blocks(ref reader, destination[1..], layout, ref previous,
-            canonicalLayout);
-    }
-
     static void ReadNullableInt32Blocks(ref DeltaBinaryPackedReader reader,
         Span<int?> destination, BlockLayout layout, ref long previous,
         bool canonicalLayout)

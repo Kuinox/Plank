@@ -8,6 +8,19 @@ namespace Plank.Tests.Reading;
 
 internal sealed class DeltaBinaryPackedDecoderTests
 {
+    internal static int ReadNullableInt32Batched(ReadOnlySpan<byte> payload, Span<int?> values,
+        bool canonicalLayout)
+    {
+        var state = DeltaBinaryPackedDecoder.StartBatch(payload, values.Length, isInt64: false);
+        while (state.Active)
+        {
+            var count = state.NextBatchCount(64);
+            DeltaBinaryPackedDecoder.ReadNullableInt32Batch(payload, values.Slice(state.ValuesRead, count),
+                ref state, canonicalLayout);
+        }
+        return state.Offset;
+    }
+
     [Test]
     public void OversizedMiniBlockIsCorruptWhenPackedPayloadIsMissing()
     {
@@ -35,7 +48,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
         var nullable = new int?[2];
         var narrow = new byte[2];
         DeltaBinaryPackedDecoder.ReadInt64(payload, longs);
-        DeltaBinaryPackedDecoder.ReadNullableInt32(payload, nullable, true);
+        ReadNullableInt32Batched(payload, nullable, true);
         DeltaBinaryPackedDecoder.ReadNarrowInt32<byte>(payload, narrow);
         if (!values.SequenceEqual(new[] { 21, 21 }) || !longs.SequenceEqual(new long[] { 21, 21 }) ||
             !nullable.SequenceEqual(new int?[] { 21, 21 }) || !narrow.SequenceEqual(new byte[] { 21, 21 }) ||
@@ -49,7 +62,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
         var width33 = CreateDeclaredWidthPayload(33, 2);
         var width65 = CreateDeclaredWidthPayload(65, 2);
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(width33, new int[2]));
-        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNullableInt32(width33, new int?[2], true));
+        Assert.Throws<CorruptParquetException>(() => ReadNullableInt32Batched(width33, new int?[2], true));
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNarrowInt32<byte>(width33, new byte[2]));
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(width33, 2));
         var longs = new long[2];
@@ -61,7 +74,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
         // A partially filled mini-block still requires its full padded payload.
         var truncated = CreateDeclaredWidthPayload(8, 2)[..^1];
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(truncated, new int[2]));
-        Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNullableInt32(truncated, new int?[2], true));
+        Assert.Throws<CorruptParquetException>(() => ReadNullableInt32Batched(truncated, new int?[2], true));
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNarrowInt32<byte>(truncated, new byte[2]));
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt64(truncated, new long[2]));
         Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(truncated, 2));
@@ -132,7 +145,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
         if (DeltaBinaryPackedDecoder.GetEncodedLength(payload, 2) != encoded.Length ||
             DeltaBinaryPackedDecoder.ReadInt32(payload, ints) != encoded.Length ||
             DeltaBinaryPackedDecoder.ReadInt64(payload, longs) != encoded.Length ||
-            DeltaBinaryPackedDecoder.ReadNullableInt32(payload, nullable, canonicalLayout: true) != encoded.Length ||
+            ReadNullableInt32Batched(payload, nullable, canonicalLayout: true) != encoded.Length ||
             DeltaBinaryPackedDecoder.ReadNarrowInt32<byte>(payload, narrow) != encoded.Length ||
             !ints.SequenceEqual(new[] { 0, 1 }) || !longs.SequenceEqual(new long[] { 0, 1 }) ||
             !nullable.SequenceEqual(new int?[] { 0, 1 }) || !narrow.SequenceEqual(new byte[] { 0, 1 }))
@@ -231,7 +244,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
             foreach (var canonicalLayout in new[] { false, true })
             {
                 var nullable = new int?[count + 2];
-                DeltaBinaryPackedDecoder.ReadNullableInt32(bytes, nullable.AsSpan(1, count), canonicalLayout);
+                ReadNullableInt32Batched(bytes, nullable.AsSpan(1, count), canonicalLayout);
                 if (!nullable.AsSpan(1, count).SequenceEqual(expected.Select(static value => (int?)value).ToArray()) ||
                     nullable[0] is not null || nullable[^1] is not null)
                     throw new InvalidOperationException($"Nullable Int32 width {bitWidth}, count {count} failed.");
@@ -372,7 +385,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
                 var nullable = new int?[count];
                 foreach (var canonicalLayout in new[] { false, true })
                 {
-                    consumed = DeltaBinaryPackedDecoder.ReadNullableInt32(
+                    consumed = ReadNullableInt32Batched(
                         payload, nullable, canonicalLayout);
                     if (!nullable.SequenceEqual(expected.Select(static value => (int?)value)) ||
                         consumed != payload.Length)
@@ -415,7 +428,7 @@ internal sealed class DeltaBinaryPackedDecoderTests
             foreach (var canonicalLayout in new[] { false, true })
             {
                 var decoded = new int?[values.Length];
-                DeltaBinaryPackedDecoder.ReadNullableInt32(payload, decoded, canonicalLayout);
+                ReadNullableInt32Batched(payload, decoded, canonicalLayout);
                 if (!decoded.SequenceEqual(values.Select(static value => (int?)value)))
                     throw new InvalidOperationException(
                         $"Direct nullable Int32 decode differs with canonicalLayout={canonicalLayout}.");
