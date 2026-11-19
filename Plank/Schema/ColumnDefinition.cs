@@ -226,10 +226,34 @@ public sealed record ColumnDefinition
                 $"Logical type '{nameof(LogicalType.Date)}' requires physical type '{ParquetPhysicalType.Int32}' for column '{name}'.",
                 nameof(physicalType));
 
-        if (logicalType is LogicalType.Enum or LogicalType.Bson or LogicalType.Geometry or LogicalType.Geography &&
+        if (logicalType is LogicalType.String or LogicalType.Json or LogicalType.Enum or LogicalType.Bson or
+                LogicalType.Geometry or LogicalType.Geography &&
             physicalType != ParquetPhysicalType.ByteArray)
             return (
                 $"Logical type '{logicalType.GetType().Name}' requires physical type '{ParquetPhysicalType.ByteArray}' for column '{name}'.",
+                nameof(physicalType));
+
+        if (logicalType is LogicalType.Uuid &&
+            (physicalType != ParquetPhysicalType.FixedLenByteArray || options.TypeLength != 16))
+            return (
+                $"Logical type '{nameof(LogicalType.Uuid)}' requires a 16-byte '{ParquetPhysicalType.FixedLenByteArray}' physical type for column '{name}'.",
+                nameof(physicalType));
+
+        if (logicalType is LogicalType.Int integer &&
+            physicalType != (integer.BitWidth == 64 ? ParquetPhysicalType.Int64 : ParquetPhysicalType.Int32))
+            return (
+                $"Logical type '{nameof(LogicalType.Int)}({integer.BitWidth}, signed={integer.IsSigned})' requires physical type '{(integer.BitWidth == 64 ? ParquetPhysicalType.Int64 : ParquetPhysicalType.Int32)}' for column '{name}'.",
+                nameof(physicalType));
+
+        if (logicalType is LogicalType.Time time &&
+            physicalType != (time.Unit == TimeUnit.Millis ? ParquetPhysicalType.Int32 : ParquetPhysicalType.Int64))
+            return (
+                $"Logical type '{nameof(LogicalType.Time)}({time.Unit})' requires physical type '{(time.Unit == TimeUnit.Millis ? ParquetPhysicalType.Int32 : ParquetPhysicalType.Int64)}' for column '{name}'.",
+                nameof(physicalType));
+
+        if (logicalType is LogicalType.Timestamp && physicalType != ParquetPhysicalType.Int64)
+            return (
+                $"Logical type '{nameof(LogicalType.Timestamp)}' requires physical type '{ParquetPhysicalType.Int64}' for column '{name}'.",
                 nameof(physicalType));
 
         if (logicalType is LogicalType.Float16 &&

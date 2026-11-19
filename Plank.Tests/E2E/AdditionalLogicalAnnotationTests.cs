@@ -121,6 +121,25 @@ internal sealed class AdditionalLogicalAnnotationTests
             ParquetPhysicalType.ByteArray, logicalType: new LogicalType.Variant(1)));
         Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_unknown",
             ParquetPhysicalType.ByteArray, logicalType: new LogicalType.Unknown()));
+        Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_string",
+            ParquetPhysicalType.Int32, logicalType: new LogicalType.String()));
+        Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_json",
+            ParquetPhysicalType.FixedLenByteArray, new ColumnOptions(typeLength: 8), new LogicalType.Json()));
+        Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_uuid",
+            ParquetPhysicalType.FixedLenByteArray, new ColumnOptions(typeLength: 15), new LogicalType.Uuid()));
+        Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_int32",
+            ParquetPhysicalType.Int64, logicalType: new LogicalType.Int(32, isSigned: true)));
+        Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_int64",
+            ParquetPhysicalType.Int32, logicalType: new LogicalType.Int(64, isSigned: false)));
+        Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_time_millis",
+            ParquetPhysicalType.Int64, logicalType: new LogicalType.Time(TimeUnit.Millis, IsAdjustedToUtc: false)));
+        Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_time_micros",
+            ParquetPhysicalType.Int32, logicalType: new LogicalType.Time(TimeUnit.Micros, IsAdjustedToUtc: true)));
+        Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_timestamp",
+            ParquetPhysicalType.Int32, logicalType: new LogicalType.Timestamp(TimeUnit.Nanos, IsAdjustedToUtc: true)));
+        Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_fixed_timestamp",
+            ParquetPhysicalType.FixedLenByteArray, new ColumnOptions(typeLength: 12),
+            new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true)));
     }
 
     static byte[] CreateAnnotatedFile()
