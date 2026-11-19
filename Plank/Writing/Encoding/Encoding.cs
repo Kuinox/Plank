@@ -4268,7 +4268,7 @@ static class Encoding
     static int AddDictionaryPage(BufferWriterFactory bufferWriters, PageList pages)
     {
         ref var page = ref pages.Add();
-        EnsureInitialized(bufferWriters, ref page.Header, useColumnBuffer: false);
+        EnsureHeaderInitialized(bufferWriters, ref page.Header);
         EnsureInitialized(bufferWriters, ref page.Content, useColumnBuffer: true);
         page.ResetMetadata();
         return pages.Count - 1;
@@ -4277,10 +4277,21 @@ static class Encoding
     static int AddNewDataPage(BufferWriterFactory bufferWriters, PageList pages)
     {
         ref var page = ref pages.Add();
-        EnsureInitialized(bufferWriters, ref page.Header, useColumnBuffer: false);
+        EnsureHeaderInitialized(bufferWriters, ref page.Header);
         EnsureInitialized(bufferWriters, ref page.Content, useColumnBuffer: false);
         page.ResetMetadata();
         return pages.Count - 1;
+    }
+
+    static void EnsureHeaderInitialized(BufferWriterFactory bufferWriters, ref BufferWriter buffer)
+    {
+        if (buffer.IsInitialized)
+        {
+            buffer.Reset();
+            return;
+        }
+
+        buffer = bufferWriters.CreatePageHeaderBufferWriter();
     }
 
     static void EnsureInitialized(BufferWriterFactory bufferWriters, ref BufferWriter buffer, bool useColumnBuffer)
