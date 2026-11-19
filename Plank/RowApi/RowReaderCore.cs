@@ -482,6 +482,7 @@ public sealed class RowReaderCore : IDisposable
     void ResolveFileSchema()
     {
         var fileSchema = _reader.Metadata.Schema;
+        var hasMissingCollectionLeaf = false;
         for (var i = 0; i < _states.Length; i++)
         {
             var state = _states[i];
@@ -490,7 +491,10 @@ public sealed class RowReaderCore : IDisposable
             if (ordinal < 0)
             {
                 if (state.Projected)
+                {
+                    hasMissingCollectionLeaf |= state.Column.Options.Repetition == ParquetRepetition.Repeated;
                     state.ResetForMissingMaterialized();
+                }
                 else
                     state.ResetForMissingUnprojected();
                 continue;
@@ -498,6 +502,27 @@ public sealed class RowReaderCore : IDisposable
 
             state.Ordinal = ordinal;
             state.Materialized = false;
+        }
+
+        if (hasMissingCollectionLeaf)
+            ValidateCollectionDefaults();
+    }
+
+    void ValidateCollectionDefaults()
+    {
+        // An entirely missing collection has a single default shape. A missing leaf of a
+        // present collection would have to inherit the repetition shape of a sibling.
+        var missingByRoot = new Dictionary<string, bool>(StringComparer.Ordinal);
+        for (var i = 0; i < _states.Length; i++)
+        {
+            var state = _states[i];
+            if ((!state.Projected && !state.Materialized) || state.Column.Options.Repetition != ParquetRepetition.Repeated)
+                continue;
+
+            var root = _schema.LeafPaths[i][0];
+            if (!missingByRoot.TryAdd(root, state.Materialized) && missingByRoot[root] != state.Materialized)
+                throw new InvalidOperationException(
+                    $"Collection '{root}' has both present and missing leaves. The row API cannot materialize defaults for part of a collection.");
         }
     }
 

@@ -189,6 +189,28 @@ internal sealed class GeneratedNestedRowE2ETests
     }
 
     [Test]
+    public async Task GeneratedReaderRejectsPartiallyMissingRepeatedRecord()
+    {
+        using var stream = new MemoryStream();
+        using (var writer = OriginalRepeatedRecordRows.CreateRowWriter(stream, maxParallelism: 1))
+        {
+            writer.GetRow().Items = [new OriginalRepeatedRecord { Existing = 17 }];
+            writer.Complete();
+        }
+
+        await Assert.That(() =>
+        {
+            using var reader = EvolvedRepeatedRecordRows.CreateRowReader(new MemoryStream(stream.ToArray()),
+                schemaEvolution: new Plank.Reading.ParquetSchemaEvolutionOptions
+                {
+                    MissingColumns = Plank.Reading.MissingColumnEvolutionBehavior.MaterializeDefault
+                });
+            if (reader.MoveNext())
+                _ = reader.Current.Items;
+        }).Throws<InvalidOperationException>();
+    }
+
+    [Test]
     [Arguments(ParquetSharp.ParquetDataPageVersion.V1)]
     [Arguments(ParquetSharp.ParquetDataPageVersion.V2)]
     public void GeneratedListReaderReadsParquetSharpPages(ParquetSharp.ParquetDataPageVersion pageVersion)
