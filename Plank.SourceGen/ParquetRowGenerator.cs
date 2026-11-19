@@ -1223,7 +1223,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         {
             if (!TryNormalizeClrType(type, nullableAnnotation, out clrTypeName))
             {
-                error = $"Unsupported CLR type '{type.ToDisplayString()}' for schema property '{property?.Name ?? "element"}'.";
+                error = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) is
+                    "global::System.Half" or "global::System.Half?"
+                    ? $"Schema property '{property?.Name ?? "element"}' cannot map System.Half directly. " +
+                      "Use byte[] or ReadOnlyMemory<byte> with a FLOAT16 logical type on FIXED_LEN_BYTE_ARRAY."
+                    : $"Unsupported CLR type '{type.ToDisplayString()}' for schema property '{property?.Name ?? "element"}'.";
                 return false;
             }
 

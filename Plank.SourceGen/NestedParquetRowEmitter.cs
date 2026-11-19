@@ -1524,7 +1524,7 @@ static class NestedParquetRowEmitter
         var name = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         return name is "global::System.ReadOnlyMemory<byte>" or "global::System.DateOnly" or
             "global::System.DateTime" or "global::System.DateTimeOffset" or "global::System.TimeOnly" or
-            "global::System.Guid";
+            "global::System.Guid" or "global::System.Half";
     }
 
     static bool IsList(INamedTypeSymbol type)
