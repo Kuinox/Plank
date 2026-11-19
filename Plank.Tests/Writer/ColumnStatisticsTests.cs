@@ -405,6 +405,79 @@ internal sealed class ColumnStatisticsTests
     }
 
     [Test]
+    public void UnsignedColumnsOrderPhysicalSignedValuesAsUnsigned()
+    {
+        // -1 is the largest unsigned value; signed ordering made it the minimum and pruned every match. The last
+        // column reaches the same int path through a converter.
+        var uint32 = new PlankLogicalType.Int(32, false);
+        var uint64 = new PlankLogicalType.Int(64, false);
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.RequiredLeaf("u32", ParquetPhysicalType.Int32, logicalType: uint32,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.OptionalLeaf("u32_optional", ParquetPhysicalType.Int32, logicalType: uint32,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.RequiredLeaf("u64", ParquetPhysicalType.Int64, logicalType: uint64,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.OptionalLeaf("u64_optional", ParquetPhysicalType.Int64, logicalType: uint64,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.RequiredLeaf("u32_converted", ParquetPhysicalType.Int32, logicalType: uint32,
+                pageStrategy: new FixedRowsPageStrategy(2), converter: new UInt32BitsConverter())
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions { WritePageIndexes = true });
+        var rowGroup = writer.StartRowGroup();
+        var u32 = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        u32.Serialize([-1, 1, 2]);
+        rowGroup.Write(u32);
+        var u32Optional = rowGroup.CreateSerializedColumn<int?>(schema.LeafColumns[1]);
+        u32Optional.Serialize([-1, 1, null]);
+        rowGroup.Write(u32Optional);
+        var u64 = rowGroup.CreateSerializedColumn<long>(schema.LeafColumns[2]);
+        u64.Serialize([-1L, 1L, 2L]);
+        rowGroup.Write(u64);
+        var u64Optional = rowGroup.CreateSerializedColumn<long?>(schema.LeafColumns[3]);
+        u64Optional.Serialize([-1L, 1L, null]);
+        rowGroup.Write(u64Optional);
+        var u32Converted = rowGroup.CreateSerializedColumn<uint>(schema.LeafColumns[4]);
+        u32Converted.Serialize([uint.MaxValue, 1, 2]);
+        rowGroup.Write(u32Converted);
+        writer.CloseFile();
+
+        using var reader = schema.CreateReader(new MemoryStream(stream.ToArray()));
+        for (var column = 0; column < 5; column++)
+        {
+            var max = column is 2 or 3 ? ulong.MaxValue : uint.MaxValue;
+            var metadata = reader.RowGroups[0].GetColumnMetadata(column);
+            AssertUnsignedBounds(metadata.Statistics, min: 1, max, $"column {column}");
+            using var pages = metadata.OpenPages();
+            AssertUnsignedBounds(pages[0].Statistics, min: 1, max, $"column {column} page 0");
+        }
+    }
+
+    // Maps uint to its two's-complement INT32 bits, as a user converter for an unsigned column would.
+    sealed class UInt32BitsConverter : ParquetValueConverter<uint, int>
+    {
+        public override int ConvertToPhysical(uint value) => unchecked((int)value);
+
+        public override uint ConvertFromPhysical(int value) => unchecked((uint)value);
+    }
+
+    static void AssertUnsignedBounds(ParquetStatistics statistics, ulong min, ulong max, string what)
+    {
+        static ulong Read(ReadOnlySpan<byte> bytes) => bytes.Length == sizeof(uint)
+            ? BinaryPrimitives.ReadUInt32LittleEndian(bytes)
+            : BinaryPrimitives.ReadUInt64LittleEndian(bytes);
+
+        if (!statistics.HasMinimum || !statistics.HasMaximum)
+            throw new InvalidOperationException($"{what} has no bounds.");
+        var actualMin = Read(statistics.Minimum);
+        var actualMax = Read(statistics.Maximum);
+        if (actualMin != min || actualMax != max)
+            throw new InvalidOperationException(
+                $"{what} bounds are [{actualMin}, {actualMax}], expected [{min}, {max}].");
+    }
+
+    [Test]
     public void RequiredInt32PageStatisticsMatchPageBoundaries()
     {
         using var stream = new MemoryStream();
