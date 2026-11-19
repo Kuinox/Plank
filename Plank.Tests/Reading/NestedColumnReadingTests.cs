@@ -84,6 +84,31 @@ internal sealed class NestedColumnReadingTests
     }
 
     [Test]
+    public void RuntimeWriterPreservesRepeatedValuesUnderOptionalElementGroup()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.List("items",
+                ColumnDefinition.OptionalGroup("element",
+                    ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32)),
+                ParquetRepetition.Required)
+        ]);
+        int?[][] rows = [[null, 10], []];
+
+        WithPlankFile(schema, rowGroup =>
+        {
+            var serialized = rowGroup.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
+            serialized.Serialize(rows);
+            rowGroup.Write(serialized);
+        }, reader =>
+        {
+            var snapshot = Read(reader.RowGroups[0].NestedColumn<int>(0));
+            // 1: absent optional element group; 3: group and leaf both present; 0: empty list.
+            AssertSnapshot(snapshot, [10], [0, 1, 0], [1, 3, 0],
+                rowCount: 2, maxRepetitionLevel: 1, maxDefinitionLevel: 3);
+        });
+    }
+
+    [Test]
     public void ReadsDataPageV2OptionalMapLeaves()
     {
         var schema = new ParquetSchema([
@@ -300,6 +325,56 @@ internal sealed class NestedColumnReadingTests
         {
             File.Delete(path);
         }
+    }
+
+    [Test]
+    public void RuntimeWriterAccountsForOptionalGroupAroundList()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalGroup("s",
+                ColumnDefinition.List("items", ColumnDefinition.OptionalLeaf("element", ParquetPhysicalType.Int32),
+                    ParquetRepetition.Optional))
+        ]);
+        int?[][] rows = [[7, null], [], null!];
+
+        WithPlankFile(schema, rowGroup =>
+        {
+            var serialized = rowGroup.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
+            serialized.Serialize(rows);
+            rowGroup.Write(serialized);
+        }, reader =>
+        {
+            var snapshot = Read(reader.RowGroups[0].NestedColumn<int>(0));
+            // The optional group s is defined for every row, so each level sits one above the bare list's.
+            AssertSnapshot(snapshot, [7], [0, 1, 0, 0], [4, 3, 2, 1],
+                rowCount: 3, maxRepetitionLevel: 1, maxDefinitionLevel: 4);
+        });
+    }
+
+    [Test]
+    public void RuntimeWriterAccountsForOptionalGroupAroundNestedLists()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalGroup("s",
+                ColumnDefinition.List("outer",
+                    ColumnDefinition.List("element", ColumnDefinition.OptionalLeaf("element", ParquetPhysicalType.Int32),
+                        ParquetRepetition.Required),
+                    ParquetRepetition.Required))
+        ]);
+        int?[][][] rows = [[[1, null], []], []];
+
+        WithPlankFile(schema, rowGroup =>
+        {
+            var serialized = rowGroup.CreateSerializedColumn<int?[][]>(schema.LeafColumns[0]);
+            serialized.Serialize(rows);
+            rowGroup.Write(serialized);
+        }, reader =>
+        {
+            var snapshot = Read(reader.RowGroups[0].NestedColumn<int>(0));
+            // 2: empty inner list; 1: empty outer list with s still defined.
+            AssertSnapshot(snapshot, [1], [0, 2, 1, 0], [4, 3, 2, 1],
+                rowCount: 2, maxRepetitionLevel: 2, maxDefinitionLevel: 4);
+        });
     }
 
     static Snapshot<T> Read<T>(NestedRowGroupColumn<T> column)

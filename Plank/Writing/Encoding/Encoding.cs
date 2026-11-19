@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -3991,11 +3992,14 @@ static class Encoding
         var levelValueCount = 0;
         var nullCount = 0;
         var allowsNullRow = leafProjectionInfo.ListOptional;
-        var listDefinedDefinitionLevel = leafProjectionInfo.IsList && leafProjectionInfo.ListOptional ? 1 : 0;
-        // A required element sits one level above the defined list; an optional one needs a level of
-        // its own in between.
-        var nullElementDefinitionLevel = listDefinedDefinitionLevel + 1;
-        var presentElementDefinitionLevel = listDefinedDefinitionLevel + (TProbe.ValueRequired ? 1 : 2);
+        // Optional groups around the list or inside its element add levels of their own, so the levels
+        // come from the schema: an empty list defines everything above the repeated node, a null element
+        // the repeated node itself, and a present value the whole path.
+        var repeatedDefinitionLevel = leafProjectionInfo.RepeatedDefinitionLevels[0];
+        var nullRowDefinitionLevel = repeatedDefinitionLevel - 2;
+        var listDefinedDefinitionLevel = repeatedDefinitionLevel - 1;
+        var nullElementDefinitionLevel = repeatedDefinitionLevel;
+        var presentElementDefinitionLevel = leafProjectionInfo.MaxDefinitionLevel;
         var definitionBitWidth = EncodingPrimitives.GetBitWidthFromMaxValue(presentElementDefinitionLevel);
 
         for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
@@ -4065,8 +4069,8 @@ static class Encoding
 
         var repetitionLength = WriteRepeatedLevels(rows, writeLevelLengthPrefixes, ref page.Content);
         var definitionLength = WriteRepeatedDefinitionLevels<TRowElement, TValue, TProbe>(rows,
-            listDefinedDefinitionLevel, nullElementDefinitionLevel, presentElementDefinitionLevel, allowsNullRow,
-            definitionBitWidth, writeLevelLengthPrefixes, ref page.Content);
+            nullRowDefinitionLevel, listDefinedDefinitionLevel, nullElementDefinitionLevel,
+            presentElementDefinitionLevel, allowsNullRow, definitionBitWidth, writeLevelLengthPrefixes, ref page.Content);
         ValueEncodingDispatcher.WriteValues(dataEncoding, column, flatValues, bufferWriters, ref page.Content);
         WriteDataPageHeader(ref page, rowCount, levelValueCount, nullCount, repetitionLength, definitionLength,
             dataEncoding);
@@ -4079,14 +4083,14 @@ static class Encoding
         where TRow : notnull
     {
         var allowsNullRow = leafProjectionInfo.ListOptional;
-        var rowDefinedLevel = allowsNullRow ? 1 : 0;
+        var repeatedDefinitionLevels = leafProjectionInfo.RepeatedDefinitionLevels;
         var repLevels = new List<int>(rows.Length * 2);
         var defLevels = new List<int>(rows.Length * 2);
         var values = new List<TElement>(rows.Length * 2);
         for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
         {
             object? row = rows[rowIndex];
-            TraverseNestedRepeatedRow(row, depth: 1, repForFirst: 0, currentDefinitionLevel: rowDefinedLevel,
+            TraverseNestedRepeatedRow(row, depth: 1, repForFirst: 0, repeatedDefinitionLevels,
                 allowsNullRow, leafProjectionInfo.ElementOptional, leafProjectionInfo.MaxRepetitionLevel,
                 leafProjectionInfo.MaxDefinitionLevel, repLevels, defLevels, values, column.Name);
         }
@@ -4100,9 +4104,12 @@ static class Encoding
         WriteDataPageHeader(ref page, rows.Length, defLevels.Count, nullCount, repetitionLength, definitionLength,
             dataEncoding);
 
-        static void TraverseNestedRepeatedRow(object? node, int depth, int repForFirst, int currentDefinitionLevel,
-            bool allowNullNode, bool elementOptional, int maxRepetitionLevel, int maxDefinitionLevel,
-            List<int> repLevels, List<int> defLevels, List<TElement> values, string columnName)
+        // The array at depth d holds the entries of the d-th repeated node: empty, it defines everything above
+        // that node; a null leaf defines the innermost repeated node but not the optional groups below it.
+        static void TraverseNestedRepeatedRow(object? node, int depth, int repForFirst,
+            ImmutableArray<int> repeatedDefinitionLevels, bool allowNullNode, bool elementOptional,
+            int maxRepetitionLevel, int maxDefinitionLevel, List<int> repLevels, List<int> defLevels,
+            List<TElement> values, string columnName)
         {
             if (node is null)
             {
@@ -4110,7 +4117,7 @@ static class Encoding
                     throw new InvalidOperationException(
                         $"Column '{columnName}' has repeated values; null array is not supported at depth {depth}.");
                 repLevels.Add(repForFirst);
-                defLevels.Add(currentDefinitionLevel - 1);
+                defLevels.Add(repeatedDefinitionLevels[depth - 1] - 2);
                 return;
             }
 
@@ -4121,7 +4128,7 @@ static class Encoding
             if (array.Length == 0)
             {
                 repLevels.Add(repForFirst);
-                defLevels.Add(currentDefinitionLevel);
+                defLevels.Add(repeatedDefinitionLevels[depth - 1] - 1);
                 return;
             }
 
@@ -4137,7 +4144,7 @@ static class Encoding
                             throw new InvalidOperationException(
                                 $"Column '{columnName}' has incompatible leaf value type '{element?.GetType()}'.");
                         repLevels.Add(rep);
-                        defLevels.Add(maxDefinitionLevel - 1);
+                        defLevels.Add(repeatedDefinitionLevels[depth - 1]);
                         continue;
                     }
                     repLevels.Add(rep);
@@ -4146,7 +4153,7 @@ static class Encoding
                     continue;
                 }
 
-                TraverseNestedRepeatedRow(element, depth + 1, rep, currentDefinitionLevel + 1, allowNullNode: false,
+                TraverseNestedRepeatedRow(element, depth + 1, rep, repeatedDefinitionLevels, allowNullNode: false,
                     elementOptional, maxRepetitionLevel, maxDefinitionLevel, repLevels, defLevels, values, columnName);
             }
         }
@@ -4207,8 +4214,8 @@ static class Encoding
     /// row; optional ones need a level per element because presence varies within the row.
     /// </summary>
     static int WriteRepeatedDefinitionLevels<TRowElement, TValue, TProbe>(ReadOnlySpan<TRowElement[]> rows,
-        int listDefinedDefinitionLevel, int nullElementDefinitionLevel, int presentElementDefinitionLevel,
-        bool allowsNullRow, int definitionBitWidth, bool writeLengthPrefix, ref BufferWriter writer)
+        int nullRowDefinitionLevel, int listDefinedDefinitionLevel, int nullElementDefinitionLevel,
+        int presentElementDefinitionLevel, bool allowsNullRow, int definitionBitWidth, bool writeLengthPrefix, ref BufferWriter writer)
         where TProbe : IOptionalRow<TRowElement, TValue>
     {
         var lengthPrefix = ReserveLevelLengthPrefix(writeLengthPrefix, ref writer);
@@ -4220,7 +4227,7 @@ static class Encoding
             {
                 if (!allowsNullRow)
                     throw new InvalidOperationException("Null row is not allowed for this repeated column.");
-                EncodingPrimitives.WriteRleRun(0, 1, definitionBitWidth, ref writer);
+                EncodingPrimitives.WriteRleRun(nullRowDefinitionLevel, 1, definitionBitWidth, ref writer);
                 continue;
             }
 
