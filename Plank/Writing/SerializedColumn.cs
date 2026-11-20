@@ -371,8 +371,11 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             var combined = new long[count];
             required.CopyTo(combined, 0);
             var incoming = combined.AsSpan(required.Length);
-            for (var i = 0; i < values.Length; i++)
-                incoming[i] = ToNanoseconds(values[i]!, expectedKind);
+            if (typeof(T) == typeof(DateTime))
+                TimestampConversion.ConvertDateTimes(AsSpan<DateTime>(values), incoming, TimeUnit.Nanos, expectedKind);
+            else
+                for (var i = 0; i < values.Length; i++)
+                    incoming[i] = ToNanoseconds(values[i], expectedKind);
             var comparisons = _owner.LatestSortingOrder?.CompareIncoming<long>(
                 _column, ordinal, required, incoming);
             SerializeTyped<long>(combined);
@@ -385,7 +388,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             optional.CopyTo(combined, 0);
             var incoming = combined.AsSpan(optional.Length);
             for (var i = 0; i < values.Length; i++)
-                incoming[i] = values[i] is { } value ? ToNanoseconds(value, expectedKind) : null;
+                incoming[i] = ToOptionalNanoseconds(values[i], expectedKind);
             var comparisons = _owner.LatestSortingOrder?.CompareIncoming<long?>(
                 _column, ordinal, optional, incoming);
             SerializeOptionalTyped<long>(combined);
@@ -393,17 +396,33 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
     }
 
-    static long ToNanoseconds(object value, DateTimeKind expectedKind)
-        => value switch
+    static long? ToOptionalNanoseconds(T value, DateTimeKind expectedKind)
+    {
+        if (typeof(T) == typeof(DateTime?))
+            return Unsafe.As<T, DateTime?>(ref value) is { } date ? ToNanoseconds(date, expectedKind) : null;
+        if (typeof(T) == typeof(DateTimeOffset?))
+            return Unsafe.As<T, DateTimeOffset?>(ref value) is { } offset ? ToNanoseconds(offset, expectedKind) : null;
+        if (typeof(T) == typeof(TimeOnly?))
+            return Unsafe.As<T, TimeOnly?>(ref value) is { } time ? ToNanoseconds(time, expectedKind) : null;
+        return ToNanoseconds(value, expectedKind);
+    }
+
+    static long ToNanoseconds<TValue>(TValue value, DateTimeKind expectedKind)
+    {
+        if (typeof(TValue) == typeof(TimeOnly))
+            return ToTimeValue(Unsafe.As<TValue, TimeOnly>(ref value), TimeUnit.Nanos);
+        if (typeof(TValue) == typeof(DateTimeOffset))
+            return ToUnixTime(Unsafe.As<TValue, DateTimeOffset>(ref value), TimeUnit.Nanos);
+        if (typeof(TValue) == typeof(DateTime))
         {
-            TimeOnly time => ToTimeValue(time, TimeUnit.Nanos),
-            DateTimeOffset offset => ToUnixTime(offset, TimeUnit.Nanos),
-            DateTime timestamp when timestamp.Kind == expectedKind =>
-                TimestampConversion.FromDateTimeTicks(timestamp.Ticks, TimeUnit.Nanos),
-            DateTime timestamp => throw new InvalidOperationException(
-                $"DateTime values must have kind '{expectedKind}', got '{timestamp.Kind}'."),
-            _ => throw new InvalidOperationException("A CLR temporal value is required for nanosecond append.")
-        };
+            var date = Unsafe.As<TValue, DateTime>(ref value);
+            if (date.Kind != expectedKind)
+                throw new InvalidOperationException(
+                    $"DateTime values must have kind '{expectedKind}', got '{date.Kind}'.");
+            return TimestampConversion.FromDateTimeTicks(date.Ticks, TimeUnit.Nanos);
+        }
+        throw new InvalidOperationException("A CLR temporal value is required for nanosecond append.");
+    }
 
     void SerializeConverted(ReadOnlySpan<T> values, ParquetValueConverter converter)
     {

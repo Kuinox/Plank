@@ -456,6 +456,52 @@ internal sealed class AppendFileTests
     }
 
     [Test]
+    public async Task AppendedNullableTimestampsKeepOffsetsNullsAndSubtickValues()
+    {
+        var timestamp = new LogicalType.Timestamp(TimeUnit.Nanos, IsAdjustedToUtc: true);
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("Utc", ParquetPhysicalType.Int64, logicalType: timestamp),
+            ColumnDefinition.OptionalLeaf("Offset", ParquetPhysicalType.Int64, logicalType: timestamp)
+        ]);
+        using var stream = new MemoryStream();
+        using (var writer = schema.CreateWriter(stream))
+        {
+            var group = writer.StartRowGroup();
+            foreach (var leaf in schema.LeafColumns)
+            {
+                var values = writer.CreateSerializedColumn<long?>(leaf);
+                values.Serialize([-1, null]);
+                group.Write(values);
+            }
+            writer.CloseFile();
+        }
+
+        using var appended = new MemoryStream();
+        appended.Write(stream.ToArray());
+        appended.Position = 0;
+        using (var writer = schema.CreateAppender(appended, new ParquetAppendOptions { AppendToLatestRowGroup = true }))
+        {
+            var utc = writer.CreateSerializedColumn<DateTime?>(schema.LeafColumns[0]);
+            var offset = writer.CreateSerializedColumn<DateTimeOffset?>(schema.LeafColumns[1]);
+            utc.Serialize([null, DateTime.UnixEpoch.AddTicks(2)]);
+            offset.Serialize([null, DateTimeOffset.UnixEpoch.AddTicks(2).ToOffset(TimeSpan.FromHours(3))]);
+            var group = writer.StartRowGroup();
+            group.Write(utc);
+            group.Write(offset);
+            writer.CloseFile();
+        }
+
+        using var reader = schema.CreateReader(new MemoryStream(appended.ToArray()));
+        for (var i = 0; i < 2; i++)
+        {
+            var values = new List<long?>();
+            foreach (var buffer in reader.RowGroups[0].Column<long?>(i))
+                values.AddRange(buffer.Values.ToArray());
+            await Assert.That(values.ToArray()).IsEquivalentTo(new long?[] { -1, null, null, 200 });
+        }
+    }
+
+    [Test]
     public async Task AppendsDecodedOptionalStringsToLatestRowGroup()
     {
         var path = NewPath();
