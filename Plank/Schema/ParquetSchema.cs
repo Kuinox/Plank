@@ -30,6 +30,48 @@ public sealed record ParquetSchema
     /// For the reader, definitions that do not project mean the file's footer is malformed, not that a caller passed
     /// bad arguments — so it needs the failure as a value it can turn into <see cref="CorruptParquetException"/>.
     /// </remarks>
+    internal bool NestedShapeMatches(int ordinal, ParquetSchema other, int otherOrdinal)
+    {
+        var left = LeafPaths[ordinal];
+        var right = other.LeafPaths[otherOrdinal];
+        if (left.Length != right.Length)
+            return false;
+        var a = Find(Definitions, left[0]);
+        var b = Find(other.Definitions, right[0]);
+        for (var i = 0; a is not null && b is not null;)
+        {
+            if (a.Kind != b.Kind || Normalize(a.Repetition) != Normalize(b.Repetition))
+                return false;
+            if (a.Kind == NodeKind.Leaf)
+                return i == left.Length - 1;
+            i += a.Kind is NodeKind.Map or NodeKind.List ? 2 : 1;
+            if (i >= left.Length)
+                return false;
+            a = Child(a, left[i]);
+            b = Child(b, right[i]);
+        }
+        return false;
+
+        static ParquetRepetition Normalize(ParquetRepetition value)
+            => value == ParquetRepetition.Unspecified ? ParquetRepetition.Required : value;
+
+        static ColumnDefinition? Child(ColumnDefinition node, string name)
+            => node.Kind switch
+            {
+                NodeKind.List => node.Children[0],
+                NodeKind.Map => node.Children[name == "key" ? 0 : 1],
+                _ => Find(node.Children, name)
+            };
+
+        static ColumnDefinition? Find(ImmutableArray<ColumnDefinition> nodes, string name)
+        {
+            foreach (var node in nodes)
+                if (node.Name == name)
+                    return node;
+            return null;
+        }
+    }
+
     internal static bool TryCreate(ImmutableArray<ColumnDefinition> definitions,
         [NotNullWhen(true)] out ParquetSchema? schema, out string? error)
     {

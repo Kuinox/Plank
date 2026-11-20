@@ -210,8 +210,7 @@ public sealed class ParquetReader : IDisposable
 
             ValidateRequestedColumn(requestedColumn, fileColumns[match]);
             if (requestedPath.Length > 1 && requestedColumn.Options.Repetition == ParquetRepetition.Repeated &&
-                !NestedProjectionMatches(
-                    requestedSchema.Definitions, fileSchema.Definitions, requestedPath))
+                !requestedSchema.NestedShapeMatches(i, fileSchema, match))
                 throw new InvalidOperationException(
                     $"Requested schema column '{requestedColumn.Name}' has a different nested structure or repetition than the file schema.");
         }
@@ -226,54 +225,6 @@ public sealed class ParquetReader : IDisposable
             if (!string.Equals(left[i], right[i], StringComparison.Ordinal))
                 return false;
         return true;
-    }
-
-    static bool NestedProjectionMatches(System.Collections.Immutable.ImmutableArray<ColumnDefinition> requested,
-        System.Collections.Immutable.ImmutableArray<ColumnDefinition> actual,
-        System.Collections.Immutable.ImmutableArray<string> path)
-    {
-        var depth = 0;
-        var expectedNode = FindNode(requested, path[depth]);
-        var actualNode = FindNode(actual, path[depth]);
-        while (expectedNode is not null && actualNode is not null)
-        {
-            if (expectedNode.Kind != actualNode.Kind ||
-                NormalizeRepetition(expectedNode.Repetition) != NormalizeRepetition(actualNode.Repetition))
-                return false;
-
-            switch (expectedNode.Kind)
-            {
-                case NodeKind.Leaf:
-                    return depth == path.Length - 1;
-                case NodeKind.List:
-                    depth += 2; // Skip the synthetic "list" wrapper and select its "element".
-                    expectedNode = expectedNode.Children[0];
-                    actualNode = actualNode.Children[0];
-                    break;
-                case NodeKind.Map:
-                    depth += 2; // Skip the synthetic "key_value" wrapper.
-                    var index = path[depth] == "key" ? 0 : 1;
-                    expectedNode = expectedNode.Children[index];
-                    actualNode = actualNode.Children[index];
-                    break;
-                case NodeKind.Group:
-                    depth++;
-                    expectedNode = FindNode(expectedNode.Children, path[depth]);
-                    actualNode = FindNode(actualNode.Children, path[depth]);
-                    break;
-                default:
-                    return false;
-            }
-        }
-        return false;
-    }
-
-    static ColumnDefinition? FindNode(System.Collections.Immutable.ImmutableArray<ColumnDefinition> nodes, string name)
-    {
-        foreach (var node in nodes)
-            if (node.Name == name)
-                return node;
-        return null;
     }
 
     static void ValidateRequestedColumn(Column requestedColumn, Column fileColumn)
