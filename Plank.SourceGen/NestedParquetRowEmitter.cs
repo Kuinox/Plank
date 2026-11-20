@@ -1295,9 +1295,8 @@ static class NestedParquetRowEmitter
         var count = node.Kind == NodeKind.List && node.CollectionKind == "Array"
             ? nonNullSource + ".Length"
             : nonNullSource + ".Count";
-        builder.Append(padding).Append("    ").Append(target).Append(" = (")
-            .Append(GetStorageTypeAtDepth(leaf, depth)).Append(")global::System.Array.CreateInstance(typeof(")
-            .Append(elementStorageType).Append("), ").Append(count).AppendLine(");");
+        builder.Append(padding).Append("    ").Append(target).Append(" = global::System.GC.AllocateArray<")
+            .Append(elementStorageType).Append(">(").Append(count).AppendLine(");");
         if (node.Kind == NodeKind.Map)
         {
             var pair = "pair" + depth;
