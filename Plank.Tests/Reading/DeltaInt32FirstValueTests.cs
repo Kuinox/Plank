@@ -49,18 +49,18 @@ internal sealed class DeltaInt32FirstValueTests
             byte[] payload = [0x80, 1, 4, 1, .. first];
             Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(payload));
             Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(payload, new int[1]));
-            Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNullableInt32(payload, new int?[1], true));
+            Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoderTests.ReadNullableInt32Batched(payload, new int?[1], true));
             Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNarrowInt32<byte>(payload, new byte[1]));
             Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.StartBatch(payload, 1, isInt64: false));
             Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(payload, 1));
             // The same VLQ is valid for an INT64 first value.
-            _ = DeltaBinaryPackedDecoder.ReadInt64(payload);
+            _ = DeltaBinaryPackedDecoder.ReadInt64(payload, new long[1]);
             _ = DeltaBinaryPackedDecoder.StartBatch(payload, 1, isInt64: true);
 
             payload[3] = 0; // zero-value streams still consume the first-value field
             Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(payload));
             Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadInt32(payload, Span<int>.Empty));
-            Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNullableInt32(payload, Span<int?>.Empty, true));
+            Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoderTests.ReadNullableInt32Batched(payload, Span<int?>.Empty, true));
             Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.ReadNarrowInt32<byte>(payload, Span<byte>.Empty));
             Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.StartBatch(payload, 0, isInt64: false));
             Assert.Throws<CorruptParquetException>(() => DeltaBinaryPackedDecoder.GetEncodedLength(payload, 0));
