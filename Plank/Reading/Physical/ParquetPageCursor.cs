@@ -63,6 +63,9 @@ public struct ParquetPageCursor : IDisposable
 
     public PageHeader CurrentHeader { get; private set; }
 
+    internal bool SkippedDataPage
+        => _skippedDataPage;
+
     public ParquetPage Current
         => new(CurrentHeader, CurrentPayload);
 
@@ -120,7 +123,9 @@ public struct ParquetPageCursor : IDisposable
                 owner.ValidateGeneration(_generation);
                 if (!accepted)
                 {
-                    _skippedDataPage = true;
+                    // A verified empty page contributes no entries to the chunk.
+                    if (page.RowCount != 0)
+                        _skippedDataPage = true;
                     continue;
                 }
                 _pendingPageOrdinal = ordinal;
