@@ -84,13 +84,15 @@ static class StatisticsThriftReader
             }
         }
 
-        if (!hasMinimum && hasLegacyMinimum)
+        var useLegacyMinimum = !hasMinimum && hasLegacyMinimum;
+        var useLegacyMaximum = !hasMaximum && hasLegacyMaximum;
+        if (useLegacyMinimum)
         {
             minimumOffset = legacyMinimumOffset;
             minimumLength = legacyMinimumLength;
             hasMinimum = true;
         }
-        if (!hasMaximum && hasLegacyMaximum)
+        if (useLegacyMaximum)
         {
             maximumOffset = legacyMaximumOffset;
             maximumLength = legacyMaximumLength;
@@ -99,6 +101,6 @@ static class StatisticsThriftReader
 
         return new EncodedStatistics(minimumOffset, minimumLength, maximumOffset, maximumLength,
             nullCount, distinctCount, hasMinimum, hasMaximum, hasNullCount, hasDistinctCount,
-            minimumExact, maximumExact);
+            minimumExact, maximumExact, useLegacyMinimum, useLegacyMaximum);
     }
 }
