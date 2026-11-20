@@ -251,9 +251,10 @@ public sealed record ColumnDefinition
                 $"Logical type '{nameof(LogicalType.Time)}({time.Unit})' requires physical type '{(time.Unit == TimeUnit.Millis ? ParquetPhysicalType.Int32 : ParquetPhysicalType.Int64)}' for column '{name}'.",
                 nameof(physicalType));
 
-        if (logicalType is LogicalType.Timestamp && physicalType != ParquetPhysicalType.Int64)
+        if (logicalType is LogicalType.Timestamp && physicalType != ParquetPhysicalType.Int64 &&
+            (physicalType != ParquetPhysicalType.FixedLenByteArray || options.TypeLength != 12))
             return (
-                $"Logical type '{nameof(LogicalType.Timestamp)}' requires physical type '{ParquetPhysicalType.Int64}' for column '{name}'.",
+                $"Logical type '{nameof(LogicalType.Timestamp)}' requires INT64 or a 12-byte FIXED_LEN_BYTE_ARRAY for column '{name}'.",
                 nameof(physicalType));
 
         if (logicalType is LogicalType.Float16 &&

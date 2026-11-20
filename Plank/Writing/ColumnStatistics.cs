@@ -208,12 +208,12 @@ internal readonly struct ColumnStatistics
 
     /// <summary>
     /// Whether binary bounds can be collected by comparing unsigned byte sequences.
-    /// DECIMAL and FLOAT16 require numeric comparisons.
+    /// Binary decimals, FLOAT16 and fixed-width timestamps require numeric comparisons.
     /// </summary>
     internal static bool OrdersBinaryValuesLexicographically(Column column)
     {
         ArgumentNullException.ThrowIfNull(column);
-        return column.LogicalType is not (LogicalType.Decimal or LogicalType.Float16);
+        return HasDefinedOrder(column) && column.LogicalType is not (LogicalType.Decimal or LogicalType.Float16 or LogicalType.Timestamp);
     }
 
     static ColumnStatistics CreateRepeated<T>(Column column, ReadOnlySpan<T> values, long nullCount)
@@ -1490,9 +1490,20 @@ internal readonly struct ColumnStatistics
         => hasValue ? FromDouble(min, max, nullCount, nanCount) : EmptyFloating(nullCount, nanCount);
 
     static int CompareBinary(Column column, ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
-        => column.LogicalType is LogicalType.Decimal
-            ? CompareDecimalBytes(left, right)
-            : EncodingPrimitives.ComparePayload(left, right);
+        => column.LogicalType switch
+        {
+            LogicalType.Decimal => CompareDecimalBytes(left, right),
+            LogicalType.Timestamp => CompareTimestamp96(left, right),
+            _ => EncodingPrimitives.ComparePayload(left, right)
+        };
+
+    internal static int CompareTimestamp96(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
+    {
+        var high = BinaryPrimitives.ReadInt32LittleEndian(left[8..])
+            .CompareTo(BinaryPrimitives.ReadInt32LittleEndian(right[8..]));
+        return high != 0 ? high : BinaryPrimitives.ReadUInt64LittleEndian(left)
+            .CompareTo(BinaryPrimitives.ReadUInt64LittleEndian(right));
+    }
 
     static int CompareDecimalBytes(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {

@@ -138,7 +138,7 @@ internal sealed class AdditionalLogicalAnnotationTests
         Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_timestamp",
             ParquetPhysicalType.Int32, logicalType: new LogicalType.Timestamp(TimeUnit.Nanos, IsAdjustedToUtc: true)));
         Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_fixed_timestamp",
-            ParquetPhysicalType.FixedLenByteArray, new ColumnOptions(typeLength: 12),
+            ParquetPhysicalType.FixedLenByteArray, new ColumnOptions(typeLength: 11),
             new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true)));
     }
 

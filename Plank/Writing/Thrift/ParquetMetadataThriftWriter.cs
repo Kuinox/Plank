@@ -412,7 +412,7 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI32(3, GetRepetition(node.Repetition));
         writer.WriteFieldBinary(4, name);
         if (node.LogicalType is not null)
-            WriteLogicalType(ref writer, node.LogicalType, node.FieldId);
+            WriteLogicalType(ref writer, node.LogicalType, node.FieldId, node.PhysicalType);
         else
             WriteSchemaFieldId(ref writer, node.FieldId);
         writer.EndStruct(previous);
@@ -425,7 +425,7 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldBinary(4, name);
         writer.WriteFieldI32(5, node.Children.Length);
         if (node.LogicalType is not null)
-            WriteLogicalType(ref writer, node.LogicalType, node.FieldId);
+            WriteLogicalType(ref writer, node.LogicalType, node.FieldId, node.PhysicalType);
         else
             WriteSchemaFieldId(ref writer, node.FieldId);
         writer.EndStruct(previous);
@@ -522,7 +522,7 @@ static class ParquetMetadataThriftWriter
     static ColumnDefinition ForceRepetition(ColumnDefinition node, ParquetRepetition repetition)
         => node with { Repetition = repetition };
 
-    static void WriteLogicalType(ref CompactWriter writer, LogicalType logicalType, int? fieldId)
+    static void WriteLogicalType(ref CompactWriter writer, LogicalType logicalType, int? fieldId, ParquetPhysicalType? physicalType)
     {
         switch (logicalType)
         {
@@ -542,9 +542,9 @@ static class ParquetMetadataThriftWriter
                 WriteTimeLogicalType(ref writer, time.IsAdjustedToUtc, time.Unit);
                 return;
             case LogicalType.Timestamp timestamp:
-                if (timestamp.Unit == TimeUnit.Millis)
+                if (physicalType == ParquetPhysicalType.Int64 && timestamp.Unit == TimeUnit.Millis)
                     writer.WriteFieldI32(6, (int)ConvertedType.TimestampMillis);
-                else if (timestamp.Unit == TimeUnit.Micros)
+                else if (physicalType == ParquetPhysicalType.Int64 && timestamp.Unit == TimeUnit.Micros)
                     writer.WriteFieldI32(6, (int)ConvertedType.TimestampMicros);
                 WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);

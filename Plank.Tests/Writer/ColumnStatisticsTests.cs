@@ -18,6 +18,50 @@ namespace Plank.Tests.Writer;
 internal sealed class ColumnStatisticsTests
 {
     [Test]
+    [Arguments(PlankDataPageVersion.V1)]
+    [Arguments(PlankDataPageVersion.V2)]
+    public void FixedWidthTimestampBoundsUseSigned96BitOrder(PlankDataPageVersion version)
+    {
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.RequiredLeaf("time", ParquetPhysicalType.FixedLenByteArray,
+                new ColumnOptions(typeLength: 12), new PlankLogicalType.Timestamp(Plank.Schema.TimeUnit.Micros, true),
+                pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
+        byte[][] values = [Timestamp(0, 1), Timestamp(0, 256), Timestamp(-1, ulong.MaxValue), Timestamp(1, 0)];
+        using var stream = new MemoryStream();
+        using var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            WritePageIndexes = true,
+            DataPageVersion = version
+        });
+        var column = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+        column.Serialize(values);
+        writer.StartRowGroup().Write(column);
+        writer.CloseFile();
+
+        using var reader = schema.CreateReader(new MemoryStream(stream.ToArray()));
+        var metadata = reader.RowGroups[0].GetColumnMetadata(0);
+        using var pages = metadata.OpenPages();
+        Check(metadata.Statistics, values[2], values[3]);
+        Check(pages[0].Statistics, values[0], values[1]);
+        Check(pages[1].Statistics, values[2], values[3]);
+
+        static byte[] Timestamp(int high, ulong low)
+        {
+            var bytes = new byte[12];
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes, low);
+            BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(8), high);
+            return bytes;
+        }
+
+        static void Check(Plank.Reading.Logical.ParquetStatistics stats, byte[] min, byte[] max)
+        {
+            if (!stats.Minimum.SequenceEqual(min) || !stats.Maximum.SequenceEqual(max))
+                throw new InvalidOperationException("Incorrect signed 96-bit timestamp bounds.");
+        }
+    }
+
+    [Test]
     public void FloatStatisticsIgnoreNaNs()
     {
         var column = new Plank.Schema.Column("value", ParquetPhysicalType.Float);
