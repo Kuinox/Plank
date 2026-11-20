@@ -4,6 +4,7 @@ sealed class StreamParquetSource : IParquetReadWriteSource
 {
     internal Stream? Stream;
     ulong _position;
+    bool _writeFailed;
 
     internal StreamParquetSource(Stream stream)
     {
@@ -15,6 +16,7 @@ sealed class StreamParquetSource : IParquetReadWriteSource
         ArgumentNullException.ThrowIfNull(stream);
         Stream = stream;
         _position = stream.CanSeek ? checked((ulong)stream.Position) : 0;
+        _writeFailed = false;
     }
 
     public ulong Length
@@ -45,11 +47,29 @@ sealed class StreamParquetSource : IParquetReadWriteSource
         if (!stream.CanWrite)
             throw new NotSupportedException("The stream does not support writes.");
         if (stream.CanSeek)
+        {
             stream.Position = checked((long)offset);
-        else if (offset != _position)
+            stream.Write(source);
+            return;
+        }
+
+        if (_writeFailed)
+            throw new InvalidOperationException("Cannot continue writing to a non-seekable stream after a failed write.");
+        if (offset != _position)
             throw new NotSupportedException("The stream does not support non-sequential writes.");
-        stream.Write(source);
-        _position = checked(offset + (uint)source.Length);
+
+        var nextPosition = checked(offset + (uint)source.Length);
+        try
+        {
+            stream.Write(source);
+        }
+        catch
+        {
+            // Write may have consumed some bytes before throwing; there is no way to recover the offset.
+            _writeFailed = true;
+            throw;
+        }
+        _position = nextPosition;
     }
 
     public void SetLength(ulong length)
