@@ -388,7 +388,7 @@ internal sealed class DatasetWriterTests
                 new DatasetWriterOptions
                 {
                     PendingRowCapacity = parked ? 3u : 0u,
-                    WriterOptions = new ParquetWriterOptions { TargetRowGroupSizeBytes = 1, TargetFileSizeBytes = 1 }
+                    WriterOptions = new ParquetWriterOptions { CreatedBy = "rollover-test", TargetRowGroupSizeBytes = 1, TargetFileSizeBytes = 1 }
                 }))
             {
                 if (parked)
@@ -417,6 +417,10 @@ internal sealed class DatasetWriterTests
             {
                 if (part.Length == 0)
                     continue;
+                using var metadata = new ParquetFileReader();
+                metadata.Reset(part.OpenRead());
+                if (!metadata.Metadata.CreatedByUtf8.SequenceEqual("rollover-test"u8))
+                    throw new InvalidOperationException("Retried partition lost its creation options.");
                 using var reader = DatasetRowSchema.CreateRowReader(part.OpenRead());
                 while (reader.MoveNext())
                     actual.Add(reader.Current.Value);
