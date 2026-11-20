@@ -1,7 +1,10 @@
+using System.Buffers;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Unicode;
 using Plank.Schema;
 using Plank.Writing.Compression;
 using Plank.Writing.Encoding;
@@ -480,7 +483,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 $"Converter physical CLR type '{typeof(TPhysical)}' is not supported for column '{_column.Name}'.");
     }
 
-    static readonly System.Text.UTF8Encoding StrictUtf8 = new(false, true);
+    static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     void SerializeStrings(ReadOnlySpan<string> values)
     {
@@ -494,9 +497,26 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var payloads = encoded.AsSpan(0, values.Length);
         try
         {
+            // At most three UTF-8 bytes per UTF-16 code unit.
+            const int maxStackChars = 256;
+            Span<byte> bytes = stackalloc byte[3 * maxStackChars];
             for (var i = 0; i < values.Length; i++)
-                if (values[i] is { } value)
+            {
+                if (values[i] is not { } value)
+                    continue;
+                if (Ascii.IsValid(value))
+                {
+                    byte[] ascii = value.Length == 0 ? [] : new byte[value.Length];
+                    Ascii.FromUtf16(value, ascii, out _);
+                    payloads[i] = ascii;
+                }
+                else if (value.Length <= maxStackChars &&
+                    Utf8.FromUtf16(value, bytes, out _, out var written,
+                        replaceInvalidSequences: false) == OperationStatus.Done)
+                    payloads[i] = bytes[..written].ToArray();
+                else
                     payloads[i] = StrictUtf8.GetBytes(value);
+            }
 
             if (_column.Options.Repetition == ParquetRepetition.Optional)
                 SerializeOptionalReference<byte[]>(payloads);

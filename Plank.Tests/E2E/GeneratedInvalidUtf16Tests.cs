@@ -6,11 +6,12 @@ namespace Plank.Tests.E2E;
 internal sealed class GeneratedInvalidUtf16Tests
 {
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
-    public void FlatAndRepeatedStringWritersRejectUnpairedSurrogates(bool repeated)
+    [Arguments(false, 1)]
+    [Arguments(false, 300)]
+    [Arguments(true, 1)]
+    public void FlatAndRepeatedStringWritersRejectUnpairedSurrogates(bool repeated, int prefixLength)
     {
-        const string invalid = "a\uD800b";
+        var invalid = new string('a', prefixLength) + "\uD800b";
         if (!repeated)
         {
             using var flat = new MemoryStream();
@@ -23,6 +24,26 @@ internal sealed class GeneratedInvalidUtf16Tests
         using var nested = new MemoryStream();
         using var nestedWriter = InvalidUtf16NestedRow.CreateRowWriter(nested, maxParallelism: 1);
         Assert.Throws<EncoderFallbackException>(() => nestedWriter.GetRow().Text = [invalid]);
+    }
+
+    [Test]
+    public async Task FlatStringsRoundTripWithAsciiPrefixesAndUnicodeSuffixes()
+    {
+        string[] values = ["", new string('a', 64), "aé東京🌸", new string('x', 300) + "🌸"];
+        using var stream = new MemoryStream();
+        using (var writer = InvalidUtf16FlatRow.CreateRowWriter(stream, maxParallelism: 1))
+        {
+            foreach (var value in values)
+                writer.GetRow().Text = value;
+            writer.Complete();
+        }
+
+        using var reader = InvalidUtf16FlatRow.CreateRowReader(new MemoryStream(stream.ToArray()));
+        foreach (var value in values)
+        {
+            await Assert.That(reader.MoveNext()).IsTrue();
+            await Assert.That(reader.Current.Text).IsEqualTo(value);
+        }
     }
 }
 
