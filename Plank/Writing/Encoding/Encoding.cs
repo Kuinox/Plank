@@ -4051,7 +4051,7 @@ static class Encoding
         var physicalValueCount = 0;
         var levelValueCount = 0;
         var nullCount = 0;
-        var allowsNullRow = leafProjectionInfo.ListOptional;
+        var allowsNullRow = leafProjectionInfo.RepeatedDefinitionLevels[0] > 1;
         // Optional groups around the list or inside its element add levels of their own, so the levels
         // come from the schema: an empty list defines everything above the repeated node, a null element
         // the repeated node itself, and a present value the whole path.
@@ -4142,7 +4142,7 @@ static class Encoding
         where TElement : notnull
         where TRow : notnull
     {
-        var allowsNullRow = leafProjectionInfo.ListOptional;
+        var allowsNullRow = leafProjectionInfo.RepeatedDefinitionLevels[0] > 1;
         var repeatedDefinitionLevels = leafProjectionInfo.RepeatedDefinitionLevels;
         var repLevels = new List<int>(rows.Length * 2);
         var defLevels = new List<int>(rows.Length * 2);

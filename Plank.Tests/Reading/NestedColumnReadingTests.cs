@@ -328,12 +328,14 @@ internal sealed class NestedColumnReadingTests
     }
 
     [Test]
-    public void RuntimeWriterAccountsForOptionalGroupAroundList()
+    [Arguments(ParquetRepetition.Optional)]
+    [Arguments(ParquetRepetition.Required)]
+    public void RuntimeWriterAccountsForOptionalGroupAroundList(ParquetRepetition listRepetition)
     {
         var schema = new ParquetSchema([
             ColumnDefinition.OptionalGroup("s",
                 ColumnDefinition.List("items", ColumnDefinition.OptionalLeaf("element", ParquetPhysicalType.Int32),
-                    ParquetRepetition.Optional))
+                    listRepetition))
         ]);
         int?[][] rows = [[7, null], [], null!];
 
@@ -345,9 +347,10 @@ internal sealed class NestedColumnReadingTests
         }, reader =>
         {
             var snapshot = Read(reader.RowGroups[0].NestedColumn<int>(0));
-            // The optional group s is defined for every row, so each level sits one above the bare list's.
-            AssertSnapshot(snapshot, [7], [0, 1, 0, 0], [4, 3, 2, 1],
-                rowCount: 3, maxRepetitionLevel: 1, maxDefinitionLevel: 4);
+            // A null row leaves the deepest optional node undefined (the list or its parent).
+            var max = listRepetition == ParquetRepetition.Optional ? 4 : 3;
+            AssertSnapshot(snapshot, [7], [0, 1, 0, 0], [max, max - 1, max - 2, max - 3],
+                rowCount: 3, maxRepetitionLevel: 1, maxDefinitionLevel: max);
         });
     }
 
