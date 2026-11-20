@@ -57,8 +57,8 @@ public struct ParquetPageCursor : IDisposable
     {
         _pageMetadata = pageMetadata;
         _pruner = pruner;
-        _dictionaryPending = _chunk.DictionaryPageOffset != 0 &&
-            _chunk.DictionaryPageOffset < _chunk.DataPageOffset;
+        // Resolved before the first selected page: the dictionary precedes the first data page.
+        _dictionaryPending = true;
     }
 
     public PageHeader CurrentHeader { get; private set; }
@@ -96,7 +96,7 @@ public struct ParquetPageCursor : IDisposable
             return MoveNextPruned(owner);
         if (_offset >= _chunkLength)
         {
-            ValidateDataValueCount();
+            ValidateDataValueCount(_dataValueCount);
             CurrentHeader = default;
             _payloadLength = 0;
             _borrowedPayload = default;
@@ -131,7 +131,7 @@ public struct ParquetPageCursor : IDisposable
         if (_pendingPageOrdinal < 0)
         {
             if (!_skippedDataPage)
-                ValidateDataValueCount();
+                ValidateDataValueCount(_dataValueCount);
             CurrentHeader = default;
             _payloadLength = 0;
             _borrowedPayload = default;
@@ -141,22 +141,29 @@ public struct ParquetPageCursor : IDisposable
 
         if (_dictionaryPending)
         {
+            // A dictionary sits at dictionary_page_offset when the writer set it, and otherwise often at
+            // data_page_offset (parquet-mr, Impala); either way it is the chunk's first page, ahead of the first
+            // data page. Location validation allows only non-data pages there.
+            var firstDataPage = metadata.GetMetadata(0).Offset;
+            var foundDictionary = firstDataPage > _chunk.ChunkOffset &&
+                ReadPage(owner, 0, checked((int)(firstDataPage - _chunk.ChunkOffset))) &&
+                CurrentHeader.Type == PageHeaderType.DictionaryPage;
             _dictionaryPending = false;
-            var dictionaryOffset = checked((int)(_chunk.DictionaryPageOffset - _chunk.ChunkOffset));
-            var dictionaryLength = checked((int)(_chunk.DataPageOffset - _chunk.DictionaryPageOffset));
-            return ReadPage(owner, dictionaryOffset, dictionaryLength);
+            if (foundDictionary)
+                return true;
         }
 
         var selected = metadata.GetMetadata(_pendingPageOrdinal);
-        _pendingPageOrdinal = -1;
         if (selected.Offset < _chunk.ChunkOffset ||
             selected.Offset - _chunk.ChunkOffset > (ulong)_chunkLength)
             throw new CorruptParquetException(
                 $"Selected page offset {selected.Offset} is outside its column chunk.");
         if (selected.CompressedSize > int.MaxValue)
             throw new NotSupportedException("Pages larger than Int32.MaxValue are not supported.");
-        return ReadPage(owner, checked((int)(selected.Offset - _chunk.ChunkOffset)),
+        var readData = ReadPage(owner, checked((int)(selected.Offset - _chunk.ChunkOffset)),
             checked((int)selected.CompressedSize), requireDataPage: true);
+        _pendingPageOrdinal = -1;
+        return readData;
     }
 
     bool ReadPage(ParquetFileReader owner, int pageOffset, int? boundedPageLength = null,
@@ -171,11 +178,11 @@ public struct ParquetPageCursor : IDisposable
             return false;
         }
 
+        CurrentHeader = default;
         _payloadLength = 0;
         _borrowedPayload = default;
-        _offset = pageOffset;
         var pageFileOffset = _chunk.ChunkOffset + (ulong)pageOffset;
-        var remainingChunkLength = _chunkLength - _offset;
+        var remainingChunkLength = _chunkLength - pageOffset;
         var maxHeaderLength = remainingChunkLength;
         if (boundedPageLength.HasValue)
         {
@@ -195,18 +202,19 @@ public struct ParquetPageCursor : IDisposable
         if (boundedPageLength.HasValue && totalPageLength > boundedPageLength.Value)
             throw new CorruptParquetException(
                 $"Page size {totalPageLength} exceeds its indexed compressed size {boundedPageLength.Value}.");
-        _offset += header.HeaderLength;
-        if (header.CompressedPageSize > (uint)(_chunkLength - _offset))
+        var payloadOffset = pageOffset + header.HeaderLength;
+        if (header.CompressedPageSize > (uint)(_chunkLength - payloadOffset))
             throw new CorruptParquetException(
-                $"Page compressed size ({header.CompressedPageSize}) exceeds remaining column chunk buffer ({_chunkLength - _offset}).");
+                $"Page compressed size ({header.CompressedPageSize}) exceeds remaining column chunk buffer ({_chunkLength - payloadOffset}).");
 
         var compressedLength = checked((int)header.CompressedPageSize);
-        var sourceOffset = _chunk.ChunkOffset + (ulong)_offset;
-        _offset += compressedLength;
+        var sourceOffset = _chunk.ChunkOffset + (ulong)payloadOffset;
+        var nextOffset = payloadOffset + compressedLength;
+        var dataValueCount = _dataValueCount;
         if (header.Type is PageHeaderType.DataPage or PageHeaderType.DataPageV2)
-            _dataValueCount += header.ValueCount;
-        if (_pruner is null && (_dataValueCount > _chunk.ValueCount || _offset == _chunkLength))
-            ValidateDataValueCount();
+            dataValueCount += header.ValueCount;
+        if (_pruner is null && (dataValueCount > _chunk.ValueCount || nextOffset == _chunkLength))
+            ValidateDataValueCount(dataValueCount);
         if (!RequiresDecompression(header))
         {
             if (header.CompressedPageSize != header.UncompressedPageSize)
@@ -228,8 +236,7 @@ public struct ParquetPageCursor : IDisposable
             }
             if (owner.VerifyPageCrc && header.Crc.HasValue)
                 VerifyPageCrc(header, ParquetCrc32.Compute(payload), pageFileOffset);
-            _payloadLength = compressedLength;
-            CurrentHeader = header;
+            CommitPage(header, compressedLength, nextOffset, dataValueCount);
             return true;
         }
 
@@ -281,9 +288,17 @@ public struct ParquetPageCursor : IDisposable
                 throw new CorruptParquetException("Compressed page payload is empty but its uncompressed payload is not.");
         }
 
-        _payloadLength = uncompressedLength;
-        CurrentHeader = header;
+        CommitPage(header, uncompressedLength, nextOffset, dataValueCount);
         return true;
+    }
+
+    void CommitPage(PageHeader header, int payloadLength, int nextOffset, ulong dataValueCount)
+    {
+        // An I/O failure must not advance this cursor past the page being read.
+        CurrentHeader = header;
+        _payloadLength = payloadLength;
+        _offset = nextOffset;
+        _dataValueCount = dataValueCount;
     }
 
     internal static void ValidateV2Levels(PageHeader header, ParquetColumnSchemaInfo column)
@@ -296,11 +311,11 @@ public struct ParquetPageCursor : IDisposable
             throw new CorruptParquetException("DataPageV2 definition levels are empty for a nonempty page.");
     }
 
-    void ValidateDataValueCount()
+    void ValidateDataValueCount(ulong dataValueCount)
     {
-        if (_dataValueCount != _chunk.ValueCount)
+        if (dataValueCount != _chunk.ValueCount)
             throw new CorruptParquetException(
-                $"Data pages in row group {_chunk.RowGroupOrdinal}, column {_chunk.ColumnOrdinal} have {_dataValueCount} values but the column chunk declares {_chunk.ValueCount}.");
+                $"Data pages in row group {_chunk.RowGroupOrdinal}, column {_chunk.ColumnOrdinal} have {dataValueCount} values but the column chunk declares {_chunk.ValueCount}.");
     }
 
     public void Dispose()
