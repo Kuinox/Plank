@@ -1618,6 +1618,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         if (page.RowCount != RowCount)
             return false;
 
+        // Repeated columns can have null entries even though their top-level values are required.
+        if (statistics.NullCount != page.NullCount)
+            statistics = statistics.WithNullCount(page.NullCount);
         page.Statistics = statistics;
         return true;
     }
