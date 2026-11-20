@@ -1,4 +1,7 @@
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 
 namespace Plank.BloomFilters;
 
@@ -33,6 +36,14 @@ static class SplitBlockBloomFilter
     {
         var block = GetBlock(bitset, hash);
         var key = unchecked((uint)hash);
+        if (Avx2.IsSupported)
+        {
+            var salts = Vector256.LoadUnsafe(ref MemoryMarshal.GetArrayDataReference(_salt));
+            var positions = (salts * Vector256.Create(key)) >> 27;
+            var mask = Avx2.ShiftLeftLogicalVariable(Vector256<uint>.One, positions);
+            var words = MemoryMarshal.Read<Vector256<uint>>(block);
+            return Vector256.EqualsAll(words & mask, mask);
+        }
         var salt = Salt;
         for (var i = 0; i < salt.Length; i++)
         {
