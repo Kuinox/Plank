@@ -100,3 +100,22 @@ var schema = new ParquetSchema([
         logicalType: new LogicalType.String())
 ]);
 ```
+
+### Optional elements in lists
+
+Generated row APIs preserve the difference between a missing record and a record whose fields are all
+null. For a list of lists, a null inner list, an empty inner list, and an inner list containing a null
+element also round-trip separately.
+
+When writing a physical column directly, use `NestedValue<T>` to say which part of an element is
+missing. For a list of optional records with an optional INT32 price, this writes one row containing
+a missing record, a record with a null price, and a record with a price of 7.
+
+```csharp
+var prices = rowGroup.CreateSerializedColumn<NestedValue<int>[]>(schema.LeafColumns[0]);
+prices.Serialize([[NestedValue<int>.Null(0), NestedValue<int>.Null(1), NestedValue<int>.Present(7)]]);
+rowGroup.Write(prices);
+```
+
+The argument to `Null` counts the optional nodes that are present below the innermost repeated node.
+Existing `int?[]` input still treats a null element as the first missing optional node.

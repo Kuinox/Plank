@@ -42,7 +42,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     readonly Column _column;
     T[]? _retainedValues;
     internal sbyte[]? AppendSortingComparisons { get; private set; }
-    object? _dictionaryState;
+    object? _encodingState;
     ParquetBuffer _statisticsMinValueBuffer;
     ParquetBuffer _statisticsMaxValueBuffer;
     ParquetBuffer _bloomFilterBuffer;
@@ -957,18 +957,72 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeRepeated(ReadOnlySpan<T> values)
     {
         var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
-#pragma warning disable CS8714
-        SerializeCore(values, columnOrdinal, _owner.GetPageStrategyContext(columnOrdinal));
-#pragma warning restore CS8714
+        if (HasPendingData)
+            throw new InvalidOperationException("SerializedColumn already contains pending data.");
         var projection = _owner.ColumnProjectionInfosByOrdinal[columnOrdinal];
+        ColumnOrdinal = columnOrdinal;
+        RowCount = checked((uint)values.Length);
+        Pages.Clear();
+        switch (_column.PhysicalType)
+        {
+            case ParquetPhysicalType.Boolean:
+                SerializeRepeatedPage<bool, bool?, NullableValueRow<bool>>(values, projection);
+                break;
+            case ParquetPhysicalType.Int32:
+                SerializeRepeatedPage<int, int?, NullableValueRow<int>>(values, projection);
+                break;
+            case ParquetPhysicalType.Int64:
+                SerializeRepeatedPage<long, long?, NullableValueRow<long>>(values, projection);
+                break;
+            case ParquetPhysicalType.Float:
+                SerializeRepeatedPage<float, float?, NullableValueRow<float>>(values, projection);
+                break;
+            case ParquetPhysicalType.Double:
+                SerializeRepeatedPage<double, double?, NullableValueRow<double>>(values, projection);
+                break;
+            case ParquetPhysicalType.ByteArray:
+            case ParquetPhysicalType.Int96:
+            case ParquetPhysicalType.FixedLenByteArray:
+                if (typeof(T) == typeof(ReadOnlyMemory<byte>[]) && projection.MaxRepetitionLevel == 1)
+                    SerializeRepeatedPage<ReadOnlyMemory<byte>, ReadOnlyMemory<byte>, RequiredRow<ReadOnlyMemory<byte>>>(values, projection);
+                else
+                    SerializeRepeatedPage<byte[], byte[], ReferenceRow<byte[]>>(values, projection);
+                break;
+            default:
+                throw new InvalidOperationException($"Unsupported repeated physical type '{_column.PhysicalType}'.");
+        }
         var mapProjections = projection.MapProjections;
-        if (mapProjections.IsDefaultOrEmpty)
-            return;
+        if (!mapProjections.IsDefaultOrEmpty)
+        {
+            var shapes = new RepeatedRowShape[mapProjections.Length];
+            for (var i = 0; i < shapes.Length; i++)
+                shapes[i] = CaptureRepeatedShape(values, mapProjections[i].RepetitionLevel);
+            MapRowShapes = shapes;
+        }
+        HasPendingData = true;
+    }
 
-        var shapes = new RepeatedRowShape[mapProjections.Length];
-        for (var i = 0; i < shapes.Length; i++)
-            shapes[i] = CaptureRepeatedShape(values, mapProjections[i].RepetitionLevel);
-        MapRowShapes = shapes;
+    void SerializeRepeatedPage<TValue, TOptional, TProbe>(ReadOnlySpan<T> rows, LeafProjectionInfo projection)
+        where TValue : notnull where TProbe : IOptionalRow<TOptional, TValue>
+    {
+        var data = _encodingState as RepeatedPageValues<TValue> ?? new RepeatedPageValues<TValue>(_owner.BufferWriters, projection);
+        _encodingState = data;
+        try
+        {
+            data.Flatten<T, TOptional, TProbe>(rows, projection, _column.Name);
+            Plank.Writing.Encoding.Encoding.EncodeRepeatedPage(_owner.BufferWriters, _column, data, rows.Length,
+                Pages, _owner.DataPageVersion);
+            ReadOnlySpan<TValue> dense = CollectionsMarshal.AsSpan(data.Values);
+            Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, dense, data.Count - dense.Length,
+                ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
+            _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, dense,
+                ref _bloomFilterBuffer);
+            TryAssignSingleDataPageStatistics(Statistics);
+        }
+        finally
+        {
+            data.Clear();
+        }
     }
 
     static RepeatedRowShape CaptureRepeatedShape(ReadOnlySpan<T> rows, int depth)
@@ -1582,6 +1636,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     internal void ReleaseBuffers()
     {
         Pages.ReleaseBuffers();
+        if (_encodingState is IDisposable state)
+            state.Dispose();
+        _encodingState = null;
         _compressedContent.Dispose();
         _compressionInput.Dispose();
         _compressedValues.Dispose();
@@ -1760,11 +1817,11 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     ReusableDictionaryState<TValue> GetOrCreateDictionaryState<TValue>()
         where TValue : notnull
     {
-        if (_dictionaryState is ReusableDictionaryState<TValue> state)
+        if (_encodingState is ReusableDictionaryState<TValue> state)
             return state;
 
         state = new ReusableDictionaryState<TValue>();
-        _dictionaryState = state;
+        _encodingState = state;
         return state;
     }
 

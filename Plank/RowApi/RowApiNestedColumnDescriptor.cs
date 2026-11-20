@@ -50,7 +50,7 @@ public sealed class RowApiNestedColumnDescriptor<TShape, TElement> : RowApiColum
                     nameof(collectionLevels));
             shapeType = shapeType.GetElementType()!;
         }
-        if ((Nullable.GetUnderlyingType(shapeType) ?? shapeType) != typeof(TElement))
+        if (shapeType != typeof(NestedValue<TElement>) && (Nullable.GetUnderlyingType(shapeType) ?? shapeType) != typeof(TElement))
             throw new ArgumentException(
                 $"Nested row shape leaf type '{shapeType}' does not match dense element type '{typeof(TElement)}'.",
                 nameof(collectionLevels));
