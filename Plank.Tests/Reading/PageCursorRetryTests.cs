@@ -59,6 +59,39 @@ internal sealed class PageCursorRetryTests
             throw new InvalidOperationException("Expected exactly one nonempty data page.");
     }
 
+    [Test]
+    public void RetryFirstDictionaryDiscoveredAtDataPageOffset()
+    {
+        var bytes = ParquetTesting.ParquetTestingCorpus.ReadAllBytes("data/alltypes_tiny_pages.parquet");
+        using var logical = new ParquetReader();
+        logical.Reset(new MemoryStream(bytes));
+        using var source = new ShortReadSource(bytes);
+        using var reader = new ParquetFileReader();
+        reader.Reset(source);
+        var group = reader.Metadata.RowGroup(0);
+        for (var i = 0; i < group.ColumnCount; i++)
+        {
+            var chunk = reader.Metadata.ColumnChunk(0, i);
+            using var plain = reader.OpenPages(0, i);
+            if (chunk.DataPageOffset != chunk.ChunkOffset || !plain.MoveNext() ||
+                plain.CurrentHeader.Type != PageHeaderType.DictionaryPage)
+                continue;
+            using var index = PageMetadataReader.OpenHandle(reader, 0, i, logical.Schema.LeafColumns[i], group.RowCount);
+            using var cursor = reader.OpenPages(0, i, index, static (in ParquetDataPageMetadata _) => true);
+            source.FaultOffset = chunk.ChunkOffset + (uint)plain.CurrentHeader.HeaderLength;
+            Assert.Throws<EndOfStreamException>(() => cursor.MoveNext());
+            do
+            {
+                if (!cursor.MoveNext() || cursor.CurrentHeader.Type != plain.CurrentHeader.Type ||
+                    !cursor.CurrentPayload.SequenceEqual(plain.CurrentPayload))
+                    throw new InvalidOperationException("Retry diverged from the plain scan.");
+            } while (plain.MoveNext());
+            if (cursor.MoveNext()) throw new InvalidOperationException("Retry returned an extra page.");
+            return;
+        }
+        throw new InvalidOperationException("Fixture must have a dictionary at data_page_offset.");
+    }
+
     sealed class ShortReadSource(byte[] bytes) : IParquetReadSource
     {
         public ulong? FaultOffset { get; set; }
