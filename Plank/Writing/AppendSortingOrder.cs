@@ -14,7 +14,7 @@ sealed class AppendSortingOrder(ParquetSortingColumn[] columns)
     readonly sbyte[]?[] _comparisons = new sbyte[]?[columns.Length];
     const sbyte Unknown = 2;
 
-    internal sbyte[]? CompareIncoming<T>(Column column, int ordinal, T[] retained, ReadOnlySpan<T> incoming)
+    internal sbyte[]? CompareIncoming<T>(Column column, int ordinal, ReadOnlySpan<T> retained, ReadOnlySpan<T> incoming)
     {
         var key = FindKey(ordinal);
         if (key < 0)

@@ -58,17 +58,31 @@ sealed class LatestRowGroupValues
         return new LatestRowGroupValues(columns, values);
     }
 
-    internal T[] GetValues<T>(int columnOrdinal)
+    internal Array GetValues<T>(int columnOrdinal)
     {
         var source = _values[columnOrdinal];
-        if (source is T[] exact)
-            return exact;
+        var column = _columns[columnOrdinal];
+        if (source is T[] || RetainRawNanoseconds<T>(column))
+            return source;
 
         var result = new T[source.Length];
-        var column = _columns[columnOrdinal];
         for (var i = 0; i < result.Length; i++)
             result[i] = ConvertValue<T>(source.GetValue(i), column);
         return result;
+    }
+
+    static bool RetainRawNanoseconds<T>(Column column)
+    {
+        if (column.Converter is not null)
+            return false;
+        var target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        return column.LogicalType switch
+        {
+            LogicalType.Time { Unit: TimeUnit.Nanos } => target == typeof(TimeOnly),
+            LogicalType.Timestamp { Unit: TimeUnit.Nanos } =>
+                target == typeof(DateTime) || target == typeof(DateTimeOffset),
+            _ => false
+        };
     }
 
     static T[] ReadFixed<T>(RowGroup rowGroup, int columnOrdinal)
