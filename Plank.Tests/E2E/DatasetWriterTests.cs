@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Plank.Dataset;
 using Plank.Reading;
 using Plank.Reading.Physical;
+using Plank.Schema;
 using Plank.Writing;
 
 namespace Plank.Tests.E2E;
