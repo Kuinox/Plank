@@ -13,10 +13,10 @@ internal sealed class GeneratedNestedSetterAtomicityTests
         using (var writer = AtomicSetterRow.CreateRowWriter(stream, maxParallelism: 1))
         {
             var row = writer.GetRow();
-            row.Group = new AtomicSetterGroup { First = 1, Text = "original" };
+            row.Group = new AtomicSetterGroup { First = 1, Text = ["original"] };
             try
             {
-                row.Group = new AtomicSetterGroup { First = 2, Text = invalidUtf16 ? "\uD800" : null! };
+                row.Group = new AtomicSetterGroup { First = 2, Text = [invalidUtf16 ? "\uD800" : null!] };
                 throw new Exception("Expected the invalid group to be rejected.");
             }
             catch (InvalidOperationException) when (!invalidUtf16) { }
@@ -26,7 +26,7 @@ internal sealed class GeneratedNestedSetterAtomicityTests
         using var reader = AtomicSetterRow.CreateRowReader(new MemoryStream(stream.ToArray()));
         await Assert.That(reader.MoveNext()).IsTrue();
         await Assert.That(reader.Current.Group.First).IsEqualTo(1);
-        await Assert.That(reader.Current.Group.Text).IsEqualTo("original");
+        await Assert.That(reader.Current.Group.Text.Single()).IsEqualTo("original");
     }
 
     [Test]
@@ -70,5 +70,5 @@ internal sealed class AtomicSetterGroup
         get => field >= 0 ? field : throw new ArgumentOutOfRangeException(nameof(Second));
         set;
     }
-    public string Text { get; set; } = "";
+    public string[] Text { get; set; } = [];
 }
