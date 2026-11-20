@@ -482,15 +482,19 @@ public sealed class RowReaderCore : IDisposable
     void ResolveFileSchema()
     {
         var fileSchema = _reader.Metadata.Schema;
+        var hasMissingCollectionLeaf = false;
         for (var i = 0; i < _states.Length; i++)
         {
             var state = _states[i];
-            var ordinal = ResolveColumnOrdinal(fileSchema, state.Column, _schema.LeafPaths[i], state.Column.Name,
+            var ordinal = ResolveColumnOrdinal(fileSchema, state.Column, i, _schema.LeafPaths[i], state.Column.Name,
                 state.PropertyName, state.Projected);
             if (ordinal < 0)
             {
                 if (state.Projected)
+                {
+                    hasMissingCollectionLeaf |= state.Column.Options.Repetition == ParquetRepetition.Repeated;
                     state.ResetForMissingMaterialized();
+                }
                 else
                     state.ResetForMissingUnprojected();
                 continue;
@@ -498,6 +502,27 @@ public sealed class RowReaderCore : IDisposable
 
             state.Ordinal = ordinal;
             state.Materialized = false;
+        }
+
+        if (hasMissingCollectionLeaf)
+            ValidateCollectionDefaults();
+    }
+
+    void ValidateCollectionDefaults()
+    {
+        // An entirely missing collection has a single default shape. A missing leaf of a
+        // present collection would have to inherit the repetition shape of a sibling.
+        var missingByRoot = new Dictionary<string, bool>(StringComparer.Ordinal);
+        for (var i = 0; i < _states.Length; i++)
+        {
+            var state = _states[i];
+            if ((!state.Projected && !state.Materialized) || state.Column.Options.Repetition != ParquetRepetition.Repeated)
+                continue;
+
+            var root = _schema.LeafPaths[i][0];
+            if (!missingByRoot.TryAdd(root, state.Materialized) && missingByRoot[root] != state.Materialized)
+                throw new InvalidOperationException(
+                    $"Collection '{root}' has both present and missing leaves. The row API cannot materialize defaults for part of a collection.");
         }
     }
 
@@ -563,8 +588,8 @@ public sealed class RowReaderCore : IDisposable
             ? state.CurrentIndex
             : checked(state.CurrentIndex + _currentBatchOffset);
 
-    int ResolveColumnOrdinal(ParquetSchema fileSchema, Column expected, ImmutableArray<string> expectedPath,
-        string columnName, string propertyName, bool projected)
+    int ResolveColumnOrdinal(ParquetSchema fileSchema, Column expected, int expectedOrdinal,
+        ImmutableArray<string> expectedPath, string columnName, string propertyName, bool projected)
     {
         if (!projected)
             return -1;
@@ -580,6 +605,7 @@ public sealed class RowReaderCore : IDisposable
             ValidatePhysicalType(actual, expected, columnName);
             ValidateLogicalType(actual, expected, columnName);
             ValidateRepetition(actual, expected, columnName);
+            ValidateNestedSchema(fileSchema, i, expectedOrdinal, columnName);
             ValidateMaterializedType(actual, expected, columnName, propertyName);
             return i;
         }
@@ -630,6 +656,14 @@ public sealed class RowReaderCore : IDisposable
                 $"Column '{columnName}' became optional, but row API non-null materialization is not safe.");
         throw new InvalidOperationException(
             $"Column '{columnName}' has repetition {actualRepetition}, expected {expectedRepetition}.");
+    }
+
+    void ValidateNestedSchema(ParquetSchema fileSchema, int actualOrdinal, int expectedOrdinal, string columnName)
+    {
+        if (_schema.LeafPaths[expectedOrdinal].Length > 1 &&
+            !_schema.NestedShapeMatches(expectedOrdinal, fileSchema, actualOrdinal))
+            throw new InvalidOperationException(
+                $"Column '{columnName}' has a different nested schema structure or repetition than the row API schema.");
     }
 
     void ValidateMaterializedType(Column actual, Column expected, string columnName, string propertyName)

@@ -9,6 +9,34 @@ namespace Plank.Tests.Reading;
 internal sealed class NestedColumnReadingTests
 {
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void RequestedNestedSchemaRejectsIncompatibleDefinitionLevels(bool sameMaximum)
+    {
+        var file = new ParquetSchema([
+            ColumnDefinition.List("values", ColumnDefinition.RequiredLeaf("element", ParquetPhysicalType.Int32),
+                ParquetRepetition.Optional)
+        ]);
+        var requested = new ParquetSchema([
+            ColumnDefinition.List("values", sameMaximum
+                ? ColumnDefinition.OptionalLeaf("element", ParquetPhysicalType.Int32)
+                : ColumnDefinition.RequiredLeaf("element", ParquetPhysicalType.Int32), ParquetRepetition.Required)
+        ]);
+        using var stream = new MemoryStream();
+        using (var writer = file.CreateWriter(stream))
+        {
+            var rowGroup = writer.StartRowGroup();
+            var column = rowGroup.CreateSerializedColumn<int[]>(file.LeafColumns[0]);
+            column.Serialize([null!, [], [17]]);
+            rowGroup.Write(column);
+            writer.CloseFile();
+        }
+
+        using var source = new MemoryReadSource(stream.ToArray());
+        Assert.Throws<InvalidOperationException>(() => requested.CreateReader(source).Dispose());
+    }
+
+    [Test]
     public void ReadsDataPageV2TopLevelRepeatedPrimitive()
     {
         var schema = new ParquetSchema([

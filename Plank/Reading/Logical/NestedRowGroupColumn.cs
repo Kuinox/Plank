@@ -20,7 +20,7 @@ public readonly struct NestedRowGroupColumn<T>
         _columnOrdinal = columnOrdinal;
     }
 
-    /// <summary>Gets the selected leaf definition.</summary>
+    /// <summary>Gets the requested leaf definition. Enumerated buffers expose the definition levels from the file.</summary>
     public LeafColumn Definition { get; }
 
     /// <summary>Gets this column chunk's logical metadata view.</summary>

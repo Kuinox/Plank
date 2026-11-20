@@ -1128,17 +1128,12 @@ static class NestedParquetRowEmitter
 
         var firstLeaf = node.Leaves[0];
         var source = GetLeafAccess(firstLeaf, indexes);
-        if (node.Optional)
-        {
-            builder.Append(padding).Append("if (").Append(source).AppendLine(" is null)");
-            builder.Append(padding).Append("    ").Append(target).AppendLine(" = null!;");
-            builder.Append(padding).AppendLine("else");
-            builder.Append(padding).AppendLine("{");
-            AppendReadCollectionBody(builder, node, target, source, indexes, indent + 1, ref variableIndex);
-            builder.Append(padding).AppendLine("}");
-        }
-        else
-            AppendReadCollectionBody(builder, node, target, source, indexes, indent, ref variableIndex);
+        builder.Append(padding).Append("if (").Append(source).AppendLine(" is null)");
+        builder.Append(padding).Append("    ").Append(target).AppendLine(" = null!;");
+        builder.Append(padding).AppendLine("else");
+        builder.Append(padding).AppendLine("{");
+        AppendReadCollectionBody(builder, node, target, source, indexes, indent + 1, ref variableIndex);
+        builder.Append(padding).AppendLine("}");
     }
 
     static void AppendReadGroupBody(StringBuilder builder, Node node, string target,

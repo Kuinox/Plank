@@ -302,6 +302,20 @@ internal sealed class GeneratedRowReaderE2ETests
     }
 
     [Test]
+    public void GeneratedRowReaderMaterializesDefaultsForMissingRequiredCollections()
+    {
+        using var stream = CreateEvolvingFile(includeAdded: false, addedOptional: false,
+            idPhysicalType: Plank.Schema.ParquetPhysicalType.Int32, maybeOptional: true);
+        using var reader = RequiredCollectionRowSchema.CreateRowReader(stream, schemaEvolution: MissingColumnEvolution);
+
+        if (!reader.MoveNext())
+            throw new InvalidOperationException("Expected a row.");
+        var row = reader.Current;
+        if (row.Values is not null || row.Scores is not null)
+            throw new InvalidOperationException("Missing collection properties were not materialized as their CLR defaults.");
+    }
+
+    [Test]
     public async Task GeneratedRowReaderMaterializesAddedLaterColumn()
     {
         using var stream = CreateEvolvingFile(includeAdded: false, addedOptional: false, idPhysicalType: Plank.Schema.ParquetPhysicalType.Int32,

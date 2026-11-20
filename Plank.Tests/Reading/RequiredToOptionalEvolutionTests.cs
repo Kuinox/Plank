@@ -75,6 +75,25 @@ internal sealed class RequiredToOptionalEvolutionTests
             throw new InvalidOperationException($"Expected {expected.Length} binary values, got {offset}.");
     }
 
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public async Task DenseColumnUsesFileLevelsForRequiredToOptionalProjection(ParquetDataPageVersion version)
+    {
+        int[] expected = [17, 29];
+        var file = Write(ParquetPhysicalType.Int32, expected, version, EncodingKind.Plain);
+        var requested = new ParquetSchema([ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32)]);
+        using var source = new MemoryReadSource(file);
+        using var reader = requested.CreateReader(source);
+        var actual = new List<int>();
+        foreach (var buffer in reader.RowGroups[0].NestedColumn<int>(0))
+        {
+            await Assert.That(buffer.MaxDefinitionLevel).IsEqualTo(0);
+            actual.AddRange(buffer.Values.Values);
+        }
+        await Assert.That(actual).IsEquivalentTo(expected);
+    }
+
     static byte[] Write<T>(ParquetPhysicalType type, T[] values,
         ParquetDataPageVersion version, EncodingKind encoding)
     {

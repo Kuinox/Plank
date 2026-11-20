@@ -31,3 +31,26 @@ internal sealed partial class GeneratedNestedRowSchema
 
     public List<DateTimeOffset?>? Instants { get; set; }
 }
+
+[ParquetSchema(AllowAllocatingValues = true)]
+internal sealed partial class OriginalRepeatedRecordRows
+{
+    public OriginalRepeatedRecord[] Items { get; set; } = [];
+}
+
+internal sealed class OriginalRepeatedRecord
+{
+    public int Existing { get; set; }
+}
+
+[ParquetSchema(AllowAllocatingValues = true)]
+internal sealed partial class EvolvedRepeatedRecordRows
+{
+    public EvolvedRepeatedRecord[] Items { get; set; } = [];
+}
+
+internal sealed class EvolvedRepeatedRecord
+{
+    public int Existing { get; set; }
+    public int Added { get; set; }
+}
