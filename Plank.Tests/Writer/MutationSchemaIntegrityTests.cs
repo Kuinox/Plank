@@ -8,6 +8,23 @@ namespace Plank.Tests.Writer;
 internal sealed class MutationSchemaIntegrityTests
 {
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task DisposingUnusedAppenderPreservesCommittedFile(bool appendLatest)
+    {
+        var schema = new ParquetSchema([Int("A")]);
+        var original = WriteFile(schema, withValues: true);
+        using var source = new MemorySource(original);
+
+        using (schema.CreateAppender(source, source, new ParquetAppendOptions
+               { AppendToLatestRowGroup = appendLatest }))
+        {
+        }
+
+        await Assert.That(source.Bytes.AsSpan().SequenceEqual(original)).IsTrue();
+    }
+
+    [Test]
     [Arguments("subset")]
     [Arguments("extra field")]
     [Arguments("reordered")]
