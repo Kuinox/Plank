@@ -917,13 +917,24 @@ static class NestedParquetRowEmitter
         builder.AppendLine(");");
         builder.AppendLine("            set");
         builder.AppendLine("            {");
-        for (var i = 0; i < root.Leaves.Count; i++)
+        // Project every leaf before mutating the row. User getters and conversions can throw.
+        if (root.Leaves.Count == 1)
         {
-            var leaf = root.Leaves[i];
-            builder.Append("                ")
-                .Append(element(leaf))
-                .Append(" = ")
+            var leaf = root.Leaves[0];
+            builder.Append("                ").Append(element(leaf)).Append(" = ")
                 .Append(names.Get("project:" + leaf.UniqueName, "Project" + leaf.UniqueName)).AppendLine("(value);");
+        }
+        else
+        {
+            for (var i = 0; i < root.Leaves.Count; i++)
+            {
+                var leaf = root.Leaves[i];
+                builder.Append("                var projected").Append(i).Append(" = ")
+                    .Append(names.Get("project:" + leaf.UniqueName, "Project" + leaf.UniqueName)).AppendLine("(value);");
+            }
+            for (var i = 0; i < root.Leaves.Count; i++)
+                builder.Append("                ").Append(element(root.Leaves[i])).Append(" = projected")
+                    .Append(i).AppendLine(";");
         }
         builder.AppendLine("            }");
         builder.AppendLine("        }");
@@ -1021,6 +1032,11 @@ static class NestedParquetRowEmitter
 
     static void AppendMaterializers(StringBuilder builder, GeneratedMemberNames names, Model model)
     {
+        if (model.Leaves.Any(static leaf => leaf.MaxRepetitionLevel > 0 &&
+                leaf.Node.Scalar!.NonNullableUserType == "string"))
+            builder.AppendLine("    static readonly global::System.Text.UTF8Encoding " +
+                names.Root("GeneratedStrictUtf8") + " = new(false, true);");
+
         if (model.Leaves.Any(static leaf => leaf.MaxRepetitionLevel > 0 &&
                 leaf.Node.Scalar!.NonNullableUserType is "global::System.DateTime" or
                     "global::System.DateTimeOffset"))
@@ -1232,6 +1248,13 @@ static class NestedParquetRowEmitter
         string source, int depth, int indent, List<string> indexes)
     {
         var padding = new string(' ', indent * 4);
+        if (node.Kind is NodeKind.Leaf or NodeKind.Group && !node.Optional && node.TypeSymbol.IsReferenceType)
+        {
+            var message = $"Required generated property '{node.PropertyName}' cannot be null.";
+            source = $"({source} ?? throw new global::System.InvalidOperationException(" +
+                Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(message, quote: true) + "))";
+        }
+
         if (node.Kind == NodeKind.Leaf)
         {
             builder.Append(padding).Append(target).Append(" = ").Append(ConvertToStorage(names, leaf, source))
@@ -1272,9 +1295,8 @@ static class NestedParquetRowEmitter
         var count = node.Kind == NodeKind.List && node.CollectionKind == "Array"
             ? nonNullSource + ".Length"
             : nonNullSource + ".Count";
-        builder.Append(padding).Append("    ").Append(target).Append(" = (")
-            .Append(GetStorageTypeAtDepth(leaf, depth)).Append(")global::System.Array.CreateInstance(typeof(")
-            .Append(elementStorageType).Append("), ").Append(count).AppendLine(");");
+        builder.Append(padding).Append("    ").Append(target).Append(" = global::System.GC.AllocateArray<")
+            .Append(elementStorageType).Append(">(").Append(count).AppendLine(");");
         if (node.Kind == NodeKind.Map)
         {
             var pair = "pair" + depth;
@@ -1441,7 +1463,9 @@ static class NestedParquetRowEmitter
         {
             "byte" or "ushort" or "uint" or "ulong" =>
                 ConvertUnsignedInteger(leaf, expression, scalar.StorageType),
-            "string" => $"{expression} is null ? null! : global::System.Text.Encoding.UTF8.GetBytes({expression}!)",
+            "string" => leaf.Node.Optional
+                ? $"{expression} is null ? null! : {names.Root("GeneratedStrictUtf8")}.GetBytes({expression}!)"
+                : $"{names.Root("GeneratedStrictUtf8")}.GetBytes({expression})",
             "global::System.ReadOnlyMemory<byte>" => scalar.UserType.EndsWith("?", StringComparison.Ordinal)
                 ? $"{expression}.HasValue ? {expression}!.Value.ToArray() : null!"
                 : $"{expression}.ToArray()",

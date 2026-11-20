@@ -38,11 +38,11 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     delegate ColumnStatistics PageStatisticsFactory<TValue>(ReadOnlySpan<TValue> values, long nullCount);
 
     internal readonly ParquetWriter _owner;
-    readonly LeafColumn _leafColumn;
     readonly Column _column;
     T[]? _retainedValues;
     internal sbyte[]? AppendSortingComparisons { get; private set; }
     object? _dictionaryState;
+    StringWriteScratch? _stringScratch;
     ParquetBuffer _statisticsMinValueBuffer;
     ParquetBuffer _statisticsMaxValueBuffer;
     ParquetBuffer _bloomFilterBuffer;
@@ -59,20 +59,18 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(column);
         _owner = owner;
-        _ = owner.GetColumnOrdinal(column);
-        _leafColumn = column;
+        ColumnOrdinal = owner.GetColumnOrdinal(column);
         _column = column.Column;
         _retainedValues = retainedValues;
         _compressionContext = new CompressionContext(owner.BufferWriters);
         Pages = new PageList(initialPageCapacity);
-        ColumnOrdinal = 0;
         RowCount = 0;
         HasPendingData = false;
     }
 
     internal PageList Pages { get; }
 
-    internal uint ColumnOrdinal { get; private set; }
+    internal uint ColumnOrdinal { get; }
 
     internal uint RowCount { get; private set; }
 
@@ -113,7 +111,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             retainedValues.CopyTo(combined, 0);
             values.CopyTo(combined.AsSpan(retainedValues.Length));
             var comparisons = _owner.LatestSortingOrder?.CompareIncoming(
-                _column, checked((int)_owner.GetColumnOrdinal(_leafColumn)), retainedValues, values);
+                _column, checked((int)ColumnOrdinal), retainedValues, values);
             SerializeValues(combined.AsSpan());
             AppendSortingComparisons = comparisons;
             return;
@@ -481,15 +479,21 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     void SerializeStrings(ReadOnlySpan<string> values)
     {
-        var encoded = new byte[values.Length][];
-        for (var i = 0; i < values.Length; i++)
-            if (values[i] is { } value)
-                encoded[i] = System.Text.Encoding.UTF8.GetBytes(value);
-
-        if (_column.Options.Repetition == ParquetRepetition.Optional)
-            SerializeOptionalReference(encoded);
-        else
-            SerializeTyped(encoded);
+        var scratch = _stringScratch ?? new StringWriteScratch();
+        _stringScratch = null; // A reentrant call must have its own scratch.
+        try
+        {
+            var pool = _owner.BufferWriters.BufferPool;
+            if (_column.Options.Repetition == ParquetRepetition.Optional)
+                SerializeOptionalTyped<ReadOnlyMemory<byte>>(scratch.EncodeOptional(values, pool));
+            else
+                SerializeTyped(scratch.EncodeRequired(values, _column, pool));
+        }
+        finally
+        {
+            scratch.Reset();
+            _stringScratch = scratch;
+        }
     }
 
     void SerializeGuids(ReadOnlySpan<Guid> values)
@@ -674,7 +678,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             || _owner.WritePageIndexes || _column.Options.BloomFilter is not null)
             return false;
 
-        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        var columnOrdinal = ColumnOrdinal;
         var projection = _owner.ColumnProjectionInfosByOrdinal[columnOrdinal];
         if (projection.MaxDefinitionLevel != 0 || projection.MaxRepetitionLevel != 0)
             return false;
@@ -687,7 +691,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         var statistics = CreateRequiredDateTimeStatistics(values, timestamp);
         Pages.Clear();
-        ColumnOrdinal = columnOrdinal;
         RowCount = checked((uint)values.Length);
         Statistics = statistics;
         HasPendingData = true;
@@ -733,7 +736,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeNullableDateTime(ReadOnlySpan<DateTime?> values)
     {
         var timestamp = RequireTimestampLogicalType(_column);
-        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        var columnOrdinal = ColumnOrdinal;
         if (HasPendingData)
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
@@ -742,7 +745,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 values, timestamp, _owner.GetPageStrategyContext(columnOrdinal), Pages, _owner.DataPageVersion,
                 _owner.ColumnProjectionInfosByOrdinal[columnOrdinal]))
         {
-            ColumnOrdinal = columnOrdinal;
             RowCount = checked((uint)values.Length);
             HasPendingData = true;
             _bloomFilterByteLength = 0;
@@ -907,14 +909,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeTyped<TValue>(ReadOnlySpan<TValue> values)
         where TValue : notnull
     {
-        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        var columnOrdinal = ColumnOrdinal;
         SerializeCore(values, columnOrdinal, _owner.GetPageStrategyContext(columnOrdinal));
     }
 
     void SerializeOptionalTyped<TValue>(ReadOnlySpan<TValue?> values)
         where TValue : struct
     {
-        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        var columnOrdinal = ColumnOrdinal;
         SerializeOptionalCore(values, columnOrdinal, _owner.GetPageStrategyContext(columnOrdinal));
     }
 
@@ -923,14 +925,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         where TSource : struct
         where TValue : struct
     {
-        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        var columnOrdinal = ColumnOrdinal;
         var strategyContext = _owner.GetPageStrategyContext(columnOrdinal);
         ArgumentNullException.ThrowIfNull(strategyContext);
         if (HasPendingData)
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
         Pages.Clear();
-        ColumnOrdinal = columnOrdinal;
         RowCount = checked((uint)values.Length);
         HasPendingData = true;
 
@@ -952,13 +953,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeOptionalReference<TValue>(ReadOnlySpan<TValue> values)
         where TValue : class
     {
-        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        var columnOrdinal = ColumnOrdinal;
         SerializeOptionalCore(values, columnOrdinal, _owner.GetPageStrategyContext(columnOrdinal));
     }
 
     void SerializeRepeated(ReadOnlySpan<T> values)
     {
-        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        var columnOrdinal = ColumnOrdinal;
 #pragma warning disable CS8714
         SerializeCore(values, columnOrdinal, _owner.GetPageStrategyContext(columnOrdinal));
 #pragma warning restore CS8714
@@ -1030,7 +1031,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
         Pages.Clear();
-        ColumnOrdinal = columnOrdinal;
         RowCount = checked((uint)values.Length);
         HasPendingData = true;
 
@@ -1212,7 +1212,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                     _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
                     GetOrCreateDictionaryState<double>(), out var dictionaryStatistics))
             {
-                ColumnOrdinal = columnOrdinal;
                 RowCount = checked((uint)values.Length);
                 HasPendingData = true;
                 Statistics = dictionaryStatistics;
@@ -1229,7 +1228,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             && _column.Options.BloomFilter is null)
         {
             Pages.Clear();
-            ColumnOrdinal = columnOrdinal;
             RowCount = checked((uint)values.Length);
             HasPendingData = true;
             var longValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<long?>>(ref values);
@@ -1254,7 +1252,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                     _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal],
                     GetOrCreateDictionaryState<long>(), out var dictionaryStatistics))
             {
-                ColumnOrdinal = columnOrdinal;
                 RowCount = checked((uint)values.Length);
                 HasPendingData = true;
                 Statistics = dictionaryStatistics;
@@ -1274,7 +1271,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                         _owner.BufferWriters, _column, values, strategyContext, Pages,
                         _owner.DataPageVersion, _owner.ColumnProjectionInfosByOrdinal[columnOrdinal]))
                 {
-                    ColumnOrdinal = columnOrdinal;
                     RowCount = checked((uint)values.Length);
                     HasPendingData = true;
                     _bloomFilterByteLength = 0;
@@ -1290,7 +1286,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                     && !_owner.WritePageIndexes && _column.Options.BloomFilter is null)
                 {
                     Pages.Clear();
-                    ColumnOrdinal = columnOrdinal;
                     RowCount = checked((uint)values.Length);
                     HasPendingData = true;
                     var intValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<int?>>(ref values);
@@ -1312,7 +1307,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                     && _column.Options.BloomFilter is null)
                 {
                     Pages.Clear();
-                    ColumnOrdinal = columnOrdinal;
                     RowCount = checked((uint)values.Length);
                     HasPendingData = true;
                     var longValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<long?>>(ref values);
@@ -1332,7 +1326,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                     && !_owner.WritePageIndexes && _column.Options.BloomFilter is null)
                 {
                     Pages.Clear();
-                    ColumnOrdinal = columnOrdinal;
                     RowCount = checked((uint)values.Length);
                     HasPendingData = true;
                     var longValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<long?>>(ref values);
@@ -1351,7 +1344,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                     && !_owner.WritePageIndexes && _column.Options.BloomFilter is null)
                 {
                     Pages.Clear();
-                    ColumnOrdinal = columnOrdinal;
                     RowCount = checked((uint)values.Length);
                     HasPendingData = true;
                     var doubleValues = Unsafe.As<ReadOnlySpan<TValue?>, ReadOnlySpan<double?>>(ref values);
@@ -1382,7 +1374,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
 
         Pages.Clear();
-        ColumnOrdinal = columnOrdinal;
         RowCount = checked((uint)values.Length);
         HasPendingData = true;
 
@@ -1424,7 +1415,6 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             throw new InvalidOperationException(
                 "SerializedColumn already contains pending data. Call RowGroupWriter.Write(serialized) before Serialize(...) again.");
         Pages.Clear();
-        ColumnOrdinal = columnOrdinal;
         RowCount = checked((uint)values.Length);
         HasPendingData = true;
 
@@ -1583,6 +1573,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     internal void ReleaseBuffers()
     {
+        _stringScratch = null;
         Pages.ReleaseBuffers();
         _compressedContent.Dispose();
         _compressionInput.Dispose();
