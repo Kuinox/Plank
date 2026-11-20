@@ -5,6 +5,31 @@ namespace Plank.Tests.E2E;
 internal sealed class GeneratedNestedSetterAtomicityTests
 {
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task InvalidLastLeafPreservesThePreviousGroup(bool invalidUtf16)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = AtomicSetterRow.CreateRowWriter(stream, maxParallelism: 1))
+        {
+            var row = writer.GetRow();
+            row.Group = new AtomicSetterGroup { First = 1, Text = "original" };
+            try
+            {
+                row.Group = new AtomicSetterGroup { First = 2, Text = invalidUtf16 ? "\uD800" : null! };
+                throw new Exception("Expected the invalid group to be rejected.");
+            }
+            catch (InvalidOperationException) when (!invalidUtf16) { }
+            catch (System.Text.EncoderFallbackException) when (invalidUtf16) { }
+            writer.Complete();
+        }
+        using var reader = AtomicSetterRow.CreateRowReader(new MemoryStream(stream.ToArray()));
+        await Assert.That(reader.MoveNext()).IsTrue();
+        await Assert.That(reader.Current.Group.First).IsEqualTo(1);
+        await Assert.That(reader.Current.Group.Text).IsEqualTo("original");
+    }
+
+    [Test]
     public async Task FailedGroupAssignmentPreservesPreviousValue()
     {
         using var stream = new MemoryStream();
@@ -45,4 +70,5 @@ internal sealed class AtomicSetterGroup
         get => field >= 0 ? field : throw new ArgumentOutOfRangeException(nameof(Second));
         set;
     }
+    public string Text { get; set; } = "";
 }
