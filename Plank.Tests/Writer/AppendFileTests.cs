@@ -1,13 +1,61 @@
 using System.Collections.Immutable;
 using System.Text;
+using Plank.Reading;
 using Plank.Reading.Physical;
 using Plank.Schema;
+using Plank.Tests.Reading.ParquetTesting;
 using Plank.Writing;
 
 namespace Plank.Tests.Writer;
 
 internal sealed class AppendFileTests
 {
+    [Test]
+    public void AppendingPreservesRetainedInt96TimestampOrder()
+    {
+        var input = ParquetTestingCorpus.ReadAllBytes("data/int96_timestamp_order.parquet");
+        var schema = new ParquetSchema([ColumnDefinition.RequiredLeaf("ts", ParquetPhysicalType.Int96)]);
+        using var stream = new MemoryStream();
+        stream.Write(input);
+        stream.Position = 0;
+        using (var writer = schema.CreateAppender(stream, new ParquetAppendOptions
+        {
+            WriterOptions = new ParquetWriterOptions { WritePageIndexes = true }
+        }))
+        {
+            var column = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+            column.Serialize([
+                Convert.FromHexString("7B00000000000000403B2500"),
+                Convert.FromHexString("00000000000000008D3D2500")
+            ]);
+            writer.StartRowGroup().Write(column);
+            writer.CloseFile();
+        }
+
+        using var reader = new ParquetFileReader();
+        using var source = new MemoryReadSource(stream.ToArray());
+        reader.Reset(source);
+        var footer = new CompactProtocolReader(reader.Metadata.FooterBytes);
+        footer.BeginRootStruct();
+        var order = 0;
+        while (footer.TryReadFieldHeader(out var id, out var type, out var inlineBool))
+        {
+            if (id == 7)
+            {
+                var (_, elementType) = footer.ReadListHeader(type);
+                footer.BeginStruct(elementType);
+                _ = footer.TryReadFieldHeader(out order, out _, out _);
+                break;
+            }
+            footer.Skip(type, inlineBool);
+        }
+        if (order != 3 || reader.Metadata.ColumnChunk(0, 0).ColumnIndexLength == 0)
+            throw new InvalidOperationException("Expected the retained INT96_TIMESTAMP_ORDER and its ColumnIndex.");
+        var appended = reader.Metadata.ColumnChunk(1, 0);
+        if (appended.Statistics.HasMinimum || appended.Statistics.HasMaximum || appended.ColumnIndexLength != 0)
+            throw new InvalidOperationException("New INT96 pages must not publish byte-ordered bounds as chronological.");
+    }
+
     [Test]
     [Arguments(false, 0)]
     [Arguments(true, 0)]

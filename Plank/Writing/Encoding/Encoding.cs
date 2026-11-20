@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -50,6 +51,13 @@ static class Encoding
 
         public static ColumnStatistics Write(ReadOnlySpan<int?> values, ref BufferWriter writer)
             => PlainEncoding.WriteAllPresentOptionalInt32PageWithStatistics(values, ref writer);
+    }
+
+    readonly struct UnsignedPlainPageWriter<T> : IPlainPrimitivePageWriter<T>
+        where T : unmanaged, IBinaryInteger<T>, IUnsignedNumber<T>
+    {
+        public static ColumnStatistics Write(ReadOnlySpan<T> values, ref BufferWriter writer)
+            => PlainEncoding.WriteIntegerPageWithStatistics(values, ref writer);
     }
 
     readonly struct Int64PlainPageWriter : IPlainPrimitivePageWriter<long>
@@ -234,7 +242,10 @@ static class Encoding
         if (column.PhysicalType == ParquetPhysicalType.Int32 && typeof(T) == typeof(int))
         {
             var intValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<int>>(ref values);
-            if (AdvSimd.Arm64.IsSupported
+            if (column.LogicalType is LogicalType.Int { IsSigned: false })
+                WritePlainPrimitiveDataPages<uint, UnsignedPlainPageWriter<uint>>(bufferWriters,
+                    MemoryMarshal.Cast<int, uint>(intValues), rowsPerPage, pages);
+            else if (AdvSimd.Arm64.IsSupported
                 && PlainEncoding.CanUseInt32Vector128(Math.Min(values.Length, rowsPerPage)))
                 WritePlainPrimitiveDataPages<int, ArmInt32PlainPageWriter>(bufferWriters, intValues, rowsPerPage,
                     pages);
@@ -246,7 +257,10 @@ static class Encoding
         if (column.PhysicalType == ParquetPhysicalType.Int64 && typeof(T) == typeof(long))
         {
             var longValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<long>>(ref values);
-            if (AdvSimd.Arm64.IsSupported
+            if (column.LogicalType is LogicalType.Int { IsSigned: false })
+                WritePlainPrimitiveDataPages<ulong, UnsignedPlainPageWriter<ulong>>(bufferWriters,
+                    MemoryMarshal.Cast<long, ulong>(longValues), rowsPerPage, pages);
+            else if (AdvSimd.Arm64.IsSupported
                 && PlainEncoding.CanUseInt64Vector128(Math.Min(values.Length, rowsPerPage)))
                 WritePlainPrimitiveDataPages<long, ArmInt64PlainPageWriter>(bufferWriters, longValues, rowsPerPage,
                     pages);
