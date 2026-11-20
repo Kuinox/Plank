@@ -176,13 +176,51 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                     "Declare [ParquetSchema] classes directly in a namespace or the global namespace.");
         }
 
+        if (schemaType.IsFileLocal || schemaType.DeclaringSyntaxReferences.Any(static reference =>
+                reference.GetSyntax() is TypeDeclarationSyntax declaration &&
+                !declaration.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PartialKeyword)))
+        {
+            var reason = schemaType.IsFileLocal ? "is file-local" : "is not partial";
+            return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration,
+                schemaType.Locations.FirstOrDefault(),
+                $"Schema type '{schemaType.Name}' {reason}. Declare a non-file-local partial class or record.");
+        }
+
+        if (compilation is Microsoft.CodeAnalysis.CSharp.CSharpCompilation csharp &&
+            csharp.LanguageVersion < Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp12)
+        {
+            return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration,
+                schemaType.Locations.FirstOrDefault(),
+                $"Schema type '{schemaType.Name}' requires C# 12 or later for generated APIs. Set LangVersion to 12.0 or later.");
+        }
+
         if (!ValidateDtoInheritance(schemaType, out var inheritanceError))
         {
             return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration, location, inheritanceError);
         }
 
+        foreach (var property in schemaType.GetMembers().OfType<IPropertySymbol>())
+        {
+            if (property.IsStatic || property.IsIndexer || property.ExplicitInterfaceImplementations.IsEmpty)
+                continue;
+
+            return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration,
+                property.Locations.FirstOrDefault(),
+                $"Schema property '{property.Name}' explicitly implements an interface and cannot be a column. " +
+                "Use an implicitly implemented property or a separate schema DTO.");
+        }
+
         if (NestedParquetRowEmitter.TryGenerate(schemaType, compilation, location, out var nestedResult))
             return nestedResult;
+
+        foreach (var property in schemaType.GetMembers().OfType<IPropertySymbol>())
+        {
+            if (property.IsStatic || property.IsIndexer || property.IsImplicitlyDeclared || property.GetMethod is not null)
+                continue;
+
+            return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration,
+                property.Locations.FirstOrDefault(), MissingGetterMessage(property));
+        }
 
         if (!TryExtractColumns(schemaType, out var columns, out var extractError))
         {
@@ -249,7 +287,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return true;
     }
 
-    static string GetHintName(INamedTypeSymbol schemaType)
+    internal static string GetHintName(INamedTypeSymbol schemaType)
     {
         var typeName = schemaType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         using var sha256 = SHA256.Create();
@@ -289,8 +327,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         for (var i = 0; i < schemaColumns.Length; i++)
         {
             var schemaColumn = schemaColumns[i];
-            builder.Append("        global::Plank.Schema.ColumnDefinition.Leaf(\"").Append(Escape(schemaColumn.Name))
-                .Append("\", global::Plank.Schema.ParquetPhysicalType.").Append(schemaColumn.PhysicalType)
+            builder.Append("        global::Plank.Schema.ColumnDefinition.Leaf(").Append(StringLiteral(schemaColumn.Name))
+                .Append(", global::Plank.Schema.ParquetPhysicalType.").Append(schemaColumn.PhysicalType)
                 .Append(", ").Append(GetColumnOptionsExpression(schemaColumn));
             if (schemaColumn.LogicalType is { } logicalType)
                 builder.Append(", ").Append(GetLogicalTypeExpression(logicalType));
@@ -455,9 +493,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        internal " + names.Root("PipelineWriter") + "(global::Plank.Writing.IParquetWriteSource file, global::Plank.Writing.ParquetFilePath filePath, global::Plank.Writing.ParquetWriterOptions options)");
         builder.Append("            : base(file, filePath, ").Append(names.Root("Schema"))
-            .Append(", options.RowApiMaxParallelism, null, options, options.RowApiInitialRowCapacity, \"Plank")
-            .Append(Escape(schemaType.Name))
-            .AppendLine("RowApiWorker\")");
+            .Append(", options.RowApiMaxParallelism, null, options, options.RowApiInitialRowCapacity, ")
+            .Append(StringLiteral($"Plank{schemaType.Name}RowApiWorker")).AppendLine(")");
         builder.AppendLine("        {");
         if (rowSizePlan.IsFixed)
             builder.Append("            " + names.Helper("_rowsPerGroup") + " = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
@@ -475,9 +512,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        internal " + names.Root("PipelineWriter") + "(global::System.IO.Stream stream, uint maxParallelism, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
         builder.Append("            : base(stream, ").Append(names.Root("Schema"))
-            .Append(", maxParallelism, onFlush, options, options.RowApiInitialRowCapacity, \"Plank")
-            .Append(Escape(schemaType.Name))
-            .AppendLine("RowApiWorker\")");
+            .Append(", maxParallelism, onFlush, options, options.RowApiInitialRowCapacity, ")
+            .Append(StringLiteral($"Plank{schemaType.Name}RowApiWorker")).AppendLine(")");
         builder.AppendLine("        {");
         if (rowSizePlan.IsFixed)
             builder.Append("            " + names.Helper("_rowsPerGroup") + " = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
@@ -735,8 +771,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append("    static readonly global::Plank.RowApi.RowApiColumnDescriptor<")
                 .Append(columns[i].ClrTypeName).Append("> ")
                 .Append(names.Helper(GetRowApiColumnFieldName(columns[i].PropertyName)))
-                .Append(" = new(\"").Append(Escape(columns[i].PropertyName))
-                .Append("\", ").Append(schemaMemberName).Append(".LeafColumns[").Append(i).AppendLine("]);");
+                .Append(" = new(").Append(StringLiteral(columns[i].PropertyName))
+                .Append(", ").Append(schemaMemberName).Append(".LeafColumns[").Append(i).AppendLine("]);");
         }
         builder.AppendLine();
         builder.AppendLine("    static readonly global::Plank.RowApi.RowApiColumnDescriptor[] " + names.Root("s_rowApiColumns") + " = [");
@@ -1080,8 +1116,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static bool IsAdditionalFixedBinaryMapping(SchemaColumn column, string clrType)
         => column.LogicalType?.Kind is "Float16" or "Interval" && IsUtf8ByteArrayClr(clrType);
 
-    static string Escape(string value)
-        => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: false);
+    internal static string StringLiteral(string value)
+        => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: true);
 
     static string EscapeIdentifier(string value)
         => Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(value) ==
@@ -1132,6 +1168,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 return true;
         return false;
     }
+
+    internal static string MissingGetterMessage(IPropertySymbol property)
+        => $"Schema property '{property.ContainingType.Name}.{property.Name}' must have a getter to write its value.";
 
     static bool TryExtractColumns(INamedTypeSymbol schemaType, out ImmutableArray<SchemaColumn> columns, out string error)
     {
@@ -1188,7 +1227,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         {
             if (!TryNormalizeClrType(type, nullableAnnotation, out clrTypeName))
             {
-                error = $"Unsupported CLR type '{type.ToDisplayString()}' for schema property '{property?.Name ?? "element"}'.";
+                error = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) is
+                    "global::System.Half" or "global::System.Half?"
+                    ? $"Schema property '{property?.Name ?? "element"}' cannot map System.Half directly. " +
+                      "Use byte[] or ReadOnlyMemory<byte> with a FLOAT16 logical type on FIXED_LEN_BYTE_ARRAY."
+                    : $"Unsupported CLR type '{type.ToDisplayString()}' for schema property '{property?.Name ?? "element"}'.";
                 return false;
             }
 

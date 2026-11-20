@@ -46,7 +46,7 @@ static class NestedParquetRowEmitter
                 diagnostics.Add(GenerationDiagnostic.Create(diagnostic.Descriptor, location, diagnostic.Message));
 
         result = diagnostics.Count == 0
-            ? GenerationResult.Source(GetHintName(schemaType), BuildSource(schemaType, model))
+            ? GenerationResult.Source(ParquetRowGenerator.GetHintName(schemaType), BuildSource(schemaType, model))
             : GenerationResult.Diagnostics(diagnostics.ToImmutable());
         return true;
     }
@@ -95,6 +95,13 @@ static class NestedParquetRowEmitter
         var activeTypes = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default) { schemaType };
         foreach (var property in GetProperties(schemaType))
         {
+            if (!CanExposeType(property.Type, schemaType.DeclaredAccessibility == Accessibility.Public))
+            {
+                model = default!;
+                error = $"Type '{property.Type.ToDisplayString()}' of schema property '{property.Name}' is less accessible " +
+                    $"than schema '{schemaType.Name}' and cannot appear in its generated row API.";
+                return false;
+            }
             if (!TryCreatePropertyNode(property, activeTypes, out var root, out error))
             {
                 model = default!;
@@ -141,6 +148,19 @@ static class NestedParquetRowEmitter
         return true;
     }
 
+    static bool CanExposeType(ITypeSymbol type, bool isPublicApi)
+    {
+        if (type is IArrayTypeSymbol array)
+            return CanExposeType(array.ElementType, isPublicApi);
+        if (type is not INamedTypeSymbol named)
+            return true;
+        if (named.IsFileLocal || named.DeclaredAccessibility != Accessibility.Public &&
+            (isPublicApi || named.DeclaredAccessibility is not (Accessibility.Internal or Accessibility.ProtectedOrInternal)))
+            return false;
+        return (named.ContainingType is null || CanExposeType(named.ContainingType, isPublicApi)) &&
+            named.TypeArguments.All(argument => CanExposeType(argument, isPublicApi));
+    }
+
     static bool ValidateSiblingNames(IEnumerable<Node> nodes, out string error)
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
@@ -161,6 +181,13 @@ static class NestedParquetRowEmitter
     static bool TryCreatePropertyNode(IPropertySymbol property, HashSet<INamedTypeSymbol> activeTypes,
         out Node node, out string error)
     {
+        if (property.GetMethod is null)
+        {
+            node = default!;
+            error = ParquetRowGenerator.MissingGetterMessage(property);
+            return false;
+        }
+
         var parquetName = property.Name;
         if (!TryReadNameOverride(property, ref parquetName, out error))
         {
@@ -526,23 +553,23 @@ static class NestedParquetRowEmitter
         switch (node.Kind)
         {
             case NodeKind.Leaf:
-                builder.Append("global::Plank.Schema.ColumnDefinition.Leaf(\"").Append(Escape(node.Name))
-                    .Append("\", global::Plank.Schema.ParquetPhysicalType.").Append(node.Scalar!.PhysicalType)
+                builder.Append("global::Plank.Schema.ColumnDefinition.Leaf(").Append(ParquetRowGenerator.StringLiteral(node.Name))
+                    .Append(", global::Plank.Schema.ParquetPhysicalType.").Append(node.Scalar!.PhysicalType)
                     .Append(", ").Append(GetColumnOptionsExpression(node));
                 if (node.Scalar.LogicalExpression is { } logical)
                     builder.Append(", ").Append(logical);
                 builder.Append(')');
                 break;
             case NodeKind.List:
-                builder.Append("global::Plank.Schema.ColumnDefinition.List(\"").Append(Escape(node.Name))
-                    .Append("\", ");
+                builder.Append("global::Plank.Schema.ColumnDefinition.List(").Append(ParquetRowGenerator.StringLiteral(node.Name))
+                    .Append(", ");
                 AppendDefinition(builder, node.Children[0]);
                 builder.Append(", global::Plank.Schema.ParquetRepetition.")
                     .Append(node.Optional ? "Optional" : "Required").Append(')');
                 break;
             case NodeKind.Map:
-                builder.Append("global::Plank.Schema.ColumnDefinition.Map(\"").Append(Escape(node.Name))
-                    .Append("\", ");
+                builder.Append("global::Plank.Schema.ColumnDefinition.Map(").Append(ParquetRowGenerator.StringLiteral(node.Name))
+                    .Append(", ");
                 AppendDefinition(builder, node.Children[0]);
                 builder.Append(", ");
                 AppendDefinition(builder, node.Children[1]);
@@ -551,8 +578,8 @@ static class NestedParquetRowEmitter
                 break;
             case NodeKind.Group:
                 builder.Append("global::Plank.Schema.ColumnDefinition.")
-                    .Append(node.Optional ? "OptionalGroup" : "RequiredGroup").Append("(\"")
-                    .Append(Escape(node.Name)).Append('"');
+                    .Append(node.Optional ? "OptionalGroup" : "RequiredGroup").Append('(')
+                    .Append(ParquetRowGenerator.StringLiteral(node.Name));
                 for (var i = 0; i < node.Children.Length; i++)
                 {
                     builder.Append(", ");
@@ -574,8 +601,8 @@ static class NestedParquetRowEmitter
             {
                 builder.Append("    static readonly global::Plank.RowApi.RowApiNestedColumnDescriptor<")
                     .Append(leaf.StorageShapeType).Append(", ").Append(leaf.StorageElementType).Append("> ")
-                    .Append(names.Helper(leaf.DescriptorName)).Append(" = new(\"").Append(Escape(leaf.Root.PropertyName))
-                    .Append("\", " + names.Root("Schema") + ".LeafColumns[").Append(i).Append(']');
+                    .Append(names.Helper(leaf.DescriptorName)).Append(" = new(").Append(ParquetRowGenerator.StringLiteral(leaf.Root.PropertyName))
+                    .Append(", " + names.Root("Schema") + ".LeafColumns[").Append(i).Append(']');
                 for (var levelIndex = 0; levelIndex < leaf.CollectionLevels.Length; levelIndex++)
                 {
                     var level = leaf.CollectionLevels[levelIndex];
@@ -589,7 +616,7 @@ static class NestedParquetRowEmitter
             {
                 builder.Append("    static readonly global::Plank.RowApi.RowApiColumnDescriptor<")
                     .Append(leaf.StorageShapeType).Append("> ").Append(names.Helper(leaf.DescriptorName))
-                    .Append(" = new(\"").Append(Escape(leaf.Root.PropertyName)).Append("\", " + names.Root("Schema") + ".LeafColumns[")
+                    .Append(" = new(").Append(ParquetRowGenerator.StringLiteral(leaf.Root.PropertyName)).Append(", " + names.Root("Schema") + ".LeafColumns[")
                     .Append(i).AppendLine("]);");
             }
         }
@@ -1516,7 +1543,7 @@ static class NestedParquetRowEmitter
         var name = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         return name is "global::System.ReadOnlyMemory<byte>" or "global::System.DateOnly" or
             "global::System.DateTime" or "global::System.DateTimeOffset" or "global::System.TimeOnly" or
-            "global::System.Guid";
+            "global::System.Guid" or "global::System.Half";
     }
 
     static bool IsList(INamedTypeSymbol type)
@@ -1555,14 +1582,8 @@ static class NestedParquetRowEmitter
             .NamedArguments.Any(static argument =>
                 argument.Key == "AllowAllocatingValues" && argument.Value.Value is true) == true;
 
-    static string GetHintName(INamedTypeSymbol schemaType)
-        => ToIdentifier(schemaType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)) + ".NestedSchemaApi.g.cs";
-
     static string GetAccessibilityKeyword(Accessibility accessibility)
         => accessibility == Accessibility.Public ? "public" : "internal";
-
-    static string Escape(string value)
-        => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: false);
 
     static string EscapeIdentifier(string value)
         => Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(value) ==

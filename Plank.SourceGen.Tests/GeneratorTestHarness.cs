@@ -12,9 +12,13 @@ internal static class GeneratorTestHarness
     static readonly ImmutableArray<MetadataReference> MetadataReferences = CreateMetadataReferences();
 
     internal static RunResult Run(params SourceFile[] sources)
+        => RunWithLanguageVersion(ParseOptions.LanguageVersion, sources);
+
+    internal static RunResult RunWithLanguageVersion(LanguageVersion languageVersion, params SourceFile[] sources)
     {
+        var parseOptions = ParseOptions.WithLanguageVersion(languageVersion);
         var syntaxTrees = sources.Select(source =>
-            CSharpSyntaxTree.ParseText(source.Text, ParseOptions, source.Path, Encoding.UTF8));
+            CSharpSyntaxTree.ParseText(source.Text, parseOptions, source.Path, Encoding.UTF8));
         var compilation = CSharpCompilation.Create(
             "GeneratorTests",
             syntaxTrees,
@@ -25,7 +29,7 @@ internal static class GeneratorTestHarness
                 nullableContextOptions: NullableContextOptions.Enable));
         GeneratorDriver driver = CSharpGeneratorDriver.Create(
             [new global::Plank.SourceGen.ParquetRowGenerator().AsSourceGenerator()],
-            parseOptions: ParseOptions);
+            parseOptions: parseOptions);
 
         driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out var outputCompilation, out _);
         var runResult = driver.GetRunResult();
