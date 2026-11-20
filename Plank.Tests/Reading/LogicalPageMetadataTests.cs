@@ -161,6 +161,31 @@ internal sealed class LogicalPageMetadataTests
         await Assert.That(expectedFirst).IsEqualTo(5UL);
     }
 
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void PruningOnlyEmptyPagesPreservesChunkValidation(bool pageIndex)
+    {
+        var bytes = CreateArrowListFileWithEmptyDataPage(pageIndex);
+        using var logical = new ParquetReader();
+        logical.Reset(new MemoryStream(bytes));
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(bytes));
+        using var metadata = PageMetadataReader.OpenHandle(physical, 0, 0, logical.Schema.LeafColumns[0],
+            physical.Metadata.RowGroup(0).RowCount);
+        var skipped = 0;
+        using var cursor = physical.OpenPages(0, 0, metadata, (in ParquetDataPageMetadata page) =>
+        {
+            if (page.RowCount != 0)
+                return true;
+            skipped++;
+            return false;
+        });
+        while (cursor.MoveNext()) { }
+        if (skipped == 0 || cursor.SkippedDataPage)
+            throw new InvalidOperationException("Skipping empty pages must preserve first-entry and value-count validation.");
+    }
+
     static byte[] CreateArrowListFileWithEmptyDataPage(bool pageIndex = true)
     {
         var element = new ParquetSharp.Schema.PrimitiveNode("element", ParquetSharp.Repetition.Required,
