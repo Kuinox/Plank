@@ -213,13 +213,16 @@ public readonly struct RowGroup
                 or ParquetPhysicalType.FixedLenByteArray
                 or ParquetPhysicalType.Int96)
             return;
-        ValidateTemporalLogicalType(column, typeof(T));
-        var target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
-        if (target == typeof(TimeOnly) &&
+        if (typeof(T) == typeof(DateOnly) || typeof(T) == typeof(DateOnly?) ||
+            typeof(T) == typeof(TimeOnly) || typeof(T) == typeof(TimeOnly?) ||
+            typeof(T) == typeof(DateTime) || typeof(T) == typeof(DateTime?) ||
+            typeof(T) == typeof(DateTimeOffset) || typeof(T) == typeof(DateTimeOffset?))
+            ValidateTemporalLogicalType(column, typeof(T));
+        if ((typeof(T) == typeof(TimeOnly) || typeof(T) == typeof(TimeOnly?)) &&
             column.PhysicalType == ParquetPhysicalType.Int32 &&
             column.LogicalType is LogicalType.Time { Unit: TimeUnit.Millis })
             return;
-        if (target == typeof(decimal))
+        if (typeof(T) == typeof(decimal) || typeof(T) == typeof(decimal?))
         {
             _ = ParquetDecimalConverter.RequireLogicalType(column);
             return;
