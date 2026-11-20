@@ -14,6 +14,7 @@ public abstract class DatasetWriterBase<TRow>
     readonly ParquetSchema _schema;
     readonly RowApiColumnDescriptor[] _columns;
     readonly DatasetWriterOptions _options;
+    readonly ParquetWriterOptions _newFileOptions;
     readonly IParquetBufferPool _bufferPool;
     readonly PartitionState[] _states;
     readonly FileSources[] _files;
@@ -81,12 +82,15 @@ public abstract class DatasetWriterBase<TRow>
         _columns = DatasetBufferSlot.CreateSnapshotColumns(columns);
         _options = options;
         var createFileParts = filePath is not null;
-        var writerOptions = createFileParts ? options.WriterOptions : options.AppendOptions.WriterOptions;
-        _bufferPool = writerOptions.BufferPool;
+        // Route-only callers historically supplied their sole writer configuration through AppendOptions.
+        _newFileOptions = !createFileParts && ReferenceEquals(options.WriterOptions, ParquetWriterOptions.Default)
+            ? options.AppendOptions.WriterOptions
+            : options.WriterOptions;
+        _bufferPool = _newFileOptions.BufferPool;
         _rowBufferCapacity = rowBufferCapacity;
         _pendingRowCapacity = checked((int)options.PendingRowCapacity);
-        _targetRowGroupSizeBytes = writerOptions.TargetRowGroupSizeBytes;
-        _targetFileSizeBytes = writerOptions.TargetFileSizeBytes;
+        _targetRowGroupSizeBytes = _newFileOptions.TargetRowGroupSizeBytes;
+        _targetFileSizeBytes = _newFileOptions.TargetFileSizeBytes;
         _filePath = filePath;
         _createFileParts = createFileParts;
         _states = new PartitionState[files.Length];
@@ -278,7 +282,7 @@ public abstract class DatasetWriterBase<TRow>
     {
         state.LastUse = unchecked(++_clock);
         if (state.RolloverPending)
-            Rollover(state);
+            Rollover(state, -1);
         try
         {
             CopyRow(row, state.SlotIndex, state.Slot.Count);
@@ -397,7 +401,14 @@ public abstract class DatasetWriterBase<TRow>
         }
         catch (Exception exception)
         {
+            // Rows that were not drained yet stay parked under their key, as they do when the
+            // first Open fails, so a later promotion or Dispose still writes them.
             var failure = ExceptionDispatchInfo.Capture(exception);
+            if (state.Active)
+            {
+                key.Path = state.Path;
+                state.Path = default;
+            }
             try
             {
                 ReleaseAfterFailure(state);
@@ -405,8 +416,11 @@ public abstract class DatasetWriterBase<TRow>
             catch
             {
             }
-            ExceptionDispatchInfo? cleanupFailure = null;
-            DiscardPendingPartition(keyIndex, ref cleanupFailure);
+            if (key.RowCount == 0 || key.Path.IsEmpty)
+            {
+                ExceptionDispatchInfo? cleanupFailure = null;
+                DiscardPendingPartition(keyIndex, ref cleanupFailure);
+            }
             failure.Throw();
             throw;
         }
@@ -427,7 +441,7 @@ public abstract class DatasetWriterBase<TRow>
             }
 
             if (state.RolloverPending)
-                Rollover(state);
+                Rollover(state, keyIndex);
 
             _parkedRows.MoveRowTo(current, state.Slot, state.Slot.Count);
             state.Slot.NextSized();
@@ -493,7 +507,7 @@ public abstract class DatasetWriterBase<TRow>
                 if (filePath.IsEmpty)
                     throw new InvalidOperationException("The dataset file path selector returned an empty path.");
                 file.Destination.Open(filePath, FileMode.CreateNew);
-                writer = _schema.CreateWriter(file.Destination, _options.WriterOptions);
+                writer = _schema.CreateWriter(file.Destination, _newFileOptions);
             }
             else
             {
@@ -501,7 +515,7 @@ public abstract class DatasetWriterBase<TRow>
                     "The dataset file does not support reads required for append.");
                 file.Destination.Open(pathBuffer.Span[..pathLength], FileMode.OpenOrCreate);
                 writer = source.Length == 0
-                    ? _schema.CreateWriter(file.Destination, _options.AppendOptions.WriterOptions)
+                    ? _schema.CreateWriter(file.Destination, _newFileOptions)
                     : _schema.CreateAppender(source, file.Destination, _options.AppendOptions);
             }
             state.Slot.Bind(writer);
@@ -600,7 +614,7 @@ public abstract class DatasetWriterBase<TRow>
             state.RolloverPending = true;
     }
 
-    void Rollover(PartitionState state)
+    void Rollover(PartitionState state, int pendingKeyIndex)
     {
         if (!state.Active || state.Writer is null || state.File is not { } file)
             throw new InvalidOperationException("The partition does not have an active writer.");
@@ -619,7 +633,7 @@ public abstract class DatasetWriterBase<TRow>
             if (filePath.IsEmpty)
                 throw new InvalidOperationException("The dataset file path selector returned an empty path.");
             file.Destination.Open(filePath, FileMode.CreateNew);
-            writer = _schema.CreateWriter(file.Destination, _options.WriterOptions);
+            writer = _schema.CreateWriter(file.Destination, _newFileOptions);
             state.Slot.Bind(writer);
             state.Writer = writer;
             state.RolloverPending = false;
@@ -632,6 +646,12 @@ public abstract class DatasetWriterBase<TRow>
             state.File = null;
             state.Active = false;
             ReturnFile(file);
+            if (pendingKeyIndex >= 0)
+            {
+                // The pending key still owns its undrained parked rows: give it its path back.
+                _pendingKeys[pendingKeyIndex].Path = state.Path;
+                state.Path = default;
+            }
             ReleaseState(state);
             throw;
         }

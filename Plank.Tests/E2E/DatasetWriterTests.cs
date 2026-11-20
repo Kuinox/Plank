@@ -3,12 +3,72 @@ using System.Runtime.InteropServices;
 using Plank.Dataset;
 using Plank.Reading;
 using Plank.Reading.Physical;
+using Plank.Schema;
 using Plank.Writing;
 
 namespace Plank.Tests.E2E;
 
 internal sealed class DatasetWriterTests
 {
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void NewPartitionUsesDatasetWriterOptionsBeforeAppendOptions(bool reopen)
+    {
+        var path = NewPath();
+        try
+        {
+            var pathBytes = Encoding.UTF8.GetBytes(path);
+            var sorting = new ParquetSortingColumn(0);
+            var options = new DatasetWriterOptions
+            {
+                WriterOptions = new ParquetWriterOptions
+                {
+                    CreatedBy = "dataset-created",
+                    KeyValueMetadata = [new("created", "true")],
+                    SortingColumns = [sorting]
+                },
+                AppendOptions = new ParquetAppendOptions
+                {
+                    WriterOptions = new ParquetWriterOptions
+                    {
+                        CreatedBy = "dataset-appended",
+                        KeyValueMetadata = [new("appended", "true")],
+                        SortingColumns = [sorting]
+                    }
+                }
+            };
+            WritePartitionRow(1);
+            if (reopen)
+                WritePartitionRow(2);
+
+            using var stream = File.OpenRead(path);
+            using var reader = new ParquetFileReader();
+            reader.Reset(stream);
+            var metadata = reader.Metadata;
+            if (!metadata.CreatedByUtf8.SequenceEqual(reopen ? "dataset-appended"u8 : "dataset-created"u8))
+                throw new InvalidOperationException("The dataset used the wrong CreatedBy for create or append.");
+            if (metadata.KeyValueMetadataCount != (reopen ? 2 : 1) ||
+                !metadata.KeyValueMetadataKeyUtf8(0).SequenceEqual("created"u8) ||
+                !metadata.KeyValueMetadataValueUtf8(0).SequenceEqual("true"u8))
+                throw new InvalidOperationException("A partition lost the key/value entry configured for creation.");
+            if (reopen && !metadata.KeyValueMetadataKeyUtf8(1).SequenceEqual("appended"u8))
+                throw new InvalidOperationException("A reopened partition did not add the append metadata.");
+            if (!metadata.RowGroupSortingColumns(0).SequenceEqual([sorting]))
+                throw new InvalidOperationException("A partition lost its declared creation sort order.");
+
+            void WritePartitionRow(int value)
+            {
+                using var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1), options);
+                writer.Queue(new DatasetRowSchema { Value = value, Path = pathBytes });
+            }
+        }
+        finally
+        {
+            DeleteIfPresent(path);
+        }
+    }
+
     [Test]
     public async Task GeneratedDatasetWriterDoesNotExposeBufferSlot()
     {
@@ -309,6 +369,147 @@ internal sealed class DatasetWriterTests
             DeleteIfPresent(pathB);
             DeleteIfPresent(pathC);
             DeleteIfPresent(pathD);
+        }
+    }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    public async Task RolloverSelectorFailurePreservesAcceptedRows(bool parked, bool failOpen)
+    {
+        var directory = Directory.CreateTempSubdirectory("plank-selector-");
+        try
+        {
+            using var file = new TestParquetSource();
+            var failed = false;
+            var parkedKey = "b"u8.ToArray();
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, SelectFile, [file],
+                new DatasetWriterOptions
+                {
+                    PendingRowCapacity = parked ? 3u : 0u,
+                    WriterOptions = new ParquetWriterOptions { CreatedBy = "rollover-test", TargetRowGroupSizeBytes = 1, TargetFileSizeBytes = 1 }
+                }))
+            {
+                if (parked)
+                {
+                    writer.Queue(new DatasetRowSchema { Value = 1, Path = "a"u8.ToArray() });
+                    writer.Queue(new DatasetRowSchema { Value = 2, Path = parkedKey });
+                    writer.Queue(new DatasetRowSchema { Value = 3, Path = parkedKey });
+                    // Row 4 was parked before the rollover failed, so it stays queued like rows 2 and 3.
+                    await Assert.That(() => writer.Queue(new DatasetRowSchema { Value = 4, Path = parkedKey }))
+                        .Throws<IOException>();
+                    file.FailOpen = false;
+                }
+                else
+                {
+                    writer.Queue(new DatasetRowSchema { Value = 2, Path = parkedKey });
+                    // The active rollover fails before row 3 is copied, so the caller queues it again.
+                    await Assert.That(() => writer.Queue(new DatasetRowSchema { Value = 3, Path = parkedKey }))
+                        .Throws<IOException>();
+                    file.FailOpen = false;
+                    writer.Queue(new DatasetRowSchema { Value = 3, Path = parkedKey });
+                }
+            }
+
+            var actual = new List<int>();
+            foreach (var part in directory.GetFiles("*.parquet"))
+            {
+                if (part.Length == 0)
+                    continue;
+                using var metadata = new ParquetFileReader();
+                metadata.Reset(part.OpenRead());
+                if (!metadata.Metadata.CreatedByUtf8.SequenceEqual("rollover-test"u8))
+                    throw new InvalidOperationException("Retried partition lost its creation options.");
+                using var reader = DatasetRowSchema.CreateRowReader(part.OpenRead());
+                while (reader.MoveNext())
+                    actual.Add(reader.Current.Value);
+            }
+            actual.Sort();
+            int[] expected = parked ? [1, 2, 3, 4] : [2, 3];
+            await Assert.That(actual).IsEquivalentTo(expected);
+
+            ReadOnlySpan<byte> SelectFile(ReadOnlySpan<byte> key, ulong index, IParquetBufferPool pool,
+                out ParquetBuffer? allocation)
+            {
+                allocation = null;
+                if (index == (parked ? 2UL : 1UL) && !failed)
+                {
+                    failed = true;
+                    if (!failOpen)
+                        throw new IOException("Rollover selector failed.");
+                    file.FailOpen = true;
+                }
+                return Encoding.UTF8.GetBytes(Path.Combine(directory.FullName, $"{index}.parquet"));
+            }
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task PromotionOpenFailureKeepsParkedRowsQueued()
+    {
+        var directory = Directory.CreateTempSubdirectory("plank-promotion-");
+        try
+        {
+            using var file = new TestParquetSource();
+            using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, SelectFile, [file],
+                new DatasetWriterOptions
+                {
+                    PendingRowCapacity = 2,
+                    WriterOptions = new ParquetWriterOptions
+                    {
+                        RowApiInitialRowCapacity = 1,
+                        TargetRowGroupSizeBytes = ulong.MaxValue,
+                        TargetFileSizeBytes = ulong.MaxValue
+                    }
+                }))
+            {
+                writer.Queue(new DatasetRowSchema { Value = 10, Path = "p0"u8.ToArray() });
+                writer.Queue(new DatasetRowSchema { Value = 11, Path = "p1"u8.ToArray() });
+                // Parking row 21 fills the pool. Promoting p2 evicts p0, then opening p2 fails:
+                // both parked rows, including this call's, stay queued.
+                file.FailOpen = true;
+                await Assert.That(() => writer.Queue(new DatasetRowSchema { Value = 21, Path = "p2"u8.ToArray() }))
+                    .Throws<IOException>();
+                file.FailOpen = false;
+                // The pool is still full: this promotes p2, then parks row 12 next to p1's row.
+                writer.Queue(new DatasetRowSchema { Value = 12, Path = "p1"u8.ToArray() });
+            }
+
+            await Assert.That(ReadPartition("p0")).IsEquivalentTo([10]);
+            await Assert.That(ReadPartition("p1")).IsEquivalentTo([11, 12]);
+            await Assert.That(ReadPartition("p2")).IsEquivalentTo([21]);
+
+            List<int> ReadPartition(string key)
+            {
+                var result = new List<int>();
+                foreach (var part in directory.GetFiles($"{key}-*.parquet"))
+                {
+                    if (part.Length == 0)
+                        continue;
+                    using var reader = DatasetRowSchema.CreateRowReader(part.OpenRead());
+                    while (reader.MoveNext())
+                        result.Add(reader.Current.Value);
+                }
+                return result;
+            }
+
+            ReadOnlySpan<byte> SelectFile(ReadOnlySpan<byte> key, ulong index, IParquetBufferPool pool,
+                out ParquetBuffer? allocation)
+            {
+                allocation = null;
+                return Encoding.UTF8.GetBytes(
+                    Path.Combine(directory.FullName, $"{Encoding.UTF8.GetString(key)}-{index}.parquet"));
+            }
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
         }
     }
 
