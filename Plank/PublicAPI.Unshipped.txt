@@ -1,8 +1,1 @@
 #nullable enable
-Plank.Schema.NestedValue<T>
-Plank.Schema.NestedValue<T>.DefinedOptionalNodes.get -> int
-Plank.Schema.NestedValue<T>.HasValue.get -> bool
-Plank.Schema.NestedValue<T>.NestedValue() -> void
-Plank.Schema.NestedValue<T>.Value.get -> T
-static Plank.Schema.NestedValue<T>.Null(int definedOptionalNodes = 0) -> Plank.Schema.NestedValue<T>
-static Plank.Schema.NestedValue<T>.Present(T value) -> Plank.Schema.NestedValue<T>
