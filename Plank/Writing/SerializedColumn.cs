@@ -1,10 +1,7 @@
-using System.Buffers;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text;
-using System.Text.Unicode;
 using Plank.Schema;
 using Plank.Writing.Compression;
 using Plank.Writing.Encoding;
@@ -46,7 +43,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     T[]? _retainedValues;
     internal sbyte[]? AppendSortingComparisons { get; private set; }
     object? _dictionaryState;
-    byte[][]? _stringPayloadScratch;
+    StringWriteScratch? _stringScratch;
     ParquetBuffer _statisticsMinValueBuffer;
     ParquetBuffer _statisticsMaxValueBuffer;
     ParquetBuffer _bloomFilterBuffer;
@@ -483,54 +480,22 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 $"Converter physical CLR type '{typeof(TPhysical)}' is not supported for column '{_column.Name}'.");
     }
 
-    static readonly UTF8Encoding StrictUtf8 = new(false, true);
-
     void SerializeStrings(ReadOnlySpan<string> values)
     {
-        // Keep at most 4096 managed references per string column; large batches use temporary storage.
-        const int maxRetainedRows = 4096;
-        var reuse = values.Length is > 0 and <= maxRetainedRows;
-        var encoded = reuse && _stringPayloadScratch is { } scratch && scratch.Length >= values.Length
-            ? scratch : values.IsEmpty ? [] : new byte[values.Length][];
-        if (reuse)
-            _stringPayloadScratch = null; // Do not lend the active scratch to a reentrant caller.
-        var payloads = encoded.AsSpan(0, values.Length);
+        var scratch = _stringScratch ?? new StringWriteScratch();
+        _stringScratch = null; // A reentrant call must have its own scratch.
         try
         {
-            // At most three UTF-8 bytes per UTF-16 code unit.
-            const int maxStackChars = 256;
-            Span<byte> bytes = stackalloc byte[3 * maxStackChars];
-            for (var i = 0; i < values.Length; i++)
-            {
-                if (values[i] is not { } value)
-                    continue;
-                if (value.Length > maxStackChars)
-                    payloads[i] = StrictUtf8.GetBytes(value);
-                else if (Ascii.IsValid(value))
-                {
-                    byte[] ascii = value.Length == 0 ? [] : new byte[value.Length];
-                    Ascii.FromUtf16(value, ascii, out _);
-                    payloads[i] = ascii;
-                }
-                else if (Utf8.FromUtf16(value, bytes, out _, out var written,
-                        replaceInvalidSequences: false) == OperationStatus.Done)
-                    payloads[i] = bytes[..written].ToArray();
-                else
-                    payloads[i] = StrictUtf8.GetBytes(value);
-            }
-
+            var pool = _owner.BufferWriters.BufferPool;
             if (_column.Options.Repetition == ParquetRepetition.Optional)
-                SerializeOptionalReference<byte[]>(payloads);
+                SerializeOptionalTyped<ReadOnlyMemory<byte>>(scratch.EncodeOptional(values, pool));
             else
-                SerializeTyped<byte[]>(payloads);
+                SerializeTyped(scratch.EncodeRequired(values, _column, pool));
         }
         finally
         {
-            if (reuse)
-            {
-                payloads.Clear();
-                _stringPayloadScratch = encoded;
-            }
+            scratch.Reset();
+            _stringScratch = scratch;
         }
     }
 
@@ -1625,7 +1590,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     internal void ReleaseBuffers()
     {
-        _stringPayloadScratch = null;
+        _stringScratch = null;
         Pages.ReleaseBuffers();
         _compressedContent.Dispose();
         _compressionInput.Dispose();
