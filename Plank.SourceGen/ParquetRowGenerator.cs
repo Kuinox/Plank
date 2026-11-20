@@ -1231,8 +1231,23 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         column = default;
 
         ConverterSpec? converter = null;
-        if (property is not null && !TryGetConverterSpec(property, out converter, out error))
-            return false;
+        AttributeData? columnAttribute = null;
+        if (property is not null)
+        {
+            foreach (var attribute in property.GetAttributes())
+            {
+                if (attribute.AttributeClass?.ToDisplayString() != "Plank.Schema.ParquetColumnAttribute")
+                    continue;
+                if (columnAttribute is not null)
+                {
+                    error = $"Property '{property.Name}' has multiple [ParquetColumn] attributes.";
+                    return false;
+                }
+                columnAttribute = attribute;
+            }
+            if (columnAttribute is not null && !TryGetConverterSpec(property, columnAttribute, out converter, out error))
+                return false;
+        }
 
         string clrTypeName;
         string inferredPhysicalType;
@@ -1278,7 +1293,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var bloomFilterFalsePositiveProbability = 0.01;
         var bloomFilterExpectedDistinctValueCount = 0U;
         var bloomFilterMaximumBytes = 128U * 1024 * 1024;
-        if (property is not null && !TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref fieldId,
+        if (columnAttribute is not null && !TryReadColumnOverrides(property!, columnAttribute, ref columnName, ref physicalType, ref logicalType, ref fieldId,
                 ref encodings, ref compression, ref compressionLevel, ref bloomFilter,
                 ref bloomFilterFalsePositiveProbability, ref bloomFilterExpectedDistinctValueCount,
                 ref bloomFilterMaximumBytes, out error))
@@ -1305,23 +1320,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return true;
     }
 
-    static bool TryGetConverterSpec(IPropertySymbol property, out ConverterSpec? converter, out string error)
+    static bool TryGetConverterSpec(IPropertySymbol property, AttributeData columnAttribute, out ConverterSpec? converter, out string error)
     {
         converter = null;
         error = string.Empty;
-        var attributes = property.GetAttributes()
-            .Where(static a => a.AttributeClass?.ToDisplayString() == "Plank.Schema.ParquetColumnAttribute")
-            .ToImmutableArray();
-        if (attributes.IsDefaultOrEmpty)
-            return true;
-        if (attributes.Length > 1)
-        {
-            error = $"Property '{property.Name}' has multiple [ParquetColumn] attributes.";
-            return false;
-        }
-
         ITypeSymbol? converterTypeSymbol = null;
-        foreach (var argument in attributes[0].NamedArguments)
+        foreach (var argument in columnAttribute.NamedArguments)
             if (argument.Key == "Converter")
                 converterTypeSymbol = argument.Value.Value as ITypeSymbol;
         if (converterTypeSymbol is null)
@@ -1411,26 +1415,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         };
     }
 
-    static bool TryReadColumnOverrides(IPropertySymbol property, ref string columnName, ref string physicalType,
+    static bool TryReadColumnOverrides(IPropertySymbol property, AttributeData attribute, ref string columnName, ref string physicalType,
         ref LogicalTypeSpec? logicalType, ref int? fieldId, ref ImmutableArray<string> encodings,
         ref string? compression, ref int? compressionLevel, ref bool bloomFilter,
         ref double bloomFilterFalsePositiveProbability, ref uint bloomFilterExpectedDistinctValueCount,
         ref uint bloomFilterMaximumBytes, out string error)
     {
         error = string.Empty;
-        var attributes = property.GetAttributes()
-            .Where(static a => a.AttributeClass?.ToDisplayString() == "Plank.Schema.ParquetColumnAttribute")
-            .ToImmutableArray();
-
-        if (attributes.IsDefaultOrEmpty)
-            return true;
-        if (attributes.Length > 1)
-        {
-            error = $"Property '{property.Name}' has multiple [ParquetColumn] attributes.";
-            return false;
-        }
-
-        var attribute = attributes[0];
         for (var i = 0; i < attribute.ConstructorArguments.Length; i++)
         {
             var parameter = attribute.AttributeConstructor?.Parameters[i];

@@ -80,8 +80,9 @@ static class NestedParquetRowEmitter
 
     static bool RequiresNestedEmitter(INamedTypeSymbol schemaType)
     {
-        foreach (var property in GetProperties(schemaType))
-            if (!IsFlatScalar(property.Type) && !DeclaresConverter(property))
+        foreach (var member in schemaType.GetMembers())
+            if (member is IPropertySymbol { IsStatic: false, IsIndexer: false, IsImplicitlyDeclared: false } property &&
+                !IsFlatScalar(property.Type) && !DeclaresConverter(property))
                 return true;
         return false;
     }
