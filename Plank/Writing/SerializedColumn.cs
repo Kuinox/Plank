@@ -368,9 +368,10 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         var count = checked(retained.Length + values.Length);
         if (retained is long[] required && target == typeof(T))
         {
-            var combined = new long[count];
-            required.CopyTo(combined, 0);
-            var incoming = combined.AsSpan(required.Length);
+            using var scratch = _owner.BufferWriters.RentScratch<long>(checked((uint)count));
+            var combined = ParquetBuffer.AsSpan<long>(scratch, count);
+            required.AsSpan().CopyTo(combined);
+            var incoming = combined[required.Length..];
             if (typeof(T) == typeof(DateTime))
                 TimestampConversion.ConvertDateTimes(AsSpan<DateTime>(values), incoming, TimeUnit.Nanos, expectedKind);
             else
@@ -383,14 +384,22 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
         else
         {
-            var optional = retained as long?[] ?? Array.ConvertAll((long[])retained, static value => (long?)value);
-            var combined = new long?[count];
-            optional.CopyTo(combined, 0);
-            var incoming = combined.AsSpan(optional.Length);
+            using var scratch = _owner.BufferWriters.RentScratch<long?>(checked((uint)count));
+            var combined = ParquetBuffer.AsSpan<long?>(scratch, count);
+            var original = combined[..retained.Length];
+            if (retained is long?[] optional)
+                optional.AsSpan().CopyTo(original);
+            else
+            {
+                var present = (long[])retained;
+                for (var i = 0; i < present.Length; i++)
+                    original[i] = present[i];
+            }
+            var incoming = combined[retained.Length..];
             for (var i = 0; i < values.Length; i++)
                 incoming[i] = ToOptionalNanoseconds(values[i], expectedKind);
             var comparisons = _owner.LatestSortingOrder?.CompareIncoming<long?>(
-                _column, ordinal, optional, incoming);
+                _column, ordinal, original, incoming);
             SerializeOptionalTyped<long>(combined);
             AppendSortingComparisons = comparisons;
         }
