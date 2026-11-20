@@ -159,6 +159,8 @@ public sealed class ParquetWriter : IDisposable
         }
     }
 
+    internal (int RowGroupCount, long RowCount) CommittedCounts => (_rowGroupCount, _totalRowCount);
+
     public uint RowApiMaxParallelism
     {
         get

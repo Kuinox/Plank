@@ -56,13 +56,14 @@ public sealed class ParquetFileMerger
             }
             else
             {
-                InitializeCounts(existingSource);
                 _writer = new ParquetWriter(existingSource, destination, schema, new ParquetAppendOptions
                 {
                     WriterOptions = options.WriterOptions,
                     PreserveExistingMetadata = options.PreserveFirstFileMetadata,
                     DeferFooterTruncation = true
                 });
+                SourceFileCount = 1;
+                (RowGroupCount, RowCount) = _writer.CommittedCounts;
             }
         }
         catch
@@ -102,25 +103,6 @@ public sealed class ParquetFileMerger
         _writer.CloseFile();
         _reader.Dispose();
         _closed = true;
-    }
-
-    void InitializeCounts(IParquetReadSource source)
-    {
-        _reader.Reset(source);
-        var metadata = _reader.PhysicalReader.Metadata;
-        long rowCount = 0;
-        var rowGroupCount = 0;
-        for (var i = 0; i < metadata.RowGroupCount; i++)
-        {
-            if (metadata.RowGroups[i].RowCount == 0)
-                continue;
-            rowGroupCount++;
-            rowCount = checked(rowCount + checked((long)metadata.RowGroups[i].RowCount));
-        }
-
-        SourceFileCount = 1;
-        RowGroupCount = rowGroupCount;
-        RowCount = rowCount;
     }
 
     void AbortConstruction()
