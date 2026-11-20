@@ -23,13 +23,6 @@ public sealed record ParquetSchema
         LeafProjectionInfos = projectedInfos;
     }
 
-    /// <summary>
-    /// Builds a schema, returning <see langword="false"/> instead of throwing when the definitions do not project.
-    /// </summary>
-    /// <remarks>
-    /// For the reader, definitions that do not project mean the file's footer is malformed, not that a caller passed
-    /// bad arguments — so it needs the failure as a value it can turn into <see cref="CorruptParquetException"/>.
-    /// </remarks>
     internal bool NestedShapeMatches(int ordinal, ParquetSchema other, int otherOrdinal)
     {
         var left = LeafPaths[ordinal];
@@ -72,6 +65,13 @@ public sealed record ParquetSchema
         }
     }
 
+    /// <summary>
+    /// Builds a schema, returning <see langword="false"/> instead of throwing when the definitions do not project.
+    /// </summary>
+    /// <remarks>
+    /// For the reader, definitions that do not project mean the file's footer is malformed, not that a caller passed
+    /// bad arguments — so it needs the failure as a value it can turn into <see cref="CorruptParquetException"/>.
+    /// </remarks>
     internal static bool TryCreate(ImmutableArray<ColumnDefinition> definitions,
         [NotNullWhen(true)] out ParquetSchema? schema, out string? error)
     {
