@@ -49,6 +49,30 @@ internal sealed class ParquetMetadataComplianceTests
     }
 
     [Test]
+    public void SingleRepeatedPageStatisticsCountNullElements()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.List("numbers", ColumnDefinition.OptionalLeaf("element", ParquetPhysicalType.Int32))
+        ]);
+        var file = WriteFile(schema, new ParquetWriterOptions(), writer =>
+        {
+            var column = writer.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
+            var rowGroup = writer.StartRowGroup();
+            column.Serialize([[1, null, 2]]);
+            rowGroup.Write(column);
+        });
+
+        var metadata = ReadMetadata(file);
+        var page = PageHeaderReader.Read(file.AsSpan(checked((int)metadata.Column.DataPageOffset)));
+        if (page.NullCount != 1)
+            throw new InvalidOperationException($"Expected one null element in the V2 page, got {page.NullCount}.");
+        if (!page.Statistics.HasNullCount || page.Statistics.NullCount != 1)
+            throw new InvalidOperationException(
+                $"Expected page Statistics.null_count=1, got {page.Statistics.NullCount} " +
+                $"(present: {page.Statistics.HasNullCount}).");
+    }
+
+    [Test]
     public void FooterIncludesTypeDefinedColumnOrderForModernStatistics()
     {
         var file = WriteRequiredInt32File(new ParquetWriterOptions());
