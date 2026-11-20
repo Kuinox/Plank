@@ -504,14 +504,15 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             {
                 if (values[i] is not { } value)
                     continue;
-                if (Ascii.IsValid(value))
+                if (value.Length > maxStackChars)
+                    payloads[i] = StrictUtf8.GetBytes(value);
+                else if (Ascii.IsValid(value))
                 {
                     byte[] ascii = value.Length == 0 ? [] : new byte[value.Length];
                     Ascii.FromUtf16(value, ascii, out _);
                     payloads[i] = ascii;
                 }
-                else if (value.Length <= maxStackChars &&
-                    Utf8.FromUtf16(value, bytes, out _, out var written,
+                else if (Utf8.FromUtf16(value, bytes, out _, out var written,
                         replaceInvalidSequences: false) == OperationStatus.Done)
                     payloads[i] = bytes[..written].ToArray();
                 else
