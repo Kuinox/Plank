@@ -378,7 +378,8 @@ static class NestedParquetRowEmitter
             if (endpointOptional && !storageElementType.EndsWith("?", StringComparison.Ordinal) &&
                 IsNonNullableValueType(storageElementType))
                 storageElementType += "?";
-            var storageShapeType = storageElementType;
+            var tracksGroupPresence = collections.Count > 0 && path.Any(static part => part.Kind == NodeKind.Group && part.Optional);
+            var storageShapeType = tracksGroupPresence ? $"global::Plank.Schema.NestedValue<{node.Scalar!.StorageType}>" : storageElementType;
             for (var i = 0; i < collections.Count; i++)
                 storageShapeType += "[]";
 
@@ -388,7 +389,7 @@ static class NestedParquetRowEmitter
                 uniqueName = preferredName + suffix;
             var leaf = new Leaf(root, node, path.ToImmutableArray(), collections.ToImmutableArray(),
                 uniqueName, storageShapeType, node.Scalar.StorageType, repetitionLevel, definitionLevel,
-                endpointOptional);
+                endpointOptional, tracksGroupPresence);
             leaves.Add(leaf);
             for (var i = 0; i < path.Count; i++)
                 path[i].Leaves.Add(leaf);
@@ -450,9 +451,9 @@ static class NestedParquetRowEmitter
         var element = list.Children[0];
         if (element.Kind == NodeKind.Group)
         {
-            if (element.Optional || element.Children.Any(static child => child.Kind != NodeKind.Leaf || child.Optional))
+            if (element.Children.Any(static child => child.Kind != NodeKind.Leaf))
             {
-                error = $"List-of-record property '{list.PropertyName}' currently requires a required record with required scalar properties.";
+                error = $"List-of-record property '{list.PropertyName}' currently requires records with scalar properties.";
                 return false;
             }
         }
@@ -463,11 +464,6 @@ static class NestedParquetRowEmitter
         }
         else if (element.Kind == NodeKind.List)
         {
-            if (element.Optional)
-            {
-                error = $"Nested-list property '{list.PropertyName}' currently requires non-null inner lists.";
-                return false;
-            }
             if (!ValidateListShape(element, out error))
                 return false;
         }
@@ -1103,6 +1099,18 @@ static class NestedParquetRowEmitter
         {
             var leaf = node.Leaves.Single(static candidate => candidate.Node.Kind == NodeKind.Leaf);
             var access = GetLeafAccess(leaf, indexes);
+            if (leaf.TracksGroupPresence)
+            {
+                if (node.Optional)
+                {
+                    var local = "physical" + variableIndex++;
+                    builder.Append(padding).Append(leaf.StorageElementType).Append("? ").Append(local)
+                        .Append(" = ").Append(access).Append(".HasValue ? ").Append(access).AppendLine(".Value : null;");
+                    access = local;
+                }
+                else
+                    access += ".Value";
+            }
             builder.Append(padding).Append(target).Append(" = ")
                 .Append(ConvertFromStorage(leaf, access)).AppendLine(";");
             return;
@@ -1112,9 +1120,9 @@ static class NestedParquetRowEmitter
         {
             if (node.Optional)
             {
-                var presenceLeaf = FindPresenceLeaf(node)!;
+                var presenceLeaf = node.Leaves[0].TracksGroupPresence ? node.Leaves[0] : FindPresenceLeaf(node)!;
                 builder.Append(padding).Append("if (").Append(GetLeafAccess(presenceLeaf, indexes))
-                    .AppendLine(" is null)");
+                    .AppendLine(presenceLeaf.TracksGroupPresence ? " is { HasValue: false, DefinedOptionalNodes: 0 })" : " is null)");
                 builder.Append(padding).Append("    ").Append(target).AppendLine(" = null!;");
                 builder.Append(padding).AppendLine("else");
                 builder.Append(padding).AppendLine("{");
@@ -1234,8 +1242,15 @@ static class NestedParquetRowEmitter
         var padding = new string(' ', indent * 4);
         if (node.Kind == NodeKind.Leaf)
         {
-            builder.Append(padding).Append(target).Append(" = ").Append(ConvertToStorage(names, leaf, source))
-                .AppendLine(";");
+            var converted = ConvertToStorage(names, leaf, source);
+            if (leaf.TracksGroupPresence)
+            {
+                var tagged = GetStorageTypeAtDepth(leaf, depth);
+                converted = node.Optional
+                    ? $"({converted}) is {{ }} present ? {tagged}.Present(present) : {tagged}.Null(1)"
+                    : $"{tagged}.Present({converted})";
+            }
+            builder.Append(padding).Append(target).Append(" = ").Append(converted).AppendLine(";");
             return;
         }
 
@@ -1401,7 +1416,7 @@ static class NestedParquetRowEmitter
     static string ConvertFromStorage(Leaf leaf, string expression)
     {
         var scalar = leaf.Node.Scalar!;
-        if (leaf.EndpointOptional && !leaf.Node.Optional && IsNonNullableValueType(scalar.NonNullableUserType))
+        if (!leaf.TracksGroupPresence && leaf.EndpointOptional && !leaf.Node.Optional && IsNonNullableValueType(scalar.NonNullableUserType))
             expression += "!.Value";
         if (leaf.MaxRepetitionLevel == 0)
             return expression;
@@ -1654,8 +1669,9 @@ static class NestedParquetRowEmitter
 
     sealed class Leaf(Node root, Node node, ImmutableArray<Node> path,
         ImmutableArray<CollectionLevel> collectionLevels, string uniqueName, string storageShapeType,
-        string storageElementType, int maxRepetitionLevel, int maxDefinitionLevel, bool endpointOptional)
+        string storageElementType, int maxRepetitionLevel, int maxDefinitionLevel, bool endpointOptional, bool tracksGroupPresence)
     {
+        internal bool TracksGroupPresence { get; } = tracksGroupPresence;
         internal Node Root { get; } = root;
         internal Node Node { get; } = node;
         internal ImmutableArray<Node> Path { get; } = path;

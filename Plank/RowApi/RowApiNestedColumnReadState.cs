@@ -136,9 +136,12 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
             {
                 if (denseValueIndex >= _values.Count)
                     throw new CorruptParquetException($"Column '{PropertyName}' has fewer dense values than levels.");
-                return _values[denseValueIndex++];
+                var value = _values[denseValueIndex++];
+                return shapeType == typeof(NestedValue<TElement>) ? NestedValue<TElement>.Present(value) : (object?)value;
             }
 
+            if (shapeType == typeof(NestedValue<TElement>))
+                return NestedValue<TElement>.Null(_definitionLevels[start] - _descriptor.CollectionLevels[^1].ElementDefinitionLevel);
             if (shapeType.IsValueType && Nullable.GetUnderlyingType(shapeType) is null)
                 throw new CorruptParquetException(
                     $"Column '{PropertyName}' contains a null leaf that cannot be materialized as {shapeType}.");

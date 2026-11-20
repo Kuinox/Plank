@@ -110,6 +110,25 @@ internal readonly struct ColumnStatistics
         if (column.Options.Repetition == ParquetRepetition.Repeated)
             return CreateRepeated(column, values, nullCount);
 
+        return CreateDense(column, values, nullCount);
+    }
+
+    static ColumnStatistics CreateDense<T>(Column column, ReadOnlySpan<T> values, long nullCount)
+        where T : notnull
+    {
+        if (column.Options.Repetition == ParquetRepetition.Repeated)
+        {
+            if (column.LogicalType is LogicalType.Int { IsSigned: false })
+            {
+                if (typeof(T) == typeof(int))
+                    return CreateUInt32(AsSpan<T, uint>(values), nullCount);
+                if (typeof(T) == typeof(long))
+                    return CreateUInt64(AsSpan<T, ulong>(values), nullCount);
+            }
+            if (values.IsEmpty && (typeof(T) == typeof(float) || typeof(T) == typeof(double)))
+                return EmptyFloating(nullCount, 0);
+        }
+
         if (values.Length == 0)
             return Empty(nullCount);
 
@@ -145,7 +164,7 @@ internal readonly struct ColumnStatistics
         if (typeof(T) == typeof(decimal))
             return CreateDecimal(column, AsSpan<T, decimal>(values), nullCount, ref minBuffer, ref maxBuffer,
                 bufferPool);
-        return Create(column, values, nullCount);
+        return CreateDense(column, values, nullCount);
     }
 
     /// <summary>

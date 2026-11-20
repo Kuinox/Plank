@@ -79,6 +79,14 @@ static class RowValueSizeEstimator
         if (values.Length == 0)
             return 1;
 
+        if (values is NestedValue<byte[]>[] leaves)
+        {
+            ulong bytes = (ulong)leaves.Length;
+            foreach (var leaf in leaves)
+                bytes = checked(bytes + (leaf.HasValue ? AtLeastOne(leaf.Value.Length) : 1UL));
+            return bytes;
+        }
+
         var elementType = values.GetType().GetElementType()!;
         if (elementType.IsValueType && elementType != typeof(ReadOnlyMemory<byte>) &&
             elementType != typeof(Memory<byte>))

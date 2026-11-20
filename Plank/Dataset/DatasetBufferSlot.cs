@@ -84,6 +84,13 @@ sealed class DatasetBufferSlot : RowBufferSlot
         if (shape is byte[] bytes)
             return bytes.ToArray();
         var copy = (Array)shape.Clone();
+        if (copy is NestedValue<byte[]>[] leaves)
+        {
+            for (var i = 0; i < leaves.Length; i++)
+                if (leaves[i].HasValue)
+                    leaves[i] = NestedValue<byte[]>.Present(leaves[i].Value.ToArray());
+            return leaves;
+        }
         for (var i = 0; i < copy.Length; i++)
             if (copy.GetValue(i) is Array child)
                 copy.SetValue(SnapshotBinaryShape(child), i);
