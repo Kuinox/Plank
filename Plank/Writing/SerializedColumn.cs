@@ -151,7 +151,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         if (typeof(T) == typeof(int))
         {
-            SerializeInt32(AsSpan<int>(values));
+            SerializeTyped(AsSpan<int>(values));
             return;
         }
 
@@ -199,7 +199,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         if (typeof(T) == typeof(long))
         {
-            SerializeInt64(AsSpan<long>(values));
+            SerializeTyped(AsSpan<long>(values));
             return;
         }
 
@@ -425,7 +425,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         else if (typeof(TPhysical) == typeof(int?))
             SerializeNullableInt32(Reinterpret<TPhysical, int?>(values));
         else if (typeof(TPhysical) == typeof(int))
-            SerializeInt32(Reinterpret<TPhysical, int>(values));
+            SerializeTyped(Reinterpret<TPhysical, int>(values));
         else if (typeof(TPhysical) == typeof(byte?))
             SerializeNullableByte(Reinterpret<TPhysical, byte?>(values));
         else if (typeof(TPhysical) == typeof(byte))
@@ -441,7 +441,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         else if (typeof(TPhysical) == typeof(long?))
             SerializeNullableInt64(Reinterpret<TPhysical, long?>(values));
         else if (typeof(TPhysical) == typeof(long))
-            SerializeInt64(Reinterpret<TPhysical, long>(values));
+            SerializeTyped(Reinterpret<TPhysical, long>(values));
         else if (typeof(TPhysical) == typeof(ulong?))
             SerializeNullableUInt64(Reinterpret<TPhysical, ulong?>(values));
         else if (typeof(TPhysical) == typeof(ulong))
@@ -612,26 +612,12 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     bool IsUnsignedInteger => _column.LogicalType is LogicalType.Int { IsSigned: false };
 
-    void SerializeInt32(ReadOnlySpan<int> values)
-    {
-        SerializeTyped(values);
-        if (IsUnsignedInteger)
-            AssignUnsignedStatistics(MemoryMarshal.Cast<int, uint>(values));
-    }
-
     void SerializeNullableInt32(ReadOnlySpan<int?> values)
     {
         SerializeOptionalTyped(values);
         if (IsUnsignedInteger)
             AssignUnsignedStatistics(MemoryMarshal.CreateReadOnlySpan(
                 ref Unsafe.As<int?, uint?>(ref MemoryMarshal.GetReference(values)), values.Length));
-    }
-
-    void SerializeInt64(ReadOnlySpan<long> values)
-    {
-        SerializeTyped(values);
-        if (IsUnsignedInteger)
-            AssignUnsignedStatistics(MemoryMarshal.Cast<long, ulong>(values));
     }
 
     void SerializeNullableInt64(ReadOnlySpan<long?> values)
@@ -642,66 +628,31 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 ref Unsafe.As<long?, ulong?>(ref MemoryMarshal.GetReference(values)), values.Length));
     }
 
-    // Physical int/long values of an unsigned column (given directly or produced by a converter) were encoded and
-    // their statistics taken in signed order; replace them with the unsigned ones the uint/ulong entry points compute.
-    void AssignUnsignedStatistics(ReadOnlySpan<uint> values)
-    {
-        Statistics = ColumnStatistics.CreateUInt32(values, 0);
-        AssignUInt32PageStatistics(values);
-    }
-
     void AssignUnsignedStatistics(ReadOnlySpan<uint?> values)
     {
-        Statistics = ColumnStatistics.CreateNullableUInt32(values);
         AssignNullableUInt32PageStatistics(values);
-    }
-
-    void AssignUnsignedStatistics(ReadOnlySpan<ulong> values)
-    {
-        Statistics = ColumnStatistics.CreateUInt64(values, 0);
-        AssignUInt64PageStatistics(values);
+        if (!TryAssignPrimitiveColumnStatisticsFromPages<uint>())
+            Statistics = ColumnStatistics.CreateNullableUInt32(values);
     }
 
     void AssignUnsignedStatistics(ReadOnlySpan<ulong?> values)
     {
-        Statistics = ColumnStatistics.CreateNullableUInt64(values);
         AssignNullableUInt64PageStatistics(values);
+        if (!TryAssignPrimitiveColumnStatisticsFromPages<ulong>())
+            Statistics = ColumnStatistics.CreateNullableUInt64(values);
     }
 
     void SerializeUInt32(ReadOnlySpan<uint> values)
     {
-        var rented = _owner.BufferWriters.RentScratch<int>(checked((uint)values.Length));
-        try
-        {
-            var converted = ParquetBuffer.AsSpan<int>(rented, values.Length);
-            for (var i = 0; i < values.Length; i++)
-                converted[i] = unchecked((int)values[i]);
-            SerializeTyped(converted);
-            Statistics = ColumnStatistics.CreateUInt32(values, 0);
-            AssignUInt32PageStatistics(values);
-        }
-        finally
-        {
-            _owner.BufferWriters.ReturnScratch(rented);
-        }
+        SerializeTyped(MemoryMarshal.Cast<uint, int>(values));
+        if (!IsUnsignedInteger)
+            AssignIntegerColumnAndPageStatistics(values, valuesAreDense: false, columnNullCount: 0);
     }
 
     void SerializeNullableUInt32(ReadOnlySpan<uint?> values)
     {
-        var rented = _owner.BufferWriters.RentScratch<int?>(checked((uint)values.Length));
-        try
-        {
-            var converted = ParquetBuffer.AsSpan<int?>(rented, values.Length);
-            for (var i = 0; i < values.Length; i++)
-                converted[i] = values[i] is { } value ? unchecked((int)value) : null;
-            SerializeOptionalTyped(converted);
-            Statistics = ColumnStatistics.CreateNullableUInt32(values);
-            AssignNullableUInt32PageStatistics(values);
-        }
-        finally
-        {
-            _owner.BufferWriters.ReturnScratch(rented);
-        }
+        SerializeOptionalTyped(Reinterpret<uint?, int?>(values));
+        AssignUnsignedStatistics(values);
     }
 
     void SerializeDateTime(ReadOnlySpan<DateTime> values)
@@ -825,38 +776,15 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     void SerializeUInt64(ReadOnlySpan<ulong> values)
     {
-        var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
-        try
-        {
-            var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
-            for (var i = 0; i < values.Length; i++)
-                converted[i] = unchecked((long)values[i]);
-            SerializeTyped(converted);
-            Statistics = ColumnStatistics.CreateUInt64(values, 0);
-            AssignUInt64PageStatistics(values);
-        }
-        finally
-        {
-            _owner.BufferWriters.ReturnScratch(rented);
-        }
+        SerializeTyped(MemoryMarshal.Cast<ulong, long>(values));
+        if (!IsUnsignedInteger)
+            AssignIntegerColumnAndPageStatistics(values, valuesAreDense: false, columnNullCount: 0);
     }
 
     void SerializeNullableUInt64(ReadOnlySpan<ulong?> values)
     {
-        var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
-        try
-        {
-            var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
-            for (var i = 0; i < values.Length; i++)
-                converted[i] = values[i] is { } value ? unchecked((long)value) : null;
-            SerializeOptionalTyped(converted);
-            Statistics = ColumnStatistics.CreateNullableUInt64(values);
-            AssignNullableUInt64PageStatistics(values);
-        }
-        finally
-        {
-            _owner.BufferWriters.ReturnScratch(rented);
-        }
+        SerializeOptionalTyped(Reinterpret<ulong?, long?>(values));
+        AssignUnsignedStatistics(values);
     }
 
     void SerializeDateTimeOffset(ReadOnlySpan<DateTimeOffset> values)
@@ -1098,6 +1026,18 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], dictionaryState, out var binaryMinMax);
         _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
+        if (typeof(TValue) == typeof(int) && IsUnsignedInteger)
+        {
+            if (!TryAssignPrimitiveColumnStatisticsFromPages<uint>())
+                AssignIntegerColumnAndPageStatistics(Reinterpret<TValue, uint>(values), false, 0);
+            return;
+        }
+        if (typeof(TValue) == typeof(long) && IsUnsignedInteger)
+        {
+            if (!TryAssignPrimitiveColumnStatisticsFromPages<ulong>())
+                AssignIntegerColumnAndPageStatistics(Reinterpret<TValue, ulong>(values), false, 0);
+            return;
+        }
         if (TryAssignPrimitiveColumnStatisticsFromPages<TValue>())
             return;
         if (TryAssignInt32ColumnAndPageStatistics(values))
@@ -1131,8 +1071,12 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         {
             (ParquetPhysicalType.Boolean, var type) when type == typeof(bool)
                 => ColumnStatistics.ColumnStatisticsValueKind.Boolean,
+            (ParquetPhysicalType.Int32, var type) when type == typeof(uint)
+                => ColumnStatistics.ColumnStatisticsValueKind.UInt32,
             (ParquetPhysicalType.Int32, var type) when type == typeof(int)
                 => ColumnStatistics.ColumnStatisticsValueKind.Int32,
+            (ParquetPhysicalType.Int64, var type) when type == typeof(ulong)
+                => ColumnStatistics.ColumnStatisticsValueKind.UInt64,
             (ParquetPhysicalType.Int64, var type) when type == typeof(long)
                 => ColumnStatistics.ColumnStatisticsValueKind.Int64,
             (ParquetPhysicalType.Float, var type) when type == typeof(float)
@@ -1204,6 +1148,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 if (pageMaxBits > columnMaxBits)
                     columnMaxBits = pageMaxBits;
                 return;
+            case ColumnStatistics.ColumnStatisticsValueKind.UInt32:
+            case ColumnStatistics.ColumnStatisticsValueKind.UInt64:
+                if (unchecked((ulong)pageMinBits) < unchecked((ulong)columnMinBits))
+                    columnMinBits = pageMinBits;
+                if (unchecked((ulong)pageMaxBits) > unchecked((ulong)columnMaxBits))
+                    columnMaxBits = pageMaxBits;
+                return;
             case ColumnStatistics.ColumnStatisticsValueKind.Float:
                 if (ColumnStatistics.IsLessThan(BitConverter.Int32BitsToSingle(checked((int)pageMinBits)),
                         BitConverter.Int32BitsToSingle(checked((int)columnMinBits))))
@@ -1232,8 +1183,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             ColumnStatistics.ColumnStatisticsValueKind.Boolean => hasValue
                 ? ColumnStatistics.FromBoolean(minBits != 0, maxBits != 0, nullCount)
                 : ColumnStatistics.Empty(nullCount),
+            ColumnStatistics.ColumnStatisticsValueKind.UInt32 => hasValue
+                ? ColumnStatistics.FromUInt32(unchecked((uint)minBits), unchecked((uint)maxBits), nullCount)
+                : ColumnStatistics.Empty(nullCount),
             ColumnStatistics.ColumnStatisticsValueKind.Int32 => hasValue
                 ? ColumnStatistics.FromInt32(checked((int)minBits), checked((int)maxBits), nullCount)
+                : ColumnStatistics.Empty(nullCount),
+            ColumnStatistics.ColumnStatisticsValueKind.UInt64 => hasValue
+                ? ColumnStatistics.FromUInt64(unchecked((ulong)minBits), unchecked((ulong)maxBits), nullCount)
                 : ColumnStatistics.Empty(nullCount),
             ColumnStatistics.ColumnStatisticsValueKind.Int64 => hasValue
                 ? ColumnStatistics.FromInt64(minBits, maxBits, nullCount)
@@ -1729,7 +1686,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return false;
 
         var intValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<int>>(ref values);
-        AssignSignedIntegerColumnAndPageStatistics(intValues, valuesAreDense: false, columnNullCount: 0);
+        AssignIntegerColumnAndPageStatistics(intValues, valuesAreDense: false, columnNullCount: 0);
         return true;
     }
 
@@ -1746,7 +1703,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return false;
 
         var longValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<long>>(ref values);
-        AssignSignedIntegerColumnAndPageStatistics(longValues, valuesAreDense: false, columnNullCount: 0);
+        AssignIntegerColumnAndPageStatistics(longValues, valuesAreDense: false, columnNullCount: 0);
         return true;
     }
 
@@ -1758,11 +1715,11 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return false;
 
         var longValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<long>>(ref values);
-        AssignSignedIntegerColumnAndPageStatistics(longValues, valuesAreDense: true, nullCount);
+        AssignIntegerColumnAndPageStatistics(longValues, valuesAreDense: true, nullCount);
         return true;
     }
 
-    void AssignSignedIntegerColumnAndPageStatistics<TValue>(ReadOnlySpan<TValue> values, bool valuesAreDense,
+    void AssignIntegerColumnAndPageStatistics<TValue>(ReadOnlySpan<TValue> values, bool valuesAreDense,
         long columnNullCount)
         where TValue : struct, INumber<TValue>
     {
@@ -1786,7 +1743,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             }
 
             MinMaxScan.Compute(pageValues, out var pageMin, out var pageMax);
-            page.Statistics = CreateSignedIntegerStatistics(pageMin, pageMax, page.NullCount);
+            page.Statistics = ColumnStatistics.FromIntegerBounds(pageMin, pageMax, page.NullCount);
             if (!hasColumnValue)
             {
                 columnMin = pageMin;
@@ -1806,20 +1763,8 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 $"Page statistics covered {valueOffset} values, but the column contains {values.Length} values.");
 
         Statistics = hasColumnValue
-            ? CreateSignedIntegerStatistics(columnMin, columnMax, columnNullCount)
+            ? ColumnStatistics.FromIntegerBounds(columnMin, columnMax, columnNullCount)
             : ColumnStatistics.Empty(columnNullCount);
-    }
-
-    static ColumnStatistics CreateSignedIntegerStatistics<TValue>(TValue min, TValue max, long nullCount)
-        where TValue : struct, INumber<TValue>
-    {
-        if (typeof(TValue) == typeof(int))
-            return ColumnStatistics.FromInt32(Unsafe.As<TValue, int>(ref min), Unsafe.As<TValue, int>(ref max),
-                nullCount);
-        if (typeof(TValue) == typeof(long))
-            return ColumnStatistics.FromInt64(Unsafe.As<TValue, long>(ref min), Unsafe.As<TValue, long>(ref max),
-                nullCount);
-        throw new InvalidOperationException($"Unsupported signed statistics type '{typeof(TValue)}'.");
     }
 
     ReusableDictionaryState<TValue> GetOrCreateDictionaryState<TValue>()
@@ -1940,17 +1885,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         => AssignConvertedPageStatistics(values, static (pageValues, _) =>
             ColumnStatistics.CreateNullableUInt16(pageValues));
 
-    void AssignUInt32PageStatistics(ReadOnlySpan<uint> values)
-        => AssignConvertedPageStatistics(values, static (pageValues, nullCount) =>
-            ColumnStatistics.CreateUInt32(pageValues, nullCount));
-
     void AssignNullableUInt32PageStatistics(ReadOnlySpan<uint?> values)
         => AssignConvertedPageStatistics(values, static (pageValues, _) =>
             ColumnStatistics.CreateNullableUInt32(pageValues));
-
-    void AssignUInt64PageStatistics(ReadOnlySpan<ulong> values)
-        => AssignConvertedPageStatistics(values, static (pageValues, nullCount) =>
-            ColumnStatistics.CreateUInt64(pageValues, nullCount));
 
     void AssignNullableUInt64PageStatistics(ReadOnlySpan<ulong?> values)
         => AssignConvertedPageStatistics(values, static (pageValues, _) =>

@@ -509,6 +509,30 @@ internal sealed class ColumnStatisticsTests
         }
     }
 
+    [Test]
+    public void PlainUInt64StatisticsMergePageBoundsInUnsignedOrder()
+    {
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.RequiredLeaf("bits", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.Plain]), logicalType: new PlankLogicalType.Int(64, false))
+        ]);
+        using var stream = new MemoryStream();
+        using (var writer = schema.CreateWriter(stream, new ParquetWriterOptions { TargetDataPageSizeBytes = 16 }))
+        {
+            var values = writer.CreateSerializedColumn<long>(schema.LeafColumns[0]);
+            values.Serialize([2, 3, long.MinValue, -1]);
+            writer.StartRowGroup().Write(values);
+            writer.CloseFile();
+        }
+
+        using var reader = schema.CreateReader(new MemoryStream(stream.ToArray()));
+        var metadata = reader.RowGroups[0].GetColumnMetadata(0);
+        AssertUnsignedBounds(metadata.Statistics, 2, ulong.MaxValue, "chunk");
+        using var pages = metadata.OpenPages();
+        AssertUnsignedBounds(pages[0].Statistics, 2, 3, "page 0");
+        AssertUnsignedBounds(pages[1].Statistics, 1UL << 63, ulong.MaxValue, "page 1");
+    }
+
     // Maps uint to its two's-complement INT32 bits, as a user converter for an unsigned column would.
     sealed class UInt32BitsConverter : ParquetValueConverter<uint, int>
     {

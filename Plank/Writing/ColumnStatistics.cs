@@ -1371,16 +1371,32 @@ internal readonly struct ColumnStatistics
         return hasValue;
     }
 
+    internal static ColumnStatistics FromIntegerBounds<TValue>(TValue min, TValue max, long nullCount)
+        where TValue : struct, INumber<TValue>
+    {
+        if (typeof(TValue) == typeof(int))
+            return FromInt32(Unsafe.As<TValue, int>(ref min), Unsafe.As<TValue, int>(ref max),
+                nullCount);
+        if (typeof(TValue) == typeof(long))
+            return FromInt64(Unsafe.As<TValue, long>(ref min), Unsafe.As<TValue, long>(ref max),
+                nullCount);
+        if (typeof(TValue) == typeof(uint))
+            return FromUInt32(Unsafe.As<TValue, uint>(ref min), Unsafe.As<TValue, uint>(ref max), nullCount);
+        if (typeof(TValue) == typeof(ulong))
+            return FromUInt64(Unsafe.As<TValue, ulong>(ref min), Unsafe.As<TValue, ulong>(ref max), nullCount);
+        throw new InvalidOperationException($"Unsupported integer statistics type '{typeof(TValue)}'.");
+    }
+
     internal static ColumnStatistics FromInt32(int min, int max, long nullCount)
         => new(ColumnStatisticsValueKind.Int32, min, max, nullCount, true);
 
-    static ColumnStatistics FromUInt32(uint min, uint max, long nullCount)
+    internal static ColumnStatistics FromUInt32(uint min, uint max, long nullCount)
         => new(ColumnStatisticsValueKind.UInt32, min, max, nullCount, true);
 
     internal static ColumnStatistics FromInt64(long min, long max, long nullCount)
         => new(ColumnStatisticsValueKind.Int64, min, max, nullCount, true);
 
-    static ColumnStatistics FromUInt64(ulong min, ulong max, long nullCount)
+    internal static ColumnStatistics FromUInt64(ulong min, ulong max, long nullCount)
         => new(ColumnStatisticsValueKind.UInt64, unchecked((long)min), unchecked((long)max), nullCount, true);
 
     static ColumnStatistics FromFloat(float min, float max, long nullCount, long nanCount)
