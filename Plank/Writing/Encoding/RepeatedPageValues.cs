@@ -40,8 +40,7 @@ sealed class RepeatedPageValues<TValue>(BufferWriterFactory buffers, LeafProject
             if (typeof(TRow) == typeof(TValue[]) && projection.ElementOptional &&
                 (typeof(TOptional) != typeof(TValue) || TProbe.ValueRequired))
                 throw new InvalidOperationException($"Column '{columnName}' has optional list elements; use a nullable row element type.");
-            if (typeof(TRow) != typeof(TOptional[]) && typeof(TRow) != typeof(TValue[]) &&
-                typeof(TRow) != typeof(NestedValue<TValue>[]))
+            if (typeof(TRow) != typeof(TOptional[]) && typeof(TRow) != typeof(TValue[]))
                 throw new InvalidOperationException($"Array type '{typeof(TRow)}' is incompatible with column '{columnName}'.");
         }
 
@@ -83,24 +82,7 @@ sealed class RepeatedPageValues<TValue>(BufferWriterFactory buffers, LeafProject
         }
 
         var max = projection.MaxDefinitionLevel;
-        if (array is NestedValue<TValue>[] explicitValues)
-        {
-            for (var i = 0; i < explicitValues.Length; i++)
-            {
-                var item = explicitValues[i];
-                var definition = max;
-                if (item.HasValue)
-                    Values.Add(item.Value);
-                else
-                {
-                    if (item.DefinedOptionalNodes >= max - repeated)
-                        throw new InvalidOperationException($"Null value in '{columnName}' exceeds the optional depth of the element.");
-                    definition = repeated + item.DefinedOptionalNodes;
-                }
-                AddLevels(i == 0 ? firstRepetition : repetition, definition);
-            }
-        }
-        else if (array is TOptional[] optional)
+        if (array is TOptional[] optional)
         {
             for (var i = 0; i < optional.Length; i++)
             {
@@ -136,6 +118,30 @@ sealed class RepeatedPageValues<TValue>(BufferWriterFactory buffers, LeafProject
         }
         else
             throw new InvalidOperationException($"Array of type '{array.GetType()}' is incompatible with column '{columnName}'.");
+    }
+
+    /// <summary>Appends levels and values that a generated row writer has already flattened.</summary>
+    internal void AddFlattened(ReadOnlySpan<byte> repetitionLevels, ReadOnlySpan<byte> definitionLevels,
+        ReadOnlySpan<TValue> values)
+    {
+        AddRuns(ref _repetitions, repetitionLevels);
+        AddRuns(ref _definitions, definitionLevels);
+        Count = checked(Count + repetitionLevels.Length);
+        Values.AddRange(values);
+    }
+
+    static void AddRuns(ref LevelRuns runs, ReadOnlySpan<byte> levels)
+    {
+        var start = 0;
+        while (start < levels.Length)
+        {
+            var value = levels[start];
+            var length = levels[start..].IndexOfAnyExcept(value);
+            if (length < 0)
+                length = levels.Length - start;
+            runs.Add(value, length);
+            start += length;
+        }
     }
 
     void AddLevels(int repetition, int definition)

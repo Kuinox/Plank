@@ -4,17 +4,18 @@ using Plank.Schema;
 
 namespace Plank.RowApi;
 
-sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadState
+// Collects the levels and dense values of the current row; generated code rebuilds the row's objects from them.
+sealed class RowApiNestedColumnReadState<TValue> : RowApiColumnReadState
 {
-    readonly RowApiNestedColumnDescriptor<TShape, TElement> _descriptor;
-    readonly List<int> _repetitionLevels = [];
-    readonly List<int> _definitionLevels = [];
-    readonly List<TElement> _values = [];
-    NestedRowGroupColumn<TElement>.Enumerator _buffers;
+    NestedRowGroupColumn<TValue>.Enumerator _buffers;
     NestedRowGroupColumn<byte>.Enumerator _binaryBuffers;
-    NestedColumnBuffer<TElement> _buffer;
+    NestedColumnBuffer<TValue> _buffer;
     NestedColumnBuffer<byte> _binaryBuffer;
-    internal TShape Current = default!;
+    byte[] _repetitionLevels = new byte[16];
+    byte[] _definitionLevels = new byte[16];
+    TValue[] _values = new TValue[16];
+    int _levelCount;
+    int _valueCount;
     int _levelIndex;
     int _valueIndex;
     bool _binary;
@@ -22,14 +23,19 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
     bool _buffersOpen;
     bool _usingMissing;
 
-    internal RowApiNestedColumnReadState(RowApiNestedColumnDescriptor<TShape, TElement> descriptor)
+    internal RowApiNestedColumnReadState(RowApiNestedColumnDescriptor<TValue> descriptor)
         : base(descriptor)
-        => _descriptor = descriptor;
+    {
+    }
+
+    internal RowApiNestedLeafRow<TValue> Current
+        => new(_repetitionLevels.AsSpan(0, _levelCount), _definitionLevels.AsSpan(0, _levelCount),
+            _values.AsSpan(0, _valueCount));
 
     internal override void ResetBufferState()
     {
         DisposeBuffers();
-        Current = default!;
+        ClearCurrent();
         _levelIndex = 0;
         _valueIndex = 0;
         _hasBuffer = false;
@@ -41,7 +47,7 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
     internal override void SetMissingValue()
     {
         DisposeBuffers();
-        Current = default!;
+        ClearCurrent();
         _usingMissing = true;
         CurrentIndex = 0;
         BufferedValueCount = 1;
@@ -55,22 +61,22 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
             or ParquetPhysicalType.Int96;
         if (_binary)
         {
-            if (typeof(TElement) != typeof(byte[]))
+            if (typeof(TValue) != typeof(byte[]))
                 throw new NotSupportedException(
                     $"Nested binary row column '{PropertyName}' must use byte[] dense elements.");
             _binaryBuffers = rowGroup.NestedColumn<byte>(Ordinal).GetEnumerator();
         }
         else
         {
-            if (RuntimeHelpers.IsReferenceOrContainsReferences<TElement>())
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
                 throw new NotSupportedException(
-                    $"Nested row column '{PropertyName}' cannot decode dense values of type {typeof(TElement)}.");
-            _buffers = rowGroup.NestedColumn<TElement>(Ordinal).GetEnumerator();
+                    $"Nested row column '{PropertyName}' cannot decode dense values of type {typeof(TValue)}.");
+            _buffers = rowGroup.NestedColumn<TValue>(Ordinal).GetEnumerator();
         }
 
         _buffer = default;
         _binaryBuffer = default;
-        Current = default!;
+        ClearCurrent();
         _levelIndex = 0;
         _valueIndex = 0;
         _hasBuffer = false;
@@ -85,10 +91,7 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
         if (!Projected || _usingMissing)
             return;
 
-        _repetitionLevels.Clear();
-        _definitionLevels.Clear();
-        _values.Clear();
-
+        ClearCurrent();
         if (!EnsureEntry())
             throw new CorruptParquetException($"Column '{PropertyName}' ended before the row group was complete.");
         if (CurrentRepetitionLevel != 0)
@@ -98,18 +101,9 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
         do
         {
             CopyCurrentEntry();
-            AdvanceEntry();
+            _levelIndex++;
         }
         while (EnsureEntry() && CurrentRepetitionLevel != 0);
-
-        var denseValueIndex = 0;
-        var value = Materialize(typeof(TShape), depth: 0, start: 0, _definitionLevels.Count,
-            ref denseValueIndex);
-        if (denseValueIndex != _values.Count)
-            throw new CorruptParquetException(
-                $"Column '{PropertyName}' materialized {denseValueIndex} dense values but decoded {_values.Count}.");
-
-        Current = value is null ? default! : (TShape)value;
     }
 
     internal override void DisposeBuffers()
@@ -125,60 +119,12 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
         _hasBuffer = false;
     }
 
-    object? Materialize(Type shapeType, int depth, int start, int end, ref int denseValueIndex)
+    void ClearCurrent()
     {
-        if (depth == _descriptor.CollectionLevels.Length)
-        {
-            if (end - start != 1)
-                throw new CorruptParquetException(
-                    $"Column '{PropertyName}' has {end - start} entries for one materialized leaf value.");
-            if (_definitionLevels[start] == Descriptor.Column.MaxDefinitionLevel)
-            {
-                if (denseValueIndex >= _values.Count)
-                    throw new CorruptParquetException($"Column '{PropertyName}' has fewer dense values than levels.");
-                var value = _values[denseValueIndex++];
-                return shapeType == typeof(NestedValue<TElement>) ? NestedValue<TElement>.Present(value) : (object?)value;
-            }
-
-            if (shapeType == typeof(NestedValue<TElement>))
-                return NestedValue<TElement>.Null(_definitionLevels[start] - _descriptor.CollectionLevels[^1].ElementDefinitionLevel);
-            if (shapeType.IsValueType && Nullable.GetUnderlyingType(shapeType) is null)
-                throw new CorruptParquetException(
-                    $"Column '{PropertyName}' contains a null leaf that cannot be materialized as {shapeType}.");
-            return null;
-        }
-
-        if (!shapeType.IsArray)
-            throw new CorruptParquetException(
-                $"Column '{PropertyName}' expected an array at nested collection depth {depth + 1}.");
-
-        var level = _descriptor.CollectionLevels[depth];
-        var firstDefinition = _definitionLevels[start];
-        if (firstDefinition < level.DefinedDefinitionLevel)
-            return null;
-
-        var elementType = shapeType.GetElementType()!;
-        if (firstDefinition < level.ElementDefinitionLevel)
-            return Array.CreateInstance(elementType, 0);
-
-        var elementCount = 1;
-        for (var i = start + 1; i < end; i++)
-            if (_repetitionLevels[i] <= level.RepetitionLevel)
-                elementCount++;
-
-        var result = Array.CreateInstance(elementType, elementCount);
-        var elementIndex = 0;
-        var elementStart = start;
-        for (var i = start + 1; i <= end; i++)
-        {
-            if (i != end && _repetitionLevels[i] > level.RepetitionLevel)
-                continue;
-
-            result.SetValue(Materialize(elementType, depth + 1, elementStart, i, ref denseValueIndex),
-                elementIndex++);
-            elementStart = i;
-        }
-        return result;
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+            Array.Clear(_values, 0, _valueCount);
+        _levelCount = 0;
+        _valueCount = 0;
     }
 
     bool EnsureEntry()
@@ -187,8 +133,6 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
         {
             if (!MoveNextBuffer())
                 return false;
-            if (CurrentBufferCount == 0)
-                continue;
         }
         return true;
     }
@@ -215,27 +159,33 @@ sealed class RowApiNestedColumnReadState<TShape, TElement> : RowApiColumnReadSta
     void CopyCurrentEntry()
     {
         var definitionLevel = CurrentDefinitionLevel;
-        _repetitionLevels.Add(CurrentRepetitionLevel);
-        _definitionLevels.Add(definitionLevel);
+        if (_levelCount == _repetitionLevels.Length)
+        {
+            Array.Resize(ref _repetitionLevels, _levelCount * 2);
+            Array.Resize(ref _definitionLevels, _levelCount * 2);
+        }
+        // The descriptor limits the leaf's levels to a byte, and the decoder rejects levels above them.
+        _repetitionLevels[_levelCount] = (byte)CurrentRepetitionLevel;
+        _definitionLevels[_levelCount] = (byte)definitionLevel;
+        _levelCount++;
         if (definitionLevel != Descriptor.Column.MaxDefinitionLevel)
             return;
 
+        if (_valueCount == _values.Length)
+            Array.Resize(ref _values, _valueCount * 2);
         if (_binary)
         {
             if ((uint)_valueIndex >= (uint)_binaryBuffer.Values.Count)
                 throw new CorruptParquetException($"Column '{PropertyName}' has fewer binary values than levels.");
             var bytes = _binaryBuffer.Values.GetValue(_valueIndex++).ToArray();
-            _values.Add((TElement)(object)bytes);
+            _values[_valueCount++] = Unsafe.As<byte[], TValue>(ref bytes);
             return;
         }
 
         if ((uint)_valueIndex >= (uint)_buffer.Values.Count)
             throw new CorruptParquetException($"Column '{PropertyName}' has fewer dense values than levels.");
-        _values.Add(_buffer.Values.Values[_valueIndex++]);
+        _values[_valueCount++] = _buffer.Values.Values[_valueIndex++];
     }
-
-    void AdvanceEntry()
-        => _levelIndex++;
 
     int CurrentBufferCount
         => _binary ? _binaryBuffer.Count : _buffer.Count;

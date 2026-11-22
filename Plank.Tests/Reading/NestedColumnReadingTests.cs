@@ -9,7 +9,7 @@ namespace Plank.Tests.Reading;
 internal sealed class NestedColumnReadingTests
 {
     [Test]
-    public void RepeatedWriterValidatesNullDepthAndCanRetryWithoutAllocating()
+    public void RepeatedWriterRejectsNullRequiredListsAndCanRetryWithoutAllocating()
     {
         var schema = new ParquetSchema([
             ColumnDefinition.List("items", ColumnDefinition.OptionalGroup("entry",
@@ -20,11 +20,11 @@ internal sealed class NestedColumnReadingTests
         ]);
         using var stream = new MemoryStream();
         using var writer = schema.CreateWriter(stream, new ParquetWriterOptions { Compression = CompressionKind.None });
-        var items = writer.CreateSerializedColumn<NestedValue<int>[]>(schema.LeafColumns[0]);
+        var items = writer.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
         var grid = writer.CreateSerializedColumn<int[][]>(schema.LeafColumns[1]);
-        Assert.Throws<InvalidOperationException>(() => items.Serialize([[NestedValue<int>.Null(2)]]));
         Assert.Throws<InvalidOperationException>(() => grid.Serialize([[null!]]));
-        NestedValue<int>[][] rows = [[default, NestedValue<int>.Null(1), NestedValue<int>.Present(17)]];
+        // A null element of the direct column writer is the missing record.
+        int?[][] rows = [[null, 17]];
         int[][][] grids = [[[2], []]];
         for (var i = 0; i < 10; i++)
         {
@@ -37,8 +37,8 @@ internal sealed class NestedColumnReadingTests
             var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             if (i == 9 && allocated != 0)
                 throw new InvalidOperationException($"Warmed nested serialization allocated {allocated} bytes.");
-            if (items.Statistics.NullCount != 2 || items.Statistics.MinBits != 17 || items.Statistics.MaxBits != 17)
-                throw new InvalidOperationException("Missing records and null fields must both count as absent physical values.");
+            if (items.Statistics.NullCount != 1 || items.Statistics.MinBits != 17 || items.Statistics.MaxBits != 17)
+                throw new InvalidOperationException("A missing record must count as an absent physical value.");
             group.Write(items);
             group.Write(grid);
         }
@@ -47,30 +47,51 @@ internal sealed class NestedColumnReadingTests
     [Test]
     [Arguments(ParquetDataPageVersion.V1)]
     [Arguments(ParquetDataPageVersion.V2)]
-    public void ExplicitElementPresenceAndNullInnerListsWriteDistinctLevels(ParquetDataPageVersion version)
+    public void NullInnerListsWriteDistinctLevels(ParquetDataPageVersion version)
     {
         var schema = new ParquetSchema([
-            ColumnDefinition.List("items", ColumnDefinition.OptionalGroup("entry",
-                ColumnDefinition.OptionalLeaf("price", ParquetPhysicalType.Int32)), ParquetRepetition.Optional),
             ColumnDefinition.List("outer", ColumnDefinition.List("inner",
                 ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32), ParquetRepetition.Optional),
                 ParquetRepetition.Optional)
         ]);
         WithPlankFile(schema, group =>
         {
-            var items = group.CreateSerializedColumn<NestedValue<int>[]>(schema.LeafColumns[0]);
-            items.Serialize([null!, [], [default, NestedValue<int>.Null(1), NestedValue<int>.Present(7)]]);
-            group.Write(items);
-            var inner = group.CreateSerializedColumn<int?[][]>(schema.LeafColumns[1]);
+            var inner = group.CreateSerializedColumn<int?[][]>(schema.LeafColumns[0]);
             inner.Serialize([null!, [], [null!, [], [null, 7], null!]]);
             group.Write(inner);
         }, reader =>
         {
             AssertSnapshot(Read(reader.RowGroups[0].NestedColumn<int>(0)), [7],
-                [0, 0, 0, 1, 1], [0, 1, 2, 3, 4], 3, 1, 4);
-            AssertSnapshot(Read(reader.RowGroups[0].NestedColumn<int>(1)), [7],
                 [0, 0, 0, 1, 1, 2, 1], [0, 1, 2, 3, 4, 5, 2], 3, 2, 5);
         }, version);
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void GeneratedRowsWriteMissingRecordsAndNullFieldsAsDistinctLevels(ParquetDataPageVersion version)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = Plank.Tests.E2E.GeneratedOptionalElementsSchema.CreateRowWriter(stream, maxParallelism: 1,
+                   new ParquetWriterOptions { DataPageVersion = version, Compression = CompressionKind.None }))
+        {
+            writer.GetRow().Items = null;
+            writer.GetRow().Items = [];
+            writer.GetRow().Items = [null, new() { Label = "x" }, new() { Price = 7 }];
+            writer.Complete();
+        }
+
+        using var input = new MemoryStream(stream.ToArray());
+        using var reader = new ParquetReader();
+        reader.Reset(input);
+        // items.list.element.{price,label}: 0 null list, 1 empty list, 2 missing record, 3 record without the
+        // field, 4 field present.
+        AssertSnapshot(Read(reader.RowGroups[0].NestedColumn<int>(0)), [7],
+            [0, 0, 0, 1, 1], [0, 1, 2, 3, 4], 3, 1, 4);
+        var labels = Read(reader.RowGroups[0].NestedColumn<byte>(1));
+        if (!labels.DefinitionLevels.AsSpan().SequenceEqual([0, 1, 2, 4, 3]))
+            throw new InvalidOperationException(
+                $"Label definition levels do not match: [{string.Join(", ", labels.DefinitionLevels)}].");
     }
 
     [Test]

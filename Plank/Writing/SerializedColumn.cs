@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -1005,24 +1006,130 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeRepeatedPage<TValue, TOptional, TProbe>(ReadOnlySpan<T> rows, LeafProjectionInfo projection)
         where TValue : notnull where TProbe : IOptionalRow<TOptional, TValue>
     {
-        var data = _encodingState as RepeatedPageValues<TValue> ?? new RepeatedPageValues<TValue>(_owner.BufferWriters, projection);
-        _encodingState = data;
+        var data = GetRepeatedPageValues<TValue>(projection);
         try
         {
             data.Flatten<T, TOptional, TProbe>(rows, projection, _column.Name);
-            Plank.Writing.Encoding.Encoding.EncodeRepeatedPage(_owner.BufferWriters, _column, data, rows.Length,
-                Pages, _owner.DataPageVersion);
-            ReadOnlySpan<TValue> dense = CollectionsMarshal.AsSpan(data.Values);
-            Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, dense, data.Count - dense.Length,
-                ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
-            _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, dense,
-                ref _bloomFilterBuffer);
-            TryAssignSingleDataPageStatistics(Statistics);
+            WriteRepeatedPage(data, rows.Length);
         }
         finally
         {
             data.Clear();
         }
+    }
+
+    /// <summary>Serializes a repeated leaf that a generated row writer has already flattened into levels.</summary>
+    internal void SerializeNestedLevels(ReadOnlySpan<byte> repetitionLevels, ReadOnlySpan<byte> definitionLevels,
+        ReadOnlySpan<T> values, int rowCount)
+    {
+        _owner.ThrowIfDisposed();
+        if (_bloomFilterRetained)
+            throw new InvalidOperationException(
+                "SerializedColumn's Bloom filter is retained by an incomplete row group.");
+        if (_column.Options.Repetition != ParquetRepetition.Repeated)
+            throw new InvalidOperationException($"Column '{_column.Name}' is not repeated.");
+        if (HasPendingData)
+            throw new InvalidOperationException("SerializedColumn already contains pending data.");
+
+        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        var projection = _owner.ColumnProjectionInfosByOrdinal[columnOrdinal];
+        ColumnOrdinal = columnOrdinal;
+        RowCount = checked((uint)rowCount);
+        Pages.Clear();
+#pragma warning disable CS8714
+        var data = GetRepeatedPageValues<T>(projection);
+        try
+        {
+            data.AddFlattened(repetitionLevels, definitionLevels, values);
+            WriteRepeatedPage(data, rowCount);
+        }
+        finally
+        {
+            data.Clear();
+        }
+#pragma warning restore CS8714
+
+        var mapProjections = projection.MapProjections;
+        if (!mapProjections.IsDefaultOrEmpty)
+        {
+            var shapes = new RepeatedRowShape[mapProjections.Length];
+            for (var i = 0; i < shapes.Length; i++)
+                shapes[i] = CaptureRepeatedShape(repetitionLevels, definitionLevels, rowCount,
+                    mapProjections[i].RepetitionLevel, projection.RepeatedDefinitionLevels);
+            MapRowShapes = shapes;
+        }
+        HasPendingData = true;
+        PreparePages();
+    }
+
+    RepeatedPageValues<TValue> GetRepeatedPageValues<TValue>(LeafProjectionInfo projection) where TValue : notnull
+    {
+        var data = _encodingState as RepeatedPageValues<TValue> ?? new RepeatedPageValues<TValue>(_owner.BufferWriters, projection);
+        _encodingState = data;
+        return data;
+    }
+
+    void WriteRepeatedPage<TValue>(RepeatedPageValues<TValue> data, int rowCount) where TValue : notnull
+    {
+        Plank.Writing.Encoding.Encoding.EncodeRepeatedPage(_owner.BufferWriters, _column, data, rowCount,
+            Pages, _owner.DataPageVersion);
+        ReadOnlySpan<TValue> dense = CollectionsMarshal.AsSpan(data.Values);
+        Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, dense, data.Count - dense.Length,
+            ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
+        _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, dense,
+            ref _bloomFilterBuffer);
+        TryAssignSingleDataPageStatistics(Statistics);
+    }
+
+    // The level form of CaptureRepeatedShape: per row, each collection down to `depth` contributes its element count,
+    // or -1 when it is null, so a map's key and value columns can be checked for matching cardinalities.
+    static RepeatedRowShape CaptureRepeatedShape(ReadOnlySpan<byte> repetitionLevels,
+        ReadOnlySpan<byte> definitionLevels, int rowCount, int depth, ImmutableArray<int> repeatedDefinitionLevels)
+    {
+        var rowOffsets = new int[rowCount + 1];
+        var tokens = new List<int>(rowCount);
+        var position = 0;
+        for (var row = 0; row < rowCount; row++)
+        {
+            rowOffsets[row] = tokens.Count;
+            if (position >= repetitionLevels.Length || repetitionLevels[position] != 0)
+                throw new InvalidOperationException("Nested levels do not start a row at repetition level 0.");
+            AddShapeTokens(repetitionLevels, definitionLevels, ref position, 1, depth, repeatedDefinitionLevels, tokens);
+            while (position < repetitionLevels.Length && repetitionLevels[position] != 0)
+                position++;
+        }
+        rowOffsets[rowCount] = tokens.Count;
+        return new RepeatedRowShape(tokens.ToArray(), rowOffsets);
+    }
+
+    static void AddShapeTokens(ReadOnlySpan<byte> repetitionLevels, ReadOnlySpan<byte> definitionLevels,
+        ref int position, int level, int depth, ImmutableArray<int> repeatedDefinitionLevels, List<int> tokens)
+    {
+        var elementDefinitionLevel = repeatedDefinitionLevels[level - 1];
+        var definitionLevel = definitionLevels[position];
+        if (definitionLevel < elementDefinitionLevel)
+        {
+            tokens.Add(definitionLevel < elementDefinitionLevel - 1 ? -1 : 0);
+            position++;
+            return;
+        }
+
+        var countIndex = tokens.Count;
+        tokens.Add(0);
+        var count = 0;
+        do
+        {
+            count++;
+            if (level < depth)
+                AddShapeTokens(repetitionLevels, definitionLevels, ref position, level + 1, depth,
+                    repeatedDefinitionLevels, tokens);
+            else
+                position++;
+            while (position < repetitionLevels.Length && repetitionLevels[position] > level)
+                position++;
+        }
+        while (position < repetitionLevels.Length && repetitionLevels[position] == level);
+        tokens[countIndex] = count;
     }
 
     static RepeatedRowShape CaptureRepeatedShape(ReadOnlySpan<T> rows, int depth)
