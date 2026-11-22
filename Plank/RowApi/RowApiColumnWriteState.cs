@@ -16,6 +16,10 @@ abstract class RowApiColumnWriteState
 
     internal abstract void ResetForReuse(int start, int count);
 
+    /// <summary>Clears every row before the slot is reused.</summary>
+    internal virtual void ResetSlot(int count)
+        => ResetForReuse(0, count);
+
     internal abstract ulong GetValueSize(int index);
 
     internal abstract void Resize(int rowCount);

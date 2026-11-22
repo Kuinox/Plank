@@ -24,9 +24,13 @@ sealed class DatasetBufferSlot : RowBufferSlot
         _sizeTracker = CreateSizeTracker();
         _snapshots = new SnapshotMemory[columns.Length][];
         for (var i = 0; i < columns.Length; i++)
+        {
             if (columns[i] is RowApiColumnDescriptor<ReadOnlyMemory<byte>> or
                 RowApiColumnDescriptor<ReadOnlyMemory<byte>?>)
                 _snapshots[i] = CreateSnapshots(rowCount);
+            else if (columns[i] is RowApiNestedColumnDescriptor<byte[]>)
+                GetNestedLeafBufferCore<byte[]>(i).SnapshotBinary = true;
+        }
     }
 
     internal ulong BufferedSizeBytes { get; private set; }
@@ -70,24 +74,8 @@ sealed class DatasetBufferSlot : RowBufferSlot
             SetValue<ReadOnlyMemory<byte>?>(columnIndex, rowIndex,
                 memory is { } bytes ? Snapshot(columnIndex, rowIndex, bytes.Span) : (ReadOnlyMemory<byte>?)null);
         }
-        else if (value is Array shape && _columns[columnIndex].Column.PhysicalType is
-                 ParquetPhysicalType.ByteArray or ParquetPhysicalType.FixedLenByteArray)
-            SetValue(columnIndex, rowIndex, (T)(object)SnapshotBinaryShape(shape));
         else
             SetValue(columnIndex, rowIndex, value);
-    }
-
-    // Nested generated projections already allocate jagged arrays, but their binary leaves may
-    // still refer to caller-owned arrays. Preserve the shape and snapshot every binary endpoint.
-    static Array SnapshotBinaryShape(Array shape)
-    {
-        if (shape is byte[] bytes)
-            return bytes.ToArray();
-        var copy = (Array)shape.Clone();
-        for (var i = 0; i < copy.Length; i++)
-            if (copy.GetValue(i) is Array child)
-                copy.SetValue(SnapshotBinaryShape(child), i);
-        return copy;
     }
 
     ReadOnlyMemory<byte> Snapshot(int columnIndex, int rowIndex, ReadOnlySpan<byte> bytes)

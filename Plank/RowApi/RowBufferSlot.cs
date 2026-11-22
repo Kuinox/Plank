@@ -110,6 +110,25 @@ public abstract class RowBufferSlot
         throw new InvalidOperationException($"Row API column at index {columnIndex} cannot be written as {typeof(T)}.");
     }
 
+    /// <summary>Gets the level buffer of a repeated leaf used by the generated writer.</summary>
+    /// <typeparam name="TValue">The leaf's physical value type.</typeparam>
+    /// <param name="columnIndex">The column index in the generated row schema.</param>
+    /// <returns>The leaf's level buffer.</returns>
+    protected RowApiNestedLeafBuffer<TValue> GetNestedLeafBuffer<TValue>(int columnIndex)
+        => GetNestedLeafBufferCore<TValue>(columnIndex);
+
+    internal RowApiNestedLeafBuffer<TValue> GetNestedLeafBufferCore<TValue>(int columnIndex)
+    {
+        if ((uint)columnIndex >= (uint)_columns.Length)
+            throw new ArgumentOutOfRangeException(nameof(columnIndex), columnIndex,
+                "Column index is outside the row API schema.");
+
+        if (_columns[columnIndex] is RowApiNestedColumnWriteState<TValue> state)
+            return state.Buffer;
+
+        throw new InvalidOperationException($"Row API column at index {columnIndex} is not a nested leaf of {typeof(TValue)}.");
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Next()
     {
@@ -182,7 +201,7 @@ public abstract class RowBufferSlot
         }
 
         for (var i = 0; i < _columns.Length; i++)
-            _columns[i].ResetForReuse(0, Index);
+            _columns[i].ResetSlot(Index);
         Index = 0;
     }
 

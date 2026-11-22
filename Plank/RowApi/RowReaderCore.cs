@@ -287,17 +287,14 @@ public sealed class RowReaderCore : IDisposable
             : RowReaderBinaryValue.NonNullEmpty);
     }
 
-    /// <summary>Gets an allocating generated nested property's current leaf shape.</summary>
-    /// <typeparam name="TShape">The generated jagged leaf shape.</typeparam>
-    /// <typeparam name="TElement">The dense physical leaf value type.</typeparam>
+    /// <summary>Gets the current row's levels and values of a generated nested property leaf.</summary>
+    /// <typeparam name="TValue">The leaf's physical value type.</typeparam>
     /// <param name="column">The generated nested leaf descriptor.</param>
-    /// <returns>A reference to the current materialized shape.</returns>
-    public ref TShape GetCurrentNested<TShape, TElement>(
-        RowApiNestedColumnDescriptor<TShape, TElement> column)
+    /// <returns>The current row of the leaf; empty when the column is missing from the file.</returns>
+    public RowApiNestedLeafRow<TValue> GetCurrentNested<TValue>(RowApiNestedColumnDescriptor<TValue> column)
     {
         ThrowIfNotPositioned();
-        var state = GetNestedState(column);
-        return ref state.Current;
+        return GetNestedState(column).Current;
     }
 
     /// <summary>Throws if the generated reader is not positioned on a row.</summary>
@@ -796,14 +793,13 @@ public sealed class RowReaderCore : IDisposable
             $"Row API column '{state.PropertyName}' is not a variable-length byte column.");
     }
 
-    RowApiNestedColumnReadState<TShape, TElement> GetNestedState<TShape, TElement>(
-        RowApiNestedColumnDescriptor<TShape, TElement> column)
+    RowApiNestedColumnReadState<TValue> GetNestedState<TValue>(RowApiNestedColumnDescriptor<TValue> column)
     {
         var state = GetSelectedState(column);
-        if (state is RowApiNestedColumnReadState<TShape, TElement> nestedState)
+        if (state is RowApiNestedColumnReadState<TValue> nestedState)
             return nestedState;
 
         throw new InvalidOperationException(
-            $"Row API column '{state.PropertyName}' cannot be read as nested shape {typeof(TShape)}.");
+            $"Row API column '{state.PropertyName}' cannot be read as a nested leaf of {typeof(TValue)}.");
     }
 }
