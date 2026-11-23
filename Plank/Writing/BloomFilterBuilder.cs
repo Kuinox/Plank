@@ -14,15 +14,6 @@ static class BloomFilterBuilder
         if (options is null)
             return 0;
 
-        if (column.Options.Repetition == ParquetRepetition.Repeated)
-        {
-            var valueCount = options.ExpectedDistinctValueCount ?? CountRepeatedValues(column, values);
-            var bitset = Initialize(buffers, options, valueCount, ref buffer, out var byteLength);
-            for (var i = 0; i < values.Length; i++)
-                InsertRepeatedValue(column, values[i], bitset);
-            return byteLength;
-        }
-
         var count = options.ExpectedDistinctValueCount ?? checked((uint)values.Length);
         var destination = Initialize(buffers, options, count, ref buffer, out var length);
         InsertValues(column, values, destination);
@@ -91,115 +82,6 @@ static class BloomFilterBuilder
                 count = checked(count + 1);
         return count;
     }
-
-    static uint CountRepeatedValues<T>(Column column, ReadOnlySpan<T> values)
-    {
-        var count = 0U;
-        for (var i = 0; i < values.Length; i++)
-            count = checked(count + CountRepeatedValue(column, values[i]));
-        return count;
-    }
-
-    static uint CountRepeatedValue(Column column, object? value)
-    {
-        if (value is null)
-            return 0;
-        if (IsBinaryLeaf(column, value))
-            return 1;
-
-        switch (value)
-        {
-            case int[] values:
-                return checked((uint)values.Length);
-            case int?[] values:
-                return CountPresent(values);
-            case long[] values:
-                return checked((uint)values.Length);
-            case long?[] values:
-                return CountPresent(values);
-            case float[] values:
-                return checked((uint)values.Length);
-            case float?[] values:
-                return CountPresent(values);
-            case double[] values:
-                return checked((uint)values.Length);
-            case double?[] values:
-                return CountPresent(values);
-            case byte[][] values:
-                return CountPresent(values);
-            case ReadOnlyMemory<byte>[] values:
-                return checked((uint)values.Length);
-            case ReadOnlyMemory<byte>?[] values:
-                return CountPresent(values);
-            case not Array:
-                return 1;
-        }
-
-        var array = (Array)value;
-        var count = 0U;
-        for (var i = 0; i < array.Length; i++)
-            count = checked(count + CountRepeatedValue(column, array.GetValue(i)));
-        return count;
-    }
-
-    static void InsertRepeatedValue(Column column, object? value, Span<byte> bitset)
-    {
-        if (value is null)
-            return;
-        if (IsBinaryLeaf(column, value))
-        {
-            InsertObject(column, value, bitset);
-            return;
-        }
-
-        switch (value)
-        {
-            case int[] values:
-                InsertValues(column, values, bitset);
-                return;
-            case int?[] values:
-                InsertOptionalValues(column, values, bitset);
-                return;
-            case long[] values:
-                InsertValues(column, values, bitset);
-                return;
-            case long?[] values:
-                InsertOptionalValues(column, values, bitset);
-                return;
-            case float[] values:
-                InsertValues(column, values, bitset);
-                return;
-            case float?[] values:
-                InsertOptionalValues(column, values, bitset);
-                return;
-            case double[] values:
-                InsertValues(column, values, bitset);
-                return;
-            case double?[] values:
-                InsertOptionalValues(column, values, bitset);
-                return;
-            case byte[][] values:
-                InsertValues(column, values, bitset);
-                return;
-            case ReadOnlyMemory<byte>[] values:
-                InsertValues(column, values, bitset);
-                return;
-            case ReadOnlyMemory<byte>?[] values:
-                InsertOptionalValues(column, values, bitset);
-                return;
-            case not Array:
-                InsertObject(column, value, bitset);
-                return;
-        }
-
-        var array = (Array)value;
-        for (var i = 0; i < array.Length; i++)
-            InsertRepeatedValue(column, array.GetValue(i), bitset);
-    }
-
-    static bool IsBinaryLeaf(Column column, object value)
-        => value is byte[] && column.PhysicalType is ParquetPhysicalType.ByteArray
-            or ParquetPhysicalType.FixedLenByteArray or ParquetPhysicalType.Int96;
 
     static void InsertValues<T>(Column column, ReadOnlySpan<T> values, Span<byte> bitset)
         where T : notnull

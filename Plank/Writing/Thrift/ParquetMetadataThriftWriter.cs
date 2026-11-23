@@ -17,7 +17,8 @@ static class ParquetMetadataThriftWriter
 
     internal static void WriteDataPageHeaderV2(ref BufferWriter destination, uint rowCount, uint valueCount, uint nullCount,
         uint repetitionLevelsByteLength, uint definitionLevelsByteLength, EncodingKind encoding, int uncompressedPageSize,
-        int compressedPageSize, bool isCompressed, in ColumnStatistics statistics, uint? crc)
+        int compressedPageSize, bool isCompressed, in ColumnStatistics statistics, uint? crc,
+        bool writeLegacyBinaryStatistics = false)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
@@ -36,14 +37,15 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI32(5, checked((int)definitionLevelsByteLength));
         writer.WriteFieldI32(6, checked((int)repetitionLevelsByteLength));
         writer.WriteFieldBool(7, isCompressed);
-        WriteStatistics(ref writer, 8, statistics);
+        WriteStatistics(ref writer, 8, statistics, writeLegacyBinaryStatistics);
         writer.EndStruct(previousData);
 
         writer.EndStruct(previous);
     }
 
     internal static void WriteDataPageHeaderV1(ref BufferWriter destination, uint valueCount, EncodingKind encoding,
-        int uncompressedPageSize, int compressedPageSize, in ColumnStatistics statistics, uint? crc)
+        int uncompressedPageSize, int compressedPageSize, in ColumnStatistics statistics, uint? crc,
+        bool writeLegacyBinaryStatistics = false)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
@@ -59,7 +61,7 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI32(2, GetEncoding(encoding));
         writer.WriteFieldI32(3, GetEncoding(EncodingKind.Rle));
         writer.WriteFieldI32(4, GetEncoding(EncodingKind.Rle));
-        WriteStatistics(ref writer, 5, statistics);
+        WriteStatistics(ref writer, 5, statistics, writeLegacyBinaryStatistics);
         writer.EndStruct(previousData);
 
         writer.EndStruct(previous);
@@ -197,7 +199,7 @@ static class ParquetMetadataThriftWriter
     internal static void WriteFileMetaData(ref BufferWriter destination, ParquetSchema schema,
         ParquetFileVersion fileVersion, int rowGroupCount, long totalRowCount, ref BufferWriter serializedRowGroups,
         string? createdBy,
-        ReadOnlySpan<ParquetKeyValueMetadata> keyValueMetadata)
+        ReadOnlySpan<ParquetKeyValueMetadata> keyValueMetadata, ReadOnlySpan<bool> int96TimestampOrders)
     {
         var writer = new CompactWriter(ref destination);
         var previous = writer.BeginStruct();
@@ -210,7 +212,7 @@ static class ParquetMetadataThriftWriter
         WriteKeyValueMetadata(ref writer, keyValueMetadata);
         if (createdBy is not null)
             writer.WriteFieldBinary(6, createdBy);
-        WriteColumnOrders(ref writer, schema.Columns.Length);
+        WriteColumnOrders(ref writer, schema.Columns.Length, int96TimestampOrders);
         writer.EndStruct(previous);
     }
 
@@ -233,14 +235,15 @@ static class ParquetMetadataThriftWriter
         }
     }
 
-    static void WriteColumnOrders(ref CompactWriter writer, int columnCount)
+    static void WriteColumnOrders(ref CompactWriter writer, int columnCount, ReadOnlySpan<bool> int96TimestampOrders)
     {
         writer.WriteFieldHeader(7, CompactType.List);
         writer.WriteListHeader(columnCount, CompactType.Struct);
         for (var i = 0; i < columnCount; i++)
         {
             var previousOrder = writer.BeginStruct();
-            writer.WriteFieldHeader(1, CompactType.Struct);
+            var chronological = !int96TimestampOrders.IsEmpty && int96TimestampOrders[i];
+            writer.WriteFieldHeader(chronological ? 3 : 1, CompactType.Struct);
             var previousTypeOrder = writer.BeginStruct();
             writer.EndStruct(previousTypeOrder);
             writer.EndStruct(previousOrder);
@@ -410,7 +413,7 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI32(3, GetRepetition(node.Repetition));
         writer.WriteFieldBinary(4, name);
         if (node.LogicalType is not null)
-            WriteLogicalType(ref writer, node.LogicalType, node.FieldId);
+            WriteLogicalType(ref writer, node.LogicalType, node.FieldId, node.PhysicalType);
         else
             WriteSchemaFieldId(ref writer, node.FieldId);
         writer.EndStruct(previous);
@@ -423,7 +426,7 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldBinary(4, name);
         writer.WriteFieldI32(5, node.Children.Length);
         if (node.LogicalType is not null)
-            WriteLogicalType(ref writer, node.LogicalType, node.FieldId);
+            WriteLogicalType(ref writer, node.LogicalType, node.FieldId, node.PhysicalType);
         else
             WriteSchemaFieldId(ref writer, node.FieldId);
         writer.EndStruct(previous);
@@ -520,7 +523,7 @@ static class ParquetMetadataThriftWriter
     static ColumnDefinition ForceRepetition(ColumnDefinition node, ParquetRepetition repetition)
         => node with { Repetition = repetition };
 
-    static void WriteLogicalType(ref CompactWriter writer, LogicalType logicalType, int? fieldId)
+    static void WriteLogicalType(ref CompactWriter writer, LogicalType logicalType, int? fieldId, ParquetPhysicalType? physicalType)
     {
         switch (logicalType)
         {
@@ -540,9 +543,9 @@ static class ParquetMetadataThriftWriter
                 WriteTimeLogicalType(ref writer, time.IsAdjustedToUtc, time.Unit);
                 return;
             case LogicalType.Timestamp timestamp:
-                if (timestamp.Unit == TimeUnit.Millis)
+                if (physicalType == ParquetPhysicalType.Int64 && timestamp.Unit == TimeUnit.Millis)
                     writer.WriteFieldI32(6, (int)ConvertedType.TimestampMillis);
-                else if (timestamp.Unit == TimeUnit.Micros)
+                else if (physicalType == ParquetPhysicalType.Int64 && timestamp.Unit == TimeUnit.Micros)
                     writer.WriteFieldI32(6, (int)ConvertedType.TimestampMicros);
                 WriteSchemaFieldId(ref writer, fieldId);
                 writer.WriteFieldHeader(10, CompactType.Struct);
@@ -798,7 +801,7 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI64(9, metadata.DataPageOffset);
         if (metadata.HasDictionaryPage)
             writer.WriteFieldI64(11, metadata.DictionaryPageOffset);
-        WriteStatistics(ref writer, 12, metadata.Statistics);
+        WriteStatistics(ref writer, 12, metadata.Statistics, HasSignedBinaryStatisticsOrder(column));
         if (metadata.BloomFilterLength > 0)
         {
             writer.WriteFieldI64(14, metadata.BloomFilterOffset);
@@ -837,7 +840,8 @@ static class ParquetMetadataThriftWriter
         writer.WriteFieldI64(9, relocated.DataPageOffset);
         if (relocated.HasDictionaryPage)
             writer.WriteFieldI64(11, relocated.DictionaryPageOffset);
-        WriteImportedStatistics(ref writer, source.Statistics, sourceFooter);
+        WriteImportedStatistics(ref writer, source.Statistics, sourceFooter,
+            writeBounds: column.PhysicalType != ParquetPhysicalType.Int96);
         if (relocated.BloomFilterLength > 0)
         {
             writer.WriteFieldI64(14, relocated.BloomFilterOffset);
@@ -867,17 +871,25 @@ static class ParquetMetadataThriftWriter
     static long GetColumnChunkStartOffset(in ColumnChunkMetadata metadata)
         => metadata.HasDictionaryPage ? metadata.DictionaryPageOffset : metadata.DataPageOffset;
 
-    static void WriteStatistics(ref CompactWriter writer, int fieldId, in ColumnStatistics statistics)
+    // Most binary types sort as unsigned bytes. DECIMAL is signed, even when physically binary.
+    internal static bool HasSignedBinaryStatisticsOrder(Column column)
+        => column.LogicalType is LogicalType.Decimal;
+
+    static void WriteStatistics(ref CompactWriter writer, int fieldId, in ColumnStatistics statistics,
+        bool writeLegacyBinaryStatistics)
     {
         if (!statistics.HasStatistics)
             return;
 
         writer.WriteFieldHeader(fieldId, CompactType.Struct);
         var previous = writer.BeginStruct();
-        var writeLegacyMinMax = statistics.ValueKind is not
-            (ColumnStatistics.ColumnStatisticsValueKind.None or
-            ColumnStatistics.ColumnStatisticsValueKind.UInt32 or
-            ColumnStatistics.ColumnStatisticsValueKind.UInt64);
+        var writeLegacyMinMax = statistics.ValueKind switch
+        {
+            ColumnStatistics.ColumnStatisticsValueKind.None or ColumnStatistics.ColumnStatisticsValueKind.UInt32
+                or ColumnStatistics.ColumnStatisticsValueKind.UInt64 => false,
+            ColumnStatistics.ColumnStatisticsValueKind.Binary => writeLegacyBinaryStatistics,
+            _ => true
+        };
         if (writeLegacyMinMax)
         {
             WriteStatisticsValue(ref writer, 1, statistics, writeMax: true);
@@ -899,9 +911,9 @@ static class ParquetMetadataThriftWriter
     }
 
     static void WriteImportedStatistics(ref CompactWriter writer, in EncodedStatistics statistics,
-        ReadOnlySpan<byte> sourceFooter)
+        ReadOnlySpan<byte> sourceFooter, bool writeBounds)
     {
-        if (!statistics.HasValues)
+        if (!statistics.HasValues || !writeBounds && !statistics.HasNullCount && !statistics.HasDistinctCount)
             return;
 
         writer.WriteFieldHeader(12, CompactType.Struct);
@@ -910,15 +922,15 @@ static class ParquetMetadataThriftWriter
             writer.WriteFieldI64(3, statistics.NullCount);
         if (statistics.HasDistinctCount)
             writer.WriteFieldI64(4, statistics.DistinctCount);
-        if (statistics.HasMaximum)
+        if (writeBounds && statistics.HasMaximum)
             writer.WriteFieldBinary(5,
                 sourceFooter.Slice(statistics.MaximumOffset, statistics.MaximumLength));
-        if (statistics.HasMinimum)
+        if (writeBounds && statistics.HasMinimum)
             writer.WriteFieldBinary(6,
                 sourceFooter.Slice(statistics.MinimumOffset, statistics.MinimumLength));
-        if (statistics.HasMaximum)
+        if (writeBounds && statistics.HasMaximum)
             writer.WriteFieldBool(7, statistics.IsMaximumExact);
-        if (statistics.HasMinimum)
+        if (writeBounds && statistics.HasMinimum)
             writer.WriteFieldBool(8, statistics.IsMinimumExact);
         writer.EndStruct(previous);
     }
@@ -965,6 +977,13 @@ static class ParquetMetadataThriftWriter
             {
                 Span<byte> value = stackalloc byte[sizeof(ulong)];
                 BinaryPrimitives.WriteUInt64LittleEndian(value, unchecked((ulong)bits));
+                writer.WriteBinary(value);
+                return;
+            }
+            case ColumnStatistics.ColumnStatisticsValueKind.Float16:
+            {
+                Span<byte> value = stackalloc byte[sizeof(ushort)];
+                BinaryPrimitives.WriteUInt16LittleEndian(value, checked((ushort)bits));
                 writer.WriteBinary(value);
                 return;
             }

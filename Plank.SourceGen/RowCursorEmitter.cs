@@ -29,7 +29,7 @@ static class RowCursorEmitter
     }
 
     public static void AppendCursor(StringBuilder builder, GeneratedMemberNames names,
-        IReadOnlyList<string> columnTypes, Action appendProperties)
+        IReadOnlyList<string> columnTypes, Action appendProperties, IReadOnlyList<bool>? referenceColumns = null)
     {
         var cursorName = names.Root("RowCursor");
         var nextRowName = names.Get("cursor:NextRow", "NextRow");
@@ -65,8 +65,10 @@ static class RowCursorEmitter
         builder.AppendLine("        {");
         builder.AppendLine("            internal " + names.Root("BufferSlot") + " " + names.Helper("_ownerSlot") + ";");
         builder.AppendLine("            internal long " + names.Helper("_bufferGeneration") + ";");
+        // Most columns are bound by reference into their value arrays; reference columns hold the slot's buffer object.
         for (var i = 0; i < columnTypes.Count; i++)
-            builder.Append("            internal ref ").Append(columnTypes[i]).Append(" _column").Append(i).AppendLine(";");
+            builder.Append(referenceColumns?[i] == true ? "            internal " : "            internal ref ")
+                .Append(columnTypes[i]).Append(" _column").Append(i).AppendLine(";");
         // Return fresh refs on the cold path; do not expose the cursor's address to a call.
         builder.AppendLine("            [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]");
         builder.Append("            internal static ").Append(buffersTypeName).Append(' ').Append(refreshName)
@@ -74,8 +76,13 @@ static class RowCursorEmitter
         builder.AppendLine("            {");
         builder.Append("                ").Append(buffersTypeName).AppendLine(" buffers = default;");
         for (var i = 0; i < columnTypes.Count; i++)
-            builder.Append("                buffers._column").Append(i).Append(" = ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(slot._column")
-                .Append(i).AppendLine(");");
+        {
+            if (referenceColumns?[i] == true)
+                builder.Append("                buffers._column").Append(i).Append(" = slot._column").Append(i).AppendLine(";");
+            else
+                builder.Append("                buffers._column").Append(i).Append(" = ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(slot._column")
+                    .Append(i).AppendLine(");");
+        }
         builder.AppendLine("                buffers." + names.Helper("_ownerSlot") + " = slot;");
         builder.AppendLine("                buffers." + names.Helper("_bufferGeneration") + " = generation;");
         builder.AppendLine("                return buffers;");

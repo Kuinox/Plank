@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using Plank.Reading;
+using Plank.Reading.Physical;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
@@ -73,6 +74,30 @@ internal sealed class ParquetMetadataComplianceTests
     }
 
     [Test]
+    public void SingleRepeatedPageStatisticsCountNullElements()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.List("numbers", ColumnDefinition.OptionalLeaf("element", ParquetPhysicalType.Int32))
+        ]);
+        var file = WriteFile(schema, new ParquetWriterOptions(), writer =>
+        {
+            var column = writer.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
+            var rowGroup = writer.StartRowGroup();
+            column.Serialize([[1, null, 2]]);
+            rowGroup.Write(column);
+        });
+
+        var metadata = ReadMetadata(file);
+        var page = PageHeaderReader.Read(file.AsSpan(checked((int)metadata.Column.DataPageOffset)));
+        if (page.NullCount != 1)
+            throw new InvalidOperationException($"Expected one null element in the V2 page, got {page.NullCount}.");
+        if (!page.Statistics.HasNullCount || page.Statistics.NullCount != 1)
+            throw new InvalidOperationException(
+                $"Expected page Statistics.null_count=1, got {page.Statistics.NullCount} " +
+                $"(present: {page.Statistics.HasNullCount}).");
+    }
+
+    [Test]
     public void FooterIncludesTypeDefinedColumnOrderForModernStatistics()
     {
         var file = WriteRequiredInt32File(new ParquetWriterOptions());
@@ -129,6 +154,129 @@ internal sealed class ParquetMetadataComplianceTests
                 "Unsigned bounds were emitted in legacy min/max fields, whose ordering is signed.");
         if (!statistics.HasModernMin || !statistics.HasModernMax)
             throw new InvalidOperationException("Unsigned bounds were not emitted in the modern min_value/max_value fields.");
+    }
+
+    [Test]
+    [Arguments(ParquetPhysicalType.ByteArray, 0U)]
+    [Arguments(ParquetPhysicalType.FixedLenByteArray, 1U)]
+    public void UnsignedBinaryBoundsAreNotWrittenToLegacyFields(ParquetPhysicalType physicalType, uint typeLength)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("value", physicalType, new ColumnOptions(typeLength: typeLength))
+        ]);
+        var file = WriteFile(schema, new ParquetWriterOptions(), writer =>
+        {
+            var column = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+            var rowGroup = writer.StartRowGroup();
+            column.Serialize([[0x01], [0xff]]);
+            rowGroup.Write(column);
+        });
+        var metadata = ReadMetadata(file);
+        AssertModernOnly(metadata.Column.Statistics);
+
+        var reader = new CompactProtocolReader(file.AsSpan(checked((int)metadata.Column.DataPageOffset)));
+        reader.BeginRootStruct();
+        while (reader.TryReadFieldHeader(out var fieldId, out var type, out var inlineBool))
+        {
+            if (fieldId == 8) // DataPageHeaderV2
+            {
+                reader.BeginRootStruct();
+                while (reader.TryReadFieldHeader(out fieldId, out type, out inlineBool))
+                {
+                    if (fieldId == 8) // Statistics
+                    {
+                        AssertModernOnly(ReadStatistics(ref reader));
+                        return;
+                    }
+                    reader.Skip(type, inlineBool);
+                }
+                break;
+            }
+            reader.Skip(type, inlineBool);
+        }
+        throw new InvalidOperationException("Expected V2 page statistics.");
+
+        static void AssertModernOnly(StatisticsMetadata statistics)
+        {
+            if (statistics.HasLegacyMin || statistics.HasLegacyMax)
+                throw new InvalidOperationException("Unsigned byte bounds were written to signed-only legacy fields.");
+            if (!statistics.HasModernMin || !statistics.HasModernMax)
+                throw new InvalidOperationException("Expected modern unsigned byte bounds.");
+        }
+    }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    public void UndefinedTypeOrderOmitsBoundsAndColumnIndex(bool interval, bool allNull)
+    {
+        var schema = new ParquetSchema([
+            interval
+                ? ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.FixedLenByteArray,
+                    new ColumnOptions(typeLength: 12), new LogicalType.Interval())
+                : ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int96)
+        ]);
+        var file = WriteFile(schema, new ParquetWriterOptions { WritePageIndexes = true }, writer =>
+        {
+            var column = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+            var rowGroup = writer.StartRowGroup();
+            var value = new byte[12];
+            if (!interval)
+                BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(8), 2440588);
+            column.Serialize(allNull ? [null!] : [value, null!]);
+            rowGroup.Write(column);
+        });
+
+        var metadata = ReadMetadata(file).Column;
+        var bounds = metadata.Statistics;
+        if (bounds.HasLegacyMin || bounds.HasLegacyMax || bounds.HasModernMin || bounds.HasModernMax)
+            throw new InvalidOperationException("An undefined-order chunk must not publish min/max bounds.");
+        var page = PageHeaderReader.Read(file.AsSpan(checked((int)metadata.DataPageOffset)));
+        if (page.Statistics.HasMinimum || page.Statistics.HasMaximum)
+            throw new InvalidOperationException("An undefined-order page must not publish min/max bounds.");
+        if (!page.Statistics.HasNullCount || page.Statistics.NullCount != 1)
+            throw new InvalidOperationException("The page must retain its observed null count.");
+        if (metadata.ColumnIndexOffset != -1)
+            throw new InvalidOperationException("An undefined-order chunk must not have a ColumnIndex.");
+        using var reader = new ParquetFileReader();
+        reader.Reset(new MemoryStream(file, writable: false));
+        if (reader.Metadata.ColumnChunk(0, 0).OffsetIndexLength == 0)
+            throw new InvalidOperationException("The OffsetIndex must be retained.");
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void GeospatialTypesOmitBoundsAndColumnIndex(bool geography)
+    {
+        // LogicalTypes.md: the sort order of GEOMETRY and GEOGRAPHY is undefined and no min/max may be saved.
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.ByteArray,
+                logicalType: geography ? new LogicalType.Geography() : new LogicalType.Geometry())
+        ]);
+        var file = WriteFile(schema, new ParquetWriterOptions { WritePageIndexes = true }, writer =>
+        {
+            var column = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+            var rowGroup = writer.StartRowGroup();
+            var point = new byte[21]; // little-endian WKB POINT (1 2)
+            point[0] = 1;
+            BinaryPrimitives.WriteInt32LittleEndian(point.AsSpan(1), 1);
+            BinaryPrimitives.WriteDoubleLittleEndian(point.AsSpan(5), 1);
+            BinaryPrimitives.WriteDoubleLittleEndian(point.AsSpan(13), 2);
+            column.Serialize([point, null!]);
+            rowGroup.Write(column);
+        });
+
+        var metadata = ReadMetadata(file).Column;
+        var bounds = metadata.Statistics;
+        if (bounds.HasLegacyMin || bounds.HasLegacyMax || bounds.HasModernMin || bounds.HasModernMax)
+            throw new InvalidOperationException("A geospatial chunk must not publish min/max bounds.");
+        var page = PageHeaderReader.Read(file.AsSpan(checked((int)metadata.DataPageOffset)));
+        if (page.Statistics.HasMinimum || page.Statistics.HasMaximum)
+            throw new InvalidOperationException("A geospatial page must not publish min/max bounds.");
+        if (metadata.ColumnIndexOffset != -1)
+            throw new InvalidOperationException("A geospatial chunk must not have a ColumnIndex.");
     }
 
     [Test]

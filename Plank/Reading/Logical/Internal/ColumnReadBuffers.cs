@@ -10,6 +10,7 @@ struct ColumnReadBuffers<T>
     internal ParquetBuffer Levels;
     internal ParquetBuffer CompactDefinitions;
     internal ParquetBuffer ExpandedDefinitions;
+    internal ParquetBuffer IntScratch;
     internal ParquetBuffer PreviousBinaryValue;
     internal int DictionaryCount;
     internal bool HasDictionary;
@@ -118,6 +119,17 @@ struct ColumnReadBuffers<T>
         return valueCount == 0 ? [] : ParquetBuffer.AsSpan<int>(ExpandedDefinitions, valueCount);
     }
 
+    internal Span<int> GetIntScratch(int valueCount, IParquetBufferPool bufferPool)
+    {
+        var byteLength = ByteLength(valueCount, sizeof(int), "Int32 scratch buffer");
+        if (IntScratch.Length < byteLength)
+        {
+            IntScratch.Dispose();
+            IntScratch = byteLength == 0 ? default : bufferPool.Rent((uint)byteLength);
+        }
+        return valueCount == 0 ? [] : ParquetBuffer.AsSpan<int>(IntScratch, valueCount);
+    }
+
     internal Span<byte> GetPreviousBinaryValue(int byteLength, IParquetBufferPool bufferPool)
     {
         if (byteLength < 0)
@@ -153,6 +165,7 @@ struct ColumnReadBuffers<T>
         Levels.Dispose();
         CompactDefinitions.Dispose();
         ExpandedDefinitions.Dispose();
+        IntScratch.Dispose();
         PreviousBinaryValue.Dispose();
         this = default;
     }
