@@ -4,18 +4,12 @@ static class StatisticsThriftReader
 {
     internal static EncodedStatistics Read(ref CompactProtocolReader reader, CompactProtocolType structType)
     {
-        var legacyMinimumOffset = 0;
-        var legacyMinimumLength = 0;
-        var legacyMaximumOffset = 0;
-        var legacyMaximumLength = 0;
         var minimumOffset = 0;
         var minimumLength = 0;
         var maximumOffset = 0;
         var maximumLength = 0;
         var nullCount = 0L;
         var distinctCount = 0L;
-        var hasLegacyMinimum = false;
-        var hasLegacyMaximum = false;
         var hasMinimum = false;
         var hasMaximum = false;
         var hasNullCount = false;
@@ -28,22 +22,9 @@ static class StatisticsThriftReader
         {
             switch (fieldId)
             {
-                case 1:
-                {
-                    var value = reader.ReadBinary(type);
-                    legacyMaximumOffset = reader.Offset - value.Length;
-                    legacyMaximumLength = value.Length;
-                    hasLegacyMaximum = true;
-                    break;
-                }
-                case 2:
-                {
-                    var value = reader.ReadBinary(type);
-                    legacyMinimumOffset = reader.Offset - value.Length;
-                    legacyMinimumLength = value.Length;
-                    hasLegacyMinimum = true;
-                    break;
-                }
+                // Deprecated min/max (fields 1/2) use signed byte order whatever the column's sort
+                // order, and old parquet-mr wrote corrupt binary bounds. Pruning on them can skip
+                // matching rows, so they are ignored: only min_value/max_value are bounds.
                 case 3:
                     nullCount = reader.ReadI64(type);
                     if (nullCount < 0)
@@ -82,19 +63,6 @@ static class StatisticsThriftReader
                     reader.Skip(type, inlineBool);
                     break;
             }
-        }
-
-        if (!hasMinimum && hasLegacyMinimum)
-        {
-            minimumOffset = legacyMinimumOffset;
-            minimumLength = legacyMinimumLength;
-            hasMinimum = true;
-        }
-        if (!hasMaximum && hasLegacyMaximum)
-        {
-            maximumOffset = legacyMaximumOffset;
-            maximumLength = legacyMaximumLength;
-            hasMaximum = true;
         }
 
         return new EncodedStatistics(minimumOffset, minimumLength, maximumOffset, maximumLength,

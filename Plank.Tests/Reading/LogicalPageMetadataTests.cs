@@ -22,6 +22,68 @@ internal sealed class LogicalPageMetadataTests
         static (in ParquetDataPageMetadata _) => throw new InvalidOperationException("pruner failed");
 
     [Test]
+    public void UnknownNullCountPreservesPageBoundsAndNeighborCounts()
+    {
+        var (schema, bytes) = CreateFile();
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(bytes));
+        var chunk = physical.Metadata.ColumnChunk(0, 0);
+        var index = bytes.AsSpan(checked((int)chunk.ColumnIndexOffset), checked((int)chunk.ColumnIndexLength));
+        var compact = new CompactProtocolReader(index);
+        compact.BeginRootStruct();
+        while (compact.TryReadFieldHeader(out var field, out var type, out var inlineBool))
+        {
+            if (field == 5)
+            {
+                var (count, elementType) = compact.ReadListHeader(type);
+                var offset = compact.Offset;
+                if (count != 3 || compact.ReadI64(elementType) != 0)
+                    throw new InvalidOperationException("Expected three pages with zero null counts.");
+                index[offset] = 1; // ZigZag-encoded -1.
+                break;
+            }
+            compact.Skip(type, inlineBool);
+        }
+
+        using var reader = schema.CreateReader(new MemoryStream(bytes));
+        using var pages = reader.RowGroups[0].GetColumnMetadata(0).OpenPages();
+        var first = pages[0].Statistics;
+        if (first.NullCount is not null || pages[1].Statistics.NullCount != 0 ||
+            BinaryPrimitives.ReadInt32LittleEndian(first.Minimum) != 1 ||
+            BinaryPrimitives.ReadInt32LittleEndian(first.Maximum) != 2)
+            throw new InvalidOperationException("A missing null count affected independent page statistics.");
+    }
+
+    /// <remarks>
+    /// parquet-mr writes -1 ("unknown") into the column index null_counts when statistics are disabled, as in the
+    /// parquet-testing checksum files. Rejecting the whole index made every pruned scan of such a file fail.
+    /// </remarks>
+    [Test]
+    public async Task UnknownColumnIndexNullCountsAreExposedAsUnknown()
+    {
+        if (!ParquetTesting.ParquetTestingCorpus.IsAvailable)
+            throw new InvalidOperationException(ParquetTesting.ParquetTestingCorpus.MissingMessage);
+        var bytes = ParquetTesting.ParquetTestingCorpus.ReadAllBytes("data/datapage_v1-uncompressed-checksum.parquet");
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(bytes, writable: false), static (in ParquetDataPageMetadata _) => true);
+
+        var pages = 0;
+        using (var metadata = reader.RowGroups[0].GetColumnMetadata(0).OpenPages())
+            foreach (var page in metadata)
+            {
+                if (page.Statistics.NullCount is not null)
+                    throw new InvalidOperationException("A -1 null count must be reported as unknown.");
+                pages++;
+            }
+        var values = 0;
+        foreach (var buffer in reader.RowGroups[0].Column<int>(0))
+            values += buffer.Values.Length;
+
+        await Assert.That(pages).IsGreaterThan(0);
+        await Assert.That(values).IsEqualTo(5120);
+    }
+
+    [Test]
     public void ExposesColumnAndPageStatistics()
     {
         var (schema, bytes) = CreateFile();

@@ -148,13 +148,6 @@ internal sealed class ParquetTestingCompatibilityTests
     // defects rather than 46 unrelated ones, and the grouping is what says so.
     static readonly Dictionary<string, Outcome> KnownGaps = new(StringComparer.Ordinal)
     {
-        // Same probe, reached from the other side: enough of a truncated header parses as
-        // a well-formed struct that the loop returns garbage instead of retrying, and the
-        // caller rejects the nonsense it was handed.
-        ["data/datapage_v1-corrupt-checksum.parquet"] = PageIndexOnly("page-header probe: partial header parses"),
-        ["data/datapage_v1-snappy-compressed-checksum.parquet"] = PageIndexOnly("page-header probe: partial header parses"),
-        ["data/datapage_v1-uncompressed-checksum.parquet"] = PageIndexOnly("page-header probe: partial header parses"),
-
         // ---------------------------------------------------------------------------
         // 3. Decoder defects. Each of these is a distinct bug reachable from the public
         //    reader on a file a mainstream writer produced.

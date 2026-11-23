@@ -143,8 +143,9 @@ static class PageMetadataReader
                     for (var i = 0; i < itemCount; i++)
                     {
                         var nullCount = reader.ReadI64(elementType);
+                        // parquet-mr writes -1 when statistics are disabled: the count is unknown, not corrupt.
                         if (nullCount < 0)
-                            throw new CorruptParquetException("Page null count cannot be negative.");
+                            continue;
                         var previous = destination[i].Statistics;
                         destination[i].Statistics = new EncodedStatistics(previous.MinimumOffset,
                             previous.MinimumLength, previous.MaximumOffset, previous.MaximumLength, nullCount,
