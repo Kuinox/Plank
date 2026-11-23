@@ -40,7 +40,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     internal readonly ParquetWriter _owner;
     readonly Column _column;
-    T[]? _retainedValues;
+    Array? _retainedValues;
     internal sbyte[]? AppendSortingComparisons { get; private set; }
     object? _encodingState;
     StringWriteScratch? _stringScratch;
@@ -55,7 +55,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     bool _bloomFilterRetained;
     internal RepeatedRowShape[]? MapRowShapes;
 
-    internal SerializedColumn(ParquetWriter owner, LeafColumn column, uint initialPageCapacity, T[]? retainedValues)
+    internal SerializedColumn(ParquetWriter owner, LeafColumn column, uint initialPageCapacity, Array? retainedValues)
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(column);
@@ -95,29 +95,38 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     public void Serialize(ReadOnlySpan<T> values)
     {
         _owner.ThrowIfDisposed();
-        SerializeValues(values);
-        PreparePages();
-    }
-
-    void SerializeValues(ReadOnlySpan<T> values)
-    {
         if (_bloomFilterRetained)
             throw new InvalidOperationException(
                 "SerializedColumn's Bloom filter is retained by an incomplete row group.");
 
         if (_retainedValues is { } retainedValues)
         {
-            _retainedValues = null;
-            var combined = new T[checked(retainedValues.Length + values.Length)];
-            retainedValues.CopyTo(combined, 0);
-            values.CopyTo(combined.AsSpan(retainedValues.Length));
+            if (retainedValues is not T[] typedRetained)
+            {
+                SerializeAppendedNanoseconds(retainedValues, values);
+                PreparePages();
+                _retainedValues = null;
+                return;
+            }
+
+            var combined = new T[checked(typedRetained.Length + values.Length)];
+            typedRetained.CopyTo(combined, 0);
+            values.CopyTo(combined.AsSpan(typedRetained.Length));
             var comparisons = _owner.LatestSortingOrder?.CompareIncoming(
-                _column, checked((int)ColumnOrdinal), retainedValues, values);
+                _column, checked((int)ColumnOrdinal), typedRetained, values);
             SerializeValues(combined.AsSpan());
+            PreparePages();
             AppendSortingComparisons = comparisons;
+            _retainedValues = null;
             return;
         }
 
+        SerializeValues(values);
+        PreparePages();
+    }
+
+    void SerializeValues(ReadOnlySpan<T> values)
+    {
         if (_column.Options.Repetition == ParquetRepetition.Repeated)
         {
             SerializeRepeated(values);
@@ -344,6 +353,84 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     public void Serialize(T[] values)
         => Serialize(values.AsSpan());
+
+    void SerializeAppendedNanoseconds(Array retained, ReadOnlySpan<T> values)
+    {
+        // Only incoming CLR values have tick resolution. Keep the retained physical values for encoding,
+        // statistics and sort-boundary verification instead of round-tripping them through CLR time types.
+        var timestamp = _column.LogicalType as LogicalType.Timestamp;
+        var target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        if (target == typeof(DateTimeOffset))
+            RequireAdjustedTimestampLogicalType(_column);
+        var expectedKind = timestamp?.IsAdjustedToUtc == true ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+        var ordinal = checked((int)ColumnOrdinal);
+        var count = checked(retained.Length + values.Length);
+        if (retained is long[] required && target == typeof(T))
+        {
+            using var scratch = _owner.BufferWriters.RentScratch<long>(checked((uint)count));
+            var combined = ParquetBuffer.AsSpan<long>(scratch, count);
+            required.AsSpan().CopyTo(combined);
+            var incoming = combined[required.Length..];
+            if (typeof(T) == typeof(DateTime))
+                TimestampConversion.ConvertDateTimes(AsSpan<DateTime>(values), incoming, TimeUnit.Nanos, expectedKind);
+            else
+                for (var i = 0; i < values.Length; i++)
+                    incoming[i] = ToNanoseconds(values[i], expectedKind);
+            var comparisons = _owner.LatestSortingOrder?.CompareIncoming<long>(
+                _column, ordinal, required, incoming);
+            SerializeTyped<long>(combined);
+            AppendSortingComparisons = comparisons;
+        }
+        else
+        {
+            using var scratch = _owner.BufferWriters.RentScratch<long?>(checked((uint)count));
+            var combined = ParquetBuffer.AsSpan<long?>(scratch, count);
+            var original = combined[..retained.Length];
+            if (retained is long?[] optional)
+                optional.AsSpan().CopyTo(original);
+            else
+            {
+                var present = (long[])retained;
+                for (var i = 0; i < present.Length; i++)
+                    original[i] = present[i];
+            }
+            var incoming = combined[retained.Length..];
+            for (var i = 0; i < values.Length; i++)
+                incoming[i] = ToOptionalNanoseconds(values[i], expectedKind);
+            var comparisons = _owner.LatestSortingOrder?.CompareIncoming<long?>(
+                _column, ordinal, original, incoming);
+            SerializeOptionalTyped<long>(combined);
+            AppendSortingComparisons = comparisons;
+        }
+    }
+
+    static long? ToOptionalNanoseconds(T value, DateTimeKind expectedKind)
+    {
+        if (typeof(T) == typeof(DateTime?))
+            return Unsafe.As<T, DateTime?>(ref value) is { } date ? ToNanoseconds(date, expectedKind) : null;
+        if (typeof(T) == typeof(DateTimeOffset?))
+            return Unsafe.As<T, DateTimeOffset?>(ref value) is { } offset ? ToNanoseconds(offset, expectedKind) : null;
+        if (typeof(T) == typeof(TimeOnly?))
+            return Unsafe.As<T, TimeOnly?>(ref value) is { } time ? ToNanoseconds(time, expectedKind) : null;
+        return ToNanoseconds(value, expectedKind);
+    }
+
+    static long ToNanoseconds<TValue>(TValue value, DateTimeKind expectedKind)
+    {
+        if (typeof(TValue) == typeof(TimeOnly))
+            return ToTimeValue(Unsafe.As<TValue, TimeOnly>(ref value), TimeUnit.Nanos);
+        if (typeof(TValue) == typeof(DateTimeOffset))
+            return ToUnixTime(Unsafe.As<TValue, DateTimeOffset>(ref value), TimeUnit.Nanos);
+        if (typeof(TValue) == typeof(DateTime))
+        {
+            var date = Unsafe.As<TValue, DateTime>(ref value);
+            if (date.Kind != expectedKind)
+                throw new InvalidOperationException(
+                    $"DateTime values must have kind '{expectedKind}', got '{date.Kind}'.");
+            return TimestampConversion.FromDateTimeTicks(date.Ticks, TimeUnit.Nanos);
+        }
+        throw new InvalidOperationException("A CLR temporal value is required for nanosecond append.");
+    }
 
     void SerializeConverted(ReadOnlySpan<T> values, ParquetValueConverter converter)
     {

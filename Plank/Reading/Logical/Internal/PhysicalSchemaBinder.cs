@@ -281,17 +281,7 @@ static class PhysicalSchemaBinder
         {
             var requested = requestedColumns[requestedOrdinal];
             var requestedPath = requestedSchema.LeafPaths[requestedOrdinal];
-            var match = -1;
-            for (var fileOrdinal = 0; fileOrdinal < metadata.ColumnCount; fileOrdinal++)
-            {
-                var fileColumn = metadata.ColumnSchema(fileOrdinal);
-                if (!PathEquals(metadata, fileColumn, requestedPath, bufferPool))
-                    continue;
-                if (match >= 0)
-                    throw new CorruptParquetException(
-                        $"File schema contains duplicate column path '{requested.Name}'.");
-                match = fileOrdinal;
-            }
+            var match = FindPhysicalColumn(metadata, requestedPath, requested.Name, bufferPool);
 
             if (match < 0)
                 for (var fileOrdinal = 0; fileOrdinal < fileSchema.Columns.Length; fileOrdinal++)
@@ -375,34 +365,60 @@ static class PhysicalSchemaBinder
             ? Encoding.UTF8.GetString(metadata.SchemaNodeLogicalTypeCrsUtf8(node.Ordinal))
             : null;
 
-    static bool PathEquals(PhysicalFileMetadata metadata, ParquetColumnSchemaInfo column,
-        ImmutableArray<string> requestedPath, IParquetBufferPool bufferPool)
+    static int FindPhysicalColumn(PhysicalFileMetadata metadata, ImmutableArray<string> path, string name,
+        IParquetBufferPool bufferPool)
     {
-        if (column.PathSegmentCount != requestedPath.Length)
-            return false;
-
+        // Every candidate is compared with the same requested path, including when checking for duplicates.
+        // Encode each segment once and keep its boundary so dots inside column names remain unambiguous.
         var byteCount = 0;
-        for (var i = 0; i < requestedPath.Length; i++)
-            byteCount = Math.Max(byteCount, Encoding.UTF8.GetByteCount(requestedPath[i]));
+        foreach (var segment in path)
+            byteCount = checked(byteCount + Encoding.UTF8.GetByteCount(segment));
 
-        ParquetBuffer rented = default;
-        Span<byte> requestedBytes = byteCount <= 1024
-            ? stackalloc byte[byteCount]
-            : (rented = bufferPool.Rent(checked((uint)byteCount))).Span[..byteCount];
+        ParquetBuffer rentedBytes = default;
+        ParquetBuffer rentedEnds = default;
         try
         {
-            for (var segmentOrdinal = 0; segmentOrdinal < column.PathSegmentCount; segmentOrdinal++)
+            Span<byte> bytes = byteCount <= 1024 ? stackalloc byte[byteCount]
+                : (rentedBytes = bufferPool.Rent((uint)byteCount)).Span[..byteCount];
+            Span<int> ends = path.Length <= 64 ? stackalloc int[path.Length]
+                : ParquetBuffer.AsSpan<int>(rentedEnds = bufferPool.Rent(checked((uint)path.Length * sizeof(int))),
+                    path.Length);
+            var end = 0;
+            for (var i = 0; i < path.Length; i++)
             {
-                var requestedLength = Encoding.UTF8.GetBytes(requestedPath[segmentOrdinal], requestedBytes);
-                var segment = metadata.ColumnPathSegmentUtf8(column.Ordinal, segmentOrdinal);
-                if (!segment.SequenceEqual(requestedBytes[..requestedLength]))
-                    return false;
+                end += Encoding.UTF8.GetBytes(path[i], bytes[end..]);
+                ends[i] = end;
             }
-            return true;
+
+            var match = -1;
+            for (var i = 0; i < metadata.ColumnCount; i++)
+            {
+                var column = metadata.ColumnSchema(i);
+                if (column.PathSegmentCount != path.Length)
+                    continue;
+
+                var start = 0;
+                var segment = 0;
+                for (; segment < ends.Length; segment++)
+                {
+                    end = ends[segment];
+                    if (!metadata.ColumnPathSegmentUtf8(column.Ordinal, segment).SequenceEqual(bytes[start..end]))
+                        break;
+                    start = end;
+                }
+
+                if (segment != ends.Length)
+                    continue;
+                if (match >= 0)
+                    throw new CorruptParquetException($"File schema contains duplicate column path '{name}'.");
+                match = i;
+            }
+            return match;
         }
         finally
         {
-            rented.Dispose();
+            rentedEnds.Dispose();
+            rentedBytes.Dispose();
         }
     }
 

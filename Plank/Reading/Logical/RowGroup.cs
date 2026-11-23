@@ -144,9 +144,15 @@ public readonly struct RowGroup
         var physicalColumnOrdinal = columnChunk.PhysicalColumnOrdinal >= 0
             ? columnChunk.PhysicalColumnOrdinal
             : columnOrdinal;
+        var definition = reader.Schema.LeafColumns[columnOrdinal];
+        var physical = reader.Metadata.Schema.LeafColumns[physicalColumnOrdinal];
+        // Materialize with the requested column (including any converter), but decode wire levels
+        // using the file schema. A required file leaf requested as optional has no definition stream.
+        if (definition.MaxRepetitionLevel != physical.MaxRepetitionLevel ||
+            definition.MaxDefinitionLevel != physical.MaxDefinitionLevel)
+            definition = new LeafColumn(definition.Column, definition.Ordinal, physical.ProjectionInfo);
         return new NestedColumnBufferEnumerable<T>(reader.PhysicalReader, Metadata.RowGroupOrdinal,
-            physicalColumnOrdinal, reader.Schema.LeafColumns[columnOrdinal], reader.Options.BufferPool,
-            Metadata.RowCount, reader.PagePruner);
+            physicalColumnOrdinal, definition, reader.Options.BufferPool, Metadata.RowCount, reader.PagePruner);
     }
 
     internal VariableLengthNestedColumnBufferEnumerable<T> EnumerateVariableLengthNestedBuffers<T>(Column column,
@@ -193,6 +199,7 @@ public readonly struct RowGroup
                     !converter.IsNullableValueType(typeof(T)))
                     throw new InvalidOperationException(
                         $"Optional column '{column.Name}' must be read as '{converter.ValueType}?'.");
+                ValidateTemporalLogicalType(column, converter.PhysicalType);
                 return;
             }
             throw new InvalidOperationException(
@@ -212,11 +219,16 @@ public readonly struct RowGroup
                 or ParquetPhysicalType.FixedLenByteArray
                 or ParquetPhysicalType.Int96)
             return;
-        if ((Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T)) == typeof(TimeOnly) &&
+        if (typeof(T) == typeof(DateOnly) || typeof(T) == typeof(DateOnly?) ||
+            typeof(T) == typeof(TimeOnly) || typeof(T) == typeof(TimeOnly?) ||
+            typeof(T) == typeof(DateTime) || typeof(T) == typeof(DateTime?) ||
+            typeof(T) == typeof(DateTimeOffset) || typeof(T) == typeof(DateTimeOffset?))
+            ValidateTemporalLogicalType(column, typeof(T));
+        if ((typeof(T) == typeof(TimeOnly) || typeof(T) == typeof(TimeOnly?)) &&
             column.PhysicalType == ParquetPhysicalType.Int32 &&
             column.LogicalType is LogicalType.Time { Unit: TimeUnit.Millis })
             return;
-        if ((Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T)) == typeof(decimal))
+        if (typeof(T) == typeof(decimal) || typeof(T) == typeof(decimal?))
         {
             _ = ParquetDecimalConverter.RequireLogicalType(column);
             return;
@@ -231,6 +243,35 @@ public readonly struct RowGroup
             return;
         throw new InvalidOperationException(
             $"Column '{column.Name}' has physical type {column.PhysicalType} and cannot be read as '{typeof(T)}'.");
+    }
+
+    static void ValidateTemporalLogicalType(Column column, Type type)
+    {
+        var target = Nullable.GetUnderlyingType(type) ?? type;
+        string required;
+        if (target == typeof(DateOnly))
+        {
+            if (column.PhysicalType != ParquetPhysicalType.Int32 || column.LogicalType is LogicalType.Date)
+                return;
+            required = nameof(LogicalType.Date);
+        }
+        else if (target == typeof(TimeOnly))
+        {
+            if (column.PhysicalType is not (ParquetPhysicalType.Int32 or ParquetPhysicalType.Int64) ||
+                column.LogicalType is LogicalType.Time)
+                return;
+            required = nameof(LogicalType.Time);
+        }
+        else if (target == typeof(DateTime) || target == typeof(DateTimeOffset))
+        {
+            if (column.PhysicalType != ParquetPhysicalType.Int64 || column.LogicalType is LogicalType.Timestamp)
+                return;
+            required = nameof(LogicalType.Timestamp);
+        }
+        else
+            return;
+        throw new InvalidOperationException(
+            $"Column '{column.Name}' must declare logical type '{required}' to be read as '{type}'.");
     }
 
     static void ValidateNestedPhysicalType<T>(Column column)
