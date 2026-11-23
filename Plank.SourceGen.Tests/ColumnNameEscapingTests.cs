@@ -5,18 +5,21 @@ namespace Plank.SourceGen.Tests;
 internal sealed class ColumnNameEscapingTests
 {
     [Test]
-    public async Task ControlCharactersInColumnNameRemainValidGeneratedSource()
+    [Arguments("""first\r\nsecond\t\u0001""", "int")]
+    [Arguments("""quote\"and\\backslash""", "int")]
+    [Arguments("""quote\"and\\backslash""", "int[]")]
+    public async Task ColumnNameRemainsValidGeneratedSource(string name, string type)
     {
-        const string source = """
+        var source = $$"""
             using Plank.Schema;
 
             namespace Regression;
 
-            [ParquetSchema]
+            [ParquetSchema(AllowAllocatingValues = true)]
             partial class EscapedColumnNameSchema
             {
-                [ParquetColumn("first\r\nsecond\t\u0001")]
-                public int Value { get; set; }
+                [ParquetColumn("{{name}}")]
+                public {{type}} Value { get; set; }
             }
             """;
 
