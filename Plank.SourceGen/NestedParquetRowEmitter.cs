@@ -1282,6 +1282,13 @@ static class NestedParquetRowEmitter
         {
             var leaf = node.Leaves[0];
             var buffer = "b" + root.Leaves.IndexOf(leaf);
+            if (!node.Optional && node.TypeSymbol.IsReferenceType)
+            {
+                var message = $"Required generated property '{node.PropertyName}' cannot be null.";
+                source = $"({source} ?? throw new global::System.InvalidOperationException(" +
+                    Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(message, quote: true) + "))";
+            }
+
             var converted = ConvertToStorage(names, leaf, source);
             if (node.Optional)
             {

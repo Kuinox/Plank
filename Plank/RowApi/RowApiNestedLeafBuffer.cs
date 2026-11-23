@@ -9,7 +9,8 @@ namespace Plank.RowApi;
 /// This unstable API supports Plank-generated code and is not intended for direct use by applications.
 /// Generated code writes each row between <see cref="BeginRow"/> and <see cref="EndRow"/>, adding one position per
 /// list element, or per null or empty collection. Levels are appended in row order; a row that is assigned again
-/// leaves its previous levels unused until the buffer is serialized.
+/// leaves its previous levels unused until the buffer is serialized. A row keeps its previous value until
+/// <see cref="EndRow"/>, so an assignment that throws part way leaves the row unchanged.
 /// </remarks>
 public sealed class RowApiNestedLeafBuffer<TValue>
 {
@@ -40,13 +41,12 @@ public sealed class RowApiNestedLeafBuffer<TValue>
     // Dataset buffers copy binary values so callers can reuse their arrays after queueing a row.
     internal bool SnapshotBinary { get; set; }
 
-    /// <summary>Starts writing the row at <paramref name="rowIndex"/>, replacing any value it had.</summary>
+    /// <summary>Starts writing the row at <paramref name="rowIndex"/>; <see cref="EndRow"/> replaces any value it had.</summary>
     /// <param name="rowIndex">The row index in the buffer slot.</param>
     public void BeginRow(int rowIndex)
     {
         if ((uint)rowIndex >= (uint)_rows.Length)
             throw new ArgumentOutOfRangeException(nameof(rowIndex), rowIndex, "Row index is outside the buffer slot.");
-        _rows[rowIndex] = default;
         _pendingRow = rowIndex;
         _pendingLevelStart = _levelCount;
         _pendingValueStart = _valueCount;
@@ -136,12 +136,13 @@ public sealed class RowApiNestedLeafBuffer<TValue>
     internal void CopyRowTo(int sourceIndex, RowApiNestedLeafBuffer<TValue> destination, int destinationIndex)
     {
         var range = _rows[sourceIndex];
-        destination.BeginRow(destinationIndex);
         if (range.LevelCount == 0)
         {
-            destination._pendingRow = -1;
+            destination._rows[destinationIndex] = default;
             return;
         }
+
+        destination.BeginRow(destinationIndex);
 
         destination.EnsureLevelCapacity(range.LevelCount);
         _repetitionLevels.AsSpan(range.LevelStart, range.LevelCount)
