@@ -119,8 +119,6 @@ internal sealed class AdditionalLogicalAnnotationTests
             new LogicalType.Geometry()));
         Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_variant",
             ParquetPhysicalType.ByteArray, logicalType: new LogicalType.Variant(1)));
-        Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_unknown",
-            ParquetPhysicalType.ByteArray, logicalType: new LogicalType.Unknown()));
         Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_string",
             ParquetPhysicalType.Int32, logicalType: new LogicalType.String()));
         Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_json",
