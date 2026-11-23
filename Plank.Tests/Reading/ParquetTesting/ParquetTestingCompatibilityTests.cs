@@ -30,6 +30,14 @@ internal sealed class ParquetTestingCompatibilityTests
     }
 
     [Test]
+    public void ReportsNegativePhysicalTypeAsCorrupt()
+    {
+        using var stream = File.OpenRead(ParquetTestingCorpus.Resolve("bad_data/PARQUET-1481.parquet"));
+        using var reader = new Plank.Reading.Physical.ParquetFileReader();
+        Assert.Throws<CorruptParquetException>(() => reader.Reset(stream));
+    }
+
+    [Test]
     public async Task ReadsUnknownListElements()
     {
         if (!ParquetTestingCorpus.IsAvailable)
