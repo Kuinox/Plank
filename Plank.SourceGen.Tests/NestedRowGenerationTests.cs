@@ -81,7 +81,7 @@ internal sealed class NestedRowGenerationTests
     }
 
     [Test]
-    public async Task OptionalInnerListsReportUnsupportedShape()
+    public async Task OptionalInnerListsGenerateCompilableRows()
     {
         const string source = """
             using Plank.Schema;
@@ -95,10 +95,10 @@ internal sealed class NestedRowGenerationTests
 
         var result = GeneratorTestHarness.Run(new GeneratorTestHarness.SourceFile("NestedSchema.cs", source));
 
-        await Assert.That(result.GeneratorDiagnostics.Any(static diagnostic =>
-            diagnostic.Id == "PLANKGEN003" && diagnostic.Severity == DiagnosticSeverity.Error &&
-            diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture)
-                .Contains("non-null inner lists", StringComparison.Ordinal))).IsTrue();
-        await Assert.That(result.GeneratedSources).IsEmpty();
+        await Assert.That(result.GeneratorDiagnostics.Where(static diagnostic =>
+            diagnostic.Severity == DiagnosticSeverity.Error)).IsEmpty();
+        await Assert.That(result.CompilationDiagnostics.Where(static diagnostic =>
+            diagnostic.Severity == DiagnosticSeverity.Error)).IsEmpty();
+        await Assert.That(result.GeneratedSources).HasSingleItem();
     }
 }
