@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Plank.Reading;
+using Plank.Reading.Logical;
 using Plank.Schema;
 using Plank.Writing;
 using Plank.Writing.PageStrategy;
@@ -15,6 +16,92 @@ internal sealed class LogicalTemporalColumnTests
         EncodingKind.ByteStreamSplit,
         EncodingKind.RleDictionary
     ];
+
+    [Test]
+    public void TemporalProjectionsRequireMatchingAnnotations()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("Number", ParquetPhysicalType.Int32),
+            ColumnDefinition.RequiredLeaf("Instant", ParquetPhysicalType.Int64,
+                logicalType: new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true)),
+            ColumnDefinition.RequiredLeaf("Clock", ParquetPhysicalType.Int64,
+                logicalType: new LogicalType.Time(TimeUnit.Micros, IsAdjustedToUtc: false)),
+            ColumnDefinition.RequiredLeaf("Count", ParquetPhysicalType.Int64),
+            ColumnDefinition.RequiredLeaf("Legacy", ParquetPhysicalType.Int96)
+        ]);
+        using var stream = new MemoryStream();
+        using (var writer = schema.CreateWriter(stream))
+        {
+            var group = writer.StartRowGroup();
+            var number = group.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+            var instant = group.CreateSerializedColumn<long>(schema.LeafColumns[1]);
+            var clock = group.CreateSerializedColumn<long>(schema.LeafColumns[2]);
+            var count = group.CreateSerializedColumn<long>(schema.LeafColumns[3]);
+            var legacy = group.CreateSerializedColumn<byte[]>(schema.LeafColumns[4]);
+            number.Serialize([42]);
+            instant.Serialize([7L]);
+            clock.Serialize([0L]);
+            count.Serialize([9L]);
+            legacy.Serialize([new byte[12]]);
+            group.Write(number);
+            group.Write(instant);
+            group.Write(clock);
+            group.Write(count);
+            group.Write(legacy);
+            writer.CloseFile();
+        }
+        var bytes = stream.ToArray();
+
+        using (var reader = schema.CreateReader(new MemoryReadSource(bytes)))
+        {
+            var rowGroup = reader.RowGroups[0];
+            AssertRejected(() => _ = rowGroup.Column<DateOnly>(0), "logical type 'Date'");
+            AssertRejected(() => _ = rowGroup.Column<TimeOnly?>(1), "logical type 'Time'");
+            AssertRejected(() => _ = rowGroup.Column<DateTime>(2), "logical type 'Timestamp'");
+            AssertRejected(() => _ = rowGroup.Column<DateTimeOffset?>(2), "logical type 'Timestamp'");
+            AssertRejected(() => _ = rowGroup.Column<DateTime>(3), "logical type 'Timestamp'");
+            AssertRejected(() => _ = rowGroup.Column<DateOnly>(3), "physical type Int64");
+            AssertRejected(() => _ = rowGroup.Column<DateTime>(4), "physical type Int96");
+            AssertSingle(rowGroup.Column<int>(0), 42);
+            AssertSingle(rowGroup.Column<long>(1), 7L);
+            AssertSingle(rowGroup.Column<long>(3), 9L);
+        }
+
+        var converted = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("Number", ParquetPhysicalType.Int32, converter: new DayConverter())
+        ]);
+        using (var reader = converted.CreateReader(new MemoryReadSource(bytes)))
+        {
+            var rowGroup = reader.RowGroups[0];
+            AssertRejected(() => _ = rowGroup.Column<Day>(0), "logical type 'Date'");
+        }
+    }
+
+    readonly record struct Day(DateOnly Value);
+
+    sealed class DayConverter : ParquetValueConverter<Day, DateOnly>
+    {
+        public override DateOnly ConvertToPhysical(Day value) => value.Value;
+        public override Day ConvertFromPhysical(DateOnly value) => new(value);
+    }
+
+    static void AssertRejected(Action open, string expectedMessage)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(open);
+        if (!exception.Message.Contains(expectedMessage, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Expected a message containing \"{expectedMessage}\", got \"{exception.Message}\".");
+    }
+
+    static void AssertSingle<T>(RowGroupColumn<T> column, T expected)
+    {
+        var actual = new List<T>();
+        foreach (var buffer in column)
+            actual.AddRange(buffer.Values);
+        if (actual.Count != 1 || !EqualityComparer<T>.Default.Equals(actual[0], expected))
+            throw new InvalidOperationException(
+                $"Expected [{expected}], got [{string.Join(", ", actual)}].");
+    }
 
     [Test]
     public void DateOnlyValuesRoundTripRelativeToUnixEpoch()
