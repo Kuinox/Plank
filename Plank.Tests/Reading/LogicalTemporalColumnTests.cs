@@ -120,7 +120,7 @@ internal sealed class LogicalTemporalColumnTests
                 optional: true);
             AssertSequenceEqual(expectedDates, RoundTrip(dateSchema, expectedDates), encoding);
 
-            var timeSchema = CreateSchema(ParquetPhysicalType.Int64,
+            var timeSchema = CreateSchema(ParquetPhysicalType.Int32,
                 new LogicalType.Time(TimeUnit.Millis, IsAdjustedToUtc: false), encoding, optional: true);
             AssertSequenceEqual(expectedTimes, RoundTrip(timeSchema, expectedTimes), encoding);
 

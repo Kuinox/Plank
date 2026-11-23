@@ -41,8 +41,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         _onFlush = onFlush;
         _targetRowGroupSizeBytes = options.TargetRowGroupSizeBytes;
         WorkerThreadNamePrefix = workerThreadNamePrefix;
-        InitializeSlots();
-        _active = TakeInitialSlot();
+        _active = InitializePipeline();
         _bufferedSizeBytes = 0;
         _completed = false;
     }
@@ -69,10 +68,32 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         _onFlush = onFlush;
         _targetRowGroupSizeBytes = options.TargetRowGroupSizeBytes;
         WorkerThreadNamePrefix = workerThreadNamePrefix;
-        InitializeSlots();
-        _active = TakeInitialSlot();
+        _active = InitializePipeline();
         _bufferedSizeBytes = 0;
         _completed = false;
+    }
+
+    TSlot InitializePipeline()
+    {
+        try
+        {
+            InitializeSlots();
+            return TakeInitialSlot();
+        }
+        catch
+        {
+            // A worker can report a startup fault before the constructor takes the first slot.
+            // There is no returned writer for the caller to dispose in that case.
+            try
+            {
+                Dispose();
+            }
+            catch (Exception)
+            {
+                // Preserve the initialization failure if closing the incomplete file also fails.
+            }
+            throw;
+        }
     }
 
     /// <summary>Gets the generated writer's row-batch size.</summary>

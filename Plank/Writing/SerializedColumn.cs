@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -42,7 +43,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     readonly Column _column;
     T[]? _retainedValues;
     internal sbyte[]? AppendSortingComparisons { get; private set; }
-    object? _dictionaryState;
+    object? _encodingState;
     ParquetBuffer _statisticsMinValueBuffer;
     ParquetBuffer _statisticsMaxValueBuffer;
     ParquetBuffer _bloomFilterBuffer;
@@ -145,7 +146,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         if (typeof(T) == typeof(int?))
         {
-            SerializeOptionalTyped(AsNullableSpan<int>(values));
+            SerializeNullableInt32(AsNullableSpan<int>(values));
             return;
         }
 
@@ -193,7 +194,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         if (typeof(T) == typeof(long?))
         {
-            SerializeOptionalTyped(AsNullableSpan<long>(values));
+            SerializeNullableInt64(AsNullableSpan<long>(values));
             return;
         }
 
@@ -351,12 +352,10 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         if (!converter.SupportsValueType(typeof(T)))
             throw new InvalidOperationException(
                 $"Column '{_column.Name}' uses a converter for '{converter.ValueType}' and cannot serialize '{typeof(T)}'.");
-        var nullable = converter.IsNullableValueType(typeof(T));
-        var optional = _column.Options.Repetition == ParquetRepetition.Optional;
-        if (nullable != optional)
+        // Non-nullable values on an optional column are simply all present; only nulls need an optional column.
+        if (converter.IsNullableValueType(typeof(T)) && _column.Options.Repetition != ParquetRepetition.Optional)
             throw new InvalidOperationException(
-                $"Column '{_column.Name}' is {(optional ? "optional" : "required")} and cannot serialize " +
-                $"converter values of type '{typeof(T)}'.");
+                $"Column '{_column.Name}' is required and cannot serialize converter values of type '{typeof(T)}'.");
         if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
             throw new NotSupportedException(
                 $"Custom converter value type '{typeof(T)}' must be unmanaged.");
@@ -423,7 +422,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         else if (typeof(TPhysical) == typeof(bool))
             SerializeTyped(Reinterpret<TPhysical, bool>(values));
         else if (typeof(TPhysical) == typeof(int?))
-            SerializeOptionalTyped(Reinterpret<TPhysical, int?>(values));
+            SerializeNullableInt32(Reinterpret<TPhysical, int?>(values));
         else if (typeof(TPhysical) == typeof(int))
             SerializeTyped(Reinterpret<TPhysical, int>(values));
         else if (typeof(TPhysical) == typeof(byte?))
@@ -439,7 +438,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         else if (typeof(TPhysical) == typeof(uint))
             SerializeUInt32(Reinterpret<TPhysical, uint>(values));
         else if (typeof(TPhysical) == typeof(long?))
-            SerializeOptionalTyped(Reinterpret<TPhysical, long?>(values));
+            SerializeNullableInt64(Reinterpret<TPhysical, long?>(values));
         else if (typeof(TPhysical) == typeof(long))
             SerializeTyped(Reinterpret<TPhysical, long>(values));
         else if (typeof(TPhysical) == typeof(ulong?))
@@ -610,40 +609,49 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         }
     }
 
+    bool IsUnsignedInteger => _column.LogicalType is LogicalType.Int { IsSigned: false };
+
+    void SerializeNullableInt32(ReadOnlySpan<int?> values)
+    {
+        SerializeOptionalTyped(values);
+        if (IsUnsignedInteger)
+            AssignUnsignedStatistics(MemoryMarshal.CreateReadOnlySpan(
+                ref Unsafe.As<int?, uint?>(ref MemoryMarshal.GetReference(values)), values.Length));
+    }
+
+    void SerializeNullableInt64(ReadOnlySpan<long?> values)
+    {
+        SerializeOptionalTyped(values);
+        if (IsUnsignedInteger)
+            AssignUnsignedStatistics(MemoryMarshal.CreateReadOnlySpan(
+                ref Unsafe.As<long?, ulong?>(ref MemoryMarshal.GetReference(values)), values.Length));
+    }
+
+    void AssignUnsignedStatistics(ReadOnlySpan<uint?> values)
+    {
+        AssignNullableUInt32PageStatistics(values);
+        if (!TryAssignPrimitiveColumnStatisticsFromPages<uint>())
+            Statistics = ColumnStatistics.CreateNullableUInt32(values);
+    }
+
+    void AssignUnsignedStatistics(ReadOnlySpan<ulong?> values)
+    {
+        AssignNullableUInt64PageStatistics(values);
+        if (!TryAssignPrimitiveColumnStatisticsFromPages<ulong>())
+            Statistics = ColumnStatistics.CreateNullableUInt64(values);
+    }
+
     void SerializeUInt32(ReadOnlySpan<uint> values)
     {
-        var rented = _owner.BufferWriters.RentScratch<int>(checked((uint)values.Length));
-        try
-        {
-            var converted = ParquetBuffer.AsSpan<int>(rented, values.Length);
-            for (var i = 0; i < values.Length; i++)
-                converted[i] = unchecked((int)values[i]);
-            SerializeTyped(converted);
-            Statistics = ColumnStatistics.CreateUInt32(values, 0);
-            AssignUInt32PageStatistics(values);
-        }
-        finally
-        {
-            _owner.BufferWriters.ReturnScratch(rented);
-        }
+        SerializeTyped(MemoryMarshal.Cast<uint, int>(values));
+        if (!IsUnsignedInteger)
+            AssignIntegerColumnAndPageStatistics(values, valuesAreDense: false, columnNullCount: 0);
     }
 
     void SerializeNullableUInt32(ReadOnlySpan<uint?> values)
     {
-        var rented = _owner.BufferWriters.RentScratch<int?>(checked((uint)values.Length));
-        try
-        {
-            var converted = ParquetBuffer.AsSpan<int?>(rented, values.Length);
-            for (var i = 0; i < values.Length; i++)
-                converted[i] = values[i] is { } value ? unchecked((int)value) : null;
-            SerializeOptionalTyped(converted);
-            Statistics = ColumnStatistics.CreateNullableUInt32(values);
-            AssignNullableUInt32PageStatistics(values);
-        }
-        finally
-        {
-            _owner.BufferWriters.ReturnScratch(rented);
-        }
+        SerializeOptionalTyped(Reinterpret<uint?, int?>(values));
+        AssignUnsignedStatistics(values);
     }
 
     void SerializeDateTime(ReadOnlySpan<DateTime> values)
@@ -767,38 +775,15 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
     void SerializeUInt64(ReadOnlySpan<ulong> values)
     {
-        var rented = _owner.BufferWriters.RentScratch<long>(checked((uint)values.Length));
-        try
-        {
-            var converted = ParquetBuffer.AsSpan<long>(rented, values.Length);
-            for (var i = 0; i < values.Length; i++)
-                converted[i] = unchecked((long)values[i]);
-            SerializeTyped(converted);
-            Statistics = ColumnStatistics.CreateUInt64(values, 0);
-            AssignUInt64PageStatistics(values);
-        }
-        finally
-        {
-            _owner.BufferWriters.ReturnScratch(rented);
-        }
+        SerializeTyped(MemoryMarshal.Cast<ulong, long>(values));
+        if (!IsUnsignedInteger)
+            AssignIntegerColumnAndPageStatistics(values, valuesAreDense: false, columnNullCount: 0);
     }
 
     void SerializeNullableUInt64(ReadOnlySpan<ulong?> values)
     {
-        var rented = _owner.BufferWriters.RentScratch<long?>(checked((uint)values.Length));
-        try
-        {
-            var converted = ParquetBuffer.AsSpan<long?>(rented, values.Length);
-            for (var i = 0; i < values.Length; i++)
-                converted[i] = values[i] is { } value ? unchecked((long)value) : null;
-            SerializeOptionalTyped(converted);
-            Statistics = ColumnStatistics.CreateNullableUInt64(values);
-            AssignNullableUInt64PageStatistics(values);
-        }
-        finally
-        {
-            _owner.BufferWriters.ReturnScratch(rented);
-        }
+        SerializeOptionalTyped(Reinterpret<ulong?, long?>(values));
+        AssignUnsignedStatistics(values);
     }
 
     void SerializeDateTimeOffset(ReadOnlySpan<DateTimeOffset> values)
@@ -959,18 +944,178 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     void SerializeRepeated(ReadOnlySpan<T> values)
     {
         var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
-#pragma warning disable CS8714
-        SerializeCore(values, columnOrdinal, _owner.GetPageStrategyContext(columnOrdinal));
-#pragma warning restore CS8714
+        if (HasPendingData)
+            throw new InvalidOperationException("SerializedColumn already contains pending data.");
         var projection = _owner.ColumnProjectionInfosByOrdinal[columnOrdinal];
+        ColumnOrdinal = columnOrdinal;
+        RowCount = checked((uint)values.Length);
+        Pages.Clear();
+        switch (_column.PhysicalType)
+        {
+            case ParquetPhysicalType.Boolean:
+                SerializeRepeatedPage<bool, bool?, NullableValueRow<bool>>(values, projection);
+                break;
+            case ParquetPhysicalType.Int32:
+                SerializeRepeatedPage<int, int?, NullableValueRow<int>>(values, projection);
+                break;
+            case ParquetPhysicalType.Int64:
+                SerializeRepeatedPage<long, long?, NullableValueRow<long>>(values, projection);
+                break;
+            case ParquetPhysicalType.Float:
+                SerializeRepeatedPage<float, float?, NullableValueRow<float>>(values, projection);
+                break;
+            case ParquetPhysicalType.Double:
+                SerializeRepeatedPage<double, double?, NullableValueRow<double>>(values, projection);
+                break;
+            case ParquetPhysicalType.ByteArray:
+            case ParquetPhysicalType.Int96:
+            case ParquetPhysicalType.FixedLenByteArray:
+                if (typeof(T) == typeof(ReadOnlyMemory<byte>[]) && projection.MaxRepetitionLevel == 1)
+                    SerializeRepeatedPage<ReadOnlyMemory<byte>, ReadOnlyMemory<byte>, RequiredRow<ReadOnlyMemory<byte>>>(values, projection);
+                else
+                    SerializeRepeatedPage<byte[], byte[], ReferenceRow<byte[]>>(values, projection);
+                break;
+            default:
+                throw new InvalidOperationException($"Unsupported repeated physical type '{_column.PhysicalType}'.");
+        }
         var mapProjections = projection.MapProjections;
-        if (mapProjections.IsDefaultOrEmpty)
-            return;
+        if (!mapProjections.IsDefaultOrEmpty)
+        {
+            var shapes = new RepeatedRowShape[mapProjections.Length];
+            for (var i = 0; i < shapes.Length; i++)
+                shapes[i] = CaptureRepeatedShape(values, mapProjections[i].RepetitionLevel);
+            MapRowShapes = shapes;
+        }
+        HasPendingData = true;
+    }
 
-        var shapes = new RepeatedRowShape[mapProjections.Length];
-        for (var i = 0; i < shapes.Length; i++)
-            shapes[i] = CaptureRepeatedShape(values, mapProjections[i].RepetitionLevel);
-        MapRowShapes = shapes;
+    void SerializeRepeatedPage<TValue, TOptional, TProbe>(ReadOnlySpan<T> rows, LeafProjectionInfo projection)
+        where TValue : notnull where TProbe : IOptionalRow<TOptional, TValue>
+    {
+        var data = GetRepeatedPageValues<TValue>(projection);
+        try
+        {
+            data.Flatten<T, TOptional, TProbe>(rows, projection, _column.Name);
+            WriteRepeatedPage(data, rows.Length);
+        }
+        finally
+        {
+            data.Clear();
+        }
+    }
+
+    /// <summary>Serializes a repeated leaf that a generated row writer has already flattened into levels.</summary>
+    internal void SerializeNestedLevels(ReadOnlySpan<byte> repetitionLevels, ReadOnlySpan<byte> definitionLevels,
+        ReadOnlySpan<T> values, int rowCount)
+    {
+        _owner.ThrowIfDisposed();
+        if (_bloomFilterRetained)
+            throw new InvalidOperationException(
+                "SerializedColumn's Bloom filter is retained by an incomplete row group.");
+        if (_column.Options.Repetition != ParquetRepetition.Repeated)
+            throw new InvalidOperationException($"Column '{_column.Name}' is not repeated.");
+        if (HasPendingData)
+            throw new InvalidOperationException("SerializedColumn already contains pending data.");
+
+        var columnOrdinal = _owner.GetColumnOrdinal(_leafColumn);
+        var projection = _owner.ColumnProjectionInfosByOrdinal[columnOrdinal];
+        ColumnOrdinal = columnOrdinal;
+        RowCount = checked((uint)rowCount);
+        Pages.Clear();
+#pragma warning disable CS8714
+        var data = GetRepeatedPageValues<T>(projection);
+        try
+        {
+            data.AddFlattened(repetitionLevels, definitionLevels, values);
+            WriteRepeatedPage(data, rowCount);
+        }
+        finally
+        {
+            data.Clear();
+        }
+#pragma warning restore CS8714
+
+        var mapProjections = projection.MapProjections;
+        if (!mapProjections.IsDefaultOrEmpty)
+        {
+            var shapes = new RepeatedRowShape[mapProjections.Length];
+            for (var i = 0; i < shapes.Length; i++)
+                shapes[i] = CaptureRepeatedShape(repetitionLevels, definitionLevels, rowCount,
+                    mapProjections[i].RepetitionLevel, projection.RepeatedDefinitionLevels);
+            MapRowShapes = shapes;
+        }
+        HasPendingData = true;
+        PreparePages();
+    }
+
+    RepeatedPageValues<TValue> GetRepeatedPageValues<TValue>(LeafProjectionInfo projection) where TValue : notnull
+    {
+        var data = _encodingState as RepeatedPageValues<TValue> ?? new RepeatedPageValues<TValue>(_owner.BufferWriters, projection);
+        _encodingState = data;
+        return data;
+    }
+
+    void WriteRepeatedPage<TValue>(RepeatedPageValues<TValue> data, int rowCount) where TValue : notnull
+    {
+        Plank.Writing.Encoding.Encoding.EncodeRepeatedPage(_owner.BufferWriters, _column, data, rowCount,
+            Pages, _owner.DataPageVersion);
+        ReadOnlySpan<TValue> dense = CollectionsMarshal.AsSpan(data.Values);
+        Statistics = ColumnStatistics.CreateWithReusableBinaryBuffers(_column, dense, data.Count - dense.Length,
+            ref _statisticsMinValueBuffer, ref _statisticsMaxValueBuffer, _owner.BufferWriters.BufferPool);
+        _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, dense,
+            ref _bloomFilterBuffer);
+        TryAssignSingleDataPageStatistics(Statistics);
+    }
+
+    // The level form of CaptureRepeatedShape: per row, each collection down to `depth` contributes its element count,
+    // or -1 when it is null, so a map's key and value columns can be checked for matching cardinalities.
+    static RepeatedRowShape CaptureRepeatedShape(ReadOnlySpan<byte> repetitionLevels,
+        ReadOnlySpan<byte> definitionLevels, int rowCount, int depth, ImmutableArray<int> repeatedDefinitionLevels)
+    {
+        var rowOffsets = new int[rowCount + 1];
+        var tokens = new List<int>(rowCount);
+        var position = 0;
+        for (var row = 0; row < rowCount; row++)
+        {
+            rowOffsets[row] = tokens.Count;
+            if (position >= repetitionLevels.Length || repetitionLevels[position] != 0)
+                throw new InvalidOperationException("Nested levels do not start a row at repetition level 0.");
+            AddShapeTokens(repetitionLevels, definitionLevels, ref position, 1, depth, repeatedDefinitionLevels, tokens);
+            while (position < repetitionLevels.Length && repetitionLevels[position] != 0)
+                position++;
+        }
+        rowOffsets[rowCount] = tokens.Count;
+        return new RepeatedRowShape(tokens.ToArray(), rowOffsets);
+    }
+
+    static void AddShapeTokens(ReadOnlySpan<byte> repetitionLevels, ReadOnlySpan<byte> definitionLevels,
+        ref int position, int level, int depth, ImmutableArray<int> repeatedDefinitionLevels, List<int> tokens)
+    {
+        var elementDefinitionLevel = repeatedDefinitionLevels[level - 1];
+        var definitionLevel = definitionLevels[position];
+        if (definitionLevel < elementDefinitionLevel)
+        {
+            tokens.Add(definitionLevel < elementDefinitionLevel - 1 ? -1 : 0);
+            position++;
+            return;
+        }
+
+        var countIndex = tokens.Count;
+        tokens.Add(0);
+        var count = 0;
+        do
+        {
+            count++;
+            if (level < depth)
+                AddShapeTokens(repetitionLevels, definitionLevels, ref position, level + 1, depth,
+                    repeatedDefinitionLevels, tokens);
+            else
+                position++;
+            while (position < repetitionLevels.Length && repetitionLevels[position] > level)
+                position++;
+        }
+        while (position < repetitionLevels.Length && repetitionLevels[position] == level);
+        tokens[countIndex] = count;
     }
 
     static RepeatedRowShape CaptureRepeatedShape(ReadOnlySpan<T> rows, int depth)
@@ -1040,6 +1185,18 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             _owner.ColumnProjectionInfosByOrdinal[columnOrdinal], dictionaryState, out var binaryMinMax);
         _bloomFilterByteLength = BloomFilterBuilder.Build(_owner.BufferWriters, _column, values,
             ref _bloomFilterBuffer);
+        if (typeof(TValue) == typeof(int) && IsUnsignedInteger)
+        {
+            if (!TryAssignPrimitiveColumnStatisticsFromPages<uint>())
+                AssignIntegerColumnAndPageStatistics(Reinterpret<TValue, uint>(values), false, 0);
+            return;
+        }
+        if (typeof(TValue) == typeof(long) && IsUnsignedInteger)
+        {
+            if (!TryAssignPrimitiveColumnStatisticsFromPages<ulong>())
+                AssignIntegerColumnAndPageStatistics(Reinterpret<TValue, ulong>(values), false, 0);
+            return;
+        }
         if (TryAssignPrimitiveColumnStatisticsFromPages<TValue>())
             return;
         if (TryAssignInt32ColumnAndPageStatistics(values))
@@ -1048,7 +1205,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return;
 
         var statisticsValues = hasDictionaryStatistics && typeof(TValue) != typeof(float)
-            && typeof(TValue) != typeof(double)
+            && typeof(TValue) != typeof(double) && _column.LogicalType is not LogicalType.Float16
             ? dictionaryState.AsSpan()
             : values;
         // The BYTE_ARRAY sizing or encode pass already compared every value on its way into the page buffer, so
@@ -1073,8 +1230,12 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         {
             (ParquetPhysicalType.Boolean, var type) when type == typeof(bool)
                 => ColumnStatistics.ColumnStatisticsValueKind.Boolean,
+            (ParquetPhysicalType.Int32, var type) when type == typeof(uint)
+                => ColumnStatistics.ColumnStatisticsValueKind.UInt32,
             (ParquetPhysicalType.Int32, var type) when type == typeof(int)
                 => ColumnStatistics.ColumnStatisticsValueKind.Int32,
+            (ParquetPhysicalType.Int64, var type) when type == typeof(ulong)
+                => ColumnStatistics.ColumnStatisticsValueKind.UInt64,
             (ParquetPhysicalType.Int64, var type) when type == typeof(long)
                 => ColumnStatistics.ColumnStatisticsValueKind.Int64,
             (ParquetPhysicalType.Float, var type) when type == typeof(float)
@@ -1146,6 +1307,13 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 if (pageMaxBits > columnMaxBits)
                     columnMaxBits = pageMaxBits;
                 return;
+            case ColumnStatistics.ColumnStatisticsValueKind.UInt32:
+            case ColumnStatistics.ColumnStatisticsValueKind.UInt64:
+                if (unchecked((ulong)pageMinBits) < unchecked((ulong)columnMinBits))
+                    columnMinBits = pageMinBits;
+                if (unchecked((ulong)pageMaxBits) > unchecked((ulong)columnMaxBits))
+                    columnMaxBits = pageMaxBits;
+                return;
             case ColumnStatistics.ColumnStatisticsValueKind.Float:
                 if (ColumnStatistics.IsLessThan(BitConverter.Int32BitsToSingle(checked((int)pageMinBits)),
                         BitConverter.Int32BitsToSingle(checked((int)columnMinBits))))
@@ -1174,8 +1342,14 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             ColumnStatistics.ColumnStatisticsValueKind.Boolean => hasValue
                 ? ColumnStatistics.FromBoolean(minBits != 0, maxBits != 0, nullCount)
                 : ColumnStatistics.Empty(nullCount),
+            ColumnStatistics.ColumnStatisticsValueKind.UInt32 => hasValue
+                ? ColumnStatistics.FromUInt32(unchecked((uint)minBits), unchecked((uint)maxBits), nullCount)
+                : ColumnStatistics.Empty(nullCount),
             ColumnStatistics.ColumnStatisticsValueKind.Int32 => hasValue
                 ? ColumnStatistics.FromInt32(checked((int)minBits), checked((int)maxBits), nullCount)
+                : ColumnStatistics.Empty(nullCount),
+            ColumnStatistics.ColumnStatisticsValueKind.UInt64 => hasValue
+                ? ColumnStatistics.FromUInt64(unchecked((ulong)minBits), unchecked((ulong)maxBits), nullCount)
                 : ColumnStatistics.Empty(nullCount),
             ColumnStatistics.ColumnStatisticsValueKind.Int64 => hasValue
                 ? ColumnStatistics.FromInt64(minBits, maxBits, nullCount)
@@ -1494,16 +1668,21 @@ public sealed class SerializedColumn<T> : ISerializedColumn
 
         page.UncompressedContentSize = uncompressedContentSize;
         page.Header.Reset();
+        if (!ColumnStatistics.HasDefinedOrder(_column))
+            page.Statistics = ColumnStatistics.Empty(page.NullCount);
+        var writeLegacyBinaryStatistics = ParquetMetadataThriftWriter.HasSignedBinaryStatisticsOrder(_column);
         if (_owner.DataPageVersion == ParquetDataPageVersion.V1)
         {
             ParquetMetadataThriftWriter.WriteDataPageHeaderV1(ref page.Header, page.ValueCount, page.Encoding,
-                uncompressedContentSize, page.Content.WrittenLength, page.Statistics, GetPageCrc(ref page));
+                uncompressedContentSize, page.Content.WrittenLength, page.Statistics, GetPageCrc(ref page),
+                writeLegacyBinaryStatistics);
             return;
         }
 
         ParquetMetadataThriftWriter.WriteDataPageHeaderV2(ref page.Header, page.RowCount, page.ValueCount,
             page.NullCount, page.RepetitionLevelsByteLength, page.DefinitionLevelsByteLength, page.Encoding,
-            uncompressedContentSize, page.Content.WrittenLength, compressed, page.Statistics, GetPageCrc(ref page));
+            uncompressedContentSize, page.Content.WrittenLength, compressed, page.Statistics, GetPageCrc(ref page),
+            writeLegacyBinaryStatistics);
     }
 
     bool PrepareDataPageV1(ref Page page, ResolvedCompression compression, int uncompressedContentSize)
@@ -1584,6 +1763,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
     internal void ReleaseBuffers()
     {
         Pages.ReleaseBuffers();
+        if (_encodingState is IDisposable state)
+            state.Dispose();
+        _encodingState = null;
         _compressedContent.Dispose();
         _compressionInput.Dispose();
         _compressedValues.Dispose();
@@ -1666,7 +1848,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return false;
 
         var intValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<int>>(ref values);
-        AssignSignedIntegerColumnAndPageStatistics(intValues, valuesAreDense: false, columnNullCount: 0);
+        AssignIntegerColumnAndPageStatistics(intValues, valuesAreDense: false, columnNullCount: 0);
         return true;
     }
 
@@ -1683,7 +1865,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return false;
 
         var longValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<long>>(ref values);
-        AssignSignedIntegerColumnAndPageStatistics(longValues, valuesAreDense: false, columnNullCount: 0);
+        AssignIntegerColumnAndPageStatistics(longValues, valuesAreDense: false, columnNullCount: 0);
         return true;
     }
 
@@ -1695,11 +1877,11 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             return false;
 
         var longValues = Unsafe.As<ReadOnlySpan<TValue>, ReadOnlySpan<long>>(ref values);
-        AssignSignedIntegerColumnAndPageStatistics(longValues, valuesAreDense: true, nullCount);
+        AssignIntegerColumnAndPageStatistics(longValues, valuesAreDense: true, nullCount);
         return true;
     }
 
-    void AssignSignedIntegerColumnAndPageStatistics<TValue>(ReadOnlySpan<TValue> values, bool valuesAreDense,
+    void AssignIntegerColumnAndPageStatistics<TValue>(ReadOnlySpan<TValue> values, bool valuesAreDense,
         long columnNullCount)
         where TValue : struct, INumber<TValue>
     {
@@ -1723,7 +1905,7 @@ public sealed class SerializedColumn<T> : ISerializedColumn
             }
 
             MinMaxScan.Compute(pageValues, out var pageMin, out var pageMax);
-            page.Statistics = CreateSignedIntegerStatistics(pageMin, pageMax, page.NullCount);
+            page.Statistics = ColumnStatistics.FromIntegerBounds(pageMin, pageMax, page.NullCount);
             if (!hasColumnValue)
             {
                 columnMin = pageMin;
@@ -1743,30 +1925,18 @@ public sealed class SerializedColumn<T> : ISerializedColumn
                 $"Page statistics covered {valueOffset} values, but the column contains {values.Length} values.");
 
         Statistics = hasColumnValue
-            ? CreateSignedIntegerStatistics(columnMin, columnMax, columnNullCount)
+            ? ColumnStatistics.FromIntegerBounds(columnMin, columnMax, columnNullCount)
             : ColumnStatistics.Empty(columnNullCount);
-    }
-
-    static ColumnStatistics CreateSignedIntegerStatistics<TValue>(TValue min, TValue max, long nullCount)
-        where TValue : struct, INumber<TValue>
-    {
-        if (typeof(TValue) == typeof(int))
-            return ColumnStatistics.FromInt32(Unsafe.As<TValue, int>(ref min), Unsafe.As<TValue, int>(ref max),
-                nullCount);
-        if (typeof(TValue) == typeof(long))
-            return ColumnStatistics.FromInt64(Unsafe.As<TValue, long>(ref min), Unsafe.As<TValue, long>(ref max),
-                nullCount);
-        throw new InvalidOperationException($"Unsupported signed statistics type '{typeof(TValue)}'.");
     }
 
     ReusableDictionaryState<TValue> GetOrCreateDictionaryState<TValue>()
         where TValue : notnull
     {
-        if (_dictionaryState is ReusableDictionaryState<TValue> state)
+        if (_encodingState is ReusableDictionaryState<TValue> state)
             return state;
 
         state = new ReusableDictionaryState<TValue>();
-        _dictionaryState = state;
+        _encodingState = state;
         return state;
     }
 
@@ -1877,17 +2047,9 @@ public sealed class SerializedColumn<T> : ISerializedColumn
         => AssignConvertedPageStatistics(values, static (pageValues, _) =>
             ColumnStatistics.CreateNullableUInt16(pageValues));
 
-    void AssignUInt32PageStatistics(ReadOnlySpan<uint> values)
-        => AssignConvertedPageStatistics(values, static (pageValues, nullCount) =>
-            ColumnStatistics.CreateUInt32(pageValues, nullCount));
-
     void AssignNullableUInt32PageStatistics(ReadOnlySpan<uint?> values)
         => AssignConvertedPageStatistics(values, static (pageValues, _) =>
             ColumnStatistics.CreateNullableUInt32(pageValues));
-
-    void AssignUInt64PageStatistics(ReadOnlySpan<ulong> values)
-        => AssignConvertedPageStatistics(values, static (pageValues, nullCount) =>
-            ColumnStatistics.CreateUInt64(pageValues, nullCount));
 
     void AssignNullableUInt64PageStatistics(ReadOnlySpan<ulong?> values)
         => AssignConvertedPageStatistics(values, static (pageValues, _) =>

@@ -32,7 +32,7 @@ internal sealed class LargePageHeaderTests
     [Test]
     public void BorrowedLargeHeaderAndPayloadDoNotRentBuffers()
     {
-        var (_, file, _) = CreateFile();
+        var (_, file, _) = CreateFile(valueLength: 40_000);
         var pool = new TrackingBufferPool();
         using var source = new MemoryReadSource(file);
         using var reader = new ParquetFileReader(new ParquetFileReaderOptions { BufferPool = pool });
