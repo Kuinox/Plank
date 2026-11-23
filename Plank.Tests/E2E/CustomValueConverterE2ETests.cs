@@ -1,6 +1,7 @@
 using ParquetSharp;
 using Plank.Schema;
 using Plank.Writing;
+using TUnit.Assertions.Enums;
 using ParquetDataPageVersion = Plank.Writing.ParquetDataPageVersion;
 
 namespace Plank.Tests.E2E;
@@ -139,6 +140,34 @@ internal sealed class CustomValueConverterE2ETests
             rows.Add((rowReader.Current.Id, rowReader.Current.ParentId));
 
         await Assert.That(rows).IsEquivalentTo(Ids.Zip(ParentIds));
+    }
+
+    [Test]
+    public async Task GeneratedGuidAccessorsUseDeclaredConverter()
+    {
+        Guid[] ids = [GuidIndexConverter.Table[2], GuidIndexConverter.Table[0], GuidIndexConverter.Table[1]];
+        Guid?[] values = [GuidIndexConverter.Table[1], null, GuidIndexConverter.Table[2]];
+        using var stream = new MemoryStream();
+        using (var writer = GuidConverterRows.CreateRowWriter(stream, maxParallelism: 1))
+        {
+            for (var i = 0; i < ids.Length; i++)
+            {
+                var row = writer.GetRow();
+                row.Id = ids[i];
+                row.Value = values[i];
+            }
+            writer.Complete();
+        }
+
+        var bytes = stream.ToArray();
+        using var columns = GuidConverterRows.CreateReader(new MemoryStream(bytes));
+        await Assert.That(ReadColumn(columns.RowGroups[0].IdColumn)).IsEquivalentTo(ids, CollectionOrdering.Matching);
+        await Assert.That(ReadColumn(columns.RowGroups[0].ValueColumn)).IsEquivalentTo(values, CollectionOrdering.Matching);
+        using var rows = GuidConverterRows.CreateRowReader(new MemoryStream(bytes));
+        var read = new List<(Guid, Guid?)>();
+        while (rows.MoveNext())
+            read.Add((rows.Current.Id, rows.Current.Value));
+        await Assert.That(read).IsEquivalentTo(ids.Zip(values), CollectionOrdering.Matching);
     }
 
     [Test]
@@ -359,4 +388,32 @@ internal sealed class CustomValueConverterE2ETests
         public override decimal ConvertFromPhysical(long value)
             => value / 100m;
     }
+}
+
+[ParquetSchema]
+internal sealed partial class GuidConverterRows
+{
+    [ParquetColumn(Converter = typeof(GuidIndexConverter))]
+    public Guid Id { get; set; }
+
+    [ParquetColumn(Converter = typeof(GuidIndexConverter))]
+    public Guid? Value { get; set; }
+}
+
+internal sealed class GuidIndexConverter : ParquetValueConverter<Guid, int>
+{
+    internal static readonly Guid[] Table =
+    [
+        new("0f8fad5b-d9cb-469f-a165-70867728950e"),
+        new("7c9e6679-7425-40de-944b-e07fc1f90ae7"),
+        new("e02fd0e4-00fd-090a-ca30-0d00a0038ba0")
+    ];
+
+    public override int ConvertToPhysical(Guid value)
+    {
+        var index = Array.IndexOf(Table, value);
+        return index >= 0 ? 100 + index : throw new InvalidOperationException("Unexpected Guid value.");
+    }
+
+    public override Guid ConvertFromPhysical(int value) => Table[value - 100];
 }
