@@ -759,7 +759,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         // This is a source member name, already validated by the C# compiler. Sanitizing it
         // changes legal Unicode identifiers and makes generated row access target another member.
-        mapped = new MappedColumn(column.Name, column.RowPropertyName, column.ClrTypeName);
+        mapped = new MappedColumn(column.Name, column.RowPropertyName, column.ClrTypeName, column.ConverterTypeName is not null);
         return true;
     }
 
@@ -856,7 +856,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.AppendLine();
             if (IsUtf8ByteArrayClr(columns[i].ClrTypeName) ||
                 IsStringClr(columns[i].ClrTypeName) ||
-                IsGuidClr(columns[i].ClrTypeName))
+                (IsGuidClr(columns[i].ClrTypeName) && !columns[i].HasConverter))
             {
                 builder.Append("        public global::Plank.Reading.Logical.RowGroupColumn<byte> ")
                     .Append(columns[i].PropertyName)
@@ -1004,7 +1004,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 builder.AppendLine("            }");
                 builder.AppendLine("        }");
             }
-            else if (IsGuidClr(columns[i].ClrTypeName))
+            else if (IsGuidClr(columns[i].ClrTypeName) && !columns[i].HasConverter)
             {
                 builder.Append("        public ").Append(columns[i].ClrTypeName).Append(' ')
                     .Append(EscapeIdentifier(propertyName)).AppendLine();
@@ -2351,11 +2351,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     readonly struct MappedColumn
     {
-        public MappedColumn(string name, string propertyName, string clrTypeName)
+        public MappedColumn(string name, string propertyName, string clrTypeName, bool hasConverter)
         {
             Name = name;
             PropertyName = propertyName;
             ClrTypeName = clrTypeName;
+            HasConverter = hasConverter;
         }
 
         public string Name { get; }
@@ -2363,5 +2364,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public string PropertyName { get; }
 
         public string ClrTypeName { get; }
+
+        public bool HasConverter { get; }
     }
 }
