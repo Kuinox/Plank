@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -354,30 +355,33 @@ static class PlainEncoding
         writer.Advance(byteCount);
     }
 
-    internal static ColumnStatistics WriteInt32PageWithStatistics(ReadOnlySpan<int> values,
-        ref BufferWriter writer)
+    internal static ColumnStatistics WriteIntegerPageWithStatistics<T>(ReadOnlySpan<T> values,
+        ref BufferWriter writer) where T : unmanaged, IBinaryInteger<T>
     {
-        var byteCount = checked(values.Length * sizeof(int));
-        if (byteCount == 0)
+        if (values.IsEmpty)
             return ColumnStatistics.Empty(0);
 
-        var destinationBytes = writer.GetSpan(byteCount)[..byteCount];
-        int min;
-        int max;
+        var width = Unsafe.SizeOf<T>();
+        var byteCount = checked(values.Length * width);
+        var destination = writer.GetSpan(byteCount)[..byteCount];
+        T min;
+        T max;
         if (BitConverter.IsLittleEndian)
-        {
-            MinMaxScan.CopyAndCompute(values, MemoryMarshal.Cast<byte, int>(destinationBytes), out min, out max);
-        }
+            MinMaxScan.CopyAndCompute(values, MemoryMarshal.Cast<byte, T>(destination), out min, out max);
         else
         {
             for (var i = 0; i < values.Length; i++)
-                BinaryPrimitives.WriteInt32LittleEndian(destinationBytes[(i * sizeof(int))..], values[i]);
+                values[i].WriteLittleEndian(destination[(i * width)..]);
             MinMaxScan.Compute(values, out min, out max);
         }
 
         writer.Advance(byteCount);
-        return ColumnStatistics.FromInt32(min, max, 0);
+        return ColumnStatistics.FromIntegerBounds(min, max, 0);
     }
+
+    internal static ColumnStatistics WriteInt32PageWithStatistics(ReadOnlySpan<int> values,
+        ref BufferWriter writer)
+        => WriteIntegerPageWithStatistics(values, ref writer);
 
     internal static ColumnStatistics WriteAllPresentOptionalInt32PageWithStatistics(
         ReadOnlySpan<int?> values, ref BufferWriter writer)
@@ -440,28 +444,7 @@ static class PlainEncoding
 
     internal static ColumnStatistics WriteInt64PageWithStatistics(ReadOnlySpan<long> values,
         ref BufferWriter writer)
-    {
-        var byteCount = checked(values.Length * sizeof(long));
-        if (byteCount == 0)
-            return ColumnStatistics.Empty(0);
-
-        var destinationBytes = writer.GetSpan(byteCount)[..byteCount];
-        long min;
-        long max;
-        if (BitConverter.IsLittleEndian)
-        {
-            MinMaxScan.CopyAndCompute(values, MemoryMarshal.Cast<byte, long>(destinationBytes), out min, out max);
-        }
-        else
-        {
-            for (var i = 0; i < values.Length; i++)
-                BinaryPrimitives.WriteInt64LittleEndian(destinationBytes[(i * sizeof(long))..], values[i]);
-            MinMaxScan.Compute(values, out min, out max);
-        }
-
-        writer.Advance(byteCount);
-        return ColumnStatistics.FromInt64(min, max, 0);
-    }
+        => WriteIntegerPageWithStatistics(values, ref writer);
 
     internal static ColumnStatistics WriteFloatPageWithStatistics(ReadOnlySpan<float> values,
         ref BufferWriter writer)

@@ -87,6 +87,12 @@ internal readonly struct ColumnStatistics
         HasStatistics = hasStatistics;
     }
 
+    // This writer always emits TYPE_ORDER, not INT96_TIMESTAMP_ORDER. LogicalTypes.md leaves INTERVAL, GEOMETRY
+    // and GEOGRAPHY unordered.
+    internal static bool HasDefinedOrder(Column column)
+        => column.PhysicalType != ParquetPhysicalType.Int96
+           && column.LogicalType is not (LogicalType.Interval or LogicalType.Geometry or LogicalType.Geography);
+
     internal static ColumnStatistics Empty(long nullCount)
         => new(null, null, nullCount, true);
 
@@ -172,9 +178,8 @@ internal readonly struct ColumnStatistics
     /// instead of walking the values again.
     /// </summary>
     /// <remarks>
-    /// The encoder orders values unsigned lexicographically, which is what
-    /// <see cref="CompareBinary"/> does for every BYTE_ARRAY column except a decimal one. Callers must
-    /// check <see cref="OrdersBinaryValuesLexicographically"/> before using an encoder-supplied result.
+    /// The encoder orders values unsigned lexicographically. Callers must check
+    /// <see cref="OrdersBinaryValuesLexicographically"/> before using an encoder-supplied result.
     /// </remarks>
     internal static ColumnStatistics CreateBinaryFromKnownExtremes<T>(Column column, ReadOnlySpan<T> values,
         int minIndex, int maxIndex, long nullCount, ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer,
@@ -221,13 +226,13 @@ internal readonly struct ColumnStatistics
     }
 
     /// <summary>
-    /// Whether the column's BYTE_ARRAY values compare as plain unsigned byte sequences. Decimals do
-    /// not: their bytes are a two's complement number, so they are ordered by sign and magnitude.
+    /// Whether binary bounds can be collected by comparing unsigned byte sequences.
+    /// Binary decimals, FLOAT16 and fixed-width timestamps require numeric comparisons.
     /// </summary>
     internal static bool OrdersBinaryValuesLexicographically(Column column)
     {
         ArgumentNullException.ThrowIfNull(column);
-        return column.LogicalType is not LogicalType.Decimal;
+        return HasDefinedOrder(column) && column.LogicalType is not (LogicalType.Decimal or LogicalType.Float16 or LogicalType.Timestamp);
     }
 
     static ColumnStatistics CreateRepeated<T>(Column column, ReadOnlySpan<T> values, long nullCount)
@@ -252,19 +257,7 @@ internal readonly struct ColumnStatistics
             return CreateNullableFloat(AsNullableSpan<T, float>(values));
         if (typeof(T) == typeof(double))
             return CreateNullableDouble(AsNullableSpan<T, double>(values));
-        if (typeof(T) == typeof(decimal))
-            return CreateNullableDecimal(column, AsNullableSpan<T, decimal>(values));
-        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
-            return CreateNullableMemory(column, AsNullableSpan<T, ReadOnlyMemory<byte>>(values));
 
-        return Empty(CountNulls(values));
-    }
-
-    internal static ColumnStatistics CreateOptional<T>(Column column, ReadOnlySpan<T> values)
-        where T : class
-    {
-        if (typeof(T) == typeof(byte[]))
-            return CreateOptionalByteArray(column, AsAnySpan<T, byte[]>(values));
         return Empty(CountNulls(values));
     }
 
@@ -290,7 +283,7 @@ internal readonly struct ColumnStatistics
         if (typeof(T) == typeof(byte[]))
             return CreateOptionalByteArray(column, AsAnySpan<T, byte[]>(values), ref minBuffer, ref maxBuffer,
                 bufferPool);
-        return CreateOptional(column, values);
+        return Empty(CountNulls(values));
     }
 
     internal ReadOnlySpan<byte> GetMinValue()
@@ -651,25 +644,7 @@ internal readonly struct ColumnStatistics
         if (!TryGetDecimalMinMax(values, out var min, out var max))
             return Empty(nullCount);
 
-        var minLength = GetDecimalEncodedLength(column, min);
-        var maxLength = GetDecimalEncodedLength(column, max);
-        EnsureReusableBuffer(minLength, ref minBuffer, bufferPool);
-        EnsureReusableBuffer(maxLength, ref maxBuffer, bufferPool);
-        EncodeDecimal(column, min, minBuffer.Span[..minLength]);
-        EncodeDecimal(column, max, maxBuffer.Span[..maxLength]);
-        return new ColumnStatistics(minBuffer, minLength, maxBuffer, maxLength, nullCount, true);
-    }
-
-    static ColumnStatistics CreateNullableDecimal(Column column, ReadOnlySpan<decimal?> values)
-    {
-        if (!TryGetNullableDecimalMinMax(values, out var min, out var max, out var nullCount))
-            return Empty(nullCount);
-
-        var minValue = new byte[GetDecimalEncodedLength(column, min)];
-        var maxValue = new byte[GetDecimalEncodedLength(column, max)];
-        EncodeDecimal(column, min, minValue);
-        EncodeDecimal(column, max, maxValue);
-        return new ColumnStatistics(minValue, maxValue, nullCount, true);
+        return FromDecimalBounds(column, min, max, nullCount, ref minBuffer, ref maxBuffer, bufferPool);
     }
 
     static ColumnStatistics CreateNullableDecimal(Column column, ReadOnlySpan<decimal?> values,
@@ -678,6 +653,12 @@ internal readonly struct ColumnStatistics
         if (!TryGetNullableDecimalMinMax(values, out var min, out var max, out var nullCount))
             return Empty(nullCount);
 
+        return FromDecimalBounds(column, min, max, nullCount, ref minBuffer, ref maxBuffer, bufferPool);
+    }
+
+    static ColumnStatistics FromDecimalBounds(Column column, decimal min, decimal max, long nullCount,
+        ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
+    {
         var minLength = GetDecimalEncodedLength(column, min);
         var maxLength = GetDecimalEncodedLength(column, max);
         EnsureReusableBuffer(minLength, ref minBuffer, bufferPool);
@@ -770,8 +751,78 @@ internal readonly struct ColumnStatistics
         }
     }
 
+    static ColumnStatistics CreateFloat16(ReadOnlySpan<byte[]> values, long nullCount)
+    {
+        var accumulator = new Float16Accumulator();
+        foreach (var value in values)
+        {
+            if (value is null)
+                nullCount++;
+            else
+                accumulator.Add(value);
+        }
+        return accumulator.ToStatistics(nullCount);
+    }
+
+    static ColumnStatistics CreateFloat16(ReadOnlySpan<ReadOnlyMemory<byte>> values, long nullCount)
+    {
+        var accumulator = new Float16Accumulator();
+        foreach (var value in values)
+            accumulator.Add(value.Span);
+        return accumulator.ToStatistics(nullCount);
+    }
+
+    static ColumnStatistics CreateFloat16(ReadOnlySpan<ReadOnlyMemory<byte>?> values)
+    {
+        var accumulator = new Float16Accumulator();
+        var nullCount = 0L;
+        foreach (var value in values)
+        {
+            if (value is { } memory)
+                accumulator.Add(memory.Span);
+            else
+                nullCount++;
+        }
+        return accumulator.ToStatistics(nullCount);
+    }
+
+    struct Float16Accumulator
+    {
+        int _min = int.MaxValue;
+        int _max = int.MinValue;
+        long _nanCount;
+
+        public Float16Accumulator() { }
+
+        internal void Add(ReadOnlySpan<byte> value)
+        {
+            var bits = BinaryPrimitives.ReadUInt16LittleEndian(value);
+            var magnitude = bits & 0x7fff;
+            if (magnitude > 0x7c00)
+            {
+                _nanCount++;
+                return;
+            }
+
+            // Binary16 magnitude bits already increase with magnitude, including subnormals.
+            var key = (bits & 0x8000) == 0 ? magnitude : -magnitude;
+            _min = Math.Min(_min, key);
+            _max = Math.Max(_max, key);
+        }
+
+        internal readonly ColumnStatistics ToStatistics(long nullCount)
+            => _min == int.MaxValue
+                ? EmptyFloating(nullCount, _nanCount)
+                : new ColumnStatistics(ColumnStatisticsValueKind.Float16,
+                    _min <= 0 ? 0x8000 - _min : _min, _max < 0 ? 0x8000 - _max : _max,
+                    nullCount, true, _nanCount);
+    }
+
     static ColumnStatistics CreateByteArray(Column column, ReadOnlySpan<byte[]> values, long nullCount)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values, nullCount);
+
         if (values.Length == 0)
             return Empty(nullCount);
 
@@ -792,6 +843,9 @@ internal readonly struct ColumnStatistics
     static ColumnStatistics CreateByteArray(Column column, ReadOnlySpan<byte[]> values, long nullCount,
         ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values, nullCount);
+
         if (values.Length == 0)
             return Empty(nullCount);
 
@@ -811,39 +865,12 @@ internal readonly struct ColumnStatistics
         return new ColumnStatistics(minBuffer, min.Length, maxBuffer, max.Length, nullCount, true);
     }
 
-    static ColumnStatistics CreateOptionalByteArray(Column column, ReadOnlySpan<byte[]> values)
-    {
-        byte[]? min = null;
-        byte[]? max = null;
-        var nullCount = 0L;
-        for (var i = 0; i < values.Length; i++)
-        {
-            var value = values[i];
-            if (value is null)
-            {
-                nullCount++;
-                continue;
-            }
-
-            if (min is null)
-            {
-                min = value;
-                max = value;
-                continue;
-            }
-
-            if (CompareBinary(column, value, min) < 0)
-                min = value;
-            if (CompareBinary(column, value, max!) > 0)
-                max = value;
-        }
-
-        return min is null ? Empty(nullCount) : new ColumnStatistics(min.ToArray(), max!.ToArray(), nullCount, true);
-    }
-
     static ColumnStatistics CreateOptionalByteArray(Column column, ReadOnlySpan<byte[]> values,
         ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values, 0);
+
         ReadOnlySpan<byte> min = default;
         ReadOnlySpan<byte> max = default;
         var hasValue = false;
@@ -881,6 +908,9 @@ internal readonly struct ColumnStatistics
 
     static ColumnStatistics CreateMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>> values, long nullCount)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values, nullCount);
+
         if (values.Length == 0)
             return Empty(nullCount);
 
@@ -901,6 +931,9 @@ internal readonly struct ColumnStatistics
     static ColumnStatistics CreateMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>> values, long nullCount,
         ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values, nullCount);
+
         if (values.Length == 0)
             return Empty(nullCount);
 
@@ -920,39 +953,12 @@ internal readonly struct ColumnStatistics
         return new ColumnStatistics(minBuffer, min.Length, maxBuffer, max.Length, nullCount, true);
     }
 
-    static ColumnStatistics CreateNullableMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>?> values)
-    {
-        byte[]? min = null;
-        byte[]? max = null;
-        var nullCount = 0L;
-        for (var i = 0; i < values.Length; i++)
-        {
-            if (values[i] is not { } memory)
-            {
-                nullCount++;
-                continue;
-            }
-
-            var value = memory.Span;
-            if (min is null)
-            {
-                min = value.ToArray();
-                max = min;
-                continue;
-            }
-
-            if (CompareBinary(column, value, min) < 0)
-                min = value.ToArray();
-            if (CompareBinary(column, value, max!) > 0)
-                max = value.ToArray();
-        }
-
-        return min is null ? Empty(nullCount) : new ColumnStatistics(min, max, nullCount, true);
-    }
-
     static ColumnStatistics CreateNullableMemory(Column column, ReadOnlySpan<ReadOnlyMemory<byte>?> values,
         ref ParquetBuffer minBuffer, ref ParquetBuffer maxBuffer, IParquetBufferPool bufferPool)
     {
+        if (column.LogicalType is LogicalType.Float16)
+            return CreateFloat16(values);
+
         ReadOnlySpan<byte> min = default;
         ReadOnlySpan<byte> max = default;
         var hasValue = false;
@@ -1384,16 +1390,32 @@ internal readonly struct ColumnStatistics
         return hasValue;
     }
 
+    internal static ColumnStatistics FromIntegerBounds<TValue>(TValue min, TValue max, long nullCount)
+        where TValue : struct, INumber<TValue>
+    {
+        if (typeof(TValue) == typeof(int))
+            return FromInt32(Unsafe.As<TValue, int>(ref min), Unsafe.As<TValue, int>(ref max),
+                nullCount);
+        if (typeof(TValue) == typeof(long))
+            return FromInt64(Unsafe.As<TValue, long>(ref min), Unsafe.As<TValue, long>(ref max),
+                nullCount);
+        if (typeof(TValue) == typeof(uint))
+            return FromUInt32(Unsafe.As<TValue, uint>(ref min), Unsafe.As<TValue, uint>(ref max), nullCount);
+        if (typeof(TValue) == typeof(ulong))
+            return FromUInt64(Unsafe.As<TValue, ulong>(ref min), Unsafe.As<TValue, ulong>(ref max), nullCount);
+        throw new InvalidOperationException($"Unsupported integer statistics type '{typeof(TValue)}'.");
+    }
+
     internal static ColumnStatistics FromInt32(int min, int max, long nullCount)
         => new(ColumnStatisticsValueKind.Int32, min, max, nullCount, true);
 
-    static ColumnStatistics FromUInt32(uint min, uint max, long nullCount)
+    internal static ColumnStatistics FromUInt32(uint min, uint max, long nullCount)
         => new(ColumnStatisticsValueKind.UInt32, min, max, nullCount, true);
 
     internal static ColumnStatistics FromInt64(long min, long max, long nullCount)
         => new(ColumnStatisticsValueKind.Int64, min, max, nullCount, true);
 
-    static ColumnStatistics FromUInt64(ulong min, ulong max, long nullCount)
+    internal static ColumnStatistics FromUInt64(ulong min, ulong max, long nullCount)
         => new(ColumnStatisticsValueKind.UInt64, unchecked((long)min), unchecked((long)max), nullCount, true);
 
     static ColumnStatistics FromFloat(float min, float max, long nullCount, long nanCount)
@@ -1413,11 +1435,22 @@ internal readonly struct ColumnStatistics
         => hasValue ? FromDouble(min, max, nullCount, nanCount) : EmptyFloating(nullCount, nanCount);
 
     static int CompareBinary(Column column, ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
-        => column.LogicalType is LogicalType.Decimal
-            ? CompareDecimalBytes(left, right)
-            : EncodingPrimitives.ComparePayload(left, right);
+        => column.LogicalType switch
+        {
+            LogicalType.Decimal => CompareDecimalBytes(left, right),
+            LogicalType.Timestamp => CompareTimestamp96(left, right),
+            _ => EncodingPrimitives.ComparePayload(left, right)
+        };
 
-    static int CompareDecimalBytes(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
+    internal static int CompareTimestamp96(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
+    {
+        var high = BinaryPrimitives.ReadInt32LittleEndian(left[8..])
+            .CompareTo(BinaryPrimitives.ReadInt32LittleEndian(right[8..]));
+        return high != 0 ? high : BinaryPrimitives.ReadUInt64LittleEndian(left)
+            .CompareTo(BinaryPrimitives.ReadUInt64LittleEndian(right));
+    }
+
+    internal static int CompareDecimalBytes(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
         if (left.IsEmpty)
             return right.IsEmpty ? 0 : CompareZeroToDecimal(right);
@@ -1533,12 +1566,14 @@ internal readonly struct ColumnStatistics
         UInt64,
         Float,
         Double,
+        Float16,
         Binary
     }
 
     struct RepeatedAccumulator
     {
         readonly Column _column;
+        Float16Accumulator _float16;
         bool _hasValue;
         bool _minBool;
         bool _maxBool;
@@ -1561,6 +1596,7 @@ internal readonly struct ColumnStatistics
         internal RepeatedAccumulator(Column column)
         {
             _column = column;
+            _float16 = new Float16Accumulator();
             _hasValue = false;
             _minBool = true;
             _maxBool = false;
@@ -1605,6 +1641,9 @@ internal readonly struct ColumnStatistics
 
         internal ColumnStatistics ToStatistics(long nullCount)
         {
+            if (_column.LogicalType is LogicalType.Float16)
+                return _float16.ToStatistics(nullCount);
+
             if (!_hasValue)
                 return _column.PhysicalType is ParquetPhysicalType.Float or ParquetPhysicalType.Double
                     ? EmptyFloating(nullCount, _nanCount)
@@ -1646,6 +1685,9 @@ internal readonly struct ColumnStatistics
                     return;
                 case ParquetPhysicalType.Double:
                     AddDouble((double)value);
+                    return;
+                case ParquetPhysicalType.FixedLenByteArray when _column.LogicalType is LogicalType.Float16:
+                    _float16.Add(value is byte[] bytes ? bytes : ((ReadOnlyMemory<byte>)value).Span);
                     return;
                 case ParquetPhysicalType.ByteArray:
                 case ParquetPhysicalType.FixedLenByteArray:
