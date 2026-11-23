@@ -119,8 +119,6 @@ internal sealed class AdditionalLogicalAnnotationTests
             new LogicalType.Geometry()));
         Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_variant",
             ParquetPhysicalType.ByteArray, logicalType: new LogicalType.Variant(1)));
-        Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_unknown",
-            ParquetPhysicalType.ByteArray, logicalType: new LogicalType.Unknown()));
         Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_string",
             ParquetPhysicalType.Int32, logicalType: new LogicalType.String()));
         Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_json",
@@ -140,6 +138,91 @@ internal sealed class AdditionalLogicalAnnotationTests
         Assert.Throws<ArgumentException>(() => ColumnDefinition.RequiredLeaf("bad_fixed_timestamp",
             ParquetPhysicalType.FixedLenByteArray, new ColumnOptions(typeLength: 11),
             new LogicalType.Timestamp(TimeUnit.Micros, IsAdjustedToUtc: true)));
+    }
+
+    [Test]
+    public void UnknownAnnotationAllowsEveryRepetition()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("required_unknown", ParquetPhysicalType.Int32,
+                logicalType: new LogicalType.Unknown()),
+            ColumnDefinition.Leaf("repeated_unknown", ParquetPhysicalType.Int32,
+                new ColumnOptions(ParquetRepetition.Repeated), new LogicalType.Unknown()),
+            ColumnDefinition.List("list_unknown", ColumnDefinition.OptionalLeaf("element",
+                ParquetPhysicalType.Int32, logicalType: new LogicalType.Unknown()))
+        ]);
+
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions());
+        var rowGroup = writer.StartRowGroup();
+        var required = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        required.Serialize([0, 0]);
+        rowGroup.Write(required);
+        var repeated = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[1]);
+        repeated.Serialize([[0], [0, 0]]);
+        rowGroup.Write(repeated);
+        var list = rowGroup.CreateSerializedColumn<int?[]>(schema.LeafColumns[2]);
+        list.Serialize([[null], []]);
+        rowGroup.Write(list);
+        writer.CloseFile();
+        var file = stream.ToArray();
+
+        using (var reader = new ParquetReader())
+        {
+            reader.Reset(new MemoryStream(file));
+            ParquetRepetition[] repetitions =
+                [ParquetRepetition.Required, ParquetRepetition.Repeated, ParquetRepetition.Repeated];
+            for (var i = 0; i < repetitions.Length; i++)
+            {
+                var leaf = reader.Schema.LeafColumns[i];
+                if (leaf.LogicalType is not LogicalType.Unknown || leaf.Options.Repetition != repetitions[i])
+                    throw new InvalidOperationException(
+                        $"Leaf {i} read back as {leaf.LogicalType} with repetition {leaf.Options.Repetition}.");
+            }
+
+            var group = reader.RowGroups[0];
+            var requiredValues = 0;
+            foreach (var buffer in group.Column<int>(0))
+                requiredValues += buffer.Count;
+            if (requiredValues != 2)
+                throw new InvalidOperationException($"Expected two required values, got {requiredValues}.");
+            AssertLevels(group, 1, expectedValues: 3, expectedDefinitions: [1, 1, 1], expectedRepetitions: [0, 0, 1]);
+            AssertLevels(group, 2, expectedValues: 0, expectedDefinitions: [1, 0], expectedRepetitions: [0, 0]);
+        }
+
+        var path = Path.Combine(Path.GetTempPath(), $"plank-unknown-repetitions-{Guid.NewGuid():N}.parquet");
+        File.WriteAllBytes(path, file);
+        try
+        {
+            using var reader = new ParquetSharp.ParquetFileReader(path);
+            for (var i = 0; i < 3; i++)
+                AssertParquetSharpKind(reader, i, ParquetSharp.LogicalTypeEnum.Nil);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    static void AssertLevels(RowGroup group, int ordinal, int expectedValues, int[] expectedDefinitions,
+        int[] expectedRepetitions)
+    {
+        var values = 0;
+        var definitions = new List<int>();
+        var repetitions = new List<int>();
+        foreach (var buffer in group.NestedColumn<int>(ordinal))
+        {
+            values += buffer.Values.Count;
+            definitions.AddRange(buffer.DefinitionLevels);
+            repetitions.AddRange(buffer.RepetitionLevels);
+        }
+
+        if (values != expectedValues || !definitions.SequenceEqual(expectedDefinitions) ||
+            !repetitions.SequenceEqual(expectedRepetitions))
+            throw new InvalidOperationException(
+                $"Column {ordinal}: {values} values, definitions [{string.Join(", ", definitions)}], " +
+                $"repetitions [{string.Join(", ", repetitions)}].");
     }
 
     static byte[] CreateAnnotatedFile()
