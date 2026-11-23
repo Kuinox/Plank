@@ -55,17 +55,6 @@ static class PhysicalMetadataThriftReader
             }
         }
         required.Validate(ParquetRequiredFields.FileMetaData);
-        // created_by may follow the row groups in the footer. Resolve legacy trust before
-        // exposing the stats to logical scans or importing them as modern bounds.
-        var chunks = metadata.ColumnChunkStorage[..metadata.ColumnChunkCount];
-        var columns = metadata.Columns;
-        for (var i = 0; i < chunks.Length; i++)
-        {
-            ref var chunk = ref chunks[i];
-            if (chunk.Statistics.HasLegacyBounds)
-                chunk = chunk with { Statistics = LegacyStatistics.Validate(chunk.Statistics,
-                    metadata.FooterBytes, columns[chunk.ColumnOrdinal], metadata.CreatedByUtf8) };
-        }
     }
 
     static void ReadKeyValueMetadata(ref CompactProtocolReader reader, CompactProtocolType wireType,

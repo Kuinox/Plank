@@ -289,12 +289,11 @@ static class PageMetadataReader
         var chunkLength = checked((int)chunk.TotalCompressedSize);
         var offset = 0;
         var dataPageCount = 0;
-        var column = reader.Metadata.Columns[chunk.ColumnOrdinal];
         while (offset < chunkLength)
         {
             var header = ReadPageHeader(reader, chunk.ChunkOffset + (ulong)offset, chunkLength - offset,
                 chunk.TotalUncompressedSize, copyHeaderStatistics, ref statisticsBuilder,
-                out var headerStatistics, column);
+                out var headerStatistics);
             var pageSize = checked(header.HeaderLength + (int)header.CompressedPageSize);
             if (pageSize > chunkLength - offset)
                 throw new CorruptParquetException("Page size exceeds the remaining column chunk.");
@@ -334,7 +333,6 @@ static class PageMetadataReader
     static void PopulateHeaderStatistics(ParquetFileReader reader, ParquetColumnChunkInfo chunk,
         LeafColumn definition, Span<PageMetadataEntry> entries, ref StatisticsBufferBuilder statisticsBuilder)
     {
-        var column = reader.Metadata.Columns[chunk.ColumnOrdinal];
         for (var i = 0; i < entries.Length; i++)
         {
             ref var entry = ref entries[i];
@@ -342,7 +340,7 @@ static class PageMetadataReader
                 throw new NotSupportedException("Pages larger than Int32.MaxValue are not supported.");
             var header = ReadPageHeader(reader, entry.Offset, checked((int)entry.CompressedSize),
                 chunk.TotalUncompressedSize, copyStatistics: true, ref statisticsBuilder,
-                out var statistics, column);
+                out var statistics);
             if (header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2))
                 throw new CorruptParquetException(
                     $"Offset index entry {i} points to page type '{header.Type}' instead of a data page.");
@@ -424,7 +422,7 @@ static class PageMetadataReader
     /// <summary>Reads a page header, allowing bounded read-ahead for unusually complex headers.</summary>
     static PageHeader ReadPageHeader(ParquetFileReader reader, ulong offset, int remainingChunkLength,
         ulong totalUncompressedSize, bool copyStatistics, ref StatisticsBufferBuilder statisticsBuilder,
-        out EncodedStatistics copiedStatistics, ParquetColumnSchemaInfo column = default)
+        out EncodedStatistics copiedStatistics)
     {
         var maxLength = remainingChunkLength;
         var buffer = reader.BufferPool.Rent(checked((uint)Math.Min(maxLength, InitialPageHeaderLength)));
@@ -434,9 +432,6 @@ static class PageMetadataReader
             var header = PageHeaderProbe.Read(reader, offset, maxLength, maxUncompressedPageSize,
                 initialLength: 1, allowBorrow: false, ref buffer);
             var statistics = header.Statistics;
-            if (copyStatistics && statistics.HasLegacyBounds)
-                statistics = LegacyStatistics.Validate(statistics, buffer.Span[..header.HeaderLength], column,
-                    reader.Metadata.CreatedByUtf8);
             if (header.Type == PageHeaderType.DataPageV2 && !statistics.HasNullCount)
                 statistics = WithNullCount(statistics, header.NullCount);
 

@@ -20,7 +20,7 @@ public readonly record struct ParquetColumnChunkInfo(
 {
     internal int GeospatialStatisticsOffset { get; init; }
     internal int GeospatialStatisticsLength { get; init; }
-    internal EncodedStatistics Statistics { get; init; }
+    internal readonly EncodedStatistics Statistics;
 
     internal ParquetColumnChunkInfo(int rowGroupOrdinal, int columnOrdinal, ParquetPhysicalType physicalType,
         CompressionKind compression, ulong valueCount, ulong dataPageOffset, ulong dictionaryPageOffset,

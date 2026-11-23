@@ -3,21 +3,23 @@ using Plank.Reading.Logical;
 
 namespace Plank.Tests.Reading;
 
-internal sealed class LegacyStatisticsTrustTests
+internal sealed class LegacyStatisticsTests
 {
     [Test]
     [Arguments(0, false)]
     [Arguments(1, false)]
     [Arguments(2, false)]
-    [Arguments(3, true)]
-    [Arguments(4, true)]
+    [Arguments(3, false)]
+    [Arguments(4, false)]
     [Arguments(5, true)]
     [Arguments(6, false)]
-    public void LegacyStatisticsDoNotExcludeMatchingValues(int sample, bool trusted)
+    public void LegacyStatisticsDoNotExcludeMatchingValues(int sample, bool hasBounds)
     {
         // Fixtures created with harness/legacy_bounds.py, independently verified with PyArrow.
         // Old binary (PARQUET-251), legacy unsigned (PARQUET-686), old and fixed binary decimal,
         // signed legacy, modern unsigned with conflicting legacy fields, and unknown writer binary.
+        // Deprecated min/max are never exposed as bounds, even where they happen to be correct;
+        // only sample 5 carries min_value/max_value.
         var bytes = Convert.FromBase64String(sample switch
         {
             0 => "UEFSMRUAFRQVFCwVBBUAFQYVBhwYAQEYAf8WAAAAAAEAAAABAQAAAP8VAhksSAZzY2hlbWEVAgAVDCUAGAV2YWx1ZQAWBBkcGRwmCBwVDBklAAYZGAV2YWx1ZRUAFgQWShZKJgg8GAEBGAH/FgAAAAAWShYEACgYcGFycXVldC1tciB2ZXJzaW9uIDEuNy4wAGgAAABQQVIx",
@@ -64,8 +66,8 @@ internal sealed class LegacyStatisticsTrustTests
         if (matches != 1)
             throw new InvalidOperationException("Page pruning excluded the known matching value.");
         using var pages = metadata.OpenPages();
-        AssertTrust(metadata.Statistics);
-        AssertTrust(pages[0].Statistics);
+        AssertBounds(metadata.Statistics);
+        AssertBounds(pages[0].Statistics);
 
         bool CouldMatch(ParquetStatistics statistics)
         {
@@ -78,10 +80,10 @@ internal sealed class LegacyStatisticsTrustTests
             return BinaryPrimitives.ReadUInt32LittleEndian(statistics.Minimum) <= 1;
         }
 
-        void AssertTrust(ParquetStatistics statistics)
+        void AssertBounds(ParquetStatistics statistics)
         {
-            if (statistics.HasMinimum != trusted || statistics.HasMaximum != trusted || statistics.NullCount != 0)
-                throw new InvalidOperationException("Unexpected trust in legacy bounds or loss of the valid null count.");
+            if (statistics.HasMinimum != hasBounds || statistics.HasMaximum != hasBounds || statistics.NullCount != 0)
+                throw new InvalidOperationException("Legacy bounds were exposed, or the valid null count was lost.");
         }
     }
 }
