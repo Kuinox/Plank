@@ -1,6 +1,9 @@
+using System.Buffers.Binary;
 using Plank.Reading;
 using Plank.Reading.Logical;
+using Plank.Reading.Physical;
 using Plank.Schema;
+using Plank.Tests.Reading.ParquetTesting;
 using Plank.Writing;
 
 namespace Plank.Tests.Reading;
@@ -380,6 +383,90 @@ internal sealed class NestedColumnReadingTests
     [Test]
     public void ReadsParquetSharpDataPageV2ListLevels()
         => AssertParquetSharpList(ParquetSharp.ParquetDataPageVersion.V2, PageHeaderType.DataPageV2);
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void RejectsChunkStartingWithRowContinuation(bool acceptAllPruner)
+    {
+        if (!ParquetTestingCorpus.IsAvailable)
+            throw new InvalidOperationException(ParquetTestingCorpus.MissingMessage);
+
+        using var stream = File.OpenRead(ParquetTestingCorpus.Resolve("bad_data/ARROW-GH-45185.parquet"));
+        using var reader = new ParquetReader();
+        reader.Reset(stream, acceptAllPruner ? static (in ParquetDataPageMetadata _) => true : null);
+        Assert.Throws<CorruptParquetException>(() =>
+        {
+            foreach (var buffer in reader.RowGroups[0].NestedColumn<int>(0))
+                _ = buffer.Count;
+        });
+    }
+
+    [Test]
+    public void ReadsDataPageV1RowContinuedOnLaterPage()
+    {
+        var path = GetTempPath();
+        byte[] file;
+        try
+        {
+            using (var builder = new ParquetSharp.WriterPropertiesBuilder())
+            using (var properties = builder
+                       .Compression(ParquetSharp.Compression.Uncompressed)
+                       .DataPageVersion(ParquetSharp.ParquetDataPageVersion.V1)
+                       .DisableDictionary()
+                       .DisableWritePageIndex()
+                       .DataPagesize(1)
+                       .WriteBatchSize(2)
+                       .Build())
+            using (var output = File.Create(path))
+            using (var writer = new ParquetSharp.ParquetFileWriter(output,
+                       [new ParquetSharp.Column<int[]>("items")], null, properties, null, true))
+            using (var rowGroup = writer.AppendRowGroup())
+            using (var logical = rowGroup.NextColumn().LogicalWriter<int[]>())
+                logical.WriteBatch([[1, 2], [3, 4]]);
+            file = File.ReadAllBytes(path);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        // Writers split pages at rows, so turn the second page's levels [0, 1] into [1, 0]: rows [1, 2, 3], [4].
+        int offset;
+        using (var physical = new ParquetFileReader())
+        {
+            physical.Reset(new MemoryStream(file, writable: false));
+            offset = checked((int)physical.Metadata.ColumnChunk(0, 0).DataPageOffset);
+        }
+        var first = PageHeaderReader.Read(file.AsSpan(offset));
+        offset += first.HeaderLength + checked((int)first.CompressedPageSize);
+        var second = PageHeaderReader.Read(file.AsSpan(offset));
+        var levels = offset + second.HeaderLength;
+        if (first.Type != PageHeaderType.DataPage || second.Type != PageHeaderType.DataPage ||
+            BinaryPrimitives.ReadInt32LittleEndian(file.AsSpan(levels)) != 2 ||
+            file[levels + sizeof(int)] != 0x03 || file[levels + sizeof(int) + 1] != 0x02)
+            throw new InvalidOperationException("Expected two V1 pages, the second with bit-packed levels [0, 1].");
+        file[levels + sizeof(int) + 1] = 0x01;
+
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(file, writable: false));
+        var continuations = new List<bool>();
+        foreach (var buffer in reader.RowGroups[0].NestedColumn<int>(0))
+            continuations.Add(buffer.StartsWithContinuation);
+        if (!continuations.SequenceEqual([false, true]))
+            throw new InvalidOperationException(
+                $"Expected the second of two pages to continue a row: [{string.Join(", ", continuations)}].");
+
+        var snapshot = Read(reader.RowGroups[0].NestedColumn<int>(0));
+        AssertSnapshot(snapshot, [1, 2, 3, 4], [0, 1, 1, 0], [2, 2, 2, 2],
+            rowCount: 2, maxRepetitionLevel: 1, maxDefinitionLevel: 2);
+
+        reader.Reset(new MemoryStream(file, writable: false),
+            static (in ParquetDataPageMetadata page) => page.PageOrdinal != 0);
+        var pruned = Read(reader.RowGroups[0].NestedColumn<int>(0));
+        AssertSnapshot(pruned, [3, 4], [1, 0], [2, 2],
+            rowCount: 1, maxRepetitionLevel: 1, maxDefinitionLevel: 2);
+    }
 
     static void AssertParquetSharpList(ParquetSharp.ParquetDataPageVersion pageVersion,
         PageHeaderType expectedPageType)

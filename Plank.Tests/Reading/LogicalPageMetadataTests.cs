@@ -102,6 +102,127 @@ internal sealed class LogicalPageMetadataTests
         await Assert.That(values).IsEquivalentTo(new[] { 1, 2, 3, 4, 5, 6, 7, 8 });
     }
 
+    /// <remarks>
+    /// Arrow C++ (pyarrow too, with dictionary encoding, small pages and a page index) can put an empty data page
+    /// in a repeated column that shares the next page's first_row_index, so it covers no rows. Any reader-level
+    /// pruner sends nested columns through the page metadata, so rejecting it failed the whole scan.
+    /// </remarks>
+    [Test]
+    public async Task EmptyArrowDataPageSharingFirstRowIndexIsReadThroughPageMetadata()
+    {
+        var bytes = CreateArrowListFileWithEmptyDataPage();
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(bytes, writable: false), static (in ParquetDataPageMetadata _) => true);
+
+        ulong rows = 0;
+        var emptyPages = 0;
+        using (var pages = reader.RowGroups[0].GetColumnMetadata(0).OpenPages())
+            foreach (var page in pages)
+            {
+                rows += page.RowCount ?? 0;
+                if (page.RowCount == 0)
+                    emptyPages++;
+            }
+        if (emptyPages == 0)
+            throw new InvalidOperationException("The Arrow fixture no longer contains an empty data page.");
+
+        var values = new List<int>();
+        foreach (var buffer in reader.RowGroups[0].NestedColumn<int>(0))
+            values.AddRange(buffer.Values.Values.ToArray());
+
+        await Assert.That(rows).IsEqualTo(5UL);
+        await Assert.That(values).IsEquivalentTo(new[] { 0, 0, 1, 1, 2, 2, 3, 3, 4, 4 });
+    }
+
+    /// <remarks>Without a page index, row positions come from DataPageV2 headers; num_rows 0 is a real count there.</remarks>
+    [Test]
+    public async Task EmptyArrowDataPageV2KeepsLaterPageRowPositionsWithoutPageIndex()
+    {
+        var bytes = CreateArrowListFileWithEmptyDataPage(pageIndex: false);
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(bytes, writable: false), static (in ParquetDataPageMetadata _) => true);
+
+        ulong expectedFirst = 0;
+        var emptyPages = 0;
+        using (var pages = reader.RowGroups[0].GetColumnMetadata(0).OpenPages())
+            foreach (var page in pages)
+            {
+                if (page.FirstRowIndex != expectedFirst || page.RowCount is not { } rowCount)
+                    throw new InvalidOperationException(
+                        $"Page {page.PageOrdinal} starts at {page.FirstRowIndex?.ToString() ?? "unknown"} with " +
+                        $"{page.RowCount?.ToString() ?? "unknown"} rows; expected row {expectedFirst}.");
+                if (rowCount == 0)
+                    emptyPages++;
+                expectedFirst += rowCount;
+            }
+        if (emptyPages == 0)
+            throw new InvalidOperationException("The Arrow fixture no longer contains an empty data page.");
+
+        await Assert.That(expectedFirst).IsEqualTo(5UL);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void PruningOnlyEmptyPagesPreservesChunkValidation(bool pageIndex)
+    {
+        var bytes = CreateArrowListFileWithEmptyDataPage(pageIndex);
+        using var logical = new ParquetReader();
+        logical.Reset(new MemoryStream(bytes));
+        using var physical = new ParquetFileReader();
+        physical.Reset(new MemoryReadSource(bytes));
+        using var metadata = PageMetadataReader.OpenHandle(physical, 0, 0, logical.Schema.LeafColumns[0],
+            physical.Metadata.RowGroup(0).RowCount);
+        var skipped = 0;
+        using var cursor = physical.OpenPages(0, 0, metadata, (in ParquetDataPageMetadata page) =>
+        {
+            if (page.RowCount != 0)
+                return true;
+            skipped++;
+            return false;
+        });
+        while (cursor.MoveNext()) { }
+        if (skipped == 0 || cursor.SkippedDataPage)
+            throw new InvalidOperationException("Skipping empty pages must preserve first-entry and value-count validation.");
+    }
+
+    static byte[] CreateArrowListFileWithEmptyDataPage(bool pageIndex = true)
+    {
+        var element = new ParquetSharp.Schema.PrimitiveNode("element", ParquetSharp.Repetition.Required,
+            ParquetSharp.LogicalType.None(), ParquetSharp.PhysicalType.Int32);
+        using var list = new ParquetSharp.Schema.GroupNode("values", ParquetSharp.Repetition.Required,
+            [new ParquetSharp.Schema.GroupNode("list", ParquetSharp.Repetition.Repeated, [element])],
+            ParquetSharp.LogicalType.List());
+        using var root = new ParquetSharp.Schema.GroupNode("schema", ParquetSharp.Repetition.Required, [list]);
+        // V1 pages with a page index, or V2 pages whose headers carry the row counts instead.
+        using var builder = new ParquetSharp.WriterPropertiesBuilder()
+            .Compression(ParquetSharp.Compression.Uncompressed)
+            .EnableDictionary()
+            .DataPagesize(1)
+            .WriteBatchSize(1);
+        if (pageIndex)
+            builder.EnableWritePageIndex().DataPageVersion(ParquetSharp.ParquetDataPageVersion.V1);
+        else
+            builder.DisableWritePageIndex().DataPageVersion(ParquetSharp.ParquetDataPageVersion.V2);
+        using var properties = builder.Build();
+        using var stream = new MemoryStream();
+        using (var writer = new ParquetSharp.ParquetFileWriter(stream, root, properties, null, leaveOpen: true))
+        {
+            using (var rowGroup = writer.AppendRowGroup())
+            using (var column = (ParquetSharp.ColumnWriter<int>)rowGroup.NextColumn())
+            {
+                // Five rows of [r, r].
+                short[] definitions = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+                short[] repetitions = [0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
+                column.WriteBatch(10, definitions, repetitions, [0, 0, 1, 1, 2, 2, 3, 3, 4, 4]);
+            }
+
+            writer.Close();
+        }
+
+        return stream.ToArray();
+    }
+
     public enum WriterKind
     {
         Int32,
@@ -388,6 +509,73 @@ internal sealed class LogicalPageMetadataTests
             foreach (var buffer in reader.RowGroups[0].Column<long>(0))
                 _ = buffer.Values.Length;
         });
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(2)]
+    public void ArrowEmptyRepeatedPageDoesNotPreventIndexedPruning(int sample)
+    {
+        // PyArrow 26.0.1, list<int32>, write_page_index=True, dictionary encoding, no compression.
+        // 0: [[123]], V1, data_page_size=4; 1/2: [[1,2],[3],[4,5]], V1/V2,
+        // data_page_size=80, write_batch_size=1, max_rows_per_page=1. See arrow#54533.
+        var bytes = Convert.FromBase64String(sample switch
+        {
+            0 => "UEFSMRUEFQgVCEwVAhUAEgAAewAAABUAFRIVEiwVABUQFQYVBgAAAAAAAAAAAAAAFQAVHhUeLBUCFRAVBhUGAAACAAAAAgACAAAAAgMBAgAZIQECGSgABHsAAAAZKAAEewAAABUCGSYAABlGAAACABmGAAAAAAAAAAIAGSwWLBU0FgAAFmAVQBYAAAAVBBlMNQAYBnNjaGVtYRUCADUCGAJ4cxUCFQZMPAAAADUEGARsaXN0FQIAFQIlAhgHZWxlbWVudAAWAhkcGRwmABwVAhk1AAYQGTgCeHMEbGlzdAdlbGVtZW50FQAWAhaYARaYASYsJggcGAR7AAAAGAR7AAAAFgAoBHsAAAAYBHsAAAAREQAZLBUEFQAVAgAVABUQFQQAPCkmAgAZRgAAAAIAABb2ARUiFqABFVYAFpgBFgImCBaYAQAoIHBhcnF1ZXQtY3BwLWFycm93IHZlcnNpb24gMjYuMC4xGRwcAAAA4gAAAFBBUjE=",
+            1 => "UEFSMRUEFSgVKEwVChUAEgAAAQAAAAIAAAADAAAABAAAAAUAAAAVABUeFR4sFQQVEBUGFQYAAAIAAAADAgIAAAAEAwEDAhUAFR4VHiwVAhUQFQYVBgAAAgAAAAIAAgAAAAIDAgICFQAVEhUSLBUAFRAVBhUGAAAAAAAAAAAAAAIVABUiFSIsFQQVEBUGFQYAAAIAAAADAgIAAAAEAwMDIwAAGUECAgECGUgEAQAAAAQDAAAAAAQEAAAAGUgEAgAAAAQDAAAAAAQFAAAAFQIZRgAAAAAZhgICAgAAAAICGfYQAAAABAAAAAIAAAAAAAAABAAZTBZMFUAWAAAWjAEVQBYCABbMARU0FgQAFoACFUQWBAAAFQQZTDUAGAZzY2hlbWEVAgA1AhgCeHMVAhUGTDwAAAA1BBgEbGlzdBUCABUCJQIYB2VsZW1lbnQAFgYZHBkcJgAcFQIZNQAGEBk4AnhzBGxpc3QHZWxlbWVudBUAFgoWvAIWvAImTCYIHBgEBQAAABgEAQAAABYAKAQFAAAAGAQBAAAAEREAGSwVBBUAFQIAFQAVEBUIADwpJgYEGUYAAAAKAAAW5AMVRBbEAhWgAQAWvAIWBiYIFrwCACggcGFycXVldC1jcHAtYXJyb3cgdmVyc2lvbiAyNi4wLjEZHBwAAADjAAAAUEFSMQ==",
+            _ => "UEFSMRUEFSgVKEwVChUAEgAAAQAAAAIAAAADAAAABAAAAAUAAAAVBhUOFQ5cFQQVABUCFRAVBBUEEgAAAwIEAwEDAhUGFQ4VDlwVAhUAFQIVEBUEFQQSAAACAAIDAgICFQYVAhUCXBUAFQAVABUQFQAVABIAAAIVBhUSFRJcFQQVABUCFRAVBBUEEgAAAwIEAwMDIwAAGUECAgECGUgEAQAAAAQDAAAAAAQEAAAAGUgEAgAAAAQDAAAAAAQFAAAAFQIZRgAAAAAZhgICAgAAAAICGfYQAAAABAAAAAIAAAAAAAAABAAZTBZMFToWAAAWhgEVOhYCABbAARUuFgQAFu4BFT4WBAAAFQQZTDUAGAZzY2hlbWEVAgA1AhgCeHMVAhUGTDwAAAA1BBgEbGlzdBUCABUCJQIYB2VsZW1lbnQAFgYZHBkcJgAcFQIZNQAGEBk4AnhzBGxpc3QHZWxlbWVudBUAFgoWpAIWpAImTCYIHBgEBQAAABgEAQAAABYAKAQFAAAAGAQBAAAAEREAGSwVBBUAFQIAFQAVEBUIADwpJgYEGUYAAAAKAAAWzAMVRBasAhWgAQAWpAIWBiYIFqQCACggcGFycXVldC1jcHAtYXJyb3cgdmVyc2lvbiAyNi4wLjEZHBwAAADjAAAAUEFSMQ=="
+        });
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(bytes));
+        var all = new List<int>();
+        var rowCount = 0;
+        foreach (var page in reader.RowGroups[0].NestedColumn<int>(0))
+        {
+            all.AddRange(page.Values.Values.ToArray());
+            rowCount += page.RowCount;
+        }
+        int[] expected = sample == 0 ? [123] : [1, 2, 3, 4, 5];
+        if (!all.SequenceEqual(expected) || rowCount != (sample == 0 ? 1 : 3))
+            throw new InvalidOperationException("Sequential scan lost repeated values or rows.");
+
+        var target = sample == 0 ? 123 : 4;
+        reader.Reset(new MemoryStream(bytes), (in ParquetDataPageMetadata page) =>
+            page.RowCount != 0 && ContainsInt32(in page, target));
+        using var pages = reader.RowGroups[0].GetColumnMetadata(0).OpenPages();
+        var emptyOrdinal = sample == 0 ? 0 : 2;
+        if (pages[emptyOrdinal].RowCount != 0 ||
+            pages[emptyOrdinal].FirstRowIndex != pages[emptyOrdinal + 1].FirstRowIndex)
+            throw new InvalidOperationException("Expected an indexed empty page before a real row.");
+        var selected = new List<int>();
+        foreach (var page in reader.RowGroups[0].NestedColumn<int>(0))
+            selected.AddRange(page.Values.Values.ToArray());
+        int[] expectedSelected = sample == 0 ? [123] : [4, 5];
+        if (!selected.SequenceEqual(expectedSelected))
+            throw new InvalidOperationException("Page pruning lost a matching row or read an unrelated page.");
+
+        if (sample == 0)
+            return;
+        using var source = new MemoryReadSource(bytes);
+        using var physical = new ParquetFileReader();
+        physical.Reset(source);
+        var chunk = physical.Metadata.ColumnChunk(0, 0);
+        PageMetadataEntry[] locations = new PageMetadataEntry[pages.Count];
+        for (var i = 0; i < pages.Count; i++)
+        {
+            var page = pages[i];
+            locations[i] = new PageMetadataEntry
+            {
+                Offset = page.Offset,
+                CompressedSize = page.CompressedSize,
+                FirstRowIndex = page.FirstRowIndex!.Value,
+                HasLocation = true,
+                HasFirstRowIndex = true
+            };
+        }
+        locations[1].FirstRowIndex = 0; // The preceding data page really contains values.
+        Assert.Throws<CorruptParquetException>(() =>
+            PageMetadataReader.ValidateLocations(physical, chunk, locations, 3, allowEmptyRepeatedPages: true));
     }
 
     [Test]
