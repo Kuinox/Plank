@@ -201,12 +201,13 @@ public sealed record ParquetSchema
         var infosBuilder = ImmutableArray.CreateBuilder<LeafProjectionInfo>();
         var pathBuffer = new List<string>(8);
         var mapProjections = new List<MapProjectionInfo>(2);
+        var repeatedDefinitionLevels = new List<int>(2);
         var nextMapId = 0;
         var errorSink = new ProjectionError();
         for (var i = 0; i < definitions.Length; i++)
             if (!TryCollectLeaves(definitions[i], columnsBuilder, pathsBuilder, pathBuffer, repeatedLevel: 0,
                     definitionLevel: 0, infosBuilder, isListLeaf: false, listOptional: false, elementOptional: false,
-                    mapProjections, ref nextMapId, errorSink))
+                    mapProjections, repeatedDefinitionLevels, ref nextMapId, errorSink))
             {
                 columns = [];
                 leafPaths = [];
@@ -224,14 +225,16 @@ public sealed record ParquetSchema
     static bool TryCollectLeaves(ColumnDefinition node, ImmutableArray<Column>.Builder columnsBuilder,
         ImmutableArray<ImmutableArray<string>>.Builder pathsBuilder, List<string> pathBuffer, int repeatedLevel,
         int definitionLevel, ImmutableArray<LeafProjectionInfo>.Builder infosBuilder, bool isListLeaf,
-        bool listOptional, bool elementOptional, List<MapProjectionInfo> mapProjections, ref int nextMapId,
-        ProjectionError error)
+        bool listOptional, bool elementOptional, List<MapProjectionInfo> mapProjections,
+        List<int> repeatedDefinitionLevels, ref int nextMapId, ProjectionError error)
     {
         pathBuffer.Add(node.Name);
         var nodeRepetition = node.Repetition == ParquetRepetition.Repeated;
         var nodeOptional = node.Repetition == ParquetRepetition.Optional;
         var nextRepeatedLevel = repeatedLevel + (nodeRepetition ? 1 : 0);
         var nextDefinitionLevel = definitionLevel + (nodeRepetition || nodeOptional ? 1 : 0);
+        if (nodeRepetition)
+            repeatedDefinitionLevels.Add(nextDefinitionLevel);
         try
         {
             switch (node.Kind)
@@ -262,7 +265,8 @@ public sealed record ParquetSchema
                     pathsBuilder.Add(path);
                     infosBuilder.Add(new LeafProjectionInfo(isListLeaf, listOptional, elementOptional,
                         MaxRepetitionLevel: nextRepeatedLevel, MaxDefinitionLevel: nextDefinitionLevel,
-                        MapProjections: mapProjections.ToImmutableArray()));
+                        MapProjections: mapProjections.ToImmutableArray(),
+                        RepeatedDefinitionLevels: repeatedDefinitionLevels.ToImmutableArray()));
                     return true;
                 }
                 case NodeKind.Group:
@@ -276,7 +280,7 @@ public sealed record ParquetSchema
                     for (var i = 0; i < node.Children.Length; i++)
                         if (!TryCollectLeaves(node.Children[i], columnsBuilder, pathsBuilder, pathBuffer, nextRepeatedLevel,
                                 nextDefinitionLevel, infosBuilder, isListLeaf, listOptional, elementOptional,
-                                mapProjections, ref nextMapId, error))
+                                mapProjections, repeatedDefinitionLevels, ref nextMapId, error))
                             return false;
                     return true;
                 }
@@ -286,6 +290,7 @@ public sealed record ParquetSchema
                         return false;
 
                     pathBuffer.Add("list");
+                    repeatedDefinitionLevels.Add(nextDefinitionLevel + 1);
                     var element = node.Children[0] with { Name = "element" };
                     try
                     {
@@ -293,11 +298,12 @@ public sealed record ParquetSchema
                             repeatedLevel: nextRepeatedLevel + 1, definitionLevel: nextDefinitionLevel + 1, infosBuilder,
                             isListLeaf: true, listOptional: listOptional || node.Repetition == ParquetRepetition.Optional,
                             elementOptional: element.Repetition == ParquetRepetition.Optional, mapProjections,
-                            ref nextMapId, error);
+                            repeatedDefinitionLevels, ref nextMapId, error);
                     }
                     finally
                     {
                         pathBuffer.RemoveAt(pathBuffer.Count - 1);
+                        repeatedDefinitionLevels.RemoveAt(repeatedDefinitionLevels.Count - 1);
                     }
                 }
                 case NodeKind.Map:
@@ -310,22 +316,18 @@ public sealed record ParquetSchema
                     var mapRepetitionLevel = nextRepeatedLevel + 1;
 
                     pathBuffer.Add("key_value");
+                    repeatedDefinitionLevels.Add(nextDefinitionLevel + 1);
                     mapProjections.Add(new MapProjectionInfo(mapId, mapRepetitionLevel, pathBuffer.Count, IsKey: true));
                     var keyOk = TryCollectLeaves(keyNode with { Name = "key" }, columnsBuilder, pathsBuilder,
                         pathBuffer, repeatedLevel: mapRepetitionLevel, definitionLevel: nextDefinitionLevel + 1,
                         infosBuilder, isListLeaf: true, listOptional: node.Repetition == ParquetRepetition.Optional,
-                        elementOptional: false, mapProjections, ref nextMapId, error);
+                        elementOptional: false, mapProjections, repeatedDefinitionLevels, ref nextMapId, error);
                     mapProjections.RemoveAt(mapProjections.Count - 1);
-                    if (!keyOk)
+                    if (!keyOk || node.Children.Length == 1)
                     {
                         pathBuffer.RemoveAt(pathBuffer.Count - 1);
-                        return false;
-                    }
-
-                    if (node.Children.Length == 1)
-                    {
-                        pathBuffer.RemoveAt(pathBuffer.Count - 1);
-                        return true;
+                        repeatedDefinitionLevels.RemoveAt(repeatedDefinitionLevels.Count - 1);
+                        return keyOk;
                     }
 
                     var valueNode = node.Children[1];
@@ -334,9 +336,10 @@ public sealed record ParquetSchema
                         pathBuffer, repeatedLevel: mapRepetitionLevel, definitionLevel: nextDefinitionLevel + 1, infosBuilder,
                         isListLeaf: true, listOptional: node.Repetition == ParquetRepetition.Optional,
                         elementOptional: valueNode.Repetition == ParquetRepetition.Optional, mapProjections,
-                        ref nextMapId, error);
+                        repeatedDefinitionLevels, ref nextMapId, error);
                     mapProjections.RemoveAt(mapProjections.Count - 1);
                     pathBuffer.RemoveAt(pathBuffer.Count - 1);
+                    repeatedDefinitionLevels.RemoveAt(repeatedDefinitionLevels.Count - 1);
                     return valueOk;
                 }
                 default:
@@ -346,6 +349,8 @@ public sealed record ParquetSchema
         finally
         {
             pathBuffer.RemoveAt(pathBuffer.Count - 1);
+            if (nodeRepetition)
+                repeatedDefinitionLevels.RemoveAt(repeatedDefinitionLevels.Count - 1);
         }
     }
 }

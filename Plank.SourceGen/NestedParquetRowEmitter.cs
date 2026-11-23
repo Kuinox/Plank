@@ -378,17 +378,15 @@ static class NestedParquetRowEmitter
             if (endpointOptional && !storageElementType.EndsWith("?", StringComparison.Ordinal) &&
                 IsNonNullableValueType(storageElementType))
                 storageElementType += "?";
-            var storageShapeType = storageElementType;
-            for (var i = 0; i < collections.Count; i++)
-                storageShapeType += "[]";
+            // Repeated leaves are buffered as levels and dense physical values.
+            var storageShapeType = collections.Count == 0 ? storageElementType : node.Scalar!.StorageType;
 
             var preferredName = string.Join("_", path.Select(static part => ToIdentifier(part.PropertyName)));
             var uniqueName = preferredName;
             for (var suffix = 2; !usedNames.Add(uniqueName); suffix++)
                 uniqueName = preferredName + suffix;
             var leaf = new Leaf(root, node, path.ToImmutableArray(), collections.ToImmutableArray(),
-                uniqueName, storageShapeType, node.Scalar.StorageType, repetitionLevel, definitionLevel,
-                endpointOptional);
+                uniqueName, storageShapeType, repetitionLevel, definitionLevel, endpointOptional);
             leaves.Add(leaf);
             for (var i = 0; i < path.Count; i++)
                 path[i].Leaves.Add(leaf);
@@ -450,9 +448,9 @@ static class NestedParquetRowEmitter
         var element = list.Children[0];
         if (element.Kind == NodeKind.Group)
         {
-            if (element.Optional || element.Children.Any(static child => child.Kind != NodeKind.Leaf || child.Optional))
+            if (element.Children.Any(static child => child.Kind != NodeKind.Leaf))
             {
-                error = $"List-of-record property '{list.PropertyName}' currently requires a required record with required scalar properties.";
+                error = $"List-of-record property '{list.PropertyName}' currently requires records with scalar properties.";
                 return false;
             }
         }
@@ -463,11 +461,6 @@ static class NestedParquetRowEmitter
         }
         else if (element.Kind == NodeKind.List)
         {
-            if (element.Optional)
-            {
-                error = $"Nested-list property '{list.PropertyName}' currently requires non-null inner lists.";
-                return false;
-            }
             if (!ValidateListShape(element, out error))
                 return false;
         }
@@ -574,7 +567,7 @@ static class NestedParquetRowEmitter
             if (leaf.UsesNestedDescriptor)
             {
                 builder.Append("    static readonly global::Plank.RowApi.RowApiNestedColumnDescriptor<")
-                    .Append(leaf.StorageShapeType).Append(", ").Append(leaf.StorageElementType).Append("> ")
+                    .Append(leaf.StorageShapeType).Append("> ")
                     .Append(names.Helper(leaf.DescriptorName)).Append(" = new(\"").Append(Escape(leaf.Root.PropertyName))
                     .Append("\", " + names.Root("Schema") + ".LeafColumns[").Append(i).Append(']');
                 for (var levelIndex = 0; levelIndex < leaf.CollectionLevels.Length; levelIndex++)
@@ -795,6 +788,17 @@ static class NestedParquetRowEmitter
                 continue;
             }
 
+            if (IsCollection(root))
+            {
+                builder.Append("            ").Append(names.Get("write:" + root.PropertyName, "Write" + ToIdentifier(root.PropertyName)))
+                    .Append("(row.").Append(EscapeIdentifier(root.PropertyName)).Append(", rowIndex");
+                foreach (var leaf in root.Leaves)
+                    builder.Append(", GetNestedLeafBuffer<").Append(leaf.StorageShapeType).Append(">(slotIndex, ")
+                        .Append(leaf.Ordinal).Append(')');
+                builder.AppendLine(");");
+                continue;
+            }
+
             builder.Append("            var value").Append(i).Append(" = row.")
                 .Append(EscapeIdentifier(root.PropertyName)).AppendLine(";");
             for (var leafIndex = 0; leafIndex < root.Leaves.Count; leafIndex++)
@@ -819,7 +823,7 @@ static class NestedParquetRowEmitter
         builder.AppendLine("    {");
         RowCursorEmitter.AppendSlotMembers(builder);
         for (var i = 0; i < model.Leaves.Length; i++)
-            builder.Append("        internal ").Append(model.Leaves[i].StorageShapeType).Append("[] _column")
+            builder.Append("        internal ").Append(model.Leaves[i].SlotFieldType).Append(" _column")
                 .Append(i).AppendLine(" = null!;");
         builder.AppendLine();
         builder.AppendLine("        internal " + names.Root("BufferSlot") + "(global::Plank.Writing.RowGroupWriter rowGroupWriter, int rowCount)");
@@ -848,6 +852,12 @@ static class NestedParquetRowEmitter
             foreach (var columnIndex in rowSizePlan.VariableColumnIndices)
             {
                 var leaf = model.Leaves[columnIndex];
+                if (leaf.UsesNestedDescriptor)
+                {
+                    builder.Append("            size = checked(size + _column").Append(columnIndex)
+                        .AppendLine(".EstimateRowSize(Index));");
+                    continue;
+                }
                 builder.Append("            size = checked(size + EstimateValueSize(")
                     .Append(UncheckedBufferElement($"_column{columnIndex}", "Index"))
                     .Append(", global::Plank.Schema.ParquetPhysicalType.")
@@ -864,7 +874,8 @@ static class NestedParquetRowEmitter
         builder.AppendLine("        void RefreshBuffers()");
         builder.AppendLine("        {");
         for (var i = 0; i < model.Leaves.Length; i++)
-            builder.Append("            _column").Append(i).Append(" = GetValues<")
+            builder.Append("            _column").Append(i)
+                .Append(model.Leaves[i].UsesNestedDescriptor ? " = GetNestedLeafBuffer<" : " = GetValues<")
                 .Append(model.Leaves[i].StorageShapeType).Append(">(").Append(i).AppendLine(");");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
@@ -884,20 +895,40 @@ static class NestedParquetRowEmitter
         {
             builder.AppendLine();
             AppendWriteRowProperty(builder, names, model.Roots[i],
-                leaf => UncheckedBufferElement($"{names.Helper("_ownerSlot")}._column{leaf.Ordinal}", names.Helper("_index")));
+                leaf => UncheckedBufferElement($"{names.Helper("_ownerSlot")}._column{leaf.Ordinal}", names.Helper("_index")),
+                leaf => $"{names.Helper("_ownerSlot")}._column{leaf.Ordinal}", names.Helper("_index"));
         }
         builder.AppendLine("    }");
         RowCursorEmitter.AppendCursor(builder, names,
-            model.Leaves.Select(static leaf => leaf.StorageShapeType).ToArray(), () =>
+            model.Leaves.Select(static leaf => leaf.UsesNestedDescriptor ? leaf.SlotFieldType : leaf.StorageShapeType).ToArray(), () =>
             {
                 foreach (var root in model.Roots)
                     AppendWriteRowProperty(builder, names, root,
-                        leaf => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref {names.Helper("_buffers")}._column{leaf.Ordinal}, {names.Helper("_index")})");
-            });
+                        leaf => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref {names.Helper("_buffers")}._column{leaf.Ordinal}, {names.Helper("_index")})",
+                        leaf => $"{names.Helper("_buffers")}._column{leaf.Ordinal}", names.Helper("_index"));
+            }, model.Leaves.Select(static leaf => leaf.UsesNestedDescriptor).ToArray());
     }
 
-    static void AppendWriteRowProperty(StringBuilder builder, GeneratedMemberNames names, Node root, Func<Leaf, string> element)
+    static void AppendWriteRowProperty(StringBuilder builder, GeneratedMemberNames names, Node root, Func<Leaf, string> element,
+        Func<Leaf, string> nestedBuffer, string rowIndex)
     {
+        if (IsCollection(root))
+        {
+            builder.Append("        public ").Append(root.UserType).Append(' ')
+                .Append(EscapeIdentifier(root.PropertyName)).AppendLine();
+            builder.AppendLine("        {");
+            builder.Append("            get => ").Append(names.Get("read:" + root.PropertyName, "Read" + ToIdentifier(root.PropertyName))).Append('(');
+            AppendLeafArguments(builder, root, leaf => $"{nestedBuffer(leaf)}.GetRow({rowIndex})");
+            builder.AppendLine(");");
+            builder.Append("            set => ").Append(names.Get("write:" + root.PropertyName, "Write" + ToIdentifier(root.PropertyName)))
+                .Append("(value, ").Append(rowIndex);
+            foreach (var leaf in root.Leaves)
+                builder.Append(", ").Append(nestedBuffer(leaf));
+            builder.AppendLine(");");
+            builder.AppendLine("        }");
+            return;
+        }
+
         if (root.Kind == NodeKind.Leaf)
         {
             var leaf = root.Leaves[0];
@@ -1067,6 +1098,13 @@ static class NestedParquetRowEmitter
                 continue;
 
             builder.AppendLine();
+            if (IsCollection(root))
+            {
+                AppendLevelReader(builder, names, root);
+                builder.AppendLine();
+                AppendLevelWriter(builder, names, root);
+                continue;
+            }
             AppendReadMaterializer(builder, names, root);
             for (var leafIndex = 0; leafIndex < root.Leaves.Count; leafIndex++)
             {
@@ -1113,8 +1151,7 @@ static class NestedParquetRowEmitter
             if (node.Optional)
             {
                 var presenceLeaf = FindPresenceLeaf(node)!;
-                builder.Append(padding).Append("if (").Append(GetLeafAccess(presenceLeaf, indexes))
-                    .AppendLine(" is null)");
+                builder.Append(padding).Append("if (").Append(GetLeafAccess(presenceLeaf, indexes)).AppendLine(" is null)");
                 builder.Append(padding).Append("    ").Append(target).AppendLine(" = null!;");
                 builder.Append(padding).AppendLine("else");
                 builder.Append(padding).AppendLine("{");
@@ -1126,14 +1163,7 @@ static class NestedParquetRowEmitter
             return;
         }
 
-        var firstLeaf = node.Leaves[0];
-        var source = GetLeafAccess(firstLeaf, indexes);
-        builder.Append(padding).Append("if (").Append(source).AppendLine(" is null)");
-        builder.Append(padding).Append("    ").Append(target).AppendLine(" = null!;");
-        builder.Append(padding).AppendLine("else");
-        builder.Append(padding).AppendLine("{");
-        AppendReadCollectionBody(builder, node, target, source, indexes, indent + 1, ref variableIndex);
-        builder.Append(padding).AppendLine("}");
+        throw new InvalidOperationException("Collections are materialized from levels.");
     }
 
     static void AppendReadGroupBody(StringBuilder builder, Node node, string target,
@@ -1157,60 +1187,6 @@ static class NestedParquetRowEmitter
         builder.Append(padding).AppendLine("};");
     }
 
-    static void AppendReadCollectionBody(StringBuilder builder, Node node, string target, string source,
-        ImmutableArray<string> indexes, int indent, ref int variableIndex)
-    {
-        var padding = new string(' ', indent * 4);
-        var index = "i" + indexes.Length;
-        var nonNullSource = source + "!";
-        if (node.Kind == NodeKind.List)
-        {
-            var element = node.Children[0];
-            if (node.CollectionKind == "Array")
-                builder.Append(padding).Append(target).Append(" = (").Append(node.UserType)
-                    .Append(")global::System.Array.CreateInstance(typeof(").Append(element.RuntimeType)
-                    .Append("), ").Append(nonNullSource).AppendLine(".Length);");
-            else
-                builder.Append(padding).Append(target).Append(" = new ").Append(TrimNullable(node.UserType))
-                    .Append('(').Append(nonNullSource).AppendLine(".Length);");
-            builder.Append(padding).Append("for (var ").Append(index).Append(" = 0; ").Append(index)
-                .Append(" < ").Append(nonNullSource).Append(".Length; ").Append(index).AppendLine("++)");
-            builder.Append(padding).AppendLine("{");
-            var elementVariable = "v" + variableIndex++;
-            builder.Append(padding).Append("    ").Append(element.UserType).Append(' ')
-                .Append(elementVariable).AppendLine(" = default!;");
-            AppendReadAssignment(builder, element, elementVariable, indexes.Add(index), indent + 1,
-                ref variableIndex);
-            if (node.CollectionKind == "Array")
-                builder.Append(padding).Append("    ").Append(target).Append("![").Append(index).Append("] = ")
-                    .Append(elementVariable).AppendLine(";");
-            else
-                builder.Append(padding).Append("    ").Append(target).Append("!.Add(").Append(elementVariable)
-                    .AppendLine(");");
-            builder.Append(padding).AppendLine("}");
-            return;
-        }
-
-        var key = node.Children[0];
-        var value = node.Children[1];
-        builder.Append(padding).Append(target).Append(" = new ").Append(TrimNullable(node.UserType))
-            .Append('(').Append(nonNullSource).AppendLine(".Length);");
-        builder.Append(padding).Append("for (var ").Append(index).Append(" = 0; ").Append(index)
-            .Append(" < ").Append(nonNullSource).Append(".Length; ").Append(index).AppendLine("++)");
-        builder.Append(padding).AppendLine("{");
-        var keyVariable = "v" + variableIndex++;
-        var valueVariable = "v" + variableIndex++;
-        builder.Append(padding).Append("    ").Append(key.UserType).Append(' ').Append(keyVariable)
-            .AppendLine(" = default!;");
-        AppendReadAssignment(builder, key, keyVariable, indexes.Add(index), indent + 1, ref variableIndex);
-        builder.Append(padding).Append("    ").Append(value.UserType).Append(' ').Append(valueVariable)
-            .AppendLine(" = default!;");
-        AppendReadAssignment(builder, value, valueVariable, indexes.Add(index), indent + 1, ref variableIndex);
-        builder.Append(padding).Append("    ").Append(target).Append("!.Add(").Append(keyVariable).Append(", ")
-            .Append(valueVariable).AppendLine(");");
-        builder.Append(padding).AppendLine("}");
-    }
-
     static void AppendWriteProjector(StringBuilder builder, GeneratedMemberNames names, Node root, Leaf leaf)
     {
         builder.Append("    static ").Append(leaf.StorageShapeType).Append(' ')
@@ -1229,8 +1205,8 @@ static class NestedParquetRowEmitter
         var padding = new string(' ', indent * 4);
         if (node.Kind == NodeKind.Leaf)
         {
-            builder.Append(padding).Append(target).Append(" = ").Append(ConvertToStorage(names, leaf, source))
-                .AppendLine(";");
+            var converted = ConvertToStorage(names, leaf, source);
+            builder.Append(padding).Append(target).Append(" = ").Append(converted).AppendLine(";");
             return;
         }
 
@@ -1252,50 +1228,347 @@ static class NestedParquetRowEmitter
             return;
         }
 
-        var collectionChild = node.Kind == NodeKind.Map
-            ? node.Children.First(candidate => candidate.Leaves.Contains(leaf))
-            : node.Children[0];
-        builder.Append(padding).Append("if (").Append(source).AppendLine(" is null)");
+        throw new InvalidOperationException("Collections are written as levels.");
+    }
+
+    // A collection property is written by one walk that appends a position to each of its leaves for every list
+    // element, or null or empty collection. Definition levels count the optional and repeated nodes that exist.
+    static void AppendLevelWriter(StringBuilder builder, GeneratedMemberNames names, Node root)
+    {
+        builder.Append("    static void ").Append(names.Get("write:" + root.PropertyName, "Write" + ToIdentifier(root.PropertyName)))
+            .Append('(').Append(root.UserType).Append(" value, int rowIndex");
+        for (var i = 0; i < root.Leaves.Count; i++)
+            builder.Append(", ").Append(root.Leaves[i].SlotFieldType).Append(" b").Append(i);
+        builder.AppendLine(")");
+        builder.AppendLine("    {");
+        for (var i = 0; i < root.Leaves.Count; i++)
+            builder.Append("        b").Append(i).AppendLine(".BeginRow(rowIndex);");
+        var variableIndex = 0;
+        AppendWriteLevels(builder, names, root, root, "value", "0", definitionLevel: 0, repetitionLevel: 0, indent: 2,
+            ref variableIndex);
+        for (var i = 0; i < root.Leaves.Count; i++)
+            builder.Append("        b").Append(i).AppendLine(".EndRow();");
+        builder.AppendLine("    }");
+    }
+
+    static void AppendWriteLevels(StringBuilder builder, GeneratedMemberNames names, Node root, Node node,
+        string source, string repetition, int definitionLevel, int repetitionLevel, int indent, ref int variableIndex)
+    {
+        var padding = new string(' ', indent * 4);
+        if (node.Kind == NodeKind.Leaf)
+        {
+            var leaf = node.Leaves[0];
+            var buffer = "b" + root.Leaves.IndexOf(leaf);
+            var converted = ConvertToStorage(names, leaf, source);
+            if (node.Optional)
+            {
+                var present = "p" + variableIndex++;
+                builder.Append(padding).Append("if ((").Append(converted).Append(") is { } ").Append(present).AppendLine(")");
+                builder.Append(padding).Append("    ").Append(buffer).Append(".Add(").Append(repetition).Append(", ")
+                    .Append(present).AppendLine(");");
+                builder.Append(padding).AppendLine("else");
+                builder.Append(padding).Append("    ").Append(buffer).Append(".AddNull(").Append(repetition).Append(", ")
+                    .Append(definitionLevel).AppendLine(");");
+            }
+            else
+                builder.Append(padding).Append(buffer).Append(".Add(").Append(repetition).Append(", ")
+                    .Append(converted).AppendLine(");");
+            return;
+        }
+
+        var local = "v" + variableIndex++;
+        builder.Append(padding).Append("var ").Append(local).Append(" = ").Append(source).AppendLine(";");
+        var definedLevel = definitionLevel;
         if (node.Optional)
-            builder.Append(padding).Append("    ").Append(target).AppendLine(" = null!;");
+        {
+            definedLevel++;
+            builder.Append(padding).Append("if (").Append(local).AppendLine(" is null)");
+            builder.Append(padding).AppendLine("{");
+            AppendAddNull(builder, root, node, padding + "    ", repetition, definitionLevel);
+            builder.Append(padding).AppendLine("}");
+            builder.Append(padding).AppendLine("else");
+            builder.Append(padding).AppendLine("{");
+            padding += "    ";
+            indent++;
+        }
+        else if (!node.TypeSymbol.IsValueType)
+        {
+            builder.Append(padding).Append("if (").Append(local).AppendLine(" is null)");
+            builder.Append(padding).Append("    throw new global::System.InvalidOperationException(\"Required nested value '")
+                .Append(Escape(node.PropertyName)).AppendLine("' cannot be null.\");");
+        }
+
+        var value = node.IsNullableValueType ? local + ".Value" : local + "!";
+        if (node.Kind == NodeKind.Group)
+        {
+            foreach (var child in node.Children)
+                AppendWriteLevels(builder, names, root, child, value + "." + EscapeIdentifier(child.PropertyName),
+                    repetition, definedLevel, repetitionLevel, indent, ref variableIndex);
+        }
         else
-            builder.Append(padding).AppendLine("    throw new global::System.InvalidOperationException(\"Required generated collection cannot be null.\");");
+        {
+            var count = node.Kind == NodeKind.List && node.CollectionKind == "Array" ? ".Length" : ".Count";
+            var elementLevel = definedLevel + 1;
+            var collectionLevel = repetitionLevel + 1;
+            builder.Append(padding).Append("if (").Append(value).Append(count).AppendLine(" == 0)");
+            builder.Append(padding).AppendLine("{");
+            AppendAddNull(builder, root, node, padding + "    ", repetition, definedLevel);
+            builder.Append(padding).AppendLine("}");
+            builder.Append(padding).AppendLine("else");
+            builder.Append(padding).AppendLine("{");
+            var elementRepetition = "r" + variableIndex++;
+            builder.Append(padding).Append("    var ").Append(elementRepetition).Append(" = ").Append(repetition).AppendLine(";");
+            if (node.Kind == NodeKind.Map)
+            {
+                var pair = "e" + variableIndex++;
+                builder.Append(padding).Append("    foreach (var ").Append(pair).Append(" in ").Append(value).AppendLine(")");
+                builder.Append(padding).AppendLine("    {");
+                AppendWriteLevels(builder, names, root, node.Children[0], pair + ".Key", elementRepetition, elementLevel,
+                    collectionLevel, indent + 2, ref variableIndex);
+                AppendWriteLevels(builder, names, root, node.Children[1], pair + ".Value", elementRepetition, elementLevel,
+                    collectionLevel, indent + 2, ref variableIndex);
+                builder.Append(padding).Append("        ").Append(elementRepetition).Append(" = ").Append(collectionLevel)
+                    .AppendLine(";");
+                builder.Append(padding).AppendLine("    }");
+            }
+            else
+            {
+                var index = "i" + variableIndex++;
+                builder.Append(padding).Append("    for (var ").Append(index).Append(" = 0; ").Append(index).Append(" < ")
+                    .Append(value).Append(count).Append("; ").Append(index).AppendLine("++)");
+                builder.Append(padding).AppendLine("    {");
+                AppendWriteLevels(builder, names, root, node.Children[0], value + "[" + index + "]", elementRepetition,
+                    elementLevel, collectionLevel, indent + 2, ref variableIndex);
+                builder.Append(padding).Append("        ").Append(elementRepetition).Append(" = ").Append(collectionLevel)
+                    .AppendLine(";");
+                builder.Append(padding).AppendLine("    }");
+            }
+            builder.Append(padding).AppendLine("}");
+        }
+
+        if (node.Optional)
+            builder.Append(padding.Substring(4)).AppendLine("}");
+    }
+
+    static void AppendAddNull(StringBuilder builder, Node root, Node node, string padding, string repetition,
+        int definitionLevel)
+    {
+        foreach (var leaf in node.Leaves)
+            builder.Append(padding).Append('b').Append(root.Leaves.IndexOf(leaf)).Append(".AddNull(").Append(repetition)
+                .Append(", ").Append(definitionLevel).AppendLine(");");
+    }
+
+    // Rebuilds a collection property from its leaves' levels. Every leaf of the property has one position per list
+    // element, or per null or empty collection, so the first leaf's levels give the structure and each leaf adds its
+    // own values. A leaf missing from the file reads as null.
+    static void AppendLevelReader(StringBuilder builder, GeneratedMemberNames names, Node root)
+    {
+        builder.Append("    static ").Append(root.UserType).Append(' ')
+            .Append(names.Get("read:" + root.PropertyName, "Read" + ToIdentifier(root.PropertyName))).Append('(');
+        for (var i = 0; i < root.Leaves.Count; i++)
+        {
+            if (i > 0)
+                builder.Append(", ");
+            builder.Append("global::Plank.RowApi.RowApiNestedLeafRow<").Append(root.Leaves[i].StorageShapeType)
+                .Append("> l").Append(i);
+        }
+        builder.AppendLine(")");
+        builder.AppendLine("    {");
+        builder.AppendLine("        var r = l0.RepetitionLevels;");
+        builder.AppendLine("        var d0 = l0.DefinitionLevels;");
+        builder.AppendLine("        var n = d0.Length;");
+        builder.AppendLine("        if (n == 0)");
+        builder.AppendLine("            return default!;");
+        for (var i = 1; i < root.Leaves.Count; i++)
+        {
+            builder.Append("        var d").Append(i).Append(" = l").Append(i).AppendLine(".DefinitionLevels;");
+            builder.Append("        var h").Append(i).Append(" = d").Append(i).AppendLine(".Length != 0;");
+            builder.Append("        if (h").Append(i).Append(" && d").Append(i).AppendLine(".Length != n)");
+            builder.Append("            throw new global::Plank.CorruptParquetException(\"The leaves of '")
+                .Append(Escape(root.PropertyName)).AppendLine("' have different numbers of positions.\");");
+        }
+        for (var i = 0; i < root.Leaves.Count; i++)
+        {
+            builder.Append("        var x").Append(i).Append(" = l").Append(i).AppendLine(".Values;");
+            builder.Append("        var c").Append(i).AppendLine(" = 0;");
+        }
+        builder.AppendLine("        var p = 0;");
+        builder.Append("        ").Append(root.UserType).AppendLine(" result = default!;");
+        var variableIndex = 0;
+        AppendReadLevels(builder, root, root, "result", definitionLevel: 0, repetitionLevel: 0, indent: 2,
+            ref variableIndex);
+        builder.AppendLine("        if (p != n)");
+        builder.Append("            throw new global::Plank.CorruptParquetException(\"A row of '")
+            .Append(Escape(root.PropertyName)).AppendLine("' has positions past its last element.\");");
+        builder.AppendLine("        return result;");
+        builder.AppendLine("    }");
+    }
+
+    // Reads `node` at position p into `target`. A collection consumes its positions; anything else reads the current
+    // position and leaves p to the enclosing collection.
+    static void AppendReadLevels(StringBuilder builder, Node root, Node node, string target, int definitionLevel,
+        int repetitionLevel, int indent, ref int variableIndex)
+    {
+        var padding = new string(' ', indent * 4);
+        if (node.Kind == NodeKind.Leaf)
+        {
+            var leaf = node.Leaves[0];
+            var leafIndex = root.Leaves.IndexOf(leaf);
+            var present = (leafIndex == 0 ? "" : $"h{leafIndex} && ") + $"d{leafIndex}[p] == {leaf.MaxDefinitionLevel}";
+            var value = $"x{leafIndex}[c{leafIndex}++]";
+            var storage = leaf.StorageShapeType;
+            var physical = "s" + variableIndex++;
+            if (node.Optional)
+                builder.Append(padding).Append(storage).Append("? ").Append(physical).Append(" = ").Append(present)
+                    .Append(" ? ").Append(value).AppendLine(" : null;");
+            else
+            {
+                builder.Append(padding).Append(storage).Append(' ').Append(physical).AppendLine(" = default!;");
+                builder.Append(padding).Append("if (").Append(present).AppendLine(")");
+                builder.Append(padding).Append("    ").Append(physical).Append(" = ").Append(value).AppendLine(";");
+                if (leafIndex == 0)
+                {
+                    builder.Append(padding).AppendLine("else");
+                    builder.Append(padding).Append("    throw new global::Plank.CorruptParquetException(\"Required nested value '")
+                        .Append(Escape(node.PropertyName)).AppendLine("' is null.\");");
+                }
+            }
+            builder.Append(padding).Append(target).Append(" = ").Append(ConvertFromStorage(leaf, physical)).AppendLine(";");
+            return;
+        }
+
+        var definedLevel = node.Optional ? definitionLevel + 1 : definitionLevel;
+        if (node.Kind == NodeKind.Group)
+        {
+            if (node.Optional)
+            {
+                builder.Append(padding).Append("if (d0[p] < ").Append(definedLevel).AppendLine(")");
+                builder.Append(padding).Append("    ").Append(target).AppendLine(" = null!;");
+                builder.Append(padding).AppendLine("else");
+                builder.Append(padding).AppendLine("{");
+                AppendReadLevelsGroupBody(builder, root, node, target, definedLevel, repetitionLevel, indent + 1,
+                    ref variableIndex);
+                builder.Append(padding).AppendLine("}");
+            }
+            else
+                AppendReadLevelsGroupBody(builder, root, node, target, definedLevel, repetitionLevel, indent,
+                    ref variableIndex);
+            return;
+        }
+
+        var collectionLevel = repetitionLevel + 1;
+        if (node.Optional)
+        {
+            builder.Append(padding).Append("if (d0[p] < ").Append(definedLevel).AppendLine(")");
+            builder.Append(padding).AppendLine("{");
+            builder.Append(padding).Append("    ").Append(target).AppendLine(" = null!;");
+            builder.Append(padding).AppendLine("    p++;");
+            builder.Append(padding).AppendLine("}");
+            builder.Append(padding).Append("else ");
+        }
+        else
+            builder.Append(padding);
+        var count = "n" + variableIndex++;
+        builder.Append("if (d0[p] == ").Append(definedLevel).AppendLine(")");
+        builder.Append(padding).AppendLine("{");
+        builder.Append(padding).Append("    ").Append(target).Append(" = ").Append(CreateCollection(node, "0")).AppendLine(";");
+        builder.Append(padding).AppendLine("    p++;");
+        builder.Append(padding).AppendLine("}");
         builder.Append(padding).AppendLine("else");
         builder.Append(padding).AppendLine("{");
-        var elementStorageType = GetStorageTypeAtDepth(leaf, depth + 1);
-        var nonNullSource = source + "!";
-        var count = node.Kind == NodeKind.List && node.CollectionKind == "Array"
-            ? nonNullSource + ".Length"
-            : nonNullSource + ".Count";
-        builder.Append(padding).Append("    ").Append(target).Append(" = (")
-            .Append(GetStorageTypeAtDepth(leaf, depth)).Append(")global::System.Array.CreateInstance(typeof(")
-            .Append(elementStorageType).Append("), ").Append(count).AppendLine(");");
+        builder.Append(padding).Append("    var ").Append(count).AppendLine(" = 1;");
+        var scan = "q" + variableIndex++;
+        builder.Append(padding).Append("    for (var ").Append(scan).Append(" = p + 1; ").Append(scan).Append(" < n && r[")
+            .Append(scan).Append("] >= ").Append(collectionLevel).Append("; ").Append(scan).AppendLine("++)");
+        builder.Append(padding).Append("        if (r[").Append(scan).Append("] == ").Append(collectionLevel).Append(") ")
+            .Append(count).AppendLine("++;");
+        var collection = "t" + variableIndex++;
+        builder.Append(padding).Append("    var ").Append(collection).Append(" = ").Append(CreateCollection(node, count))
+            .AppendLine(";");
+        var index = "i" + variableIndex++;
+        builder.Append(padding).Append("    var ").Append(index).AppendLine(" = 0;");
+        builder.Append(padding).AppendLine("    do");
+        builder.Append(padding).AppendLine("    {");
+        var elementLevel = definedLevel + 1;
         if (node.Kind == NodeKind.Map)
         {
-            var pair = "pair" + depth;
-            var index = "i" + depth;
-            builder.Append(padding).Append("    var ").Append(index).AppendLine(" = 0;");
-            builder.Append(padding).Append("    foreach (var ").Append(pair).Append(" in ").Append(nonNullSource)
-                .AppendLine(")");
-            builder.Append(padding).AppendLine("    {");
-            var childSource = collectionChild == node.Children[0] ? pair + ".Key" : pair + ".Value";
-            AppendProjectAssignment(builder, names, collectionChild, leaf, target + "[" + index + "]",
-                childSource, depth + 1, indent + 2, indexes);
-            builder.Append(padding).Append("        ").Append(index).AppendLine("++;");
-            builder.Append(padding).AppendLine("    }");
+            var key = "k" + variableIndex++;
+            var item = "v" + variableIndex++;
+            builder.Append(padding).Append("        ").Append(node.Children[0].UserType).Append(' ').Append(key).AppendLine(" = default!;");
+            AppendReadLevels(builder, root, node.Children[0], key, elementLevel, collectionLevel, indent + 2, ref variableIndex);
+            builder.Append(padding).Append("        ").Append(node.Children[1].UserType).Append(' ').Append(item).AppendLine(" = default!;");
+            AppendReadLevels(builder, root, node.Children[1], item, elementLevel, collectionLevel, indent + 2, ref variableIndex);
+            builder.Append(padding).AppendLine("        p++;");
+            builder.Append(padding).Append("        ").Append(collection).Append(".Add(").Append(key).Append(", ").Append(item)
+                .AppendLine(");");
         }
         else
         {
-            var index = "i" + depth;
-            builder.Append(padding).Append("    for (var ").Append(index).Append(" = 0; ").Append(index)
-                .Append(" < ").Append(count).Append("; ").Append(index).AppendLine("++)");
-            builder.Append(padding).AppendLine("    {");
-            AppendProjectAssignment(builder, names, collectionChild, leaf, target + "[" + index + "]",
-                nonNullSource + "[" + index + "]", depth + 1, indent + 2, indexes);
-            builder.Append(padding).AppendLine("    }");
+            var element = node.Children[0];
+            var item = "v" + variableIndex++;
+            builder.Append(padding).Append("        ").Append(element.UserType).Append(' ').Append(item).AppendLine(" = default!;");
+            AppendReadLevels(builder, root, element, item, elementLevel, collectionLevel, indent + 2, ref variableIndex);
+            if (!IsCollection(element))
+                builder.Append(padding).AppendLine("        p++;");
+            if (node.CollectionKind == "Array")
+                builder.Append(padding).Append("        ").Append(collection).Append('[').Append(index).Append("] = ")
+                    .Append(item).AppendLine(";");
+            else
+                builder.Append(padding).Append("        ").Append(collection).Append(".Add(").Append(item).AppendLine(");");
         }
+        builder.Append(padding).Append("        ").Append(index).AppendLine("++;");
+        builder.Append(padding).AppendLine("    }");
+        builder.Append(padding).Append("    while (p < n && r[p] == ").Append(collectionLevel).Append(" && ").Append(index)
+            .Append(" < ").Append(count).AppendLine(");");
+        builder.Append(padding).Append("    ").Append(target).Append(" = ").Append(collection).AppendLine(";");
         builder.Append(padding).AppendLine("}");
     }
+
+    static void AppendReadLevelsGroupBody(StringBuilder builder, Node root, Node node, string target, int definitionLevel,
+        int repetitionLevel, int indent, ref int variableIndex)
+    {
+        var padding = new string(' ', indent * 4);
+        var childVariables = new string[node.Children.Length];
+        for (var i = 0; i < node.Children.Length; i++)
+        {
+            var child = node.Children[i];
+            var variable = "v" + variableIndex++;
+            childVariables[i] = variable;
+            builder.Append(padding).Append(child.UserType).Append(' ').Append(variable).AppendLine(" = default!;");
+            AppendReadLevels(builder, root, child, variable, definitionLevel, repetitionLevel, indent, ref variableIndex);
+        }
+        builder.Append(padding).Append(target).Append(" = new ").Append(TrimNullable(node.UserType)).AppendLine();
+        builder.Append(padding).AppendLine("{");
+        for (var i = 0; i < node.Children.Length; i++)
+            builder.Append(padding).Append("    ").Append(EscapeIdentifier(node.Children[i].PropertyName))
+                .Append(" = ").Append(childVariables[i]).AppendLine(",");
+        builder.Append(padding).AppendLine("};");
+    }
+
+    static string CreateCollection(Node node, string count)
+    {
+        if (node.Kind != NodeKind.List || node.CollectionKind != "Array")
+            return $"new {TrimNullable(node.UserType)}({count})";
+
+        // `new T[n]` puts the count before any rank specifiers of an array element type: int[][] is `new int[n][]`.
+        var element = node.Children[0].UserType;
+        var depth = 0;
+        for (var i = 0; i < element.Length; i++)
+        {
+            var c = element[i];
+            if (c == '<')
+                depth++;
+            else if (c == '>')
+                depth--;
+            else if (c == '[' && depth == 0)
+                // The cast restores the element type's nullable annotations, which an array creation cannot spell.
+                return $"({TrimNullable(node.UserType)})new {element.Substring(0, i)}[{count}]{element.Substring(i).Replace("?", "")}";
+        }
+        return $"new {element}[{count}]";
+    }
+
+    static bool IsCollection(Node node)
+        => node.Kind is NodeKind.List or NodeKind.Map;
 
     static string GetLeafAccess(Leaf leaf, ImmutableArray<string> indexes)
     {
@@ -1303,14 +1576,6 @@ static class NestedParquetRowEmitter
         for (var i = 0; i < indexes.Length; i++)
             builder.Append('[').Append(indexes[i]).Append(']');
         return builder.ToString();
-    }
-
-    static string GetStorageTypeAtDepth(Leaf leaf, int depth)
-    {
-        var type = leaf.StorageShapeType;
-        for (var i = 0; i < depth; i++)
-            type = type.Substring(0, type.Length - 2);
-        return type;
     }
 
     static void AppendLeafArguments(StringBuilder builder, Node root, Func<Leaf, string> expression)
@@ -1396,7 +1661,7 @@ static class NestedParquetRowEmitter
     static string ConvertFromStorage(Leaf leaf, string expression)
     {
         var scalar = leaf.Node.Scalar!;
-        if (leaf.EndpointOptional && !leaf.Node.Optional && IsNonNullableValueType(scalar.NonNullableUserType))
+        if (leaf.MaxRepetitionLevel == 0 && leaf.EndpointOptional && !leaf.Node.Optional && IsNonNullableValueType(scalar.NonNullableUserType))
             expression += "!.Value";
         if (leaf.MaxRepetitionLevel == 0)
             return expression;
@@ -1649,21 +1914,24 @@ static class NestedParquetRowEmitter
 
     sealed class Leaf(Node root, Node node, ImmutableArray<Node> path,
         ImmutableArray<CollectionLevel> collectionLevels, string uniqueName, string storageShapeType,
-        string storageElementType, int maxRepetitionLevel, int maxDefinitionLevel, bool endpointOptional)
+        int maxRepetitionLevel, int maxDefinitionLevel, bool endpointOptional)
     {
         internal Node Root { get; } = root;
         internal Node Node { get; } = node;
         internal ImmutableArray<Node> Path { get; } = path;
         internal ImmutableArray<CollectionLevel> CollectionLevels { get; } = collectionLevels;
         internal string UniqueName { get; } = uniqueName;
+        // The flat column's CLR type, or the physical value type of a repeated leaf.
         internal string StorageShapeType { get; } = storageShapeType;
-        internal string StorageElementType { get; } = storageElementType;
         internal int MaxRepetitionLevel { get; } = maxRepetitionLevel;
         internal int MaxDefinitionLevel { get; } = maxDefinitionLevel;
         internal bool EndpointOptional { get; } = endpointOptional;
         internal int Ordinal { get; set; }
         internal string DescriptorName => $"s_{UniqueName}RowApiColumn";
         internal bool UsesNestedDescriptor => MaxRepetitionLevel > 0;
+        internal string SlotFieldType => UsesNestedDescriptor
+            ? $"global::Plank.RowApi.RowApiNestedLeafBuffer<{StorageShapeType}>"
+            : StorageShapeType + "[]";
     }
 
     readonly struct CollectionLevel

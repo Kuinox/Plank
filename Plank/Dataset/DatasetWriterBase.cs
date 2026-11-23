@@ -131,6 +131,14 @@ public abstract class DatasetWriterBase<TRow>
     protected void SetColumnValue<T>(int slotIndex, int columnIndex, int rowIndex, T value)
         => GetSlot(slotIndex).SetSnapshotValue(columnIndex, rowIndex, value);
 
+    /// <summary>Gets the level buffer of a repeated leaf in a dataset slot.</summary>
+    /// <typeparam name="TValue">The leaf's physical value type.</typeparam>
+    /// <param name="slotIndex">The destination slot identifier.</param>
+    /// <param name="columnIndex">The destination column index.</param>
+    /// <returns>The leaf's level buffer; binary values added to it are copied.</returns>
+    protected RowApiNestedLeafBuffer<TValue> GetNestedLeafBuffer<TValue>(int slotIndex, int columnIndex)
+        => GetSlot(slotIndex).GetNestedLeafBufferCore<TValue>(columnIndex);
+
     /// <summary>Gets the UTF-8 path for one schema row.</summary>
     /// <param name="row">The schema row.</param>
     /// <param name="bufferPool">The writer buffer pool.</param>

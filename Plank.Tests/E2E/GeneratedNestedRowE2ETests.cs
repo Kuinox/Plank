@@ -11,6 +11,39 @@ internal sealed class GeneratedNestedRowE2ETests
     const int MultiRowGroupRowCount = 1031;
 
     [Test]
+    [Arguments(Plank.Writing.ParquetDataPageVersion.V1)]
+    [Arguments(Plank.Writing.ParquetDataPageVersion.V2)]
+    public void RoundTripsMissingRecordsNullFieldsAndMissingInnerLists(Plank.Writing.ParquetDataPageVersion version)
+    {
+        List<OptionalEntry?> items = [null, new(), new() { Label = "x" }, new() { Price = 7 }, null];
+        using var stream = new MemoryStream();
+        using (var writer = GeneratedOptionalElementsSchema.CreateRowWriter(stream, maxParallelism: 1,
+                   new ParquetWriterOptions { DataPageVersion = version, Compression = CompressionKind.None }))
+        {
+            var row = writer.GetRow();
+            row.Items = null;
+            row.Grid = null;
+            row = writer.GetRow();
+            row.Items = [];
+            row.Grid = [];
+            row = writer.GetRow();
+            row.Items = items;
+            row.Grid = [null, [], [null, 7], null];
+            writer.Complete();
+        }
+
+        using var input = new MemoryStream(stream.ToArray());
+        using var reader = GeneratedOptionalElementsSchema.CreateRowReader(input);
+        if (!reader.MoveNext() || reader.Current.Items is not null || reader.Current.Grid is not null)
+            throw new InvalidOperationException("Expected missing outer collections.");
+        if (!reader.MoveNext() || reader.Current.Items is not [] || reader.Current.Grid is not [])
+            throw new InvalidOperationException("Expected empty outer collections.");
+        if (!reader.MoveNext() || reader.Current.Items is not { } actual || !items.SequenceEqual(actual) ||
+            reader.Current.Grid is not [null, [], [null, 7], null] || reader.MoveNext())
+            throw new InvalidOperationException("Nested presence changed on round trip.");
+    }
+
+    [Test]
     [Arguments(false)]
     [Arguments(true)]
     public async Task GeneratedRowsRoundTripCollectionsMapsAndRecordsAcrossRowGroups(bool useCursor)

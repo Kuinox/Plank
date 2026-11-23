@@ -730,9 +730,22 @@ Plank.RowApi.RowApiCollectionLevel.ElementDefinitionLevel.get -> int
 Plank.RowApi.RowApiCollectionLevel.RepetitionLevel.get -> int
 Plank.RowApi.RowApiCollectionLevel.RowApiCollectionLevel() -> void
 Plank.RowApi.RowApiCollectionLevel.RowApiCollectionLevel(int repetitionLevel, int definedDefinitionLevel, int elementDefinitionLevel) -> void
-Plank.RowApi.RowApiNestedColumnDescriptor<TShape, TElement>
-Plank.RowApi.RowApiNestedColumnDescriptor<TShape, TElement>.RowApiNestedColumnDescriptor(string! propertyName, Plank.Schema.LeafColumn! column, params Plank.RowApi.RowApiCollectionLevel[]! collectionLevels) -> void
-Plank.RowApi.RowReaderCore.GetCurrentNested<TShape, TElement>(Plank.RowApi.RowApiNestedColumnDescriptor<TShape, TElement>! column) -> TShape
+Plank.RowApi.RowApiNestedColumnDescriptor<TValue>
+Plank.RowApi.RowApiNestedColumnDescriptor<TValue>.RowApiNestedColumnDescriptor(string! propertyName, Plank.Schema.LeafColumn! column, params Plank.RowApi.RowApiCollectionLevel[]! collectionLevels) -> void
+Plank.RowApi.RowApiNestedLeafBuffer<TValue>
+Plank.RowApi.RowApiNestedLeafBuffer<TValue>.Add(int repetitionLevel, TValue value) -> void
+Plank.RowApi.RowApiNestedLeafBuffer<TValue>.AddNull(int repetitionLevel, int definitionLevel) -> void
+Plank.RowApi.RowApiNestedLeafBuffer<TValue>.BeginRow(int rowIndex) -> void
+Plank.RowApi.RowApiNestedLeafBuffer<TValue>.EndRow() -> void
+Plank.RowApi.RowApiNestedLeafBuffer<TValue>.EstimateRowSize(int rowIndex) -> ulong
+Plank.RowApi.RowApiNestedLeafBuffer<TValue>.GetRow(int rowIndex) -> Plank.RowApi.RowApiNestedLeafRow<TValue>
+Plank.RowApi.RowApiNestedLeafRow<TValue>
+Plank.RowApi.RowApiNestedLeafRow<TValue>.DefinitionLevels.get -> System.ReadOnlySpan<byte>
+Plank.RowApi.RowApiNestedLeafRow<TValue>.RepetitionLevels.get -> System.ReadOnlySpan<byte>
+Plank.RowApi.RowApiNestedLeafRow<TValue>.RowApiNestedLeafRow() -> void
+Plank.RowApi.RowApiNestedLeafRow<TValue>.Values.get -> System.ReadOnlySpan<TValue>
+Plank.RowApi.RowBufferSlot.GetNestedLeafBuffer<TValue>(int columnIndex) -> Plank.RowApi.RowApiNestedLeafBuffer<TValue>!
+Plank.RowApi.RowReaderCore.GetCurrentNested<TValue>(Plank.RowApi.RowApiNestedColumnDescriptor<TValue>! column) -> Plank.RowApi.RowApiNestedLeafRow<TValue>
 Plank.Schema.CompressionKind.Lz4Legacy = 6 -> Plank.Schema.CompressionKind
 Plank.Reading.Physical.ParquetFileMetadata.CreatedByUtf8.get -> System.ReadOnlySpan<byte>
 Plank.Reading.Physical.ParquetFileMetadata.HasCreatedBy.get -> bool
@@ -849,6 +862,7 @@ Plank.Dataset.DatasetWriterBase<TRow>.DatasetWriterBase(Plank.Schema.ParquetSche
 Plank.Dataset.DatasetWriterBase<TRow>.DisposeDataset() -> void
 Plank.Dataset.DatasetWriterBase<TRow>.InitializeSlots() -> void
 Plank.Dataset.DatasetWriterBase<TRow>.QueueRow(TRow row) -> void
+Plank.Dataset.DatasetWriterBase<TRow>.GetNestedLeafBuffer<TValue>(int slotIndex, int columnIndex) -> Plank.RowApi.RowApiNestedLeafBuffer<TValue>!
 Plank.Dataset.DatasetWriterBase<TRow>.SetColumnValue<T>(int slotIndex, int columnIndex, int rowIndex, T value) -> void
 abstract Plank.Dataset.DatasetWriterBase<TRow>.CopyRow(TRow row, int slotIndex, int rowIndex) -> void
 abstract Plank.Dataset.DatasetWriterBase<TRow>.SelectPath(TRow row, Plank.IParquetBufferPool! bufferPool, out Plank.ParquetBuffer? allocation) -> System.ReadOnlySpan<byte>

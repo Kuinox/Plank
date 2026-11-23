@@ -158,7 +158,7 @@ public sealed class RowGroupWriter
         columnMetadata.TotalCompressedSize = totalCompressedSize;
         columnMetadata.DataEncoding = dataEncoding;
         columnMetadata.Compression = compression.Kind;
-        columnMetadata.Statistics = state.Statistics.HasStatistics
+        columnMetadata.Statistics = ColumnStatistics.HasDefinedOrder(column) && state.Statistics.HasStatistics
             ? state.Statistics.WithNullCount(nullCount)
             : ColumnStatistics.Empty(nullCount);
         columnMetadata.HasDictionaryPage = hasDictionaryPage;
@@ -270,10 +270,10 @@ public sealed class RowGroupWriter
     void WritePageIndexes(Span<ColumnChunkMetadata> metadata)
     {
         for (var i = 0; i < metadata.Length; i++)
-            WritePageIndexes(ref metadata[i]);
+            WritePageIndexes(ref metadata[i], _writer.ColumnsByOrdinal[i]);
     }
 
-    void WritePageIndexes(ref ColumnChunkMetadata metadata)
+    void WritePageIndexes(ref ColumnChunkMetadata metadata, Column column)
     {
         if (!metadata.PageIndex.HasPages)
             return;
@@ -286,7 +286,7 @@ public sealed class RowGroupWriter
         _columnIndexBuffer.Reset();
         var statistics = metadata.PageIndex.Statistics.AsSpan(0, metadata.PageIndex.Count);
         var nullPages = metadata.PageIndex.NullPages.AsSpan(0, metadata.PageIndex.Count);
-        if (CanWriteColumnIndex(statistics, nullPages))
+        if (ColumnStatistics.HasDefinedOrder(column) && CanWriteColumnIndex(statistics, nullPages))
         {
             ParquetMetadataThriftWriter.WriteColumnIndex(ref _columnIndexBuffer, statistics, nullPages);
             metadata.ColumnIndexOffset = _writer.FileOffset;
