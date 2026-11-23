@@ -141,7 +141,7 @@ internal sealed class RleRunValueWidthTests
         { Compression = CompressionKind.None, DataPageVersion = ParquetDataPageVersion.V2 }))
         {
             var column = writer.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
-            column.Serialize(Enumerable.Range(0, 16).Select(_ => new[] { 42 }).ToArray());
+            column.Serialize([[42]]);
             writer.StartRowGroup().Write(column);
             writer.CloseFile();
         }

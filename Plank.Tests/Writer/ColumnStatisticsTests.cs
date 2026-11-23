@@ -18,6 +18,50 @@ namespace Plank.Tests.Writer;
 internal sealed class ColumnStatisticsTests
 {
     [Test]
+    [Arguments(PlankDataPageVersion.V1)]
+    [Arguments(PlankDataPageVersion.V2)]
+    public void FixedWidthTimestampBoundsUseSigned96BitOrder(PlankDataPageVersion version)
+    {
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.RequiredLeaf("time", ParquetPhysicalType.FixedLenByteArray,
+                new ColumnOptions(typeLength: 12), new PlankLogicalType.Timestamp(Plank.Schema.TimeUnit.Micros, true),
+                pageStrategy: new FixedRowsPageStrategy(2))
+        ]);
+        byte[][] values = [Timestamp(0, 1), Timestamp(0, 256), Timestamp(-1, ulong.MaxValue), Timestamp(1, 0)];
+        using var stream = new MemoryStream();
+        using var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+        {
+            WritePageIndexes = true,
+            DataPageVersion = version
+        });
+        var column = writer.CreateSerializedColumn<byte[]>(schema.LeafColumns[0]);
+        column.Serialize(values);
+        writer.StartRowGroup().Write(column);
+        writer.CloseFile();
+
+        using var reader = schema.CreateReader(new MemoryStream(stream.ToArray()));
+        var metadata = reader.RowGroups[0].GetColumnMetadata(0);
+        using var pages = metadata.OpenPages();
+        Check(metadata.Statistics, values[2], values[3]);
+        Check(pages[0].Statistics, values[0], values[1]);
+        Check(pages[1].Statistics, values[2], values[3]);
+
+        static byte[] Timestamp(int high, ulong low)
+        {
+            var bytes = new byte[12];
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes, low);
+            BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(8), high);
+            return bytes;
+        }
+
+        static void Check(Plank.Reading.Logical.ParquetStatistics stats, byte[] min, byte[] max)
+        {
+            if (!stats.Minimum.SequenceEqual(min) || !stats.Maximum.SequenceEqual(max))
+                throw new InvalidOperationException("Incorrect signed 96-bit timestamp bounds.");
+        }
+    }
+
+    [Test]
     public void FloatStatisticsIgnoreNaNs()
     {
         var column = new Plank.Schema.Column("value", ParquetPhysicalType.Float);
@@ -198,13 +242,24 @@ internal sealed class ColumnStatisticsTests
         var optionalColumn = new Plank.Schema.Column("value", ParquetPhysicalType.ByteArray,
             new ColumnOptions(ParquetRepetition.Optional));
         byte[][] optionalValues = [null!, middle, high, commonPrefix, low, null!];
-        var optional = ColumnStatistics.CreateOptional(optionalColumn, optionalValues);
-        if (!optional.MinValue!.AsSpan().SequenceEqual(commonPrefix))
-            throw new InvalidOperationException("Optional binary minimum statistic mismatch.");
-        if (!optional.MaxValue!.AsSpan().SequenceEqual(high))
-            throw new InvalidOperationException("Optional binary maximum statistic mismatch.");
-        if (optional.NullCount != 2)
-            throw new InvalidOperationException($"Expected two nulls, got {optional.NullCount}.");
+        ParquetBuffer minBuffer = default;
+        ParquetBuffer maxBuffer = default;
+        try
+        {
+            var optional = ColumnStatistics.CreateOptionalWithReusableBinaryBuffers(optionalColumn,
+                optionalValues, ref minBuffer, ref maxBuffer, DefaultParquetBufferPool.Shared);
+            if (!optional.GetMinValue().SequenceEqual(commonPrefix))
+                throw new InvalidOperationException("Optional binary minimum statistic mismatch.");
+            if (!optional.GetMaxValue().SequenceEqual(high))
+                throw new InvalidOperationException("Optional binary maximum statistic mismatch.");
+            if (optional.NullCount != 2)
+                throw new InvalidOperationException($"Expected two nulls, got {optional.NullCount}.");
+        }
+        finally
+        {
+            minBuffer.Dispose();
+            maxBuffer.Dispose();
+        }
     }
 
     [Test]
@@ -402,6 +457,103 @@ internal sealed class ColumnStatisticsTests
         AssertPageInt32Statistics(pages[0], min: 10, max: 50, nullCount: 0);
         AssertPageInt32Statistics(pages[1], min: -5, max: 40, nullCount: 0);
         AssertPageInt32Statistics(pages[2], min: 0, max: 0, nullCount: 0);
+    }
+
+    [Test]
+    public void UnsignedColumnsOrderPhysicalSignedValuesAsUnsigned()
+    {
+        // -1 is the largest unsigned value; signed ordering made it the minimum and pruned every match. The last
+        // column reaches the same int path through a converter.
+        var uint32 = new PlankLogicalType.Int(32, false);
+        var uint64 = new PlankLogicalType.Int(64, false);
+        var schema = new PlankParquetSchema([
+            Plank.Schema.ColumnDefinition.RequiredLeaf("u32", ParquetPhysicalType.Int32, logicalType: uint32,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.OptionalLeaf("u32_optional", ParquetPhysicalType.Int32, logicalType: uint32,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.RequiredLeaf("u64", ParquetPhysicalType.Int64, logicalType: uint64,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.OptionalLeaf("u64_optional", ParquetPhysicalType.Int64, logicalType: uint64,
+                pageStrategy: new FixedRowsPageStrategy(2)),
+            Plank.Schema.ColumnDefinition.RequiredLeaf("u32_converted", ParquetPhysicalType.Int32, logicalType: uint32,
+                pageStrategy: new FixedRowsPageStrategy(2), converter: new UInt32BitsConverter())
+        ]);
+        using var stream = new MemoryStream();
+        var writer = schema.CreateWriter(stream, new ParquetWriterOptions { WritePageIndexes = true });
+        var rowGroup = writer.StartRowGroup();
+        var u32 = rowGroup.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        u32.Serialize([-1, 1, 2]);
+        rowGroup.Write(u32);
+        var u32Optional = rowGroup.CreateSerializedColumn<int?>(schema.LeafColumns[1]);
+        u32Optional.Serialize([-1, 1, null]);
+        rowGroup.Write(u32Optional);
+        var u64 = rowGroup.CreateSerializedColumn<long>(schema.LeafColumns[2]);
+        u64.Serialize([-1L, 1L, 2L]);
+        rowGroup.Write(u64);
+        var u64Optional = rowGroup.CreateSerializedColumn<long?>(schema.LeafColumns[3]);
+        u64Optional.Serialize([-1L, 1L, null]);
+        rowGroup.Write(u64Optional);
+        var u32Converted = rowGroup.CreateSerializedColumn<uint>(schema.LeafColumns[4]);
+        u32Converted.Serialize([uint.MaxValue, 1, 2]);
+        rowGroup.Write(u32Converted);
+        writer.CloseFile();
+
+        using var reader = schema.CreateReader(new MemoryStream(stream.ToArray()));
+        for (var column = 0; column < 5; column++)
+        {
+            var max = column is 2 or 3 ? ulong.MaxValue : uint.MaxValue;
+            var metadata = reader.RowGroups[0].GetColumnMetadata(column);
+            AssertUnsignedBounds(metadata.Statistics, min: 1, max, $"column {column}");
+            using var pages = metadata.OpenPages();
+            AssertUnsignedBounds(pages[0].Statistics, min: 1, max, $"column {column} page 0");
+        }
+    }
+
+    [Test]
+    public void PlainUInt64StatisticsMergePageBoundsInUnsignedOrder()
+    {
+        var schema = new PlankParquetSchema([
+            ColumnDefinition.RequiredLeaf("bits", ParquetPhysicalType.Int64,
+                new ColumnOptions(encodings: [EncodingKind.Plain]), logicalType: new PlankLogicalType.Int(64, false))
+        ]);
+        using var stream = new MemoryStream();
+        using (var writer = schema.CreateWriter(stream, new ParquetWriterOptions { TargetDataPageSizeBytes = 16 }))
+        {
+            var values = writer.CreateSerializedColumn<long>(schema.LeafColumns[0]);
+            values.Serialize([2, 3, long.MinValue, -1]);
+            writer.StartRowGroup().Write(values);
+            writer.CloseFile();
+        }
+
+        using var reader = schema.CreateReader(new MemoryStream(stream.ToArray()));
+        var metadata = reader.RowGroups[0].GetColumnMetadata(0);
+        AssertUnsignedBounds(metadata.Statistics, 2, ulong.MaxValue, "chunk");
+        using var pages = metadata.OpenPages();
+        AssertUnsignedBounds(pages[0].Statistics, 2, 3, "page 0");
+        AssertUnsignedBounds(pages[1].Statistics, 1UL << 63, ulong.MaxValue, "page 1");
+    }
+
+    // Maps uint to its two's-complement INT32 bits, as a user converter for an unsigned column would.
+    sealed class UInt32BitsConverter : ParquetValueConverter<uint, int>
+    {
+        public override int ConvertToPhysical(uint value) => unchecked((int)value);
+
+        public override uint ConvertFromPhysical(int value) => unchecked((uint)value);
+    }
+
+    static void AssertUnsignedBounds(ParquetStatistics statistics, ulong min, ulong max, string what)
+    {
+        static ulong Read(ReadOnlySpan<byte> bytes) => bytes.Length == sizeof(uint)
+            ? BinaryPrimitives.ReadUInt32LittleEndian(bytes)
+            : BinaryPrimitives.ReadUInt64LittleEndian(bytes);
+
+        if (!statistics.HasMinimum || !statistics.HasMaximum)
+            throw new InvalidOperationException($"{what} has no bounds.");
+        var actualMin = Read(statistics.Minimum);
+        var actualMax = Read(statistics.Maximum);
+        if (actualMin != min || actualMax != max)
+            throw new InvalidOperationException(
+                $"{what} bounds are [{actualMin}, {actualMax}], expected [{min}, {max}].");
     }
 
     [Test]

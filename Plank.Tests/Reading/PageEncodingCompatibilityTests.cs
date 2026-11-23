@@ -235,7 +235,7 @@ internal sealed class PageEncodingCompatibilityTests
             {
                 using var stream = new MemoryStream(file, writable: false);
                 RowApiColumnDescriptor descriptor = repetition == ParquetRepetition.Repeated
-                    ? new RowApiNestedColumnDescriptor<int[], int>("value", schema.LeafColumns[0], new RowApiCollectionLevel(1, 0, 1))
+                    ? new RowApiNestedColumnDescriptor<int>("value", schema.LeafColumns[0], new RowApiCollectionLevel(1, 0, 1))
                     : new RowApiColumnDescriptor<int?>("value", schema.LeafColumns[0]);
                 using var rows = new RowReaderCore(stream, schema, [descriptor], null,
                     new RowReaderOptions { Execution = new() { WorkerCount = 1 } }, null);

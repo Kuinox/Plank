@@ -58,11 +58,13 @@ public sealed class ParquetBloomFilter : IDisposable
 
     /// <summary>Checks a FLOAT value.</summary>
     public bool MightContain(float value)
-        => MightContainHash(ParquetBloomFilterHash.Hash(value));
+        => MightContainHash(ParquetBloomFilterHash.Hash(value)) ||
+            (value == 0f && MightContainHash(ParquetBloomFilterHash.Hash(-value)));
 
     /// <summary>Checks a DOUBLE value.</summary>
     public bool MightContain(double value)
-        => MightContainHash(ParquetBloomFilterHash.Hash(value));
+        => MightContainHash(ParquetBloomFilterHash.Hash(value)) ||
+            (value == 0d && MightContainHash(ParquetBloomFilterHash.Hash(-value)));
 
     /// <summary>Checks a BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY, or INT96 value.</summary>
     public bool MightContain(ReadOnlySpan<byte> value)

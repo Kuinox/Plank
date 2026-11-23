@@ -139,16 +139,28 @@ static class ParquetDecimalConverter
 
         var negative = value < 0;
         var magnitude = (UInt128)(negative ? -value : value);
-        if (magnitude >= PowerOfTen(decimalType.Precision) || magnitude > (UInt128)decimal.MaxValue)
+        if (magnitude >= PowerOfTen(decimalType.Precision))
             throw new CorruptParquetException(
-                $"Decimal value for column '{column.Name}' exceeds the supported System.Decimal range.");
+                $"Decimal value for column '{column.Name}' exceeds precision {decimalType.Precision}.");
+
+        var scale = decimalType.Scale;
+        // The value can still fit in a CLR decimal after trimming trailing fractional zeros.
+        while (magnitude > (UInt128)decimal.MaxValue)
+        {
+            var quotient = magnitude / 10;
+            if (scale == 0 || quotient * 10 != magnitude)
+                throw new CorruptParquetException(
+                    $"Decimal value for column '{column.Name}' exceeds the supported System.Decimal range.");
+            magnitude = quotient;
+            scale--;
+        }
 
         return new decimal(
             unchecked((int)(uint)magnitude),
             unchecked((int)(uint)(magnitude >> 32)),
             unchecked((int)(uint)(magnitude >> 64)),
             negative,
-            checked((byte)decimalType.Scale));
+            checked((byte)scale));
     }
 
     static UInt128 PowerOfTen(int exponent)
