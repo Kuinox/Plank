@@ -45,6 +45,7 @@ readonly struct NestedColumnBufferEnumerable<T>
         PageMetadataHandle _pageMetadata;
         ColumnReadBuffers<T> _buffers;
         bool _openedCursor;
+        bool _checkedFirstEntry;
 
         internal Enumerator(ParquetFileReader physicalReader, int rowGroupOrdinal, int columnOrdinal,
             LeafColumn definition, IParquetBufferPool bufferPool, ulong rowCount, ParquetPagePruner? pruner)
@@ -64,6 +65,7 @@ readonly struct NestedColumnBufferEnumerable<T>
             _pageMetadata = default;
             _buffers = default;
             _openedCursor = false;
+            _checkedFirstEntry = false;
             Current = default;
         }
 
@@ -93,6 +95,14 @@ readonly struct NestedColumnBufferEnumerable<T>
                 if (ColumnChunkReader.TryDecodeNestedPageIntoNative(_cursor.CurrentHeader,
                         _cursor.CurrentPayload, _definition, ref _buffers, _bufferPool, out var buffer))
                 {
+                    if (!_checkedFirstEntry && buffer.Count != 0)
+                    {
+                        // Only a chunk's first data page must start a row; pruning may begin later.
+                        if (!_cursor.SkippedDataPage && buffer.StartsWithContinuation)
+                            throw new CorruptParquetException(
+                                $"Nested column '{_definition.Path}' starts with a non-zero repetition level.");
+                        _checkedFirstEntry = true;
+                    }
                     Current = buffer;
                     return true;
                 }
@@ -113,6 +123,7 @@ readonly struct NestedColumnBufferEnumerable<T>
             _pageMetadata = default;
             _buffers.Dispose();
             _openedCursor = false;
+            _checkedFirstEntry = false;
             Current = default;
         }
     }

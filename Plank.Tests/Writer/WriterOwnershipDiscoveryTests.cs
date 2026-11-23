@@ -1,3 +1,4 @@
+using Plank.Reading.Logical;
 using Plank.Schema;
 
 namespace Plank.Tests.Writer;
@@ -44,5 +45,42 @@ internal sealed class WriterOwnershipDiscoveryTests
         var rowGroup = destinationWriter.StartRowGroup();
 
         Assert.Throws<InvalidOperationException>(() => rowGroup.Write(foreignColumn));
+    }
+
+    [Test]
+    public async Task ResetToAnotherStreamRejectsOpenRowGroup()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("first", ParquetPhysicalType.Int32),
+            ColumnDefinition.RequiredLeaf("second", ParquetPhysicalType.Int32)
+        ]);
+        using var stream = new MemoryStream();
+        using var other = new MemoryStream();
+        using var writer = schema.CreateWriter(stream);
+        var first = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
+        var second = writer.CreateSerializedColumn<int>(schema.LeafColumns[1]);
+        var rowGroup = writer.StartRowGroup();
+        first.Serialize([42]);
+        rowGroup.Write(first);
+
+        Assert.Throws<InvalidOperationException>(() => writer.Reset(other));
+
+        second.Serialize([43]);
+        rowGroup.Write(second);
+        writer.CloseFile();
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(stream.ToArray()));
+        await Assert.That(reader.RowGroups.Count).IsEqualTo(1);
+        await Assert.That(ReadColumn(reader.RowGroups[0].Column<int>(0))).IsEquivalentTo([42]);
+        await Assert.That(ReadColumn(reader.RowGroups[0].Column<int>(1))).IsEquivalentTo([43]);
+        await Assert.That(other.Length).IsEqualTo(0L);
+    }
+
+    static List<int> ReadColumn(RowGroupColumn<int> column)
+    {
+        var values = new List<int>();
+        foreach (var buffer in column)
+            values.AddRange(buffer.Values);
+        return values;
     }
 }

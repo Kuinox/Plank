@@ -947,6 +947,7 @@ static class PhysicalMetadataThriftReader
             5 => ParquetPhysicalType.Double,
             6 => ParquetPhysicalType.ByteArray,
             7 => ParquetPhysicalType.FixedLenByteArray,
+            < 0 => throw new CorruptParquetException($"Physical type '{type}' cannot be negative."),
             _ => throw new NotSupportedException($"Physical type '{type}' is not supported.")
         };
 
