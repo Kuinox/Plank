@@ -763,7 +763,7 @@ static partial class ColumnChunkReader
             if (Unsafe.SizeOf<TValue>() >= sizeof(int))
                 raw = MemoryMarshal.Cast<TValue, int>(destination)[..destination.Length];
             else
-                raw = buffers.GetExpandedDefinitions(destination.Length, bufferPool);
+                raw = buffers.GetIntScratch(destination.Length, bufferPool);
             DeltaBinaryPackedDecoder.ReadInt32Batch(payload, raw, ref state);
             if (typeof(TValue) == typeof(int) || typeof(TValue) == typeof(uint))
                 return;
@@ -1947,12 +1947,7 @@ static partial class ColumnChunkReader
             throw new InvalidOperationException(
                 $"Delta byte array decoding declined '{typeof(TValue)}'.");
         var lengthCount = checked(destination.Length * 2);
-        using var temporaryLengths = column.Converter is not null && page.IsNullable
-            ? bufferPool.Rent(checked((uint)(lengthCount * sizeof(int))))
-            : default;
-        var lengths = temporaryLengths.IsEmpty
-            ? buffers.GetExpandedDefinitions(lengthCount, bufferPool)
-            : ParquetBuffer.AsSpan<int>(temporaryLengths, lengthCount);
+        var lengths = buffers.GetIntScratch(lengthCount, bufferPool);
         var prefixes = lengths[..destination.Length];
         var suffixes = lengths[destination.Length..];
         DeltaBinaryPackedDecoder.ReadNonNegativeInt32Batch(payload, prefixes, ref page.Delta);

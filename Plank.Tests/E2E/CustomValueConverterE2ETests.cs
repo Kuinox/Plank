@@ -54,6 +54,32 @@ internal sealed class CustomValueConverterE2ETests
     }
 
     [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public async Task NullableNarrowConverterPreservesDeltaDefinitionLevels(ParquetDataPageVersion version)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.DeltaBinaryPacked]),
+                converter: new NarrowMappedValueConverter())
+        ]);
+        using var stream = new MemoryStream();
+        using (var writer = schema.CreateWriter(stream, new ParquetWriterOptions
+               { Compression = CompressionKind.None, DataPageVersion = version }))
+        {
+            var column = writer.CreateSerializedColumn<CustomMappedValue?>(schema.LeafColumns[0]);
+            column.Serialize(ParentIds);
+            writer.StartRowGroup().Write(column);
+            writer.CloseFile();
+        }
+
+        using var input = new MemoryStream(stream.ToArray());
+        using var reader = schema.CreateReader(input);
+        var actual = ReadColumn(reader.RowGroups[0].Column<CustomMappedValue?>(0));
+        await Assert.That(actual.ToArray().AsSpan().SequenceEqual(ParentIds)).IsTrue();
+    }
+
+    [Test]
     public async Task RuntimeSchemaRoundTripsRequiredAndOptionalValues()
     {
         var converter = new CustomMappedValueConverter();
@@ -303,6 +329,15 @@ internal sealed class CustomValueConverterE2ETests
         while (reader.MoveNext())
             sum += reader.Current.Id.Value + (reader.Current.ParentId?.Value ?? 0);
         return sum;
+    }
+
+    sealed class NarrowMappedValueConverter : ParquetValueConverter<CustomMappedValue, byte>
+    {
+        public override byte ConvertToPhysical(CustomMappedValue value)
+            => checked((byte)value.Value);
+
+        public override CustomMappedValue ConvertFromPhysical(byte value)
+            => new(value);
     }
 
     readonly record struct CustomGuidValue(Guid Value);

@@ -145,9 +145,10 @@ internal sealed class GeneratedRowWriterAccessTests
 
         var generated = Generate(source);
 
-        await Assert.That(generated).Contains("_column0 = GetValues<");
+        // Nested properties append levels to the slot's leaf buffer instead of storing a value per row.
+        await Assert.That(generated).Contains("_column0 = GetNestedLeafBuffer<int>(0);");
         await Assert.That(generated).Contains("readonly BufferSlot _ownerSlot;");
-        await Assert.That(generated).Contains("MemoryMarshal.GetArrayDataReference(_ownerSlot._column0)");
+        await Assert.That(generated).Contains("set => WriteValues(value, _index, _ownerSlot._column0);");
         await Assert.That(generated).Contains("public sealed class PipelineWriter : global::Plank.RowApi.PipelineRowWriterBase<BufferSlot>");
         await Assert.That(generated).Contains("public Row GetRow()");
         await Assert.That(generated).Contains("return new Row(Index, this);");
