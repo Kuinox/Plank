@@ -1082,28 +1082,8 @@ static class NestedParquetRowEmitter
         builder.AppendLine(");");
     }
 
-    // An inlined check with a separate throw helper keeps projections small and lets the JIT drop repeated checks of the
-    // same reference; an inline `throw` or a `?? Helper()` merge stops it from inlining or enregistering them.
-    static string RequireNotNull(GeneratedMemberNames names, Node node, string source)
-    {
-        var message = $"Required generated property '{node.PropertyName}' cannot be null.";
-        return $"{names.Root("RequireNotNull")}({source}, " +
-            Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(message, quote: true) + ")";
-    }
-
     static void AppendMaterializers(StringBuilder builder, GeneratedMemberNames names, Model model)
     {
-        builder.AppendLine("    [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
-        builder.AppendLine("    static T " + names.Root("RequireNotNull") + "<T>(T? value, string message) where T : class");
-        builder.AppendLine("    {");
-        builder.AppendLine("        if (value is null)");
-        builder.AppendLine("            " + names.Root("ThrowRequiredNull") + "(message);");
-        builder.AppendLine("        return value;");
-        builder.AppendLine("    }");
-        builder.AppendLine("    [global::System.Diagnostics.CodeAnalysis.DoesNotReturn]");
-        builder.AppendLine("    static void " + names.Root("ThrowRequiredNull") +
-            "(string message) => throw new global::System.InvalidOperationException(message);");
-
         if (model.Leaves.Any(static leaf => leaf.MaxRepetitionLevel > 0 &&
                 leaf.Node.Scalar!.NonNullableUserType == "string"))
             builder.AppendLine("    static readonly global::System.Text.UTF8Encoding " +
@@ -1260,11 +1240,6 @@ static class NestedParquetRowEmitter
         string source, int depth, int indent, List<string> indexes)
     {
         var padding = new string(' ', indent * 4);
-        if (node.Kind is NodeKind.Leaf or NodeKind.Group && !node.Optional && node.TypeSymbol.IsReferenceType)
-        {
-            source = RequireNotNull(names, node, source);
-        }
-
         if (node.Kind == NodeKind.Leaf)
         {
             var converted = ConvertToStorage(names, leaf, source);
@@ -1321,11 +1296,6 @@ static class NestedParquetRowEmitter
         {
             var leaf = node.Leaves[0];
             var buffer = "b" + root.Leaves.IndexOf(leaf);
-            if (!node.Optional && node.TypeSymbol.IsReferenceType)
-            {
-                source = RequireNotNull(names, node, source);
-            }
-
             var converted = ConvertToStorage(names, leaf, source);
             if (node.Optional)
             {
