@@ -596,7 +596,7 @@ public abstract class RowWriterBase<TSlot> : IDisposable
         _freeSignal.Release();
     }
 
-    private protected void RecordFault(Exception exception)
+    void RecordFault(Exception exception)
     {
         var captured = ExceptionDispatchInfo.Capture(exception);
         if (Interlocked.CompareExchange(ref _fault, captured, null) is not null)

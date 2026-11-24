@@ -126,16 +126,7 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         ThrowIfFaulted();
         if (_completed)
             throw new InvalidOperationException("Pipeline writer is already completed.");
-        if (_active.AssignmentInProgress)
-            FaultInterruptedAssignment();
         return _active;
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    void FaultInterruptedAssignment()
-    {
-        RecordFault(RowBufferSlot.CreateAssignmentInterruptedException());
-        ThrowIfFaulted();
     }
 
     /// <summary>Commits an already validated fixed-width row and returns the slot prepared for the next row.</summary>
@@ -224,8 +215,6 @@ public abstract class PipelineRowWriterBase<TSlot> : RowWriterBase<TSlot>
         ThrowIfFaulted();
         if (_completed)
             return;
-        if (_active.AssignmentInProgress)
-            FaultInterruptedAssignment();
 
         Complete(_active, !_active.IsEmpty);
         _completed = true;

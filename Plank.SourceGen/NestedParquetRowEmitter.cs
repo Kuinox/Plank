@@ -764,6 +764,8 @@ static class NestedParquetRowEmitter
         builder.AppendLine("                " + names.Helper("_rowPending") + " = true;");
         builder.AppendLine("            return slot;");
         builder.AppendLine("        }");
+        builder.AppendLine("        /// <summary>Writes the buffered rows and the Parquet footer.</summary>");
+        builder.AppendLine("        /// <remarks>Do not call this after the writer or one of its row setters has thrown: a setter can fail part way through a row, so the file is dead. Dispose the writer instead; disposing never writes the footer.</remarks>");
         builder.AppendLine("        public void Complete()");
         builder.AppendLine("        {");
         builder.AppendLine("            if (" + names.Helper("_rowPending") + ")");
@@ -924,7 +926,7 @@ static class NestedParquetRowEmitter
             builder.AppendLine();
             AppendWriteRowProperty(builder, names, model.Roots[i],
                 leaf => UncheckedBufferElement($"{names.Helper("_ownerSlot")}._column{leaf.Ordinal}", names.Helper("_index")),
-                leaf => $"{names.Helper("_ownerSlot")}._column{leaf.Ordinal}", names.Helper("_index"), names.Helper("_ownerSlot"));
+                leaf => $"{names.Helper("_ownerSlot")}._column{leaf.Ordinal}", names.Helper("_index"));
         }
         builder.AppendLine("    }");
         RowCursorEmitter.AppendCursor(builder, names,
@@ -933,13 +935,12 @@ static class NestedParquetRowEmitter
                 foreach (var root in model.Roots)
                     AppendWriteRowProperty(builder, names, root,
                         leaf => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref {names.Helper("_buffers")}._column{leaf.Ordinal}, {names.Helper("_index")})",
-                        leaf => $"{names.Helper("_buffers")}._column{leaf.Ordinal}", names.Helper("_index"),
-                        $"{names.Helper("_buffers")}.{names.Helper("_ownerSlot")}");
+                        leaf => $"{names.Helper("_buffers")}._column{leaf.Ordinal}", names.Helper("_index"));
             }, model.Leaves.Select(static leaf => leaf.UsesNestedDescriptor).ToArray());
     }
 
     static void AppendWriteRowProperty(StringBuilder builder, GeneratedMemberNames names, Node root, Func<Leaf, string> element,
-        Func<Leaf, string> nestedBuffer, string rowIndex, string ownerSlot)
+        Func<Leaf, string> nestedBuffer, string rowIndex)
     {
         if (IsCollection(root))
         {
@@ -949,16 +950,11 @@ static class NestedParquetRowEmitter
             builder.Append("            get => ").Append(names.Get("read:" + root.PropertyName, "Read" + ToIdentifier(root.PropertyName))).Append('(');
             AppendLeafArguments(builder, root, leaf => $"{nestedBuffer(leaf)}.GetRow({rowIndex})");
             builder.AppendLine(");");
-            builder.AppendLine("            set");
-            builder.AppendLine("            {");
-            AppendBeginFaultingAssignment(builder, ownerSlot);
-            builder.Append("                ").Append(names.Get("write:" + root.PropertyName, "Write" + ToIdentifier(root.PropertyName)))
+            builder.Append("            set => ").Append(names.Get("write:" + root.PropertyName, "Write" + ToIdentifier(root.PropertyName)))
                 .Append("(value, ").Append(rowIndex);
             foreach (var leaf in root.Leaves)
                 builder.Append(", ").Append(nestedBuffer(leaf));
             builder.AppendLine(");");
-            AppendEndFaultingAssignment(builder, ownerSlot);
-            builder.AppendLine("            }");
             builder.AppendLine("        }");
             return;
         }
@@ -984,7 +980,6 @@ static class NestedParquetRowEmitter
         builder.AppendLine("            [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
         builder.AppendLine("            set");
         builder.AppendLine("            {");
-        AppendBeginFaultingAssignment(builder, ownerSlot);
         for (var i = 0; i < root.Leaves.Count; i++)
         {
             var leaf = root.Leaves[i];
@@ -993,19 +988,9 @@ static class NestedParquetRowEmitter
                 .Append(" = ")
                 .Append(names.Get("project:" + leaf.UniqueName, "Project" + leaf.UniqueName)).AppendLine("(value);");
         }
-        AppendEndFaultingAssignment(builder, ownerSlot);
         builder.AppendLine("            }");
         builder.AppendLine("        }");
     }
-
-    // User getters, required-reference checks and string conversion run on the caller's thread and can throw part way
-    // through a row. The flag stays set when they do, and the writer then refuses to write the row or finish the file.
-    // A try region here would be inlined into the caller's loop and stop the JIT from enregistering its locals.
-    static void AppendBeginFaultingAssignment(StringBuilder builder, string ownerSlot)
-        => builder.Append("                ").Append(ownerSlot).AppendLine(".AssignmentInProgress = true;");
-
-    static void AppendEndFaultingAssignment(StringBuilder builder, string ownerSlot)
-        => builder.Append("                ").Append(ownerSlot).AppendLine(".AssignmentInProgress = false;");
 
     static string UncheckedBufferElement(string bufferExpression, string indexExpression)
         => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref global::System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference({bufferExpression}), {indexExpression})";

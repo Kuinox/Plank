@@ -554,6 +554,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            return slot;");
         builder.AppendLine("        }");
         builder.AppendLine();
+        builder.AppendLine("        /// <summary>Writes the buffered rows and the Parquet footer.</summary>");
+        builder.AppendLine("        /// <remarks>Do not call this after the writer or one of its row setters has thrown: a setter can fail part way through a row, so the file is dead. Dispose the writer instead; disposing never writes the footer.</remarks>");
         builder.AppendLine("        public void Complete()");
         builder.AppendLine("        {");
         builder.AppendLine("            if (" + names.Helper("_rowPending") + ")");
