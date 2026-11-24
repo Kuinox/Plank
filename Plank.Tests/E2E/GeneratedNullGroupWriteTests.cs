@@ -4,14 +4,15 @@ namespace Plank.Tests.E2E;
 
 internal sealed class GeneratedNullGroupWriteTests
 {
-    // Null required references are not checked in the setter: a null group throws when the setter reads its
-    // fields, and a null required leaf is rejected by the encoder, which faults the writer before the footer.
+    // A null required group is rejected by the setter. A null required leaf is rejected by its column encoder, which
+    // faults the writer before the footer.
     [Test]
-    public void GeneratedWriterRejectsNullRequiredGroup()
+    public async Task GeneratedWriterRejectsNullRequiredGroup()
     {
         using var stream = new MemoryStream();
         using var writer = NullGroupWriteRow.CreateRowWriter(stream, maxParallelism: 1);
-        Assert.Throws<NullReferenceException>(() => writer.GetRow().Required = null!);
+        var exception = Assert.Throws<InvalidOperationException>(() => writer.GetRow().Required = null!);
+        await Assert.That(exception!.Message).Contains("'Required' cannot be null");
     }
 
     [Test]
