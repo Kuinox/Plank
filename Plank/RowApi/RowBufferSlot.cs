@@ -169,6 +169,28 @@ public abstract class RowBufferSlot
     {
     }
 
+    /// <summary>Gets or sets whether a generated property setter is writing the current row.</summary>
+    /// <remarks>
+    /// Generated setters set this before writing and clear it after. It stays set only when a setter threw part way
+    /// through a row; that row cannot be written, so the owning writer refuses every later call and never finishes the
+    /// file.
+    /// </remarks>
+    public bool AssignmentInProgress { get; set; }
+
+    internal void ThrowIfAssignmentInterrupted()
+    {
+        if (AssignmentInProgress)
+            ThrowAssignmentInterrupted();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static void ThrowAssignmentInterrupted()
+        => throw CreateAssignmentInterruptedException();
+
+    internal static InvalidOperationException CreateAssignmentInterruptedException()
+        => new("A generated property setter threw part way through a row, so the row writer cannot write it. " +
+            "Dispose this writer; the file is incomplete.");
+
     /// <summary>Registers a resource to dispose when this slot is reused.</summary>
     /// <param name="owner">The resource that owns values stored in the slot.</param>
     public void RegisterOwner(IDisposable owner)

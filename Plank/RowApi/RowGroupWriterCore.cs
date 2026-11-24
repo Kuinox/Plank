@@ -31,6 +31,7 @@ public sealed class RowGroupWriterCore<TSlot>
     public TSlot GetSlotForRow()
     {
         ThrowIfWritten("Rows are already written for this row group.");
+        _slot.ThrowIfAssignmentInterrupted();
         if (_rowPending)
             _slot.Next();
         else
@@ -42,6 +43,7 @@ public sealed class RowGroupWriterCore<TSlot>
     public void Write()
     {
         ThrowIfWritten("This row writer was already written.");
+        _slot.ThrowIfAssignmentInterrupted();
         if (_rowPending)
         {
             _slot.Next();
