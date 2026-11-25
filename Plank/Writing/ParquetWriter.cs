@@ -177,6 +177,7 @@ public sealed class ParquetWriter : IDisposable
     public SerializedColumn<T> CreateSerializedColumn<T>(LeafColumn column)
     {
         ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(column);
         var ordinal = GetColumnOrdinal(column);
         var retainedValues = _latestRowGroupValues?.GetValues<T>(checked((int)ordinal));
         var serialized = new SerializedColumn<T>(this, column, _options.InitialPageCapacity, retainedValues);
