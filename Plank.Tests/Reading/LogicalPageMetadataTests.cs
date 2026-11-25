@@ -461,6 +461,36 @@ internal sealed class LogicalPageMetadataTests
     }
 
     [Test]
+    public void HeaderFallbackProbesWithoutExceptions()
+    {
+        // Reading only header bytes means parsing many prefixes of each header. Each used to cost a thrown
+        // CompactProtocolTruncatedException, which made header-scanned page metadata ~0.2 ms per page.
+        var (schema, bytes) = CreateFile(writePageIndexes: false);
+        using var reader = schema.CreateReader(new MemoryReadSource(bytes));
+        var thread = Environment.CurrentManagedThreadId;
+        var exceptions = 0;
+        EventHandler<System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs> count = (_, _) =>
+        {
+            if (Environment.CurrentManagedThreadId == thread)
+                exceptions++;
+        };
+        AppDomain.CurrentDomain.FirstChanceException += count;
+        try
+        {
+            using var pages = reader.RowGroups[0].GetColumnMetadata(0).OpenPages();
+            if (pages.Count < 2)
+                throw new InvalidOperationException("The fixture must have several pages.");
+        }
+        finally
+        {
+            AppDomain.CurrentDomain.FirstChanceException -= count;
+        }
+
+        if (exceptions != 0)
+            throw new InvalidOperationException($"Probing page headers threw {exceptions} exceptions.");
+    }
+
+    [Test]
     public void PageCollectionRejectsAccessAfterDisposal()
     {
         var (schema, bytes) = CreateFile();
