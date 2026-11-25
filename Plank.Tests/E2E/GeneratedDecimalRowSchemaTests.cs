@@ -48,6 +48,27 @@ internal sealed class GeneratedDecimalRowSchemaTests
             throw new InvalidOperationException("Generated optional decimal values did not round-trip.");
     }
 
+    [Test]
+    public async Task GeneratedRowsRoundTripRepresentableScaledDecimals()
+    {
+        // The unscaled coefficients exceed 96 bits, but both values fit in a CLR decimal.
+        const decimal value = 800_000_000_000_000_000_000m;
+        using var stream = new MemoryStream();
+        using (var writer = DecimalRowSchema.CreateRowWriter(stream, maxParallelism: 1))
+        {
+            writer.GetRow().OptionalAmount = value;
+            writer.GetRow().OptionalAmount = -value;
+            writer.Complete();
+        }
+
+        using var reader = DecimalRowSchema.CreateRowReader(new MemoryReadSource(stream.ToArray()));
+        await Assert.That(reader.MoveNext()).IsTrue();
+        await Assert.That((decimal?)reader.Current.OptionalAmount).IsEqualTo(value);
+        await Assert.That(reader.MoveNext()).IsTrue();
+        await Assert.That((decimal?)reader.Current.OptionalAmount).IsEqualTo(-value);
+        await Assert.That(reader.MoveNext()).IsFalse();
+    }
+
     static void AssertDecimal(LeafColumn column, int precision, int scale, uint typeLength)
     {
         if (column.PhysicalType != ParquetPhysicalType.FixedLenByteArray)

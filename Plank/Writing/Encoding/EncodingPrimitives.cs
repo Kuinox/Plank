@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -80,8 +81,23 @@ static class EncodingPrimitives
     internal static int ComparePayload(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
         var common = Math.Min(left.Length, right.Length);
-        if (common >= Vector128<byte>.Count)
+        if (common > 32)
             return left.SequenceCompareTo(right);
+        if (common >= sizeof(ulong))
+        {
+            // Unsigned big-endian words compare in byte order. The final word may overlap the previous one.
+            var offset = 0;
+            while (true)
+            {
+                var a = BinaryPrimitives.ReadUInt64BigEndian(left[offset..]);
+                var b = BinaryPrimitives.ReadUInt64BigEndian(right[offset..]);
+                if (a != b)
+                    return a < b ? -1 : 1;
+                if (offset == common - sizeof(ulong))
+                    return left.Length - right.Length;
+                offset = Math.Min(offset + sizeof(ulong), common - sizeof(ulong));
+            }
+        }
 
         for (var i = 0; i < common; i++)
         {

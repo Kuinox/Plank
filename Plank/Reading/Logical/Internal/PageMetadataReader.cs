@@ -18,11 +18,12 @@ static class PageMetadataReader
     {
         var chunk = reader.Metadata.ColumnChunk(rowGroupOrdinal, physicalColumnOrdinal);
         var columnIndex = ReadSection(reader, chunk.ColumnIndexOffset, chunk.ColumnIndexLength, "column index");
-        var offsetIndex = ReadSection(reader, chunk.OffsetIndexOffset, chunk.OffsetIndexLength, "offset index");
+        ParquetBuffer offsetIndex = default;
         ParquetBuffer entries = default;
         var statisticsBuilder = new StatisticsBufferBuilder(reader.BufferPool);
         try
         {
+            offsetIndex = ReadSection(reader, chunk.OffsetIndexOffset, chunk.OffsetIndexLength, "offset index");
             var count = -1;
             var capacity = 0;
             var boundaryOrder = ParquetBoundaryOrder.Unknown;
@@ -34,7 +35,8 @@ static class PageMetadataReader
             {
                 ParseOffsetIndex(offsetIndex.Span[..checked((int)chunk.OffsetIndexLength)], reader.BufferPool,
                     ref entries, ref capacity, ref count);
-                ValidateLocations(reader, chunk, Entries(entries, count), rowCount);
+                ValidateLocations(reader, chunk, Entries(entries, count), rowCount,
+                    allowEmptyRepeatedPages: definition.MaxRepetitionLevel > 0);
                 if (columnIndex.IsEmpty)
                     PopulateHeaderStatistics(reader, chunk, definition, Entries(entries, count),
                         ref statisticsBuilder);
@@ -141,8 +143,9 @@ static class PageMetadataReader
                     for (var i = 0; i < itemCount; i++)
                     {
                         var nullCount = reader.ReadI64(elementType);
+                        // parquet-mr writes -1 when statistics are disabled: the count is unknown, not corrupt.
                         if (nullCount < 0)
-                            throw new CorruptParquetException("Page null count cannot be negative.");
+                            continue;
                         var previous = destination[i].Statistics;
                         destination[i].Statistics = new EncodedStatistics(previous.MinimumOffset,
                             previous.MinimumLength, previous.MaximumOffset, previous.MaximumLength, nullCount,
@@ -309,7 +312,9 @@ static class PageMetadataReader
                 var pageRowCount = header.Type == PageHeaderType.DataPageV2
                     ? header.RowCount
                     : definition.Options.Repetition == ParquetRepetition.Repeated ? 0U : header.ValueCount;
-                if (pageRowCount != 0)
+                // 0 means unknown for repeated V1 pages, whose headers carry no row count, but a page without
+                // values (Arrow writes such pages) holds no rows whatever its version.
+                if (pageRowCount != 0 || header.ValueCount == 0)
                 {
                     entry.RowCount = pageRowCount;
                     entry.HasRowCount = true;
@@ -352,17 +357,12 @@ static class PageMetadataReader
     }
 
     internal static void ValidateLocations(ParquetFileReader reader, ParquetColumnChunkInfo chunk,
-        ReadOnlySpan<PageMetadataEntry> entries, ulong rowCount)
+        ReadOnlySpan<PageMetadataEntry> entries, ulong rowCount, bool allowEmptyRepeatedPages = false)
     {
         if (rowCount != 0 && entries.IsEmpty)
             throw new CorruptParquetException("Offset index has no data pages for a nonempty row group.");
         if (!entries.IsEmpty && entries[0].FirstRowIndex != 0)
             throw new CorruptParquetException("Offset index must begin at row 0.");
-        for (var i = 0; i < entries.Length; i++)
-            if (entries[i].FirstRowIndex >= rowCount ||
-                i > 0 && entries[i].FirstRowIndex <= entries[i - 1].FirstRowIndex)
-                throw new CorruptParquetException("Offset index first_row_index values must be strictly increasing and within the row group.");
-
         if (chunk.ChunkOffset > reader.Source.Length ||
             chunk.TotalCompressedSize > reader.Source.Length - chunk.ChunkOffset)
             throw new CorruptParquetException("Column chunk exceeds the source length.");
@@ -377,6 +377,11 @@ static class PageMetadataReader
                 throw new CorruptParquetException(
                     $"Offset index page location {i} is outside the column chunk's data region or overlaps an earlier page.");
             previousEnd = checked(entry.Offset + entry.CompressedSize);
+            if (entry.FirstRowIndex >= rowCount || i > 0 &&
+                (entry.FirstRowIndex < entries[i - 1].FirstRowIndex ||
+                 entry.FirstRowIndex == entries[i - 1].FirstRowIndex &&
+                 (!allowEmptyRepeatedPages || !IsIndexedEmptyDataPage(reader, chunk, entries[i - 1]))))
+                throw new CorruptParquetException("Offset index first_row_index values must be strictly increasing and within the row group.");
         }
         // Check gaps as well as the prefix and suffix: an omitted data page
         // otherwise looks like a larger row range on a neighbouring page. Some
@@ -389,6 +394,29 @@ static class PageMetadataReader
                 ValidateLocationGap(reader, chunk, gapStart, gapEnd);
             if (i < entries.Length)
                 gapStart = entries[i].Offset + entries[i].CompressedSize;
+        }
+    }
+
+    // Arrow GH-54533 wrote empty data pages for repeated leaves. They occupy real bytes and
+    // have a ColumnIndex slot, but contain no levels or rows. Validate the physical page
+    // before treating its duplicate row index as a zero-width row range.
+    static bool IsIndexedEmptyDataPage(ParquetFileReader reader, ParquetColumnChunkInfo chunk,
+        PageMetadataEntry entry)
+    {
+        if (entry.CompressedSize > int.MaxValue)
+            return false;
+        var statistics = new StatisticsBufferBuilder(reader.BufferPool);
+        try
+        {
+            var header = ReadPageHeader(reader, entry.Offset, (int)entry.CompressedSize,
+                chunk.TotalUncompressedSize, copyStatistics: false, ref statistics, out _);
+            return (ulong)header.HeaderLength + header.CompressedPageSize == entry.CompressedSize &&
+                header.ValueCount == 0 && (header.Type == PageHeaderType.DataPage ||
+                    header.Type == PageHeaderType.DataPageV2 && header.RowCount == 0);
+        }
+        finally
+        {
+            statistics.Dispose();
         }
     }
 

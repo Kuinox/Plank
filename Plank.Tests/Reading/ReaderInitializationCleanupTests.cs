@@ -64,6 +64,27 @@ internal sealed class ReaderInitializationCleanupTests
             await Assert.That(pool.RentCount).IsGreaterThan(0);
     }
 
+    [Test]
+    public async Task OffsetIndexReadFailureReturnsBothIndexBuffers()
+    {
+        using var pool = new TrackingBufferPool();
+        using var source = new TrackingReadSource(CreateInput(corruptFile: false));
+        using var reader = new ParquetReader(options: new ParquetReaderOptions { BufferPool = pool });
+        reader.Reset(source);
+        var chunk = reader.PhysicalReader.Metadata.ColumnChunk(0, 0);
+        await Assert.That(chunk.ColumnIndexLength).IsGreaterThan(0u);
+        await Assert.That(chunk.OffsetIndexLength).IsGreaterThan(0u);
+        var outstanding = pool.Outstanding;
+        source.FaultOffset = chunk.OffsetIndexOffset;
+
+        Assert.Throws<EndOfStreamException>(() =>
+        {
+            using var pages = reader.RowGroups[0].GetColumnMetadata(0).OpenPages();
+        });
+
+        await Assert.That(pool.Outstanding).IsEqualTo(outstanding);
+    }
+
     static void AssertInitializationFails(Func<IDisposable> createReader, bool corruptFile)
     {
         try
@@ -92,7 +113,7 @@ internal sealed class ReaderInitializationCleanupTests
 
         var schema = new ParquetSchema([ColumnDefinition.RequiredLeaf("Other", ParquetPhysicalType.Int32)]);
         using var output = new MemoryStream();
-        var writer = schema.CreateWriter(output, new ParquetWriterOptions { Compression = CompressionKind.None });
+        var writer = schema.CreateWriter(output, new ParquetWriterOptions { Compression = CompressionKind.None, WritePageIndexes = true });
         var column = writer.CreateSerializedColumn<int>(schema.LeafColumns[0]);
         column.Serialize([42]);
         writer.StartRowGroup().Write(column);
@@ -103,6 +124,7 @@ internal sealed class ReaderInitializationCleanupTests
     sealed class TrackingReadSource(byte[] bytes) : IParquetReadSource
     {
         public int DisposeCount { get; private set; }
+        public ulong? FaultOffset { get; set; }
 
         public ulong Length
         {
@@ -116,6 +138,11 @@ internal sealed class ReaderInitializationCleanupTests
         public void ReadExactly(ulong offset, Span<byte> destination)
         {
             ObjectDisposedException.ThrowIf(DisposeCount != 0, this);
+            if (FaultOffset == offset)
+            {
+                destination[0] = bytes[checked((int)offset)];
+                throw new EndOfStreamException("Injected short read.");
+            }
             bytes.AsSpan(checked((int)offset), destination.Length).CopyTo(destination);
         }
 

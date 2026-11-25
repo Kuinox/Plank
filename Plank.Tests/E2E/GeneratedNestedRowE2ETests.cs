@@ -11,6 +11,39 @@ internal sealed class GeneratedNestedRowE2ETests
     const int MultiRowGroupRowCount = 1031;
 
     [Test]
+    [Arguments(Plank.Writing.ParquetDataPageVersion.V1)]
+    [Arguments(Plank.Writing.ParquetDataPageVersion.V2)]
+    public void RoundTripsMissingRecordsNullFieldsAndMissingInnerLists(Plank.Writing.ParquetDataPageVersion version)
+    {
+        List<OptionalEntry?> items = [null, new(), new() { Label = "x" }, new() { Price = 7 }, null];
+        using var stream = new MemoryStream();
+        using (var writer = GeneratedOptionalElementsSchema.CreateRowWriter(stream, maxParallelism: 1,
+                   new ParquetWriterOptions { DataPageVersion = version, Compression = CompressionKind.None }))
+        {
+            var row = writer.GetRow();
+            row.Items = null;
+            row.Grid = null;
+            row = writer.GetRow();
+            row.Items = [];
+            row.Grid = [];
+            row = writer.GetRow();
+            row.Items = items;
+            row.Grid = [null, [], [null, 7], null];
+            writer.Complete();
+        }
+
+        using var input = new MemoryStream(stream.ToArray());
+        using var reader = GeneratedOptionalElementsSchema.CreateRowReader(input);
+        if (!reader.MoveNext() || reader.Current.Items is not null || reader.Current.Grid is not null)
+            throw new InvalidOperationException("Expected missing outer collections.");
+        if (!reader.MoveNext() || reader.Current.Items is not [] || reader.Current.Grid is not [])
+            throw new InvalidOperationException("Expected empty outer collections.");
+        if (!reader.MoveNext() || reader.Current.Items is not { } actual || !items.SequenceEqual(actual) ||
+            reader.Current.Grid is not [null, [], [null, 7], null] || reader.MoveNext())
+            throw new InvalidOperationException("Nested presence changed on round trip.");
+    }
+
+    [Test]
     [Arguments(false)]
     [Arguments(true)]
     public async Task GeneratedRowsRoundTripCollectionsMapsAndRecordsAcrossRowGroups(bool useCursor)
@@ -152,6 +185,62 @@ internal sealed class GeneratedNestedRowE2ETests
         {
             File.Delete(path);
         }
+    }
+
+    [Test]
+    [Arguments(false, true)]
+    [Arguments(true, false)]
+    public void StrictGeneratedReaderRejectsNestedRepetitionChanges(bool optionalList, bool optionalElement)
+    {
+        var element = optionalElement
+            ? ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32)
+            : ColumnDefinition.RequiredLeaf("value", ParquetPhysicalType.Int32);
+        var schema = new Plank.Schema.ParquetSchema([
+            ColumnDefinition.List("Values", element, optionalList
+                ? ParquetRepetition.Optional
+                : ParquetRepetition.Required)
+        ]);
+        using var output = new MemoryStream();
+        var writer = schema.CreateWriter(output, new ParquetWriterOptions { Compression = CompressionKind.None });
+        var rowGroup = writer.StartRowGroup();
+        if (optionalElement)
+        {
+            var column = rowGroup.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
+            column.Serialize([[1]]);
+            rowGroup.Write(column);
+        }
+        else
+        {
+            var column = rowGroup.CreateSerializedColumn<int[]>(schema.LeafColumns[0]);
+            column.Serialize([[1]]);
+            rowGroup.Write(column);
+        }
+        writer.CloseFile();
+
+        Assert.Throws<InvalidOperationException>(() =>
+            GeneratedListRowSchema.CreateRowReader(new MemoryStream(output.ToArray(), writable: false)));
+    }
+
+    [Test]
+    public async Task GeneratedReaderRejectsPartiallyMissingRepeatedRecord()
+    {
+        using var stream = new MemoryStream();
+        using (var writer = OriginalRepeatedRecordRows.CreateRowWriter(stream, maxParallelism: 1))
+        {
+            writer.GetRow().Items = [new OriginalRepeatedRecord { Existing = 17 }];
+            writer.Complete();
+        }
+
+        await Assert.That(() =>
+        {
+            using var reader = EvolvedRepeatedRecordRows.CreateRowReader(new MemoryStream(stream.ToArray()),
+                schemaEvolution: new Plank.Reading.ParquetSchemaEvolutionOptions
+                {
+                    MissingColumns = Plank.Reading.MissingColumnEvolutionBehavior.MaterializeDefault
+                });
+            if (reader.MoveNext())
+                _ = reader.Current.Items;
+        }).Throws<InvalidOperationException>();
     }
 
     [Test]

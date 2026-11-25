@@ -26,6 +26,7 @@ internal sealed class DatasetNestedBinarySnapshotTests
                     Id = id,
                     Details = id % 2 == 0 ? null : new DatasetNestedBinaryDetails { Id = id, Payload = reused },
                     Items = (id % 3) switch { 0 => null, 1 => [], _ => [reused, null, []] },
+                    Records = [null, new DatasetNestedBinaryDetails { Id = id, Payload = reused }],
                     Map = new Dictionary<int, byte[]?> { [1] = reused, [2] = null, [3] = [] },
                     Matrix = [[reused], [], [reused]],
                     Memories = [reused.AsMemory(1, 2), ReadOnlyMemory<byte>.Empty],
@@ -73,6 +74,10 @@ internal sealed class DatasetNestedBinarySnapshotTests
                         throw new InvalidOperationException("A present optional group was lost.");
                     AssertPayload(details.Payload, id);
                 }
+
+                if (row.Records is not [null, { } entry] || entry.Id != id)
+                    throw new InvalidOperationException("Queued record presence changed.");
+                AssertPayload(entry.Payload, id);
 
                 var items = row.Items;
                 if (id % 3 == 0)
@@ -223,6 +228,8 @@ internal sealed partial class DatasetNestedBinarySnapshotRow
     public DatasetNestedBinaryDetails? Details { get; set; }
 
     public List<byte[]?>? Items { get; set; }
+
+    public List<DatasetNestedBinaryDetails?> Records { get; set; } = [];
 
     public Dictionary<int, byte[]?> Map { get; set; } = [];
 

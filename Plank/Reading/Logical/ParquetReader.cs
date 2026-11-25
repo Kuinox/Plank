@@ -209,6 +209,10 @@ public sealed class ParquetReader : IDisposable
                     $"Requested schema column '{requestedColumn.Name}' is not present in the file schema.");
 
             ValidateRequestedColumn(requestedColumn, fileColumns[match]);
+            if (requestedPath.Length > 1 && requestedColumn.Options.Repetition == ParquetRepetition.Repeated &&
+                !requestedSchema.NestedShapeMatches(i, fileSchema, match))
+                throw new InvalidOperationException(
+                    $"Requested schema column '{requestedColumn.Name}' has a different nested structure or repetition than the file schema.");
         }
     }
 

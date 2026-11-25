@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Runtime.CompilerServices;
 using Plank.RowApi;
 using Plank.Schema;
@@ -12,7 +11,7 @@ sealed class DatasetBufferSlot : RowBufferSlot
     readonly RowBufferSizeTracker _sizeTracker;
     readonly IParquetBufferPool _bufferPool;
     readonly RowApiColumnDescriptor[] _columns;
-    readonly SnapshotMemory[]?[] _snapshots;
+    readonly PooledByteMemory[]?[] _snapshots;
     ParquetBuffer _currentChunk;
     int _chunkOffset;
 
@@ -22,11 +21,15 @@ sealed class DatasetBufferSlot : RowBufferSlot
         _columns = columns;
         _bufferPool = bufferPool;
         _sizeTracker = CreateSizeTracker();
-        _snapshots = new SnapshotMemory[columns.Length][];
+        _snapshots = new PooledByteMemory[columns.Length][];
         for (var i = 0; i < columns.Length; i++)
+        {
             if (columns[i] is RowApiColumnDescriptor<ReadOnlyMemory<byte>> or
                 RowApiColumnDescriptor<ReadOnlyMemory<byte>?>)
                 _snapshots[i] = CreateSnapshots(rowCount);
+            else if (columns[i] is RowApiNestedColumnDescriptor<byte[]>)
+                GetNestedLeafBufferCore<byte[]>(i).SnapshotBinary = true;
+        }
     }
 
     internal ulong BufferedSizeBytes { get; private set; }
@@ -70,24 +73,8 @@ sealed class DatasetBufferSlot : RowBufferSlot
             SetValue<ReadOnlyMemory<byte>?>(columnIndex, rowIndex,
                 memory is { } bytes ? Snapshot(columnIndex, rowIndex, bytes.Span) : (ReadOnlyMemory<byte>?)null);
         }
-        else if (value is Array shape && _columns[columnIndex].Column.PhysicalType is
-                 ParquetPhysicalType.ByteArray or ParquetPhysicalType.FixedLenByteArray)
-            SetValue(columnIndex, rowIndex, (T)(object)SnapshotBinaryShape(shape));
         else
             SetValue(columnIndex, rowIndex, value);
-    }
-
-    // Nested generated projections already allocate jagged arrays, but their binary leaves may
-    // still refer to caller-owned arrays. Preserve the shape and snapshot every binary endpoint.
-    static Array SnapshotBinaryShape(Array shape)
-    {
-        if (shape is byte[] bytes)
-            return bytes.ToArray();
-        var copy = (Array)shape.Clone();
-        for (var i = 0; i < copy.Length; i++)
-            if (copy.GetValue(i) is Array child)
-                copy.SetValue(SnapshotBinaryShape(child), i);
-        return copy;
     }
 
     ReadOnlyMemory<byte> Snapshot(int columnIndex, int rowIndex, ReadOnlySpan<byte> bytes)
@@ -143,16 +130,16 @@ sealed class DatasetBufferSlot : RowBufferSlot
             var previousCount = snapshots.Length;
             Array.Resize(ref snapshots, rowCount);
             for (var rowIndex = previousCount; rowIndex < rowCount; rowIndex++)
-                snapshots[rowIndex] = new SnapshotMemory();
+                snapshots[rowIndex] = new PooledByteMemory();
             _snapshots[i] = snapshots;
         }
     }
 
-    static SnapshotMemory[] CreateSnapshots(int rowCount)
+    static PooledByteMemory[] CreateSnapshots(int rowCount)
     {
-        var snapshots = new SnapshotMemory[rowCount];
+        var snapshots = new PooledByteMemory[rowCount];
         for (var i = 0; i < rowCount; i++)
-            snapshots[i] = new SnapshotMemory();
+            snapshots[i] = new PooledByteMemory();
         return snapshots;
     }
 
@@ -175,30 +162,5 @@ sealed class DatasetBufferSlot : RowBufferSlot
         _currentChunk.Dispose();
         _chunkOffset = 0;
         BufferedSizeBytes = 0;
-    }
-
-    // Preallocated with column capacity and reused, including across parked-row promotion.
-    // Only adapts a retained ParquetBuffer slice to the serializer's ReadOnlyMemory API;
-    // ParquetBuffer supplies all reference counting and allocation ownership.
-    sealed class SnapshotMemory : MemoryManager<byte>
-    {
-        ParquetBuffer _buffer;
-
-        internal ReadOnlyMemory<byte> SetBuffer(ParquetBuffer buffer)
-        {
-            _buffer = buffer;
-            return Memory;
-        }
-
-        internal void Reset() => _buffer.Dispose();
-
-        public override Span<byte> GetSpan() => _buffer.Span;
-
-        // These private snapshots are consumed synchronously as spans by the serializer.
-        public override MemoryHandle Pin(int elementIndex = 0) => throw new NotSupportedException();
-
-        public override void Unpin() { }
-
-        protected override void Dispose(bool disposing) => Reset();
     }
 }

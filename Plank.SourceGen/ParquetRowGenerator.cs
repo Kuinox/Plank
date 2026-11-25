@@ -153,51 +153,84 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        var schemaTypes = context.SyntaxProvider.ForAttributeWithMetadataName(
-            fullyQualifiedMetadataName: "Plank.Schema.ParquetSchemaAttribute",
-            predicate: static (node, _) => node is ClassDeclarationSyntax or RecordDeclarationSyntax,
-            transform: static (ctx, _) => (Type: (INamedTypeSymbol)ctx.TargetSymbol,
-                Compilation: ctx.SemanticModel.Compilation));
+        var schemaResults = context.SyntaxProvider.ForAttributeWithMetadataName(
+                fullyQualifiedMetadataName: "Plank.Schema.ParquetSchemaAttribute",
+                predicate: static (node, _) => node is ClassDeclarationSyntax or RecordDeclarationSyntax,
+                transform: static (ctx, _) => Generate(
+                    (INamedTypeSymbol)ctx.TargetSymbol, ctx.SemanticModel.Compilation))
+            .WithTrackingName("SchemaResults");
 
-        context.RegisterSourceOutput(schemaTypes, static (sourceContext, schema) =>
-            Emit(sourceContext, schema.Type, schema.Compilation));
+        context.RegisterSourceOutput(schemaResults, static (sourceContext, result) => result.Emit(sourceContext));
     }
 
-    static void Emit(SourceProductionContext context, INamedTypeSymbol schemaType, Compilation compilation)
+    static GenerationResult Generate(INamedTypeSymbol schemaType, Compilation compilation)
     {
+        var location = schemaType.Locations.FirstOrDefault();
         if (schemaType.TypeKind != TypeKind.Class || schemaType.Arity != 0 || schemaType.ContainingType is not null)
         {
             if (schemaType.TypeKind != TypeKind.Class || schemaType.Arity != 0)
-                context.ReportDiagnostic(Diagnostic.Create(InvalidTarget, schemaType.Locations.FirstOrDefault(), schemaType.Name));
+                return GenerationResult.Diagnostic(InvalidTarget, location, schemaType.Name);
             else
-                context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
-                    schemaType.Locations.FirstOrDefault(),
+                return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration, location,
                     $"Schema type '{schemaType.ToDisplayString()}' is declared inside another type. " +
-                    "Declare [ParquetSchema] classes directly in a namespace or the global namespace."));
-            return;
+                    "Declare [ParquetSchema] classes directly in a namespace or the global namespace.");
+        }
+
+        if (schemaType.IsFileLocal || schemaType.DeclaringSyntaxReferences.Any(static reference =>
+                reference.GetSyntax() is TypeDeclarationSyntax declaration &&
+                !declaration.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PartialKeyword)))
+        {
+            var reason = schemaType.IsFileLocal ? "is file-local" : "is not partial";
+            return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration,
+                schemaType.Locations.FirstOrDefault(),
+                $"Schema type '{schemaType.Name}' {reason}. Declare a non-file-local partial class or record.");
+        }
+
+        if (compilation is Microsoft.CodeAnalysis.CSharp.CSharpCompilation csharp &&
+            csharp.LanguageVersion < Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp12)
+        {
+            return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration,
+                schemaType.Locations.FirstOrDefault(),
+                $"Schema type '{schemaType.Name}' requires C# 12 or later for generated APIs. Set LangVersion to 12.0 or later.");
         }
 
         if (!ValidateDtoInheritance(schemaType, out var inheritanceError))
         {
-            context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration,
-                schemaType.Locations.FirstOrDefault(), inheritanceError));
-            return;
+            return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration, location, inheritanceError);
         }
 
-        if (NestedParquetRowEmitter.TryEmit(context, schemaType, compilation))
-            return;
+        foreach (var property in schemaType.GetMembers().OfType<IPropertySymbol>())
+        {
+            if (property.IsStatic || property.IsIndexer || property.ExplicitInterfaceImplementations.IsEmpty)
+                continue;
+
+            return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration,
+                property.Locations.FirstOrDefault(),
+                $"Schema property '{property.Name}' explicitly implements an interface and cannot be a column. " +
+                "Use an implicitly implemented property or a separate schema DTO.");
+        }
+
+        if (NestedParquetRowEmitter.TryGenerate(schemaType, compilation, location, out var nestedResult))
+            return nestedResult;
+
+        foreach (var property in schemaType.GetMembers().OfType<IPropertySymbol>())
+        {
+            if (property.IsStatic || property.IsIndexer || property.IsImplicitlyDeclared || property.GetMethod is not null)
+                continue;
+
+            return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration,
+                property.Locations.FirstOrDefault(), MissingGetterMessage(property));
+        }
 
         if (!TryExtractColumns(schemaType, out var columns, out var extractError))
         {
             if (extractError.Length == 0)
             {
-                context.ReportDiagnostic(Diagnostic.Create(UnsupportedSchemaDeclaration, schemaType.Locations.FirstOrDefault(),
-                    $"Schema type '{schemaType.Name}' does not declare any supported non-static properties."));
-                return;
+                return GenerationResult.Diagnostic(UnsupportedSchemaDeclaration, location,
+                    $"Schema type '{schemaType.Name}' does not declare any supported non-static properties.");
             }
 
-            context.ReportDiagnostic(Diagnostic.Create(InvalidTypeHint, schemaType.Locations.FirstOrDefault(), extractError));
-            return;
+            return GenerationResult.Diagnostic(InvalidTypeHint, location, extractError);
         }
 
         if (!AllowsAllocatingValues(schemaType))
@@ -207,40 +240,35 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 if (!IsStringClr(column.ClrTypeName))
                     continue;
 
-                context.ReportDiagnostic(Diagnostic.Create(AllocatingValueNotAllowed,
-                    schemaType.Locations.FirstOrDefault(),
+                return GenerationResult.Diagnostic(AllocatingValueNotAllowed, location,
                     $"Column '{column.Name}' uses string, which allocates during UTF-8 conversion. " +
-                    "Set [ParquetSchema(AllowAllocatingValues = true)] to opt in."));
-                return;
+                    "Set [ParquetSchema(AllowAllocatingValues = true)] to opt in.");
             }
         }
 
         var schemaDiagnostics = ValidateSchemaColumns(columns);
-        for (var i = 0; i < schemaDiagnostics.Length; i++)
-            context.ReportDiagnostic(Diagnostic.Create(schemaDiagnostics[i].Descriptor,
-                schemaType.Locations.FirstOrDefault(), schemaDiagnostics[i].Message));
         if (schemaDiagnostics.Length > 0)
-            return;
+            return GenerationResult.Diagnostics(schemaDiagnostics.Select(diagnostic =>
+                GenerationDiagnostic.Create(diagnostic.Descriptor, location, diagnostic.Message)));
 
         var mappedColumns = ImmutableArray.CreateBuilder<MappedColumn>(columns.Length);
         foreach (var column in columns)
         {
             if (!TryMapColumn(column, out var mapped))
             {
-                context.ReportDiagnostic(Diagnostic.Create(
+                return GenerationResult.Diagnostic(
                     UnsupportedPropertyType,
-                    schemaType.Locations.FirstOrDefault(),
+                    location,
                     column.Name,
                     schemaType.Name,
                     column.Repetition,
-                    column.PhysicalType));
-                return;
+                    column.PhysicalType);
             }
             mappedColumns.Add(mapped);
         }
 
         var source = BuildSource(schemaType, columns, mappedColumns.ToImmutable());
-        context.AddSource(GetHintName(schemaType), source);
+        return GenerationResult.Source(GetHintName(schemaType), source);
     }
 
     internal static bool ValidateDtoInheritance(INamedTypeSymbol type, out string error)
@@ -259,7 +287,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return true;
     }
 
-    static string GetHintName(INamedTypeSymbol schemaType)
+    internal static string GetHintName(INamedTypeSymbol schemaType)
     {
         var typeName = schemaType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         using var sha256 = SHA256.Create();
@@ -281,7 +309,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             ? $"global::{EscapeIdentifier(schemaType.Name)}"
             : $"global::{namespaceName}.{EscapeIdentifier(schemaType.Name)}";
         var names = new GeneratedMemberNames(schemaType);
-        var builder = new StringBuilder();
+        var builder = SourceBuilder.Rent();
         builder.AppendLine("// <auto-generated />");
         builder.AppendLine("#nullable enable");
         if (namespaceName is not null)
@@ -299,8 +327,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         for (var i = 0; i < schemaColumns.Length; i++)
         {
             var schemaColumn = schemaColumns[i];
-            builder.Append("        global::Plank.Schema.ColumnDefinition.Leaf(\"").Append(Escape(schemaColumn.Name))
-                .Append("\", global::Plank.Schema.ParquetPhysicalType.").Append(schemaColumn.PhysicalType)
+            builder.Append("        global::Plank.Schema.ColumnDefinition.Leaf(").Append(StringLiteral(schemaColumn.Name))
+                .Append(", global::Plank.Schema.ParquetPhysicalType.").Append(schemaColumn.PhysicalType)
                 .Append(", ").Append(GetColumnOptionsExpression(schemaColumn));
             if (schemaColumn.LogicalType is { } logicalType)
                 builder.Append(", ").Append(GetLogicalTypeExpression(logicalType));
@@ -465,9 +493,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        internal " + names.Root("PipelineWriter") + "(global::Plank.Writing.IParquetWriteSource file, global::Plank.Writing.ParquetFilePath filePath, global::Plank.Writing.ParquetWriterOptions options)");
         builder.Append("            : base(file, filePath, ").Append(names.Root("Schema"))
-            .Append(", options.RowApiMaxParallelism, null, options, options.RowApiInitialRowCapacity, \"Plank")
-            .Append(Escape(schemaType.Name))
-            .AppendLine("RowApiWorker\")");
+            .Append(", options.RowApiMaxParallelism, null, options, options.RowApiInitialRowCapacity, ")
+            .Append(StringLiteral($"Plank{schemaType.Name}RowApiWorker")).AppendLine(")");
         builder.AppendLine("        {");
         if (rowSizePlan.IsFixed)
             builder.Append("            " + names.Helper("_rowsPerGroup") + " = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
@@ -485,9 +512,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        internal " + names.Root("PipelineWriter") + "(global::System.IO.Stream stream, uint maxParallelism, global::System.Action<int>? onFlush, global::Plank.Writing.ParquetWriterOptions options)");
         builder.Append("            : base(stream, ").Append(names.Root("Schema"))
-            .Append(", maxParallelism, onFlush, options, options.RowApiInitialRowCapacity, \"Plank")
-            .Append(Escape(schemaType.Name))
-            .AppendLine("RowApiWorker\")");
+            .Append(", maxParallelism, onFlush, options, options.RowApiInitialRowCapacity, ")
+            .Append(StringLiteral($"Plank{schemaType.Name}RowApiWorker")).AppendLine(")");
         builder.AppendLine("        {");
         if (rowSizePlan.IsFixed)
             builder.Append("            " + names.Helper("_rowsPerGroup") + " = GetFixedRowsPerGroup(").Append(rowSizePlan.FixedSizeExpression).AppendLine(");");
@@ -514,6 +540,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("            return slot;");
         builder.AppendLine("        }");
         builder.AppendLine();
+        builder.AppendLine("        /// <summary>Writes the buffered rows and the Parquet footer.</summary>");
+        builder.AppendLine("        /// <remarks>Do not call this after the writer or one of its row setters has thrown: a setter can fail part way through a row, so the file is dead. Dispose the writer instead; disposing never writes the footer.</remarks>");
         builder.AppendLine("        public void Complete()");
         builder.AppendLine("        {");
         builder.AppendLine("            if (" + names.Helper("_rowPending") + ")");
@@ -644,7 +672,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 i => $"global::System.Runtime.CompilerServices.Unsafe.Add(ref {names.Helper("_buffers")}._column{i}, {names.Helper("_index")})", names.Helper("_buffers") + "." + names.Helper("_ownerSlot")));
         builder.AppendLine("}");
 
-        return builder.ToString();
+        return SourceBuilder.Finish(builder);
     }
 
     static void AppendWriteRow(StringBuilder builder, GeneratedMemberNames names, ImmutableArray<MappedColumn> columns)
@@ -733,7 +761,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
         // This is a source member name, already validated by the C# compiler. Sanitizing it
         // changes legal Unicode identifiers and makes generated row access target another member.
-        mapped = new MappedColumn(column.Name, column.RowPropertyName, column.ClrTypeName);
+        mapped = new MappedColumn(column.Name, column.RowPropertyName, column.ClrTypeName, column.ConverterTypeName is not null);
         return true;
     }
 
@@ -745,8 +773,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.Append("    static readonly global::Plank.RowApi.RowApiColumnDescriptor<")
                 .Append(columns[i].ClrTypeName).Append("> ")
                 .Append(names.Helper(GetRowApiColumnFieldName(columns[i].PropertyName)))
-                .Append(" = new(\"").Append(Escape(columns[i].PropertyName))
-                .Append("\", ").Append(schemaMemberName).Append(".LeafColumns[").Append(i).AppendLine("]);");
+                .Append(" = new(").Append(StringLiteral(columns[i].PropertyName))
+                .Append(", ").Append(schemaMemberName).Append(".LeafColumns[").Append(i).AppendLine("]);");
         }
         builder.AppendLine();
         builder.AppendLine("    static readonly global::Plank.RowApi.RowApiColumnDescriptor[] " + names.Root("s_rowApiColumns") + " = [");
@@ -830,7 +858,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             builder.AppendLine();
             if (IsUtf8ByteArrayClr(columns[i].ClrTypeName) ||
                 IsStringClr(columns[i].ClrTypeName) ||
-                IsGuidClr(columns[i].ClrTypeName))
+                (IsGuidClr(columns[i].ClrTypeName) && !columns[i].HasConverter))
             {
                 builder.Append("        public global::Plank.Reading.Logical.RowGroupColumn<byte> ")
                     .Append(columns[i].PropertyName)
@@ -978,7 +1006,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
                 builder.AppendLine("            }");
                 builder.AppendLine("        }");
             }
-            else if (IsGuidClr(columns[i].ClrTypeName))
+            else if (IsGuidClr(columns[i].ClrTypeName) && !columns[i].HasConverter)
             {
                 builder.Append("        public ").Append(columns[i].ClrTypeName).Append(' ')
                     .Append(EscapeIdentifier(propertyName)).AppendLine();
@@ -1090,8 +1118,8 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
     static bool IsAdditionalFixedBinaryMapping(SchemaColumn column, string clrType)
         => column.LogicalType?.Kind is "Float16" or "Interval" && IsUtf8ByteArrayClr(clrType);
 
-    static string Escape(string value)
-        => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: false);
+    internal static string StringLiteral(string value)
+        => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: true);
 
     static string EscapeIdentifier(string value)
         => Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(value) ==
@@ -1143,6 +1171,9 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return false;
     }
 
+    internal static string MissingGetterMessage(IPropertySymbol property)
+        => $"Schema property '{property.ContainingType.Name}.{property.Name}' must have a getter to write its value.";
+
     static bool TryExtractColumns(INamedTypeSymbol schemaType, out ImmutableArray<SchemaColumn> columns, out string error)
     {
         error = string.Empty;
@@ -1188,8 +1219,23 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         column = default;
 
         ConverterSpec? converter = null;
-        if (property is not null && !TryGetConverterSpec(property, out converter, out error))
-            return false;
+        AttributeData? columnAttribute = null;
+        if (property is not null)
+        {
+            foreach (var attribute in property.GetAttributes())
+            {
+                if (attribute.AttributeClass?.ToDisplayString() != "Plank.Schema.ParquetColumnAttribute")
+                    continue;
+                if (columnAttribute is not null)
+                {
+                    error = $"Property '{property.Name}' has multiple [ParquetColumn] attributes.";
+                    return false;
+                }
+                columnAttribute = attribute;
+            }
+            if (columnAttribute is not null && !TryGetConverterSpec(property, columnAttribute, out converter, out error))
+                return false;
+        }
 
         string clrTypeName;
         string inferredPhysicalType;
@@ -1198,7 +1244,11 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         {
             if (!TryNormalizeClrType(type, nullableAnnotation, out clrTypeName))
             {
-                error = $"Unsupported CLR type '{type.ToDisplayString()}' for schema property '{property?.Name ?? "element"}'.";
+                error = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) is
+                    "global::System.Half" or "global::System.Half?"
+                    ? $"Schema property '{property?.Name ?? "element"}' cannot map System.Half directly. " +
+                      "Use byte[] or ReadOnlyMemory<byte> with a FLOAT16 logical type on FIXED_LEN_BYTE_ARRAY."
+                    : $"Unsupported CLR type '{type.ToDisplayString()}' for schema property '{property?.Name ?? "element"}'.";
                 return false;
             }
 
@@ -1231,7 +1281,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         var bloomFilterFalsePositiveProbability = 0.01;
         var bloomFilterExpectedDistinctValueCount = 0U;
         var bloomFilterMaximumBytes = 128U * 1024 * 1024;
-        if (property is not null && !TryReadColumnOverrides(property, ref columnName, ref physicalType, ref logicalType, ref fieldId,
+        if (columnAttribute is not null && !TryReadColumnOverrides(property!, columnAttribute, ref columnName, ref physicalType, ref logicalType, ref fieldId,
                 ref encodings, ref compression, ref compressionLevel, ref bloomFilter,
                 ref bloomFilterFalsePositiveProbability, ref bloomFilterExpectedDistinctValueCount,
                 ref bloomFilterMaximumBytes, out error))
@@ -1258,23 +1308,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         return true;
     }
 
-    static bool TryGetConverterSpec(IPropertySymbol property, out ConverterSpec? converter, out string error)
+    static bool TryGetConverterSpec(IPropertySymbol property, AttributeData columnAttribute, out ConverterSpec? converter, out string error)
     {
         converter = null;
         error = string.Empty;
-        var attributes = property.GetAttributes()
-            .Where(static a => a.AttributeClass?.ToDisplayString() == "Plank.Schema.ParquetColumnAttribute")
-            .ToImmutableArray();
-        if (attributes.IsDefaultOrEmpty)
-            return true;
-        if (attributes.Length > 1)
-        {
-            error = $"Property '{property.Name}' has multiple [ParquetColumn] attributes.";
-            return false;
-        }
-
         ITypeSymbol? converterTypeSymbol = null;
-        foreach (var argument in attributes[0].NamedArguments)
+        foreach (var argument in columnAttribute.NamedArguments)
             if (argument.Key == "Converter")
                 converterTypeSymbol = argument.Value.Value as ITypeSymbol;
         if (converterTypeSymbol is null)
@@ -1364,26 +1403,13 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         };
     }
 
-    static bool TryReadColumnOverrides(IPropertySymbol property, ref string columnName, ref string physicalType,
+    static bool TryReadColumnOverrides(IPropertySymbol property, AttributeData attribute, ref string columnName, ref string physicalType,
         ref LogicalTypeSpec? logicalType, ref int? fieldId, ref ImmutableArray<string> encodings,
         ref string? compression, ref int? compressionLevel, ref bool bloomFilter,
         ref double bloomFilterFalsePositiveProbability, ref uint bloomFilterExpectedDistinctValueCount,
         ref uint bloomFilterMaximumBytes, out string error)
     {
         error = string.Empty;
-        var attributes = property.GetAttributes()
-            .Where(static a => a.AttributeClass?.ToDisplayString() == "Plank.Schema.ParquetColumnAttribute")
-            .ToImmutableArray();
-
-        if (attributes.IsDefaultOrEmpty)
-            return true;
-        if (attributes.Length > 1)
-        {
-            error = $"Property '{property.Name}' has multiple [ParquetColumn] attributes.";
-            return false;
-        }
-
-        var attribute = attributes[0];
         for (var i = 0; i < attribute.ConstructorArguments.Length; i++)
         {
             var parameter = attribute.AttributeConstructor?.Parameters[i];
@@ -2327,11 +2353,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
 
     readonly struct MappedColumn
     {
-        public MappedColumn(string name, string propertyName, string clrTypeName)
+        public MappedColumn(string name, string propertyName, string clrTypeName, bool hasConverter)
         {
             Name = name;
             PropertyName = propertyName;
             ClrTypeName = clrTypeName;
+            HasConverter = hasConverter;
         }
 
         public string Name { get; }
@@ -2339,5 +2366,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         public string PropertyName { get; }
 
         public string ClrTypeName { get; }
+
+        public bool HasConverter { get; }
     }
 }

@@ -1,3 +1,7 @@
+using Plank.Reading;
+using Plank.Reading.Logical;
+using Plank.Schema;
+
 namespace Plank.Tests.Reading.ParquetTesting;
 
 /// <summary>
@@ -23,6 +27,37 @@ internal sealed class ParquetTestingCompatibilityTests
     {
         if (!ParquetTestingCorpus.IsAvailable)
             throw new InvalidOperationException(ParquetTestingCorpus.MissingMessage);
+    }
+
+    [Test]
+    public void ReportsNegativePhysicalTypeAsCorrupt()
+    {
+        using var stream = File.OpenRead(ParquetTestingCorpus.Resolve("bad_data/PARQUET-1481.parquet"));
+        using var reader = new Plank.Reading.Physical.ParquetFileReader();
+        Assert.Throws<CorruptParquetException>(() => reader.Reset(stream));
+    }
+
+    [Test]
+    public async Task ReadsUnknownListElements()
+    {
+        if (!ParquetTestingCorpus.IsAvailable)
+            throw new InvalidOperationException(ParquetTestingCorpus.MissingMessage);
+
+        using var source = new MemoryReadSource(
+            ParquetTestingCorpus.ReadAllBytes("data/null_list.parquet"));
+        using var reader = new ParquetReader();
+        reader.Reset(source);
+        var element = reader.Schema.LeafColumns[0];
+        await Assert.That(element.LogicalType is LogicalType.Unknown).IsTrue();
+        var buffers = 0;
+        foreach (var buffer in reader.RowGroups[0].NestedColumn<int>(element))
+        {
+            buffers++;
+            await Assert.That(buffer.Values.Count).IsEqualTo(0);
+            await Assert.That(buffer.DefinitionLevels.ToArray()).IsEquivalentTo([1]);
+            await Assert.That(buffer.RepetitionLevels.ToArray()).IsEquivalentTo([0]);
+        }
+        await Assert.That(buffers).IsEqualTo(1);
     }
 
     [Test]
@@ -113,13 +148,6 @@ internal sealed class ParquetTestingCompatibilityTests
     // defects rather than 46 unrelated ones, and the grouping is what says so.
     static readonly Dictionary<string, Outcome> KnownGaps = new(StringComparer.Ordinal)
     {
-        // Same probe, reached from the other side: enough of a truncated header parses as
-        // a well-formed struct that the loop returns garbage instead of retrying, and the
-        // caller rejects the nonsense it was handed.
-        ["data/datapage_v1-corrupt-checksum.parquet"] = PageIndexOnly("page-header probe: partial header parses"),
-        ["data/datapage_v1-snappy-compressed-checksum.parquet"] = PageIndexOnly("page-header probe: partial header parses"),
-        ["data/datapage_v1-uncompressed-checksum.parquet"] = PageIndexOnly("page-header probe: partial header parses"),
-
         // ---------------------------------------------------------------------------
         // 3. Decoder defects. Each of these is a distinct bug reachable from the public
         //    reader on a file a mainstream writer produced.
@@ -136,10 +164,6 @@ internal sealed class ParquetTestingCompatibilityTests
 
         // A sorting_columns field Plank insists must be a list of structs.
         ["data/dict-page-offset-zero.parquet"] = FooterRejected("footer: sorting_columns shape rejected"),
-
-        // Plank requires a column annotated with an unknown logical type to be optional.
-        // Both files are valid and both are read by arrow.
-        ["data/null_list.parquet"] = FooterRejected("schema: UNKNOWN logical type required to be optional"),
 
         // ---------------------------------------------------------------------------
         // 5. Files that are malformed on purpose. Rejecting them is correct; they are

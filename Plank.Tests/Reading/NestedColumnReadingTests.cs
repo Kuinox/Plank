@@ -1,6 +1,9 @@
+using System.Buffers.Binary;
 using Plank.Reading;
 using Plank.Reading.Logical;
+using Plank.Reading.Physical;
 using Plank.Schema;
+using Plank.Tests.Reading.ParquetTesting;
 using Plank.Writing;
 
 namespace Plank.Tests.Reading;
@@ -8,6 +11,120 @@ namespace Plank.Tests.Reading;
 [NotInParallel]
 internal sealed class NestedColumnReadingTests
 {
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void RequestedNestedSchemaRejectsIncompatibleDefinitionLevels(bool sameMaximum)
+    {
+        var file = new ParquetSchema([
+            ColumnDefinition.List("values", ColumnDefinition.RequiredLeaf("element", ParquetPhysicalType.Int32),
+                ParquetRepetition.Optional)
+        ]);
+        var requested = new ParquetSchema([
+            ColumnDefinition.List("values", sameMaximum
+                ? ColumnDefinition.OptionalLeaf("element", ParquetPhysicalType.Int32)
+                : ColumnDefinition.RequiredLeaf("element", ParquetPhysicalType.Int32), ParquetRepetition.Required)
+        ]);
+        using var stream = new MemoryStream();
+        using (var writer = file.CreateWriter(stream))
+        {
+            var rowGroup = writer.StartRowGroup();
+            var column = rowGroup.CreateSerializedColumn<int[]>(file.LeafColumns[0]);
+            column.Serialize([null!, [], [17]]);
+            rowGroup.Write(column);
+            writer.CloseFile();
+        }
+
+        using var source = new MemoryReadSource(stream.ToArray());
+        Assert.Throws<InvalidOperationException>(() => requested.CreateReader(source).Dispose());
+    }
+
+    [Test]
+    public void RepeatedWriterRejectsNullRequiredListsAndCanRetryWithoutAllocating()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.List("items", ColumnDefinition.OptionalGroup("entry",
+                ColumnDefinition.OptionalLeaf("price", ParquetPhysicalType.Int32))),
+            ColumnDefinition.List("outer", ColumnDefinition.List("inner",
+                ColumnDefinition.RequiredLeaf("v", ParquetPhysicalType.Int32), ParquetRepetition.Required),
+                ParquetRepetition.Optional)
+        ]);
+        using var stream = new MemoryStream();
+        using var writer = schema.CreateWriter(stream, new ParquetWriterOptions { Compression = CompressionKind.None });
+        var items = writer.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
+        var grid = writer.CreateSerializedColumn<int[][]>(schema.LeafColumns[1]);
+        Assert.Throws<InvalidOperationException>(() => grid.Serialize([[null!]]));
+        // A null element of the direct column writer is the missing record.
+        int?[][] rows = [[null, 17]];
+        int[][][] grids = [[[2], []]];
+        for (var i = 0; i < 10; i++)
+        {
+            stream.SetLength(0);
+            writer.Reset(stream);
+            var group = writer.StartRowGroup();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            items.Serialize(rows);
+            grid.Serialize(grids);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            if (i == 9 && allocated != 0)
+                throw new InvalidOperationException($"Warmed nested serialization allocated {allocated} bytes.");
+            if (items.Statistics.NullCount != 1 || items.Statistics.MinBits != 17 || items.Statistics.MaxBits != 17)
+                throw new InvalidOperationException("A missing record must count as an absent physical value.");
+            group.Write(items);
+            group.Write(grid);
+        }
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void NullInnerListsWriteDistinctLevels(ParquetDataPageVersion version)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.List("outer", ColumnDefinition.List("inner",
+                ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32), ParquetRepetition.Optional),
+                ParquetRepetition.Optional)
+        ]);
+        WithPlankFile(schema, group =>
+        {
+            var inner = group.CreateSerializedColumn<int?[][]>(schema.LeafColumns[0]);
+            inner.Serialize([null!, [], [null!, [], [null, 7], null!]]);
+            group.Write(inner);
+        }, reader =>
+        {
+            AssertSnapshot(Read(reader.RowGroups[0].NestedColumn<int>(0)), [7],
+                [0, 0, 0, 1, 1, 2, 1], [0, 1, 2, 3, 4, 5, 2], 3, 2, 5);
+        }, version);
+    }
+
+    [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void GeneratedRowsWriteMissingRecordsAndNullFieldsAsDistinctLevels(ParquetDataPageVersion version)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = Plank.Tests.E2E.GeneratedOptionalElementsSchema.CreateRowWriter(stream, maxParallelism: 1,
+                   new ParquetWriterOptions { DataPageVersion = version, Compression = CompressionKind.None }))
+        {
+            writer.GetRow().Items = null;
+            writer.GetRow().Items = [];
+            writer.GetRow().Items = [null, new() { Label = "x" }, new() { Price = 7 }];
+            writer.Complete();
+        }
+
+        using var input = new MemoryStream(stream.ToArray());
+        using var reader = new ParquetReader();
+        reader.Reset(input);
+        // items.list.element.{price,label}: 0 null list, 1 empty list, 2 missing record, 3 record without the
+        // field, 4 field present.
+        AssertSnapshot(Read(reader.RowGroups[0].NestedColumn<int>(0)), [7],
+            [0, 0, 0, 1, 1], [0, 1, 2, 3, 4], 3, 1, 4);
+        var labels = Read(reader.RowGroups[0].NestedColumn<byte>(1));
+        if (!labels.DefinitionLevels.AsSpan().SequenceEqual([0, 1, 2, 4, 3]))
+            throw new InvalidOperationException(
+                $"Label definition levels do not match: [{string.Join(", ", labels.DefinitionLevels)}].");
+    }
+
     [Test]
     public void ReadsDataPageV2TopLevelRepeatedPrimitive()
     {
@@ -80,6 +197,31 @@ internal sealed class NestedColumnReadingTests
             var snapshot = Read(reader.RowGroups[0].NestedColumn<int>(schema.LeafColumns[0]));
             AssertSnapshot(snapshot, [10, 20], [0, 1, 0, 0, 0], [3, 2, 0, 1, 3],
                 rowCount: 4, maxRepetitionLevel: 1, maxDefinitionLevel: 3);
+        });
+    }
+
+    [Test]
+    public void RuntimeWriterPreservesRepeatedValuesUnderOptionalElementGroup()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.List("items",
+                ColumnDefinition.OptionalGroup("element",
+                    ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32)),
+                ParquetRepetition.Required)
+        ]);
+        int?[][] rows = [[null, 10], []];
+
+        WithPlankFile(schema, rowGroup =>
+        {
+            var serialized = rowGroup.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
+            serialized.Serialize(rows);
+            rowGroup.Write(serialized);
+        }, reader =>
+        {
+            var snapshot = Read(reader.RowGroups[0].NestedColumn<int>(0));
+            // 1: absent optional element group; 3: group and leaf both present; 0: empty list.
+            AssertSnapshot(snapshot, [10], [0, 1, 0], [1, 3, 0],
+                rowCount: 2, maxRepetitionLevel: 1, maxDefinitionLevel: 3);
         });
     }
 
@@ -270,6 +412,90 @@ internal sealed class NestedColumnReadingTests
     public void ReadsParquetSharpDataPageV2ListLevels()
         => AssertParquetSharpList(ParquetSharp.ParquetDataPageVersion.V2, PageHeaderType.DataPageV2);
 
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void RejectsChunkStartingWithRowContinuation(bool acceptAllPruner)
+    {
+        if (!ParquetTestingCorpus.IsAvailable)
+            throw new InvalidOperationException(ParquetTestingCorpus.MissingMessage);
+
+        using var stream = File.OpenRead(ParquetTestingCorpus.Resolve("bad_data/ARROW-GH-45185.parquet"));
+        using var reader = new ParquetReader();
+        reader.Reset(stream, acceptAllPruner ? static (in ParquetDataPageMetadata _) => true : null);
+        Assert.Throws<CorruptParquetException>(() =>
+        {
+            foreach (var buffer in reader.RowGroups[0].NestedColumn<int>(0))
+                _ = buffer.Count;
+        });
+    }
+
+    [Test]
+    public void ReadsDataPageV1RowContinuedOnLaterPage()
+    {
+        var path = GetTempPath();
+        byte[] file;
+        try
+        {
+            using (var builder = new ParquetSharp.WriterPropertiesBuilder())
+            using (var properties = builder
+                       .Compression(ParquetSharp.Compression.Uncompressed)
+                       .DataPageVersion(ParquetSharp.ParquetDataPageVersion.V1)
+                       .DisableDictionary()
+                       .DisableWritePageIndex()
+                       .DataPagesize(1)
+                       .WriteBatchSize(2)
+                       .Build())
+            using (var output = File.Create(path))
+            using (var writer = new ParquetSharp.ParquetFileWriter(output,
+                       [new ParquetSharp.Column<int[]>("items")], null, properties, null, true))
+            using (var rowGroup = writer.AppendRowGroup())
+            using (var logical = rowGroup.NextColumn().LogicalWriter<int[]>())
+                logical.WriteBatch([[1, 2], [3, 4]]);
+            file = File.ReadAllBytes(path);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        // Writers split pages at rows, so turn the second page's levels [0, 1] into [1, 0]: rows [1, 2, 3], [4].
+        int offset;
+        using (var physical = new ParquetFileReader())
+        {
+            physical.Reset(new MemoryStream(file, writable: false));
+            offset = checked((int)physical.Metadata.ColumnChunk(0, 0).DataPageOffset);
+        }
+        var first = PageHeaderReader.Read(file.AsSpan(offset));
+        offset += first.HeaderLength + checked((int)first.CompressedPageSize);
+        var second = PageHeaderReader.Read(file.AsSpan(offset));
+        var levels = offset + second.HeaderLength;
+        if (first.Type != PageHeaderType.DataPage || second.Type != PageHeaderType.DataPage ||
+            BinaryPrimitives.ReadInt32LittleEndian(file.AsSpan(levels)) != 2 ||
+            file[levels + sizeof(int)] != 0x03 || file[levels + sizeof(int) + 1] != 0x02)
+            throw new InvalidOperationException("Expected two V1 pages, the second with bit-packed levels [0, 1].");
+        file[levels + sizeof(int) + 1] = 0x01;
+
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(file, writable: false));
+        var continuations = new List<bool>();
+        foreach (var buffer in reader.RowGroups[0].NestedColumn<int>(0))
+            continuations.Add(buffer.StartsWithContinuation);
+        if (!continuations.SequenceEqual([false, true]))
+            throw new InvalidOperationException(
+                $"Expected the second of two pages to continue a row: [{string.Join(", ", continuations)}].");
+
+        var snapshot = Read(reader.RowGroups[0].NestedColumn<int>(0));
+        AssertSnapshot(snapshot, [1, 2, 3, 4], [0, 1, 1, 0], [2, 2, 2, 2],
+            rowCount: 2, maxRepetitionLevel: 1, maxDefinitionLevel: 2);
+
+        reader.Reset(new MemoryStream(file, writable: false),
+            static (in ParquetDataPageMetadata page) => page.PageOrdinal != 0);
+        var pruned = Read(reader.RowGroups[0].NestedColumn<int>(0));
+        AssertSnapshot(pruned, [3, 4], [1, 0], [2, 2],
+            rowCount: 1, maxRepetitionLevel: 1, maxDefinitionLevel: 2);
+    }
+
     static void AssertParquetSharpList(ParquetSharp.ParquetDataPageVersion pageVersion,
         PageHeaderType expectedPageType)
     {
@@ -300,6 +526,59 @@ internal sealed class NestedColumnReadingTests
         {
             File.Delete(path);
         }
+    }
+
+    [Test]
+    [Arguments(ParquetRepetition.Optional)]
+    [Arguments(ParquetRepetition.Required)]
+    public void RuntimeWriterAccountsForOptionalGroupAroundList(ParquetRepetition listRepetition)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalGroup("s",
+                ColumnDefinition.List("items", ColumnDefinition.OptionalLeaf("element", ParquetPhysicalType.Int32),
+                    listRepetition))
+        ]);
+        int?[][] rows = [[7, null], [], null!];
+
+        WithPlankFile(schema, rowGroup =>
+        {
+            var serialized = rowGroup.CreateSerializedColumn<int?[]>(schema.LeafColumns[0]);
+            serialized.Serialize(rows);
+            rowGroup.Write(serialized);
+        }, reader =>
+        {
+            var snapshot = Read(reader.RowGroups[0].NestedColumn<int>(0));
+            // A null row leaves the deepest optional node undefined (the list or its parent).
+            var max = listRepetition == ParquetRepetition.Optional ? 4 : 3;
+            AssertSnapshot(snapshot, [7], [0, 1, 0, 0], [max, max - 1, max - 2, max - 3],
+                rowCount: 3, maxRepetitionLevel: 1, maxDefinitionLevel: max);
+        });
+    }
+
+    [Test]
+    public void RuntimeWriterAccountsForOptionalGroupAroundNestedLists()
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalGroup("s",
+                ColumnDefinition.List("outer",
+                    ColumnDefinition.List("element", ColumnDefinition.OptionalLeaf("element", ParquetPhysicalType.Int32),
+                        ParquetRepetition.Required),
+                    ParquetRepetition.Required))
+        ]);
+        int?[][][] rows = [[[1, null], []], []];
+
+        WithPlankFile(schema, rowGroup =>
+        {
+            var serialized = rowGroup.CreateSerializedColumn<int?[][]>(schema.LeafColumns[0]);
+            serialized.Serialize(rows);
+            rowGroup.Write(serialized);
+        }, reader =>
+        {
+            var snapshot = Read(reader.RowGroups[0].NestedColumn<int>(0));
+            // 2: empty inner list; 1: empty outer list with s still defined.
+            AssertSnapshot(snapshot, [1], [0, 2, 1, 0], [4, 3, 2, 1],
+                rowCount: 2, maxRepetitionLevel: 2, maxDefinitionLevel: 4);
+        });
     }
 
     static Snapshot<T> Read<T>(NestedRowGroupColumn<T> column)
@@ -379,7 +658,7 @@ internal sealed class NestedColumnReadingTests
     }
 
     static void WithPlankFile(ParquetSchema schema, Action<RowGroupWriter> write,
-        Action<ParquetReader> read)
+        Action<ParquetReader> read, ParquetDataPageVersion version = ParquetDataPageVersion.V2)
     {
         var path = GetTempPath();
         try
@@ -388,6 +667,7 @@ internal sealed class NestedColumnReadingTests
             {
                 var writer = schema.CreateWriter(writeStream, new ParquetWriterOptions
                 {
+                    DataPageVersion = version,
                     Compression = CompressionKind.None
                 });
                 write(writer.StartRowGroup());

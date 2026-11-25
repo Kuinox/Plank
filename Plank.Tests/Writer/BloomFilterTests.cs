@@ -14,6 +14,19 @@ namespace Plank.Tests.Writer;
 internal sealed class BloomFilterTests
 {
     [Test]
+    public void NumericHashesMatchLittleEndianWireBytes()
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(long)];
+        foreach (var value in new long[] { 0, 1, -1, long.MinValue, long.MaxValue, 0x0123456789ABCDEF })
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(bytes, value);
+            if (ParquetBloomFilterHash.Hash(value) != ParquetBloomFilterHash.Hash(bytes) ||
+                ParquetBloomFilterHash.Hash(unchecked((int)value)) != ParquetBloomFilterHash.Hash(bytes[..sizeof(int)]))
+                throw new InvalidOperationException($"Numeric hash mismatch for {value}.");
+        }
+    }
+
+    [Test]
     public void XxHash64MatchesPublishedVectors()
     {
         AssertHash([], 0xEF46DB3751D8E999UL);
@@ -160,6 +173,37 @@ internal sealed class BloomFilterTests
             !unsignedFilter.MightContain(uint.MaxValue) || !unsignedFilter.MightContain(123U) ||
             !uuidFilter.MightContain(firstGuid) || !uuidFilter.MightContain(secondGuid))
             throw new InvalidOperationException("A physical value representation produced a Bloom-filter false negative.");
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void FloatingPointBloomProbeMatchesEitherSignOfZero(bool negative)
+    {
+        var options = new ColumnOptions(bloomFilter: ParquetBloomFilterOptions.Default);
+        var schema = new ParquetSchema([
+            ColumnDefinition.RequiredLeaf("single", ParquetPhysicalType.Float, options),
+            ColumnDefinition.RequiredLeaf("double", ParquetPhysicalType.Double, options)
+        ]);
+        using var stream = new MemoryStream();
+        using var writer = schema.CreateWriter(stream);
+        var rowGroup = writer.StartRowGroup();
+        var single = negative ? -0.0f : 0.0f;
+        var wide = negative ? -0.0 : 0.0;
+        WriteColumn(rowGroup, schema.LeafColumns[0], new[] { single });
+        WriteColumn(rowGroup, schema.LeafColumns[1], new[] { wide });
+        writer.CloseFile();
+
+        using var source = new MemoryReadSource(stream.ToArray());
+        using var reader = new ParquetFileReader();
+        reader.Reset(source);
+        using var singleFilter = reader.OpenBloomFilter(0, 0);
+        using var wideFilter = reader.OpenBloomFilter(0, 1);
+        var matchesSingle = singleFilter.MightContain(-single);
+        var matchesDouble = wideFilter.MightContain(-wide);
+        if (!matchesSingle || !matchesDouble)
+            throw new InvalidOperationException(
+                $"Numeric zero excluded a matching row: FLOAT={matchesSingle}, DOUBLE={matchesDouble}.");
     }
 
     [Test]

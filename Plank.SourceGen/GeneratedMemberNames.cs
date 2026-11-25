@@ -6,6 +6,17 @@ namespace Plank.SourceGen;
 /// <summary>Allocates generated identifiers without changing the names of schema properties.</summary>
 sealed class GeneratedMemberNames
 {
+    static readonly string[] ApiNames =
+    [
+        "Schema", "Writer", "Reader", "DatasetWriter", "Route", "Row", "ReadRow", "Projection",
+        "RowCursor", "RowReader", "ReadRowGroup", "ReadRowGroupCollection", "SchemaWriter", "RowGroup",
+        "PipelineWriter", "BufferSlot", "CreateDatasetWriter", "CreateRowWriter", "CreateRowReader",
+        "CreateReader", "CreateWriter", "s_rowApiColumns", "GeneratedNestedToUnixMicroseconds"
+    ];
+
+    readonly Dictionary<string, string> apiNames = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string> helperNames = new(StringComparer.Ordinal);
+
     readonly HashSet<string> reserved;
     readonly HashSet<string> propertyNames;
     readonly Dictionary<string, HashSet<string>> memberScopes = new(StringComparer.Ordinal);
@@ -13,25 +24,32 @@ sealed class GeneratedMemberNames
 
     internal GeneratedMemberNames(INamedTypeSymbol schemaType)
     {
-        reserved = new HashSet<string>(schemaType.GetMembers().Select(static member => member.Name),
-            StringComparer.Ordinal) { schemaType.Name };
-        propertyNames = new HashSet<string>(schemaType.GetMembers().OfType<IPropertySymbol>()
-            .Where(static property => !property.IsStatic && !property.IsIndexer && !property.IsImplicitlyDeclared)
-            .Select(static property => property.Name), StringComparer.Ordinal);
-        // Allocate stable API names before property-derived helpers can claim one of them.
-        foreach (var name in new[]
+        reserved = new HashSet<string>(StringComparer.Ordinal) { schemaType.Name };
+        propertyNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var member in schemaType.GetMembers())
         {
-            "Schema", "Writer", "Reader", "DatasetWriter", "Route", "Row", "ReadRow", "Projection",
-            "RowCursor", "RowReader", "ReadRowGroup", "ReadRowGroupCollection", "SchemaWriter", "RowGroup",
-            "PipelineWriter", "BufferSlot", "CreateDatasetWriter", "CreateRowWriter", "CreateRowReader",
-            "CreateReader", "CreateWriter", "s_rowApiColumns", "GeneratedNestedToUnixMicroseconds"
-        })
+            reserved.Add(member.Name);
+            if (member is IPropertySymbol { IsStatic: false, IsIndexer: false, IsImplicitlyDeclared: false })
+                propertyNames.Add(member.Name);
+        }
+        // Allocate stable API names before property-derived helpers can claim one of them.
+        foreach (var name in ApiNames)
             Root(name);
     }
 
-    internal string Root(string name) => Get("api:" + name, name);
+    internal string Root(string name) => GetRootName(apiNames, name);
 
-    internal string Helper(string name) => Get("helper:" + name, name);
+    internal string Helper(string name) => GetRootName(helperNames, name);
+
+    string GetRootName(Dictionary<string, string> cache, string name)
+    {
+        if (!cache.TryGetValue(name, out var result))
+        {
+            result = Reserve(reserved, name);
+            cache.Add(name, result);
+        }
+        return result;
+    }
 
     internal string Get(string key, string preferredName)
     {
@@ -51,11 +69,17 @@ sealed class GeneratedMemberNames
             memberScopes.Add(scope, names);
         }
 
+        var candidate = Reserve(names, preferredName);
+        allocated.Add(key, candidate);
+        return candidate;
+    }
+
+    static string Reserve(HashSet<string> names, string preferredName)
+    {
         var candidate = preferredName;
         for (var suffix = 1; IsReserved(names, candidate); suffix++)
             candidate = preferredName + suffix.ToString(CultureInfo.InvariantCulture);
         names.Add(candidate);
-        allocated.Add(key, candidate);
         return candidate;
     }
 

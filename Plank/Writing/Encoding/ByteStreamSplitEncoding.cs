@@ -149,6 +149,28 @@ static class ByteStreamSplitEncoding
             return;
         }
 
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+        {
+            var memoryValues = Unsafe.As<ReadOnlySpan<T>, ReadOnlySpan<ReadOnlyMemory<byte>>>(ref values);
+            var memoryByteCount = checked(memoryValues.Length * valueLength);
+            if (memoryByteCount == 0)
+                return;
+
+            var memoryDestination = writer.GetSpan(memoryByteCount);
+            for (var i = 0; i < memoryValues.Length; i++)
+            {
+                var payload = memoryValues[i].Span;
+                if (payload.Length != valueLength)
+                    throw new InvalidOperationException(
+                        $"Column '{column.Name}' expects fixed-length values of {valueLength} bytes, but got {payload.Length}.");
+
+                ScatterValueAcrossLanes(payload, i, memoryValues.Length, memoryDestination);
+            }
+
+            writer.Advance(memoryByteCount);
+            return;
+        }
+
         if (typeof(T) != typeof(byte[]))
             throw new InvalidOperationException(
                 $"Column '{column.Name}' expects '{ParquetPhysicalType.FixedLenByteArray}' values as byte[] payloads, but got '{typeof(T)}'.");

@@ -192,7 +192,7 @@ internal sealed class WriterFormatBugReproductionsTests
                 $"Boolean RLE prefix declares {encodedLength} encoded bytes, actual {payload.Length - sizeof(int)}.");
     }
 
-    static long? ReadFirstColumnNanCount(byte[] file)
+    internal static long? ReadFirstColumnNanCount(byte[] file)
     {
         var footerLength = BinaryPrimitives.ReadInt32LittleEndian(file.AsSpan(file.Length - 8, sizeof(int)));
         var footerOffset = checked(file.Length - 8 - footerLength);

@@ -6,6 +6,11 @@ namespace Plank.Reading.Physical;
 /// <remarks>Dispose the filter to return its storage to the reader's configured buffer pool.</remarks>
 public sealed class ParquetBloomFilter : IDisposable
 {
+    static readonly ulong PositiveSingleZeroHash = ParquetBloomFilterHash.Hash(+0f);
+    static readonly ulong NegativeSingleZeroHash = ParquetBloomFilterHash.Hash(-0f);
+    static readonly ulong PositiveDoubleZeroHash = ParquetBloomFilterHash.Hash(+0d);
+    static readonly ulong NegativeDoubleZeroHash = ParquetBloomFilterHash.Hash(-0d);
+
     ParquetBuffer _bitset;
     bool _disposed;
 
@@ -58,11 +63,15 @@ public sealed class ParquetBloomFilter : IDisposable
 
     /// <summary>Checks a FLOAT value.</summary>
     public bool MightContain(float value)
-        => MightContainHash(ParquetBloomFilterHash.Hash(value));
+        => value == 0f
+            ? MightContainEitherZero(PositiveSingleZeroHash, NegativeSingleZeroHash)
+            : MightContainHash(ParquetBloomFilterHash.Hash(value));
 
     /// <summary>Checks a DOUBLE value.</summary>
     public bool MightContain(double value)
-        => MightContainHash(ParquetBloomFilterHash.Hash(value));
+        => value == 0d
+            ? MightContainEitherZero(PositiveDoubleZeroHash, NegativeDoubleZeroHash)
+            : MightContainHash(ParquetBloomFilterHash.Hash(value));
 
     /// <summary>Checks a BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY, or INT96 value.</summary>
     public bool MightContain(ReadOnlySpan<byte> value)
@@ -77,6 +86,13 @@ public sealed class ParquetBloomFilter : IDisposable
     {
         ThrowIfDisposed();
         return SplitBlockBloomFilter.MightContainHash(_bitset.Span, hash);
+    }
+
+    bool MightContainEitherZero(ulong positiveHash, ulong negativeHash)
+    {
+        var bits = Bitset;
+        return SplitBlockBloomFilter.MightContainHash(bits, positiveHash) ||
+            SplitBlockBloomFilter.MightContainHash(bits, negativeHash);
     }
 
     public void Dispose()

@@ -171,6 +171,36 @@ internal sealed class ParquetReaderTests
     }
 
     [Test]
+    public async Task StrictProjectionPreservesSegmentBoundariesInDeepUtf8Paths()
+    {
+        var prefix = new string('界', 350);
+        var first = ColumnDefinition.RequiredGroup(prefix + "a", ColumnDefinition.RequiredLeaf("bc", ParquetPhysicalType.Int32));
+        var second = ColumnDefinition.RequiredGroup(prefix + "ab", ColumnDefinition.RequiredLeaf("c", ParquetPhysicalType.Int32));
+        var fileRoot = ColumnDefinition.RequiredGroup("group", first, second);
+        var requestedRoot = ColumnDefinition.RequiredGroup("group", second);
+        for (var i = 1; i < 64; i++)
+        {
+            fileRoot = ColumnDefinition.RequiredGroup("group", fileRoot);
+            requestedRoot = ColumnDefinition.RequiredGroup("group", requestedRoot);
+        }
+
+        var file = new ParquetSchema([fileRoot]);
+        using var stream = CreateFile(file, rowGroup =>
+        {
+            for (var i = 0; i < file.LeafColumns.Length; i++)
+            {
+                var column = rowGroup.CreateSerializedColumn<int>(file.LeafColumns[i]);
+                column.Serialize([10 + i]);
+                rowGroup.Write(column);
+            }
+        });
+
+        var requested = new ParquetSchema([requestedRoot]);
+        using var reader = requested.CreateReader(stream);
+        await Assert.That(ReadAllBuffers(reader.RowGroups[0].Column<int>(0))).IsEquivalentTo([11]);
+    }
+
+    [Test]
     public async Task ReadsRequestedProjectionWhenFileSchemaOrderChanged()
     {
         var fileSchema = new ParquetSchema([

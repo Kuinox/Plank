@@ -22,6 +22,9 @@ public sealed class RowApiColumnDescriptor<T> : RowApiColumnDescriptor
 
     internal override RowApiColumnReadState CreateState()
     {
+        if (Column.Converter is not null)
+            return new RowApiColumnReadState<T>(this);
+
         if (typeof(T) == typeof(byte[]) ||
             typeof(T) == typeof(ReadOnlyMemory<byte>) ||
             typeof(T) == typeof(ReadOnlyMemory<byte>?) ||

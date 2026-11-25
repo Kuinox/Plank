@@ -17,6 +17,7 @@ public sealed class ParquetWriter : IDisposable
     readonly ParquetWriterOptions _options;
     string? _createdBy;
     ParquetKeyValueMetadata[] _keyValueMetadata;
+    bool[]? _retainedInt96TimestampOrders;
     internal readonly Column[] ColumnsByOrdinal;
     readonly PageStrategyContext[] _pageStrategyContextsByOrdinal;
     internal readonly string[][] ColumnPathsByOrdinal;
@@ -33,6 +34,8 @@ public sealed class ParquetWriter : IDisposable
             ? LatestSortingOrder is { } order ? order.GetVerifiedColumns() : []
             : _sortingColumns;
     internal AppendSortingOrder? LatestSortingOrder { get; private set; }
+    internal bool HasRetainedInt96TimestampOrder(int columnOrdinal)
+        => _retainedInt96TimestampOrders?[columnOrdinal] == true;
     internal readonly bool WritePageCrc;
     internal readonly ColumnChunkMetadata[] OpenRowGroupColumnMetadata;
     readonly RowGroupWriter _rowGroupWriter;
@@ -184,23 +187,39 @@ public sealed class ParquetWriter : IDisposable
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(stream);
-        if (_destination is StreamParquetSource streamSource)
+        if (_rowGroupOpen)
+            throw new InvalidOperationException("Cannot reset while a row group is open.");
+        var streamSource = _destination as StreamParquetSource;
+        if (ReferenceEquals(stream, streamSource?.Stream))
         {
-            if (ReferenceEquals(stream, streamSource.Stream))
-            {
-                Reset(_destination);
-                return;
-            }
-
-            CloseCurrentFile();
-            streamSource.Reset(stream);
-            if (stream.CanSeek)
-                streamSource.SetLength(0);
-            OpenFile(_destination);
+            Reset(_destination);
             return;
         }
 
-        Reset(new StreamParquetSource(stream));
+        CloseCurrentFile();
+        try
+        {
+            if (streamSource is null)
+                streamSource = new StreamParquetSource(stream);
+            else
+            {
+                streamSource.Reset(stream);
+                if (stream.CanSeek)
+                    streamSource.SetLength(0);
+            }
+
+            OpenFile(streamSource);
+        }
+        catch
+        {
+            // Ownership has transferred, even when positioning, truncating, or writing the header fails.
+            _fileClosed = true;
+            if (streamSource is not null && ReferenceEquals(stream, streamSource.Stream))
+                streamSource.Close();
+            else
+                stream.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Starts a new file on a caller-owned destination while retaining the writer's reusable buffers.</summary>
@@ -442,6 +461,7 @@ public sealed class ParquetWriter : IDisposable
 
     void OpenFile(IParquetWriteSource destination)
     {
+        _retainedInt96TimestampOrders = null;
         _destination = destination;
         _fileClosed = false;
         _rowGroupCount = 0;
@@ -475,6 +495,7 @@ public sealed class ParquetWriter : IDisposable
         var metadata = reader.PhysicalReader.Metadata;
         MutationSchemaValidator.Validate(_schema, metadata);
         _ = ValidateImport(metadata, ColumnCount);
+        _retainedInt96TimestampOrders = ReadInt96TimestampOrders(metadata.FooterBytes);
 
         var appendLatest = appendOptions.AppendToLatestRowGroup && metadata.RowGroupCount > 0 &&
             metadata.RowGroups[metadata.RowGroupCount - 1].RowCount != 0;
@@ -712,7 +733,8 @@ public sealed class ParquetWriter : IDisposable
                     WriteBytes(bloomFilter.Bitset);
                 }
             }
-            if (sourceChunk.ColumnIndexLength != 0)
+            // The destination always declares TYPE_ORDER; that order cannot carry an INT96 ColumnIndex.
+            if (sourceChunk.ColumnIndexLength != 0 && ColumnsByOrdinal[columnOrdinal].PhysicalType != ParquetPhysicalType.Int96)
             {
                 importedChunk.ColumnIndexOffset = FileOffset;
                 importedChunk.ColumnIndexLength = sourceChunk.ColumnIndexLength;
@@ -771,11 +793,49 @@ public sealed class ParquetWriter : IDisposable
         FileOffset = checked(FileOffset + _fileMagic.Length);
     }
 
+    bool[]? ReadInt96TimestampOrders(ReadOnlySpan<byte> footer)
+    {
+        if (!Array.Exists(ColumnsByOrdinal, static column => column.PhysicalType == ParquetPhysicalType.Int96))
+            return null;
+
+        var reader = new CompactProtocolReader(footer);
+        reader.BeginRootStruct();
+        while (reader.TryReadFieldHeader(out var id, out var type, out var inlineBool))
+        {
+            if (id != 7) // FileMetaData.column_orders
+            {
+                reader.Skip(type, inlineBool);
+                continue;
+            }
+
+            if (type != CompactProtocolType.List)
+                return null;
+            var (count, elementType) = reader.ReadListHeader(type);
+            if (count != (uint)ColumnCount || elementType != CompactProtocolType.Struct)
+                return null;
+            bool[]? orders = null;
+            for (var columnOrdinal = 0; columnOrdinal < ColumnCount; columnOrdinal++)
+            {
+                reader.BeginStruct(elementType);
+                while (reader.TryReadFieldHeader(out var order, out var orderType, out var orderBool))
+                {
+                    if (order == 3 && orderType == CompactProtocolType.Struct &&
+                        ColumnsByOrdinal[columnOrdinal].PhysicalType == ParquetPhysicalType.Int96)
+                        (orders ??= new bool[ColumnCount])[columnOrdinal] = true;
+                    reader.Skip(orderType, orderBool);
+                }
+            }
+            return orders;
+        }
+        return null;
+    }
+
     void WriteFileFooter()
     {
         SerializedFileMetadata.Reset();
         ParquetMetadataThriftWriter.WriteFileMetaData(ref SerializedFileMetadata, _schema, FileVersion, _rowGroupCount,
-            _totalRowCount, ref SerializedRowGroupsMetadata, _createdBy, _keyValueMetadata);
+            _totalRowCount, ref SerializedRowGroupsMetadata, _createdBy, _keyValueMetadata,
+            _retainedInt96TimestampOrders);
         var metadataLength = SerializedFileMetadata.WrittenLength;
         WriteBuffer(ref SerializedFileMetadata);
         Span<byte> suffix = stackalloc byte[sizeof(int) + 4];
