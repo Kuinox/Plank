@@ -114,7 +114,8 @@ public sealed class ParquetWriter : IDisposable
         _pageStrategyContextsByOrdinal = CreateColumnPageStrategyContexts(ColumnsByOrdinal,
             _options.TargetDataPageSizeBytes);
         BufferWriters = new BufferWriterFactory(_options.BufferPool, _options.BufferChunkSizeBytes,
-            _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes);
+            _options.InitialPageBufferBytes, _options.InitialColumnBufferBytes, _options.BufferChunkSizeBytes,
+            _options.TargetDataPageSizeBytes);
         FileVersion = _options.FileVersion;
         DataPageVersion = _options.DataPageVersion;
         ColumnCompressionsByOrdinal = ResolveColumnCompressions(ColumnsByOrdinal, _options);
