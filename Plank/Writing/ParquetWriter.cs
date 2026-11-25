@@ -46,9 +46,12 @@ public sealed class ParquetWriter : IDisposable
     int _rowGroupCount;
     long _totalRowCount;
     LatestRowGroupValues? _latestRowGroupValues;
+    bool _untouchedAppendFooter;
     byte[]? _latestRowGroupMetadata;
     long _latestRowGroupOffset;
     long _originalFooterOffset;
+    // The original in-place footer stays available for rollback until the first import commits.
+    ParquetBuffer _retainedFooter;
     uint _latestRowCount;
     bool _replacingLatestRowGroup;
     bool _rowGroupOpen;
@@ -159,6 +162,8 @@ public sealed class ParquetWriter : IDisposable
             }
         }
     }
+
+    internal (int RowGroupCount, long RowCount) CommittedCounts => (_rowGroupCount, _totalRowCount);
 
     public uint RowApiMaxParallelism
     {
@@ -271,6 +276,7 @@ public sealed class ParquetWriter : IDisposable
 
         try
         {
+            TruncateRetainedFooter();
             using var copyBuffer = _options.BufferPool.Rent(64 * 1024);
             for (var rowGroupOrdinal = 0; rowGroupOrdinal < metadata.RowGroupCount; rowGroupOrdinal++)
                 if (metadata.RowGroups[rowGroupOrdinal].RowCount != 0)
@@ -284,9 +290,12 @@ public sealed class ParquetWriter : IDisposable
             SerializedRowGroupsMetadata.Truncate(metadataLengthBeforeImport);
             SerializedFileMetadata.Reset();
             _destination.SetLength(checked((ulong)fileOffsetBeforeImport));
+            if (!_retainedFooter.IsEmpty)
+                RestoreRetainedFooter(fileOffsetBeforeImport);
             throw;
         }
 
+        _retainedFooter.Dispose();
         if (preserveMetadata)
         {
             _createdBy = importedCreatedBy;
@@ -303,7 +312,10 @@ public sealed class ParquetWriter : IDisposable
         if (_rowGroupCount == int.MaxValue)
             throw new InvalidOperationException($"Cannot write more than {int.MaxValue} row groups to one file.");
 
-        PrepareLatestRowGroupReplacement();
+        if (_latestRowGroupMetadata is not null)
+            PrepareLatestRowGroupReplacement();
+        else
+            TruncateUntouchedAppendFooter();
 
         _rowGroupOpen = true;
         if (ColumnCount == 0)
@@ -350,7 +362,11 @@ public sealed class ParquetWriter : IDisposable
         if (_rowGroupOpen)
             throw new InvalidOperationException("Cannot close the file while a row group is still open.");
 
-        RestoreUnchangedLatestRowGroup();
+        if (_latestRowGroupMetadata is not null)
+            RestoreUnchangedLatestRowGroup();
+        else
+            TruncateUntouchedAppendFooter();
+        TruncateRetainedFooter();
         WriteFileFooter();
         _destination.Flush();
         CloseCurrentFile();
@@ -472,6 +488,8 @@ public sealed class ParquetWriter : IDisposable
         LatestSortingOrder = null;
         _latestRowGroupMetadata = null;
         _replacingLatestRowGroup = false;
+        _untouchedAppendFooter = false;
+        _retainedFooter.Dispose();
         FileOffset = 0;
         if (!SerializedRowGroupsMetadata.IsInitialized)
             SerializedRowGroupsMetadata = BufferWriters.CreateMetadataBufferWriter();
@@ -549,16 +567,46 @@ public sealed class ParquetWriter : IDisposable
         _totalRowCount = totalRowCount;
         _rowGroupOpen = false;
         FileOffset = checked((long)metadata.FooterOffset);
-        if (!ParquetSourceIdentity.AreSame(source, destination))
+        _untouchedAppendFooter = ParquetSourceIdentity.AreSame(source, destination);
+        if (!_untouchedAppendFooter)
         {
             // A separate destination must receive the retained pages too. If custom adapters alias the
             // same storage this is still safe: each source range is written back at its original offset.
             using var copyBuffer = _options.BufferPool.Rent(64 * 1024);
             FileOffset = 0;
             CopyRange(source, 0, metadata.FooterOffset, copyBuffer.Span);
+            destination.SetLength(checked((ulong)FileOffset));
         }
-        destination.SetLength(checked((ulong)FileOffset));
+        else if (appendOptions.DeferFooterTruncation && !appendLatest)
+        {
+            // In-place merge: also keep the committed footer bytes so a rolled-back import can restore them.
+            _retainedFooter = metadata.FooterBuffer.RetainSlice(0, metadata.FooterByteCount);
+        }
         SerializedFileMetadata.Reset();
+    }
+
+    // Puts the original footer back after the first import into an in-place destination failed, so the
+    // destination is the readable file it was before the merge started. Best effort: the import's own exception
+    // is what the caller sees.
+    void RestoreRetainedFooter(long footerOffset)
+    {
+        try
+        {
+            _destination.Write(checked((ulong)footerOffset), _retainedFooter.Span);
+            var trailerOffset = checked(footerOffset + _retainedFooter.Length);
+            var endOffset = WriteFooterTrailer(trailerOffset, _retainedFooter.Length);
+            _destination.SetLength(checked((ulong)endOffset));
+        }
+        catch (Exception ex) when (ex is IOException or NotSupportedException or ObjectDisposedException)
+        {
+        }
+    }
+
+    void TruncateRetainedFooter()
+    {
+        if (_retainedFooter.IsEmpty)
+            return;
+        _destination.SetLength(checked((ulong)FileOffset));
     }
 
     static ulong GetLatestRowGroupReplacementOffset(Reading.Physical.ParquetFileMetadata metadata)
@@ -587,12 +635,18 @@ public sealed class ParquetWriter : IDisposable
         return replacementOffset;
     }
 
+    void TruncateUntouchedAppendFooter()
+    {
+        if (!_untouchedAppendFooter)
+            return;
+        _destination.SetLength(checked((ulong)FileOffset));
+        _untouchedAppendFooter = false;
+    }
+
     void PrepareLatestRowGroupReplacement()
     {
-        if (_latestRowGroupMetadata is null)
-            return;
-
         _destination.SetLength(checked((ulong)_latestRowGroupOffset));
+        _untouchedAppendFooter = false;
         FileOffset = _latestRowGroupOffset;
         _latestRowGroupMetadata = null;
         _replacingLatestRowGroup = true;
@@ -607,6 +661,7 @@ public sealed class ParquetWriter : IDisposable
         _rowGroupCount++;
         _totalRowCount = checked(_totalRowCount + _latestRowCount);
         _destination.SetLength(checked((ulong)_originalFooterOffset));
+        _untouchedAppendFooter = false;
         FileOffset = _originalFooterOffset;
         _latestRowGroupMetadata = null;
         _latestRowGroupValues = null;
@@ -781,6 +836,7 @@ public sealed class ParquetWriter : IDisposable
 
     void ReleaseBuffers()
     {
+        _retainedFooter.Dispose();
         SerializedRowGroupsMetadata.Dispose();
         SerializedFileMetadata.Dispose();
         _rowGroupWriter.ReleaseBuffers();
@@ -839,11 +895,16 @@ public sealed class ParquetWriter : IDisposable
             _retainedInt96TimestampOrders);
         var metadataLength = SerializedFileMetadata.WrittenLength;
         WriteBuffer(ref SerializedFileMetadata);
+        FileOffset = WriteFooterTrailer(FileOffset, metadataLength);
+    }
+
+    long WriteFooterTrailer(long offset, int metadataLength)
+    {
         Span<byte> suffix = stackalloc byte[sizeof(int) + 4];
         BinaryPrimitives.WriteInt32LittleEndian(suffix, metadataLength);
         _fileMagic.CopyTo(suffix[sizeof(int)..]);
-        _destination.Write(checked((ulong)FileOffset), suffix);
-        FileOffset = checked(FileOffset + suffix.Length);
+        _destination.Write(checked((ulong)offset), suffix);
+        return checked(offset + suffix.Length);
     }
 
     internal void CompleteOpenRowGroup(uint rowCount)
