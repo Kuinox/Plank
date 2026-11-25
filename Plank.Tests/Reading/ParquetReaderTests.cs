@@ -298,6 +298,12 @@ internal sealed class ParquetReaderTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await Task.Run(() => reader.Reset(mismatched)).ConfigureAwait(false));
+        await Assert.That(mismatched.CanRead).IsFalse();
+        await Assert.That(reader.RowGroups.Count).IsEqualTo(0);
+
+        using var replacement = CreateInt32File("Value");
+        reader.Reset(replacement);
+        await Assert.That(reader.RowGroups.Count).IsEqualTo(1);
     }
 
     [Test]
