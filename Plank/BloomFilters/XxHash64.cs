@@ -67,12 +67,37 @@ static class XxHash64
                 offset++;
             }
 
+            return Avalanche(hash);
+        }
+    }
+
+    internal static ulong Hash(uint value)
+    {
+        unchecked
+        {
+            var hash = (Prime5 + sizeof(uint)) ^ (value * Prime1);
+            return Avalanche(BitOperations.RotateLeft(hash, 23) * Prime2 + Prime3);
+        }
+    }
+
+    internal static ulong Hash(ulong value)
+    {
+        unchecked
+        {
+            var hash = (Prime5 + sizeof(ulong)) ^ Round(0, value);
+            return Avalanche(BitOperations.RotateLeft(hash, 27) * Prime1 + Prime4);
+        }
+    }
+
+    static ulong Avalanche(ulong hash)
+    {
+        unchecked
+        {
             hash ^= hash >> 33;
             hash *= Prime2;
             hash ^= hash >> 29;
             hash *= Prime3;
-            hash ^= hash >> 32;
-            return hash;
+            return hash ^ (hash >> 32);
         }
     }
 
