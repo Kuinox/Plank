@@ -50,10 +50,10 @@ internal sealed class ReaderCorrectnessDiscoveryTests
         }
     }
 
+    // A declared length shorter than the payload is accepted: the bytes after it are ignored.
     [Test]
-    [Arguments(2)]
     [Arguments(4)]
-    public void BooleanRleRejectsMismatchedEncodedLength(int encodedLength)
+    public void BooleanRleRejectsEncodedLengthPastPayload(int encodedLength)
     {
         var schema = new ParquetSchema([
             ColumnDefinition.RequiredLeaf("Value", ParquetPhysicalType.Boolean)

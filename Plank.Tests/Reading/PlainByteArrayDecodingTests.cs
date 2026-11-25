@@ -37,7 +37,6 @@ internal sealed class PlainByteArrayDecodingTests
             AssertCorrupt([0, 0, 0], valueCount: 1, optional, pageType);
             AssertCorrupt([0x00, 0x00, 0x00, 0x80], valueCount: 1, optional, pageType);
             AssertCorrupt([0x02, 0, 0, 0, 0x2A], valueCount: 1, optional, pageType);
-            AssertCorrupt([0, 0, 0, 0, 0x2A], valueCount: 1, optional, pageType);
         }
     }
 

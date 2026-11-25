@@ -1538,14 +1538,6 @@ static partial class ColumnChunkReader
                     $"Unsupported binary decoder kind '{page.DecoderKind}'.");
         }
 
-        if (page.PhysicalOffset + physicalCount == page.PhysicalCount &&
-            page.DecoderKind is EncodedDecoderKind.PlainBinary or
-                EncodedDecoderKind.DeltaLengthByteArray or EncodedDecoderKind.DeltaByteArray &&
-            page.BinaryDataOffset + page.BinaryPayloadOffset != payload.Length)
-            throw new CorruptParquetException(
-                $"{page.DecoderKind} payload contains " +
-                $"{payload.Length - page.BinaryDataOffset - page.BinaryPayloadOffset} trailing bytes.");
-
         return borrowedValues.IsEmpty
             ? buffers.CreateNativeBuffer(logicalCount)
             : buffers.CreateBorrowedBinaryBuffer(logicalCount, borrowedValues);
@@ -1636,10 +1628,6 @@ static partial class ColumnChunkReader
                 throw new CorruptParquetException(
                     $"Definition levels consumed {page.PhysicalOffset} physical values, " +
                     $"expected {page.PhysicalCount}.");
-            if (page.BinaryPayloadOffset != payload.Length)
-                throw new CorruptParquetException(
-                    $"PlainBinary payload contains " +
-                    $"{payload.Length - page.BinaryPayloadOffset} trailing bytes.");
         }
         return buffers.CreateNativeBinaryBuffer(logicalCount, descriptorCapacity);
     }
@@ -1989,9 +1977,5 @@ static partial class ColumnChunkReader
         value.CopyTo(buffers.GetPreviousBinaryValue(valueLength, bufferPool));
         page.PreviousBinaryLength = valueLength;
         page.BinaryPayloadOffset += suffixOffset;
-        if (!page.Delta.Active && page.BinaryDataOffset + page.BinaryPayloadOffset != payload.Length)
-            throw new CorruptParquetException(
-                $"DeltaByteArray payload contains " +
-                $"{payload.Length - page.BinaryDataOffset - page.BinaryPayloadOffset} trailing bytes.");
     }
 }

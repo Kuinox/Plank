@@ -2140,13 +2140,6 @@ static partial class ColumnChunkReader
                 remaining = remaining[length..];
                 destinationOffset += length;
             }
-            if (!remaining.IsEmpty)
-                throw new CorruptParquetException(
-                    $"Plain byte array payload contains {remaining.Length} trailing bytes.");
-            if (destinationOffset != byteArrayPayload.Length)
-                throw new CorruptParquetException(
-                    $"Plain byte array lengths consume {destinationOffset} bytes, expected " +
-                    $"{byteArrayPayload.Length} bytes.");
             return;
         }
 
@@ -2192,9 +2185,6 @@ static partial class ColumnChunkReader
             destination[targetIndex] = new BinaryValueDescriptor(sourceOffset, length);
             sourceOffset += length;
         }
-        if (sourceOffset != payload.Length)
-            throw new CorruptParquetException(
-                $"Plain byte array payload contains {payload.Length - sourceOffset} trailing bytes.");
     }
 
     static void DecodeByteStreamSplitBinaryValues<T>(ReadOnlySpan<byte> payload,
@@ -4383,12 +4373,13 @@ static partial class ColumnChunkReader
             throw new CorruptParquetException(
                 $"Boolean RLE payload ({payload.Length} bytes) is too short for its length prefix.");
 
-        var encodedLength = BinaryPrimitives.ReadInt32LittleEndian(payload);
+        var encodedLength = BinaryPrimitives.ReadUInt32LittleEndian(payload);
         var remaining = payload[sizeof(int)..];
-        if (encodedLength != remaining.Length)
+        // Bytes after the declared length are ignored, as the format does not forbid them.
+        if (encodedLength > (uint)remaining.Length)
             throw new CorruptParquetException(
                 $"Boolean RLE payload declares {encodedLength} encoded bytes but contains {remaining.Length}.");
-        return remaining;
+        return remaining[..(int)encodedLength];
     }
 
     static int ReadBitPackedValue(ref ReadOnlySpan<byte> payload, int bitWidth, int index)
