@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
+using System.Numerics;
 using System.Text;
 using Plank.Reading;
 using Plank.Reading.Internal;
@@ -791,8 +792,7 @@ static class ParquetMetadataThriftWriter
 
         var previousMetadata = writer.BeginStruct();
         writer.WriteFieldI32(1, GetPhysicalType(column.PhysicalType));
-        var hasLevelEncoding = column.Options.Repetition is ParquetRepetition.Optional or ParquetRepetition.Repeated;
-        WriteEncodings(ref writer, metadata.DataEncoding, metadata.HasDictionaryPage, hasLevelEncoding);
+        WriteEncodings(ref writer, metadata.Encodings);
         WritePath(ref writer, path);
         writer.WriteFieldI32(4, GetCompression(metadata.Compression));
         writer.WriteFieldI64(5, metadata.ValueCount);
@@ -1014,22 +1014,15 @@ static class ParquetMetadataThriftWriter
         }
     }
 
-    static void WriteEncodings(ref CompactWriter writer, EncodingKind dataEncoding, bool hasDictionaryPage,
-        bool hasLevelEncoding)
+    static void WriteEncodings(ref CompactWriter writer, uint encodings)
     {
-        var data = GetEncoding(dataEncoding);
-        var dictionary = GetEncoding(EncodingKind.Plain);
-        var levels = GetEncoding(EncodingKind.Rle);
-        var includeDictionary = hasDictionaryPage && data != dictionary;
-        var includeLevels = hasLevelEncoding && data != levels;
-
         writer.WriteFieldHeader(2, CompactType.List);
-        writer.WriteListHeader(1 + (includeDictionary ? 1 : 0) + (includeLevels ? 1 : 0), CompactType.I32);
-        if (includeDictionary)
-            writer.WriteI32(dictionary);
-        writer.WriteI32(data);
-        if (includeLevels)
-            writer.WriteI32(levels);
+        writer.WriteListHeader(BitOperations.PopCount(encodings), CompactType.I32);
+        while (encodings != 0)
+        {
+            writer.WriteI32(BitOperations.TrailingZeroCount(encodings));
+            encodings &= encodings - 1;
+        }
     }
 
     static void WriteEncodings(ref CompactWriter writer, ParquetColumnChunkEncodings encodings)

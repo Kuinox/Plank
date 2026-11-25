@@ -50,6 +50,30 @@ internal sealed class ParquetMetadataComplianceTests
     }
 
     [Test]
+    [Arguments(ParquetDataPageVersion.V1)]
+    [Arguments(ParquetDataPageVersion.V2)]
+    public void EmptyColumnChunkDoesNotAdvertiseUnusedEncodings(ParquetDataPageVersion version)
+    {
+        var schema = new ParquetSchema([
+            ColumnDefinition.OptionalLeaf("value", ParquetPhysicalType.Int32,
+                new ColumnOptions(encodings: [EncodingKind.DeltaBinaryPacked]))
+        ]);
+        var file = WriteFile(schema, new ParquetWriterOptions { DataPageVersion = version }, writer =>
+        {
+            var column = writer.CreateSerializedColumn<int?>(schema.LeafColumns[0]);
+            column.Serialize([]);
+            writer.StartRowGroup().Write(column);
+        });
+        using var reader = new Plank.Reading.Physical.ParquetFileReader();
+        reader.Reset(new MemoryStream(file, writable: false));
+        var chunk = reader.Metadata.ColumnChunk(0, 0);
+        if (chunk.TotalCompressedSize != 0)
+            throw new InvalidOperationException("Expected a chunk with no pages.");
+        if (chunk.Encodings.Count != 0)
+            throw new InvalidOperationException($"A chunk with no pages declared {chunk.Encodings.Count} encodings.");
+    }
+
+    [Test]
     public void SingleRepeatedPageStatisticsCountNullElements()
     {
         var schema = new ParquetSchema([
