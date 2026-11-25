@@ -94,7 +94,8 @@ static class AlpDecoder
         {
             var vector = GetVector(payload, state.VectorCount, state.VectorIndex++);
             var vectorCount = Math.Min(state.VectorSize, destination.Length - destinationOffset);
-            DecodeFloatVector(vector, destination.Slice(destinationOffset, vectorCount));
+            DecodeFloatVector(vector, destination.Slice(destinationOffset, vectorCount),
+                isLast: state.VectorIndex == state.VectorCount);
             destinationOffset += vectorCount;
         }
         state.ValuesRead += destination.Length;
@@ -108,7 +109,8 @@ static class AlpDecoder
         {
             var vector = GetVector(payload, state.VectorCount, state.VectorIndex++);
             var vectorCount = Math.Min(state.VectorSize, destination.Length - destinationOffset);
-            DecodeDoubleVector(vector, destination.Slice(destinationOffset, vectorCount));
+            DecodeDoubleVector(vector, destination.Slice(destinationOffset, vectorCount),
+                isLast: state.VectorIndex == state.VectorCount);
             destinationOffset += vectorCount;
         }
         state.ValuesRead += destination.Length;
@@ -144,12 +146,7 @@ static class AlpDecoder
             throw new CorruptParquetException(
                 $"ALP payload ({payload.Length} bytes) is too short for {vectorCount} vector offsets.");
         if (vectorCount == 0)
-        {
-            if (payload.Length != HeaderSize)
-                throw new CorruptParquetException(
-                    $"Empty ALP payload has {payload.Length - HeaderSize} trailing bytes.");
             return new PageInfo(vectorSize, 0);
-        }
 
         var firstOffset = BinaryPrimitives.ReadUInt32LittleEndian(payload[HeaderSize..]);
         if (firstOffset != (uint)offsetByteCount)
@@ -191,7 +188,9 @@ static class AlpDecoder
         => BinaryPrimitives.ReadUInt32LittleEndian(
             payload[(HeaderSize + vectorIndex * sizeof(uint))..]);
 
-    static void DecodeFloatVector(ReadOnlySpan<byte> vector, Span<float> destination)
+    // Vectors are back to back, so only the last one may be followed by bytes: the format forbids padding between
+    // vectors but does not forbid bytes after the last one.
+    static void DecodeFloatVector(ReadOnlySpan<byte> vector, Span<float> destination, bool isLast)
     {
         const int vectorHeaderSize = 9;
         if (vector.Length < vectorHeaderSize)
@@ -211,7 +210,7 @@ static class AlpDecoder
 
         var packedByteCount = GetPackedByteCount(destination.Length, bitWidth);
         var expectedLength = checked(vectorHeaderSize + packedByteCount + exceptionCount * 6);
-        if (vector.Length != expectedLength)
+        if (vector.Length < expectedLength || !isLast && vector.Length != expectedLength)
             throw new CorruptParquetException(
                 $"ALP FLOAT vector length is {vector.Length}, expected {expectedLength}.");
         var packed = vector.Slice(vectorHeaderSize, packedByteCount);
@@ -239,7 +238,7 @@ static class AlpDecoder
         }
     }
 
-    static void DecodeDoubleVector(ReadOnlySpan<byte> vector, Span<double> destination)
+    static void DecodeDoubleVector(ReadOnlySpan<byte> vector, Span<double> destination, bool isLast)
     {
         const int vectorHeaderSize = 13;
         if (vector.Length < vectorHeaderSize)
@@ -259,7 +258,7 @@ static class AlpDecoder
 
         var packedByteCount = GetPackedByteCount(destination.Length, bitWidth);
         var expectedLength = checked(vectorHeaderSize + packedByteCount + exceptionCount * 10);
-        if (vector.Length != expectedLength)
+        if (vector.Length < expectedLength || !isLast && vector.Length != expectedLength)
             throw new CorruptParquetException(
                 $"ALP DOUBLE vector length is {vector.Length}, expected {expectedLength}.");
         var packed = vector.Slice(vectorHeaderSize, packedByteCount);

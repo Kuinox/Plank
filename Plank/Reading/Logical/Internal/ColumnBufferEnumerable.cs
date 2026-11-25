@@ -62,7 +62,6 @@ readonly struct ColumnBufferEnumerable<T>
         readonly ParquetPagePruner? _pruner;
         readonly bool _borrowRequiredPlainValues;
         readonly bool _borrowBinaryValues;
-        readonly bool _isFastparquet;
         ParquetPageCursor _cursor;
         PageMetadataHandle _pageMetadata;
         ColumnReadBuffers<T> _buffers;
@@ -89,8 +88,6 @@ readonly struct ColumnBufferEnumerable<T>
             _pruner = pruner;
             _borrowRequiredPlainValues = borrowRequiredPlainValues;
             _borrowBinaryValues = borrowBinaryValues;
-            _isFastparquet = typeof(T) == typeof(BinaryValueDescriptor) &&
-                physicalReader.Metadata.CreatedByUtf8.StartsWith("fastparquet-python version "u8);
             _cursor = default;
             _pageMetadata = default;
             _buffers = default;
@@ -157,7 +154,7 @@ readonly struct ColumnBufferEnumerable<T>
                 if (ColumnChunkReader.TryStartEncodedPageBatches(_cursor.CurrentHeader,
                         _cursor.CurrentPayload, borrowedBinaryPayload, _column, _rowCount,
                         ref _buffers, _bufferPool, ref _encodedPage,
-                        out var encodedBuffer, isFastparquet: _isFastparquet))
+                        out var encodedBuffer))
                 {
                     Current = encodedBuffer;
                     return true;

@@ -33,16 +33,13 @@ internal sealed class FastparquetPlainPaddingTests
             throw new InvalidOperationException("Decoded values do not match the Fastparquet fixture.");
     }
 
+    // The padding is ignored, but the values before it are still validated.
     [Test]
-    [Arguments(49, (byte)1)] // Last padding byte; a nonzero suffix must still fail.
     [Arguments(12, (byte)6)] // Page declares three values, but its chunk declares four.
     [Arguments(27, (byte)99)] // First length prefix; cannot be satisfied by available data.
-    [Arguments(-1, (byte)'X')] // A different producer cannot use the compatibility exception.
-    public void RejectsOtherPlainBinaryTrailingData(int offset, byte replacement)
+    public void RejectsCorruptValuesBeforePadding(int offset, byte replacement)
     {
         var file = Convert.FromBase64String(Fixture);
-        if (offset < 0)
-            offset = file.AsSpan().IndexOf("fastparquet-python version "u8);
         file[offset] = replacement;
         using var source = new MemoryReadSource(file);
         using var reader = new ParquetReader();

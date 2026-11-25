@@ -55,15 +55,14 @@ internal sealed class EmptyBatchedPagesTests
     [Test]
     [Arguments(ParquetDataPageVersion.V1)]
     [Arguments(ParquetDataPageVersion.V2)]
-    public void RejectsTrailingBytesOnEmptyPlainBinaryPage(ParquetDataPageVersion version)
+    public void IgnoresTrailingBytesOnEmptyPlainBinaryPage(ParquetDataPageVersion version)
     {
         var file = MakeBinaryFile(version, EncodingKind.Plain, trailingBytes: true);
-        Assert.Throws<CorruptParquetException>(() =>
-        {
-            using var reader = new ParquetReader();
-            reader.Reset(new MemoryStream(file));
-            foreach (var buffer in reader.RowGroups[0].Column<byte>(0)) _ = buffer.Count;
-        });
+        using var reader = new ParquetReader();
+        reader.Reset(new MemoryStream(file));
+        var count = 0;
+        foreach (var buffer in reader.RowGroups[0].Column<byte>(0)) count += buffer.Count;
+        if (count != 4) throw new InvalidOperationException($"Read {count} values, expected 4.");
     }
 
     static byte[] MakeBinaryFile(ParquetDataPageVersion version, EncodingKind encoding, bool trailingBytes = false,
