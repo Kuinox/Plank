@@ -564,6 +564,7 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
         builder.AppendLine("        }");
         builder.AppendLine("    }");
         builder.AppendLine();
+        builder.AppendLine("    /// <summary>Writes a partitioned dataset. After any exception, dispose this writer and discard the entire dataset; some files may still look valid.</summary>");
         builder.Append("    public sealed class ").Append(names.Root("DatasetWriter"))
             .Append(" : global::Plank.Dataset.DatasetWriterBase<").Append(rowTypeName)
             .AppendLine(">, global::System.IDisposable");
@@ -602,9 +603,12 @@ public sealed class ParquetRowGenerator : IIncrementalGenerator
             .AppendLine(" row, global::Plank.IParquetBufferPool bufferPool, out global::Plank.ParquetBuffer? allocation)");
         builder.AppendLine("            => " + names.Helper("_route") + "(row, bufferPool, out allocation);");
         builder.AppendLine();
+        builder.AppendLine("        /// <summary>Queues a row. Any exception permanently faults the writer; dispose it and discard the dataset.</summary>");
+        builder.AppendLine("        /// <param name=\"row\">The row to queue.</param>");
         builder.Append("        public void Queue(").Append(rowTypeName).AppendLine(" row)");
         builder.AppendLine("            => QueueRow(row);");
         builder.AppendLine();
+        builder.AppendLine("        /// <summary>Completes the dataset, or after a fault releases resources without completing open parts or draining parked rows. Some files may still look valid; discard the entire dataset.</summary>");
         builder.AppendLine("        public void Dispose()");
         builder.AppendLine("            => DisposeDataset();");
         builder.AppendLine("    }");

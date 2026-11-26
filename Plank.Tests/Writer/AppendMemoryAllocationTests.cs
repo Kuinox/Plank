@@ -46,7 +46,7 @@ internal sealed class AppendMemoryAllocationTests
             _ = retained.GetValues<T>(0);
 
         var before = GC.GetAllocatedBytesForCurrentThread();
-        var result = retained.GetValues<T>(0);
+        var result = (T[])retained.GetValues<T>(0);
         var actual = GC.GetAllocatedBytesForCurrentThread() - before;
 
         before = GC.GetAllocatedBytesForCurrentThread();
