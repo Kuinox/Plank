@@ -3,12 +3,72 @@ using System.Runtime.InteropServices;
 using Plank.Dataset;
 using Plank.Reading;
 using Plank.Reading.Physical;
+using Plank.Schema;
 using Plank.Writing;
 
 namespace Plank.Tests.E2E;
 
 internal sealed class DatasetWriterTests
 {
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public void NewPartitionUsesDatasetWriterOptionsBeforeAppendOptions(bool reopen)
+    {
+        var path = NewPath();
+        try
+        {
+            var pathBytes = Encoding.UTF8.GetBytes(path);
+            var sorting = new ParquetSortingColumn(0);
+            var options = new DatasetWriterOptions
+            {
+                WriterOptions = new ParquetWriterOptions
+                {
+                    CreatedBy = "dataset-created",
+                    KeyValueMetadata = [new("created", "true")],
+                    SortingColumns = [sorting]
+                },
+                AppendOptions = new ParquetAppendOptions
+                {
+                    WriterOptions = new ParquetWriterOptions
+                    {
+                        CreatedBy = "dataset-appended",
+                        KeyValueMetadata = [new("appended", "true")],
+                        SortingColumns = [sorting]
+                    }
+                }
+            };
+            WritePartitionRow(1);
+            if (reopen)
+                WritePartitionRow(2);
+
+            using var stream = File.OpenRead(path);
+            using var reader = new ParquetFileReader();
+            reader.Reset(stream);
+            var metadata = reader.Metadata;
+            if (!metadata.CreatedByUtf8.SequenceEqual(reopen ? "dataset-appended"u8 : "dataset-created"u8))
+                throw new InvalidOperationException("The dataset used the wrong CreatedBy for create or append.");
+            if (metadata.KeyValueMetadataCount != (reopen ? 2 : 1) ||
+                !metadata.KeyValueMetadataKeyUtf8(0).SequenceEqual("created"u8) ||
+                !metadata.KeyValueMetadataValueUtf8(0).SequenceEqual("true"u8))
+                throw new InvalidOperationException("A partition lost the key/value entry configured for creation.");
+            if (reopen && !metadata.KeyValueMetadataKeyUtf8(1).SequenceEqual("appended"u8))
+                throw new InvalidOperationException("A reopened partition did not add the append metadata.");
+            if (!metadata.RowGroupSortingColumns(0).SequenceEqual([sorting]))
+                throw new InvalidOperationException("A partition lost its declared creation sort order.");
+
+            void WritePartitionRow(int value)
+            {
+                using var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, CreateFiles(1), options);
+                writer.Queue(new DatasetRowSchema { Value = value, Path = pathBytes });
+            }
+        }
+        finally
+        {
+            DeleteIfPresent(path);
+        }
+    }
+
     [Test]
     public async Task GeneratedDatasetWriterDoesNotExposeBufferSlot()
     {
