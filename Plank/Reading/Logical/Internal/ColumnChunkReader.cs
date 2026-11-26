@@ -1328,10 +1328,10 @@ static partial class ColumnChunkReader
         ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool, out ColumnBuffer<T> buffer)
     {
         buffer = default;
+        // Flat binary pages are handled by TryStartEncodedPageBatches before this fallback.
         if (typeof(T) == typeof(BinaryValueDescriptor) &&
             column.Options.Repetition == ParquetRepetition.Optional)
-            return TryDecodeBinaryDataPage(header, payload, borrowedPayload, column, rowCount,
-                ref state, bufferPool, optional: true, out buffer);
+            return false;
 
         var physicalType = GetPhysicalDecodeType<T>(column);
         var converter = column.Converter;
@@ -1707,10 +1707,10 @@ static partial class ColumnChunkReader
         ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool, out ColumnBuffer<T> buffer)
     {
         buffer = default;
+        // Flat binary pages are handled by TryStartEncodedPageBatches before this fallback.
         if (typeof(T) == typeof(BinaryValueDescriptor) &&
             column.Options.Repetition == ParquetRepetition.Required)
-            return TryDecodeBinaryDataPage(header, payload, borrowedPayload, column, rowCount,
-                ref state, bufferPool, optional: false, out buffer);
+            return false;
 
         var converter = column.Converter;
         if (header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2) ||
@@ -1945,93 +1945,6 @@ static partial class ColumnChunkReader
             out var destinationPayload);
         FillPlainBinaryValues(payload, column, valueCount, lengths, [], destination,
             destinationPayload);
-        return true;
-    }
-
-    static bool TryDecodeBinaryDataPage<T>(PageHeader header, ReadOnlySpan<byte> payload,
-        ReadOnlyMemory<byte> borrowedPayload, Column column, ulong rowCount,
-        ref ColumnReadBuffers<T> state, IParquetBufferPool bufferPool, bool optional,
-        out ColumnBuffer<T> buffer)
-    {
-        buffer = default;
-        if (header.Type is not (PageHeaderType.DataPage or PageHeaderType.DataPageV2) ||
-            !IsBinaryPhysicalType(column.PhysicalType) ||
-            column.Options.Repetition == ParquetRepetition.Repeated)
-            return false;
-        if (header.ValueCount > rowCount)
-            throw new CorruptParquetException(
-                $"Page value count ({header.ValueCount}) exceeds row group row count ({rowCount}).");
-
-        ReadOnlySpan<byte> definitionPayload;
-        ReadOnlySpan<byte> dataPayload;
-        var dataOffset = 0;
-        var expectedPhysicalCount = header.ValueCount;
-        if (header.Type == PageHeaderType.DataPageV2)
-        {
-            if (header.NullCount > header.ValueCount)
-                throw new CorruptParquetException(
-                    $"Page null count ({header.NullCount}) exceeds value count ({header.ValueCount}).");
-            if (!optional && header.NullCount != 0)
-                return false;
-            var levelBytes = checked((int)(header.RepetitionLevelsByteLength +
-                header.DefinitionLevelsByteLength));
-            if ((uint)levelBytes > (uint)payload.Length)
-                throw new CorruptParquetException(
-                    $"Level bytes ({levelBytes}) exceed page payload size ({payload.Length}).");
-            definitionPayload = optional && header.DefinitionLevelsByteLength != 0
-                ? payload.Slice(checked((int)header.RepetitionLevelsByteLength),
-                    checked((int)header.DefinitionLevelsByteLength))
-                : [];
-            dataPayload = payload[levelBytes..];
-            dataOffset = levelBytes;
-            expectedPhysicalCount -= header.NullCount;
-        }
-        else if (optional)
-        {
-            var definitionLength = GetDataPageV1LevelPayloadLength(payload, header.ValueCount,
-                header.DefinitionLevelEncoding, bitWidth: 1, "definition", out var definitionOffset);
-            definitionPayload = payload.Slice(definitionOffset, definitionLength);
-            dataPayload = payload[(definitionOffset + definitionLength)..];
-            dataOffset = definitionOffset + definitionLength;
-        }
-        else
-        {
-            definitionPayload = [];
-            dataPayload = payload;
-        }
-
-        var valueCount = PageValueCount(header, "values");
-        var scratch = MemoryMarshal.Cast<byte, int>(
-            state.GetScratch(checked(valueCount * 3 * sizeof(int)), bufferPool));
-        var definitions = scratch[..valueCount];
-        var physicalCount = valueCount;
-        if (optional && !definitionPayload.IsEmpty)
-        {
-            DecodeDefinitionLevels(definitionPayload, valueCount, header.DefinitionLevelEncoding,
-                definitions, out physicalCount);
-            if (header.Type == PageHeaderType.DataPageV2 && physicalCount != expectedPhysicalCount)
-                throw new CorruptParquetException(
-                    $"Definition levels contain {physicalCount} values, expected {expectedPhysicalCount}.");
-        }
-        else
-        {
-            definitions.Fill(1);
-            if (optional && expectedPhysicalCount != header.ValueCount)
-                throw new CorruptParquetException(
-                    $"Page declares {header.NullCount} null values but has no definition levels.");
-        }
-
-        var borrowedDataPayload = borrowedPayload.IsEmpty
-            ? default
-            : borrowedPayload[dataOffset..];
-        if (!TryDecodeBinaryValues(dataPayload, borrowedDataPayload, definitions, valueCount,
-                physicalCount, column, header.Encoding, scratch[valueCount..], ref state,
-                bufferPool, out var borrowedValuePayload))
-            return false;
-
-        buffer = borrowedValuePayload.IsEmpty
-            ? state.CreateNativeBuffer(valueCount)
-            : state.CreateBorrowedBinaryBuffer(valueCount, borrowedValuePayload);
         return true;
     }
 
@@ -3704,10 +3617,6 @@ static partial class ColumnChunkReader
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static Vector128<byte> LoadLowerUInt64(ref byte source, nuint offset)
         => Vector128.CreateScalarUnsafe(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, offset))).AsByte();
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static Vector128<byte> LoadLowerUInt32(ref byte source, nuint offset)
-        => Vector128.CreateScalarUnsafe(Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref source, offset))).AsByte();
 
     static void DecodeByteStreamSplitFloat(ReadOnlySpan<byte> payload, Span<float> destination)
     {
