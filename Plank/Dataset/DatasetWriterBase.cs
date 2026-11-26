@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using Plank.Reading;
 using Plank.RowApi;
@@ -8,7 +10,9 @@ namespace Plank.Dataset;
 
 /// <summary>Provides the bounded partition state used by generated dataset writers.</summary>
 /// <typeparam name="TRow">The generated schema row type.</typeparam>
-/// <remarks>This unstable API supports Plank-generated code and is not intended for direct use.</remarks>
+/// <remarks>This unstable API supports Plank-generated code and is not intended for direct use.
+/// After any exception, dispose the writer and treat the entire dataset as invalid. Some files may still
+/// look valid, including parts finalized before the error; the caller must discard the output.</remarks>
 public abstract class DatasetWriterBase<TRow>
 {
     readonly ParquetSchema _schema;
@@ -37,6 +41,8 @@ public abstract class DatasetWriterBase<TRow>
     ulong _nextFileIndex;
     bool _initialized;
     bool _disposed;
+    bool _ready;
+    ExceptionDispatchInfo? _fault;
 
     /// <summary>Initializes the state used by a generated dataset writer.</summary>
     /// <param name="schema">The one schema shared by all files in the dataset.</param>
@@ -167,13 +173,30 @@ public abstract class DatasetWriterBase<TRow>
 
         _parkedRows = new DatasetBufferSlot(_columns, _pendingRowCapacity, _bufferPool);
         _initialized = true;
+        _ready = true;
     }
 
     /// <summary>Routes and queues one row.</summary>
     /// <param name="row">The row to queue.</param>
     protected void QueueRow(TRow row)
     {
-        ThrowIfUnavailable();
+        if (!_ready)
+            ThrowUnavailable();
+        try
+        {
+            QueueRowCore(row);
+        }
+        catch (Exception exception)
+        {
+            _ready = false;
+            _fault = ExceptionDispatchInfo.Capture(exception);
+            throw;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    void QueueRowCore(TRow row)
+    {
         if (row is null)
             throw new ArgumentNullException(nameof(row));
 
@@ -218,19 +241,9 @@ public abstract class DatasetWriterBase<TRow>
                 pendingKeyIndex = FindPendingKey(path);
             }
 
-            var addedPendingKey = pendingKeyIndex < 0;
-            if (addedPendingKey)
+            if (pendingKeyIndex < 0)
                 pendingKeyIndex = AddPendingKey(path, ref selectedPathAllocation);
-            try
-            {
-                ParkRow(row, pendingKeyIndex);
-            }
-            catch
-            {
-                if (addedPendingKey)
-                    ReleaseEmptyPendingKey(pendingKeyIndex);
-                throw;
-            }
+            ParkRow(row, pendingKeyIndex);
 
             if (_parkedRowCount == _pendingRowCapacity)
                 PromotePendingPartition(pendingKeyIndex);
@@ -248,42 +261,43 @@ public abstract class DatasetWriterBase<TRow>
         if (_disposed)
             throw new InvalidOperationException("The dataset writer is already disposed.");
         _disposed = true;
+        _ready = false;
 
+        var hadFault = _fault is not null;
         ExceptionDispatchInfo? failure = null;
+        if (!hadFault)
+        {
+            try
+            {
+                for (var i = 0; i < _states.Length; i++)
+                    if (_states[i].Active)
+                        CloseAndRelease(_states[i]);
+
+                while (_parkedRowCount > 0)
+                {
+                    var state = PromotePendingPartition(_parkedRowKeys[_parkedRowTail]);
+                    CloseAndRelease(state);
+                }
+            }
+            catch (Exception exception)
+            {
+                failure = _fault = ExceptionDispatchInfo.Capture(exception);
+            }
+        }
+
         for (var i = 0; i < _states.Length; i++)
+            TryReleaseAfterFailure(_states[i], ref failure);
+        for (var i = 0; i < _pendingKeys.Length; i++)
         {
-            var state = _states[i];
-            if (!state.Active)
-                continue;
-
-            try
-            {
-                CloseAndRelease(state);
-            }
-            catch (Exception exception)
-            {
-                failure ??= ExceptionDispatchInfo.Capture(exception);
-                TryReleaseAfterFailure(state, ref failure);
-            }
+            try { _pendingKeys[i].Path.Dispose(); }
+            catch (Exception exception) { failure ??= ExceptionDispatchInfo.Capture(exception); }
+            _pendingKeys[i] = default;
         }
-
-        while (_parkedRowCount > 0)
-        {
-            var keyIndex = _parkedRowKeys[_parkedRowTail];
-            try
-            {
-                var state = PromotePendingPartition(keyIndex);
-                CloseAndRelease(state);
-            }
-            catch (Exception exception)
-            {
-                failure ??= ExceptionDispatchInfo.Capture(exception);
-                DiscardPendingPartition(keyIndex, ref failure);
-            }
-        }
-
-        _parkedRows.ResetForReuseAndSize();
-        failure?.Throw();
+        try { _parkedRows.ResetForReuseAndSize(); }
+        catch (Exception exception) { failure ??= ExceptionDispatchInfo.Capture(exception); }
+        // A previous Queue failure is already known to the caller; cleanup must not mask it.
+        if (!hadFault)
+            failure?.Throw();
     }
 
     void QueueActiveRow(TRow row, PartitionState state)
@@ -377,15 +391,6 @@ public abstract class DatasetWriterBase<TRow>
         _pendingKeys[keyIndex].RowCount++;
     }
 
-    void ReleaseEmptyPendingKey(int keyIndex)
-    {
-        ref var key = ref _pendingKeys[keyIndex];
-        if (!key.Used || key.RowCount != 0)
-            return;
-        key.Path.Dispose();
-        key = default;
-    }
-
     void PromoteLatestParkedPartition()
     {
         if (_parkedRowTail < 0)
@@ -401,27 +406,9 @@ public abstract class DatasetWriterBase<TRow>
 
         var state = ActivatePathBuffer(key.Path, key.PathLength);
         key.Path = default;
-        try
-        {
-            DrainPendingRows(keyIndex, state);
-            key = default;
-            return state;
-        }
-        catch (Exception exception)
-        {
-            var failure = ExceptionDispatchInfo.Capture(exception);
-            try
-            {
-                ReleaseAfterFailure(state);
-            }
-            catch
-            {
-            }
-            ExceptionDispatchInfo? cleanupFailure = null;
-            DiscardPendingPartition(keyIndex, ref cleanupFailure);
-            failure.Throw();
-            throw;
-        }
+        DrainPendingRows(keyIndex, state);
+        key = default;
+        return state;
     }
 
     void DrainPendingRows(int keyIndex, PartitionState state)
@@ -499,26 +486,34 @@ public abstract class DatasetWriterBase<TRow>
         ParquetBuffer? filePathAllocation = null;
         try
         {
-            if (_createFileParts)
+            try
             {
-                var filePath = GetFilePath(pathBuffer.Span[..pathLength], _nextFileIndex, out filePathAllocation);
-                if (filePath.IsEmpty)
-                    throw new InvalidOperationException("The dataset file path selector returned an empty path.");
-                file.Destination.Open(filePath, FileMode.CreateNew);
-                writer = _schema.CreateWriter(file.Destination, _newFileOptions);
+                if (_createFileParts)
+                {
+                    var filePath = GetFilePath(pathBuffer.Span[..pathLength], _nextFileIndex, out filePathAllocation);
+                    if (filePath.IsEmpty)
+                        throw new InvalidOperationException("The dataset file path selector returned an empty path.");
+                    file.Destination.Open(filePath, FileMode.CreateNew);
+                    writer = _schema.CreateWriter(file.Destination, _newFileOptions);
+                }
+                else
+                {
+                    var source = file.Source ?? throw new InvalidOperationException(
+                        "The dataset file does not support reads required for append.");
+                    file.Destination.Open(pathBuffer.Span[..pathLength], FileMode.OpenOrCreate);
+                    writer = source.Length == 0
+                        ? _schema.CreateWriter(file.Destination, _newFileOptions)
+                        : _schema.CreateAppender(source, file.Destination, _options.AppendOptions);
+                }
+                state.Slot.Bind(writer);
+                if (_createFileParts)
+                    _nextFileIndex = checked(_nextFileIndex + 1);
             }
-            else
+            finally
             {
-                var source = file.Source ?? throw new InvalidOperationException(
-                    "The dataset file does not support reads required for append.");
-                file.Destination.Open(pathBuffer.Span[..pathLength], FileMode.OpenOrCreate);
-                writer = source.Length == 0
-                    ? _schema.CreateWriter(file.Destination, _newFileOptions)
-                    : _schema.CreateAppender(source, file.Destination, _options.AppendOptions);
+                if (filePathAllocation is { } allocation)
+                    allocation.Dispose();
             }
-            state.Slot.Bind(writer);
-            if (_createFileParts)
-                _nextFileIndex = checked(_nextFileIndex + 1);
         }
         catch
         {
@@ -526,11 +521,6 @@ public abstract class DatasetWriterBase<TRow>
             CloseFailedOpen(file, writer);
             ReturnFile(file);
             throw;
-        }
-        finally
-        {
-            if (filePathAllocation is { } allocation)
-                allocation.Dispose();
         }
 
         state.Path = pathBuffer;
@@ -713,34 +703,6 @@ public abstract class DatasetWriterBase<TRow>
         }
     }
 
-    void DiscardPendingPartition(int keyIndex, ref ExceptionDispatchInfo? failure)
-    {
-        ref var key = ref _pendingKeys[keyIndex];
-        try
-        {
-            var previous = -1;
-            var current = _parkedRowHead;
-            while (current >= 0)
-            {
-                var next = _parkedRowLinks[current];
-                if (_parkedRowKeys[current] == keyIndex)
-                    RemoveParkedRow(current, previous, next);
-                else
-                    previous = current;
-                current = next;
-            }
-        }
-        catch (Exception cleanupException)
-        {
-            failure ??= ExceptionDispatchInfo.Capture(cleanupException);
-        }
-        finally
-        {
-            key.Path.Dispose();
-            key = default;
-        }
-    }
-
     static void CloseFailedOpen(FileSources file, ParquetWriter? writer)
     {
         if (writer is null)
@@ -757,7 +719,7 @@ public abstract class DatasetWriterBase<TRow>
 
         try
         {
-            writer.CloseFile();
+            writer.Dispose();
         }
         catch
         {
@@ -807,12 +769,16 @@ public abstract class DatasetWriterBase<TRow>
             "Slot index is outside the dataset writer.");
     }
 
-    void ThrowIfUnavailable()
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    void ThrowUnavailable()
     {
+        _fault?.Throw();
         if (!_initialized)
             throw new InvalidOperationException("Dataset writer slots are not initialized.");
         if (_disposed)
             throw new ObjectDisposedException(GetType().Name);
+        throw new InvalidOperationException("The dataset writer is unavailable.");
     }
 
     sealed class PartitionState(DatasetBufferSlot slot, int slotIndex)

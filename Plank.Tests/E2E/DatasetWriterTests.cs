@@ -411,8 +411,12 @@ internal sealed class DatasetWriterTests
             var originalBytes = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
 
             using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, SelectPartPath, [file]))
+            {
                 await Assert.That(() => writer.Queue(new DatasetRowSchema { Value = 2, Path = "a"u8.ToArray() }))
                     .Throws<IOException>();
+                await Assert.That(() => writer.Queue(new DatasetRowSchema { Value = 3, Path = "b"u8.ToArray() }))
+                    .Throws<IOException>();
+            }
 
             var preservedBytes = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
             await Assert.That(preservedBytes.SequenceEqual(originalBytes)).IsTrue();
@@ -455,6 +459,8 @@ internal sealed class DatasetWriterTests
                 writer.Queue(new DatasetRowSchema { Value = 1, Path = "a"u8.ToArray() });
                 var nextPartition = rollover ? "a"u8.ToArray() : "b"u8.ToArray();
                 await Assert.That(() => writer.Queue(new DatasetRowSchema { Value = 2, Path = nextPartition }))
+                    .Throws<IOException>();
+                await Assert.That(() => writer.Queue(new DatasetRowSchema { Value = 3, Path = "c"u8.ToArray() }))
                     .Throws<IOException>();
             }
 
@@ -541,7 +547,7 @@ internal sealed class DatasetWriterTests
     [Test]
     [Arguments(false)]
     [Arguments(true)]
-    public async Task FailedQueueReleasesBinarySnapshotsAndReusesTheRow(bool parked)
+    public async Task FailedQueueReleasesBinarySnapshotsAndFaultsWriter(bool parked)
     {
         var activePath = NewPath();
         var failedPath = parked ? NewPath() : activePath;
@@ -561,19 +567,13 @@ internal sealed class DatasetWriterTests
                     ThrowOnTail = true
                 };
                 await Assert.That(() => writer.Queue(badRow)).Throws<InvalidOperationException>();
-                writer.Queue(new DatasetBinaryRowSchema { Path = badRow.Path, Id = 3 });
+                await Assert.That(() => writer.Queue(new DatasetBinaryRowSchema { Path = badRow.Path, Id = 3 }))
+                    .Throws<InvalidOperationException>();
             }
             await Assert.That(pool.Outstanding).IsEqualTo(0);
-            using var stream = File.OpenRead(failedPath);
-            using var reader = DatasetBinaryRowSchema.CreateRowReader(stream);
-            var ids = new List<int>();
-            while (reader.MoveNext())
-            {
-                ids.Add(reader.Current.Id);
-                if (!reader.Current.Payload.Value.IsEmpty || !reader.Current.Memory.Value.IsEmpty)
-                    throw new InvalidOperationException("A failed row left binary data in the reused slot.");
-            }
-            await Assert.That(ids).IsEquivalentTo(parked ? new List<int> { 3 } : [1, 3]);
+            await Assert.That(IsReadable(activePath)).IsFalse();
+            if (parked)
+                await Assert.That(File.Exists(failedPath)).IsFalse();
         }
         finally
         {
@@ -609,6 +609,142 @@ internal sealed class DatasetWriterTests
             DeleteIfPresent(activePath);
             DeleteIfPresent(parkedPath);
         }
+    }
+
+    [Test]
+    public async Task DisposeFailureAbortsOtherOpenPartsAndDoesNotDrainParkedRows()
+    {
+        using var paths = new DatasetPartPaths();
+        var files = CreateFiles(2);
+        var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, paths.SelectPath, files,
+            new DatasetWriterOptions { PendingRowCapacity = 3 });
+        writer.Queue(new DatasetRowSchema { Path = "a"u8.ToArray() });
+        writer.Queue(new DatasetRowSchema { Path = "b"u8.ToArray() });
+        writer.Queue(new DatasetRowSchema { Path = "parked"u8.ToArray() });
+        files[1].FailFlush = true;
+        await Assert.That(() => writer.Dispose()).Throws<IOException>();
+        await Assert.That(paths.Paths.Count).IsEqualTo(2);
+        // The first part may already have a footer when Flush throws. The other
+        // open part must be aborted without being finalized.
+        await Assert.That(File.Exists(paths.Paths[1])).IsTrue();
+        await Assert.That(IsReadable(paths.Paths[1])).IsFalse();
+        foreach (var file in files) file.Dispose();
+    }
+
+    [Test]
+    public async Task NullRowFaultsWriterAndAbortsOpenPart()
+    {
+        using var paths = new DatasetPartPaths();
+        using (var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, paths.SelectPath, CreateFiles(1)))
+        {
+            writer.Queue(new DatasetRowSchema { Path = "active"u8.ToArray() });
+            await Assert.That(() => writer.Queue(null!)).Throws<ArgumentNullException>();
+            await Assert.That(() => writer.Queue(new DatasetRowSchema { Path = "active"u8.ToArray() }))
+                .Throws<ArgumentNullException>();
+        }
+        await Assert.That(File.Exists(paths.Paths[0])).IsTrue();
+        await Assert.That(IsReadable(paths.Paths[0])).IsFalse();
+    }
+
+    [Test]
+    public async Task FailedRowCopyAbortsCreatePartsAndDoesNotPromoteParkedRows()
+    {
+        using var paths = new DatasetPartPaths();
+        var pool = new OwnershipTrackingPool();
+        using (var writer = DatasetBinaryRowSchema.CreateDatasetWriter(SelectBinaryPath, paths.SelectPath,
+                   CreateFiles(2), BinaryOptions(pool, 4)))
+        {
+            writer.Queue(new DatasetBinaryRowSchema { Path = "first"u8.ToArray(), Id = 1 });
+            writer.Queue(new DatasetBinaryRowSchema { Path = "second"u8.ToArray(), Id = 2 });
+            writer.Queue(new DatasetBinaryRowSchema { Path = "parked"u8.ToArray(), Id = 3, Payload = new byte[70000] });
+            var bad = new DatasetBinaryRowSchema { Path = "first"u8.ToArray(), ThrowOnTail = true,
+                Payload = new byte[70000] };
+            await Assert.That(() => writer.Queue(bad)).Throws<InvalidOperationException>();
+            await Assert.That(() => writer.Queue(new DatasetBinaryRowSchema { Path = "first"u8.ToArray() }))
+                .Throws<InvalidOperationException>();
+        }
+        await Assert.That(pool.Outstanding).IsEqualTo(0);
+        await Assert.That(paths.Paths.Count).IsEqualTo(2);
+        foreach (var path in paths.Paths)
+        {
+            await Assert.That(File.Exists(path)).IsTrue();
+            await Assert.That(IsReadable(path)).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task FaultedUntouchedAppendCanRetainOriginalFooter()
+    {
+        var path = NewPath();
+        var bytes = Encoding.UTF8.GetBytes(path);
+        try
+        {
+            using (var writer = DatasetBinaryRowSchema.CreateDatasetWriter(SelectBinaryPath, CreateFiles(1)))
+                writer.Queue(new DatasetBinaryRowSchema { Path = bytes, Id = 1 });
+            using (var writer = DatasetBinaryRowSchema.CreateDatasetWriter(SelectBinaryPath, CreateFiles(1)))
+            {
+                writer.Queue(new DatasetBinaryRowSchema { Path = bytes, Id = 2 });
+                await Assert.That(() => writer.Queue(new DatasetBinaryRowSchema { Path = bytes, ThrowOnTail = true }))
+                    .Throws<InvalidOperationException>();
+            }
+            using var stream = File.OpenRead(path);
+            using var reader = DatasetBinaryRowSchema.CreateRowReader(stream);
+            await Assert.That(reader.MoveNext()).IsTrue();
+            await Assert.That(reader.Current.Id).IsEqualTo(1);
+            await Assert.That(reader.MoveNext()).IsFalse();
+        }
+        finally { DeleteIfPresent(path); }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task FailedPartOpenOrSelectorFaultsWriterAndAbortsOpenParts(bool failSelector)
+    {
+        using var paths = new DatasetPartPaths();
+        var files = CreateFiles(2);
+        var writer = DatasetRowSchema.CreateDatasetWriter(SelectPath, SelectPart, files,
+            new DatasetWriterOptions { PendingRowCapacity = 3 });
+        try
+        {
+            writer.Queue(new DatasetRowSchema { Path = "active"u8.ToArray(), Value = 1 });
+            writer.Queue(new DatasetRowSchema { Path = "other"u8.ToArray(), Value = 4 });
+            writer.Queue(new DatasetRowSchema { Path = "other"u8.ToArray(), Value = 5 });
+            writer.Queue(new DatasetRowSchema { Path = "parked"u8.ToArray(), Value = 2 });
+            if (!failSelector)
+                foreach (var file in files) file.FailOpen = true;
+            var bad = new DatasetRowSchema { Path = "bad"u8.ToArray(), Value = 3 };
+            // Fill the parked pool, forcing promotion and a new part selection/open.
+            writer.Queue(bad);
+            await Assert.That(() => writer.Queue(bad)).Throws<IOException>();
+            await Assert.That(() => writer.Queue(bad)).Throws<IOException>();
+            writer.Dispose();
+            // The first part was finalized by eviction before the failed promotion.
+            await Assert.That(paths.Paths.Count).IsEqualTo(failSelector ? 2 : 3);
+            await Assert.That(ReadValues(paths.Paths[0])).IsEquivalentTo([1]);
+            await Assert.That(File.Exists(paths.Paths[1])).IsTrue();
+            await Assert.That(IsReadable(paths.Paths[1])).IsFalse();
+            if (!failSelector)
+                await Assert.That(File.Exists(paths.Paths[2])).IsFalse();
+        }
+        finally
+        {
+            foreach (var file in files) file.Dispose();
+        }
+
+        ReadOnlySpan<byte> SelectPart(ReadOnlySpan<byte> key, ulong index, IParquetBufferPool pool,
+            out ParquetBuffer? allocation)
+        {
+            if (index == 2 && failSelector)
+                throw new IOException("Test selector failure.");
+            return paths.SelectPath(key, index, pool, out allocation);
+        }
+    }
+
+    static bool IsReadable(string path)
+    {
+        try { _ = ReadValues(path); return true; }
+        catch { return false; }
     }
 
     static void AssertPayload(ReadOnlySpan<byte> actual, int id, int length)
