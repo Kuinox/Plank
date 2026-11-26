@@ -7,7 +7,7 @@ Plank is a high-performance, managed .NET implementation for reading and writing
   </picture>
 </p>
 
-[Documentation](https://kuinox.github.io/Plank/) · [Benchmarks](https://kuinox.github.io/Plank-Lab/) · [NuGet](https://www.nuget.org/packages/Plank) · [Samples](Samples/Plank.Sample)
+[Documentation](https://kuinox.github.io/Plank/) · [Benchmarks](https://kuinox.github.io/Plank-Lab/) · [NuGet](https://www.nuget.org/packages/Plank) · [Samples](Samples/Plank.Sample) · [Discord](https://discord.gg/S69nTGj8nj)
 
 ## Quick start
 
