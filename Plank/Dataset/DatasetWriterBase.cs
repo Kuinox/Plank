@@ -14,6 +14,7 @@ public abstract class DatasetWriterBase<TRow>
     readonly ParquetSchema _schema;
     readonly RowApiColumnDescriptor[] _columns;
     readonly DatasetWriterOptions _options;
+    readonly ParquetWriterOptions _newFileOptions;
     readonly IParquetBufferPool _bufferPool;
     readonly PartitionState[] _states;
     readonly FileSources[] _files;
@@ -81,12 +82,15 @@ public abstract class DatasetWriterBase<TRow>
         _columns = DatasetBufferSlot.CreateSnapshotColumns(columns);
         _options = options;
         var createFileParts = filePath is not null;
-        var writerOptions = createFileParts ? options.WriterOptions : options.AppendOptions.WriterOptions;
-        _bufferPool = writerOptions.BufferPool;
+        // Route-only callers historically supplied their sole writer configuration through AppendOptions.
+        _newFileOptions = !createFileParts && ReferenceEquals(options.WriterOptions, ParquetWriterOptions.Default)
+            ? options.AppendOptions.WriterOptions
+            : options.WriterOptions;
+        _bufferPool = _newFileOptions.BufferPool;
         _rowBufferCapacity = rowBufferCapacity;
         _pendingRowCapacity = checked((int)options.PendingRowCapacity);
-        _targetRowGroupSizeBytes = writerOptions.TargetRowGroupSizeBytes;
-        _targetFileSizeBytes = writerOptions.TargetFileSizeBytes;
+        _targetRowGroupSizeBytes = _newFileOptions.TargetRowGroupSizeBytes;
+        _targetFileSizeBytes = _newFileOptions.TargetFileSizeBytes;
         _filePath = filePath;
         _createFileParts = createFileParts;
         _states = new PartitionState[files.Length];
@@ -501,7 +505,7 @@ public abstract class DatasetWriterBase<TRow>
                 if (filePath.IsEmpty)
                     throw new InvalidOperationException("The dataset file path selector returned an empty path.");
                 file.Destination.Open(filePath, FileMode.CreateNew);
-                writer = _schema.CreateWriter(file.Destination, _options.WriterOptions);
+                writer = _schema.CreateWriter(file.Destination, _newFileOptions);
             }
             else
             {
@@ -509,7 +513,7 @@ public abstract class DatasetWriterBase<TRow>
                     "The dataset file does not support reads required for append.");
                 file.Destination.Open(pathBuffer.Span[..pathLength], FileMode.OpenOrCreate);
                 writer = source.Length == 0
-                    ? _schema.CreateWriter(file.Destination, _options.AppendOptions.WriterOptions)
+                    ? _schema.CreateWriter(file.Destination, _newFileOptions)
                     : _schema.CreateAppender(source, file.Destination, _options.AppendOptions);
             }
             state.Slot.Bind(writer);
