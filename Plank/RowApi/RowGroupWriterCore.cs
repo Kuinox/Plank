@@ -35,6 +35,9 @@ public sealed class RowGroupWriterCore<TSlot>
             _slot.Next();
         else
             _rowPending = true;
+        // The returned index must be writable: generated setters store without bounds checks.
+        if (_slot.IsFull && !_slot.Grow())
+            throw new InvalidOperationException("No more row slots are available.");
         return _slot;
     }
 
