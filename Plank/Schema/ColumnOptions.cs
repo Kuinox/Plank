@@ -33,6 +33,10 @@ public sealed record ColumnOptions
     /// <summary>Gets the split-block Bloom-filter configuration for this leaf, if enabled.</summary>
     public ParquetBloomFilterOptions? BloomFilter { get; }
 
+    internal ColumnOptions WithRepetition(ParquetRepetition repetition)
+        => Repetition == repetition ? this
+            : new ColumnOptions(repetition, Encodings, TypeLength, Compression, CompressionLevel, BloomFilter);
+
     public bool Equals(ColumnOptions? other)
     {
         if (ReferenceEquals(this, other))

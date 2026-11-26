@@ -41,19 +41,16 @@ static class PhysicalSchemaBinder
     {
         var requestedColumns = requestedSchema.Columns;
         ParquetBuffer rentedOrdinals = default;
-        Span<int> projectedOrdinals = requestedColumns.Length <= 256
-            ? stackalloc int[requestedColumns.Length]
+        var projectionCount = strict ? requestedColumns.Length : 0;
+        Span<int> projectedOrdinals = projectionCount <= 256
+            ? stackalloc int[projectionCount]
             : ParquetBuffer.AsSpan<int>(
-                rentedOrdinals = bufferPool.Rent(checked((uint)(requestedColumns.Length * sizeof(int)))),
-                requestedColumns.Length);
+                rentedOrdinals = bufferPool.Rent(checked((uint)(projectionCount * sizeof(int)))), projectionCount);
         try
         {
             var metadata = physicalReader.Metadata;
             if (strict)
                 BuildStrictProjection(metadata, fileSchema, requestedSchema, projectedOrdinals, bufferPool);
-            else
-                for (var i = 0; i < projectedOrdinals.Length; i++)
-                    projectedOrdinals[i] = i < metadata.ColumnCount ? i : -1;
 
             var rowGroupCount = metadata.RowGroupCount;
             var rowGroups = previous.RowGroups.Length == rowGroupCount
@@ -78,11 +75,8 @@ static class PhysicalSchemaBinder
                             $"Row group {rowGroupOrdinal} contains {physicalRowGroup.ColumnCount} columns, but file schema column {fileOrdinal} was requested.");
 
                     var physicalChunk = metadata.ColumnChunk(rowGroupOrdinal, fileOrdinal);
-                    var path = strict && columnOrdinal < requestedColumns.Length
-                        ? requestedColumns[columnOrdinal].Name
-                        : BuildColumnPath(metadata, metadata.ColumnSchema(fileOrdinal));
                     var encodings = ReuseEncodings(columns[columnOrdinal].Encodings, physicalChunk);
-                    columns[columnOrdinal] = new InternalColumnChunkMetadata(physicalChunk, encodings, path);
+                    columns[columnOrdinal] = new InternalColumnChunkMetadata(physicalChunk, encodings);
                 }
 
                 rowGroups[rowGroupOrdinal] = new InternalRowGroupMetadata(rowGroupOrdinal, physicalRowGroup.MetadataOffset,
@@ -304,22 +298,6 @@ static class PhysicalSchemaBinder
                     $"Requested schema column '{requested.Name}' has physical type {requested.PhysicalType}, but file schema has {physicalType}.");
             projectedOrdinals[requestedOrdinal] = match;
         }
-    }
-
-    static string BuildColumnPath(PhysicalFileMetadata metadata, ParquetColumnSchemaInfo column)
-    {
-        if (column.PathSegmentCount == 0)
-            return string.Empty;
-
-        var builder = new StringBuilder();
-        for (var segmentOrdinal = 0; segmentOrdinal < column.PathSegmentCount; segmentOrdinal++)
-        {
-            if (segmentOrdinal > 0)
-                builder.Append('.');
-            builder.Append(Encoding.UTF8.GetString(metadata.ColumnPathSegmentUtf8(column.Ordinal, segmentOrdinal)));
-        }
-
-        return builder.ToString();
     }
 
     internal static LogicalType? ConvertLogicalType(PhysicalFileMetadata metadata, ParquetSchemaNodeInfo node)
