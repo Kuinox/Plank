@@ -65,6 +65,25 @@ sealed class LatestRowGroupValues
         if (source is T[] || RetainRawNanoseconds<T>(column))
             return source;
 
+        if (source is byte[][] binary)
+        {
+            if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+            {
+                var memories = new ReadOnlyMemory<byte>[binary.Length];
+                for (var i = 0; i < memories.Length; i++)
+                    memories[i] = binary[i];
+                return (T[])(object)memories;
+            }
+            if (typeof(T) == typeof(ReadOnlyMemory<byte>?))
+            {
+                var memories = new ReadOnlyMemory<byte>?[binary.Length];
+                for (var i = 0; i < memories.Length; i++)
+                    if (binary[i] is { } payload)
+                        memories[i] = new ReadOnlyMemory<byte>(payload);
+                return (T[])(object)memories;
+            }
+        }
+
         var result = new T[source.Length];
         for (var i = 0; i < result.Length; i++)
             result[i] = ConvertValue<T>(source.GetValue(i), column);
@@ -176,8 +195,6 @@ sealed class LatestRowGroupValues
         var target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
         if (target == typeof(decimal))
             return ParquetDecimalConverter.ReadBigEndian(value, column);
-        if (target == typeof(ReadOnlyMemory<byte>))
-            return new ReadOnlyMemory<byte>(value);
         if (target == typeof(string))
             return TextEncoding.UTF8.GetString(value);
         if (target == typeof(Guid))
