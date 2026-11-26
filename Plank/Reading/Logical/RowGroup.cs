@@ -35,6 +35,9 @@ public readonly struct RowGroup
     internal InternalColumnChunkMetadata[] PreviousColumns
         => Metadata.Columns ?? [];
 
+    /// <summary>Selects a flat leaf as a typed value stream.</summary>
+    /// <remarks>Unannotated INT96 timestamps carry no time zone and are read as UTC. Dates written
+    /// before 1582 using a hybrid Julian calendar are not rebased.</remarks>
     public RowGroupColumn<T> Column<T>(LeafColumn column)
     {
         ArgumentNullException.ThrowIfNull(column);
@@ -59,6 +62,9 @@ public readonly struct RowGroup
         return new NestedRowGroupColumn<T>(this, column, columnOrdinal);
     }
 
+    /// <summary>Selects a flat leaf by ordinal as a typed value stream.</summary>
+    /// <remarks>Unannotated INT96 timestamps carry no time zone and are read as UTC. Dates written
+    /// before 1582 using a hybrid Julian calendar are not rebased.</remarks>
     public RowGroupColumn<T> Column<T>(int columnOrdinal)
     {
         var reader = GetReader();
@@ -224,6 +230,10 @@ public readonly struct RowGroup
             typeof(T) == typeof(DateTime) || typeof(T) == typeof(DateTime?) ||
             typeof(T) == typeof(DateTimeOffset) || typeof(T) == typeof(DateTimeOffset?))
             ValidateTemporalLogicalType(column, typeof(T));
+        if (column.PhysicalType == ParquetPhysicalType.Int96 && column.LogicalType is null &&
+            (typeof(T) == typeof(DateTime) || typeof(T) == typeof(DateTime?) ||
+             typeof(T) == typeof(DateTimeOffset) || typeof(T) == typeof(DateTimeOffset?)))
+            return;
         if ((typeof(T) == typeof(TimeOnly) || typeof(T) == typeof(TimeOnly?)) &&
             column.PhysicalType == ParquetPhysicalType.Int32 &&
             column.LogicalType is LogicalType.Time { Unit: TimeUnit.Millis })

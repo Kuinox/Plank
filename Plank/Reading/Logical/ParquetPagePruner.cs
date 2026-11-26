@@ -4,6 +4,7 @@ namespace Plank.Reading.Logical;
 /// <remarks>
 /// The callback runs before page payload I/O. Return <see langword="true"/> to read the page or
 /// <see langword="false"/> to skip it. Dictionary and index pages are not passed to the callback.
-/// Cache a static delegate to keep warmed scans allocation-free.
+/// Cache a static delegate to keep warmed scans allocation-free. INT96 bounds must not be used
+/// for timestamp pruning unless their ordering is known; legacy INT96 sort order is undefined.
 /// </remarks>
 public delegate bool ParquetPagePruner(in ParquetDataPageMetadata page);

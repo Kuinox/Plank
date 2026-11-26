@@ -26,6 +26,8 @@ abstract class RowApiColumnReadState : IDisposable
 
     internal readonly LeafColumn Definition;
 
+    internal LeafColumn? ReadDefinition;
+
     internal readonly Column Column;
 
     internal int Ordinal;

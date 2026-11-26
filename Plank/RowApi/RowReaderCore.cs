@@ -483,6 +483,7 @@ public sealed class RowReaderCore : IDisposable
         for (var i = 0; i < _states.Length; i++)
         {
             var state = _states[i];
+            state.ReadDefinition = null;
             var ordinal = ResolveColumnOrdinal(fileSchema, state.Column, i, _schema.LeafPaths[i], state.Column.Name,
                 state.PropertyName, state.Projected);
             if (ordinal < 0)
@@ -498,6 +499,8 @@ public sealed class RowReaderCore : IDisposable
             }
 
             state.Ordinal = ordinal;
+            if (IsInt96TimestampConversion(fileSchema.Columns[ordinal], state.Column))
+                state.ReadDefinition = fileSchema.LeafColumns[ordinal];
             state.Materialized = false;
         }
 
@@ -599,6 +602,8 @@ public sealed class RowReaderCore : IDisposable
             if (!fileSchema.LeafPaths[i].AsSpan().SequenceEqual(expectedPath.AsSpan()))
                 continue;
 
+            if (_schema.LeafPaths[expectedOrdinal].Length > 1 && IsInt96TimestampConversion(actual, expected))
+                throw new NotSupportedException($"Nested INT96 timestamp column '{columnName}' is not supported.");
             ValidatePhysicalType(actual, expected, columnName);
             ValidateLogicalType(actual, expected, columnName);
             ValidateRepetition(actual, expected, columnName);
@@ -613,8 +618,16 @@ public sealed class RowReaderCore : IDisposable
         throw new InvalidOperationException($"Column '{columnName}' was not found in the file schema.");
     }
 
+    bool IsInt96TimestampConversion(Column actual, Column expected)
+        => _schemaEvolution?.PhysicalTypes == SchemaTypeEvolutionBehavior.AllowCompatible &&
+           actual.PhysicalType == ParquetPhysicalType.Int96 && actual.LogicalType is null &&
+           expected.Converter is null && expected.PhysicalType == ParquetPhysicalType.Int64 &&
+           expected.LogicalType is LogicalType.Timestamp;
+
     void ValidatePhysicalType(Column actual, Column expected, string columnName)
     {
+        if (IsInt96TimestampConversion(actual, expected))
+            return;
         if (actual.PhysicalType == expected.PhysicalType)
             return;
 
@@ -627,6 +640,8 @@ public sealed class RowReaderCore : IDisposable
 
     void ValidateLogicalType(Column actual, Column expected, string columnName)
     {
+        if (IsInt96TimestampConversion(actual, expected))
+            return;
         if (EqualityComparer<LogicalType?>.Default.Equals(actual.LogicalType, expected.LogicalType))
             return;
         if (_schemaEvolution?.LogicalTypes == SchemaTypeEvolutionBehavior.AllowCompatible && expected.LogicalType is null &&
@@ -665,6 +680,8 @@ public sealed class RowReaderCore : IDisposable
 
     void ValidateMaterializedType(Column actual, Column expected, string columnName, string propertyName)
     {
+        if (IsInt96TimestampConversion(actual, expected))
+            return;
         if (actual.PhysicalType == expected.PhysicalType)
             return;
         if (_schemaEvolution?.MaterializedTypes == SchemaTypeEvolutionBehavior.AllowCompatible)

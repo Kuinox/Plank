@@ -59,9 +59,10 @@ sealed class RowApiColumnReadState<T> : RowApiColumnReadState
     internal override void Open(RowGroup rowGroup)
     {
         DisposeBuffers();
-        RowGroup.ValidatePhysicalType<T>(Column);
+        var definition = ReadDefinition ?? Definition;
+        RowGroup.ValidatePhysicalType<T>(definition.Column);
         _buffers = new RowGroupColumn<T>.Enumerator(
-            rowGroup.EnumerateBuffers<T>(Definition, Ordinal).GetEnumerator(), rowGroup);
+            rowGroup.EnumerateBuffers<T>(definition, Ordinal).GetEnumerator(), rowGroup);
         _buffersOpen = true;
         _buffer = default;
         _usingMissing = false;
