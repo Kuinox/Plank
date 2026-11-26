@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -49,6 +50,22 @@ static partial class ColumnChunkReader
             // truncation toward zero, including negative sub-tick timestamps.
             => raw / 100 + DateTime.UnixEpoch.Ticks;
     }
+
+    static long DecodeInt96Ticks(ReadOnlySpan<byte> bytes)
+    {
+        var nanos = BinaryPrimitives.ReadInt64LittleEndian(bytes);
+        var julianDay = BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]);
+        var ticks = ((Int128)julianDay - 2_440_588) * TimeSpan.TicksPerDay +
+            nanos / 100 + DateTime.UnixEpoch.Ticks;
+        if (ticks < DateTime.MinValue.Ticks || ticks > DateTime.MaxValue.Ticks)
+            ThrowInt96TimestampOutOfRange(julianDay, nanos);
+        return (long)ticks;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void ThrowInt96TimestampOutOfRange(int julianDay, long nanos)
+        => throw new CorruptParquetException(
+            $"INT96 timestamp (Julian day {julianDay}, nanoseconds {nanos}) is outside the range representable by a date and time.");
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     static void ThrowTimestampOutOfRange(long raw)

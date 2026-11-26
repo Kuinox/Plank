@@ -632,6 +632,8 @@ static partial class ColumnChunkReader
             ParquetPhysicalType.Int64 => physicalType == typeof(long) || physicalType == typeof(ulong) ||
                 physicalType == typeof(decimal) || physicalType == typeof(TimeOnly) ||
                 physicalType == typeof(DateTime) || physicalType == typeof(DateTimeOffset),
+            ParquetPhysicalType.Int96 => column.LogicalType is null &&
+                (physicalType == typeof(DateTime) || physicalType == typeof(DateTimeOffset)),
             ParquetPhysicalType.Float => physicalType == typeof(float),
             ParquetPhysicalType.Double => physicalType == typeof(double),
             ParquetPhysicalType.FixedLenByteArray => physicalType == typeof(Guid) || physicalType == typeof(decimal),
@@ -656,6 +658,7 @@ static partial class ColumnChunkReader
             ParquetPhysicalType.Boolean => 1,
             ParquetPhysicalType.Int32 or ParquetPhysicalType.Float => sizeof(int),
             ParquetPhysicalType.Int64 or ParquetPhysicalType.Double => sizeof(long),
+            ParquetPhysicalType.Int96 => 12,
             ParquetPhysicalType.FixedLenByteArray => GetFixedBinaryLength(column),
             _ => throw new InvalidOperationException(
                 $"Physical type '{column.PhysicalType}' is not fixed-width for batched decoding.")
@@ -2592,6 +2595,20 @@ static partial class ColumnChunkReader
             for (var i = 0; i < typed.Length; i++)
                 typed[i] = DecodeTime(BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8)),
                     column.LogicalType);
+            return true;
+        }
+        if (column.PhysicalType == ParquetPhysicalType.Int96 && column.LogicalType is null &&
+            (typeof(T) == typeof(DateTime) || typeof(T) == typeof(DateTimeOffset)))
+        {
+            ValidatePlainPayload(payload, valueCount, 12);
+            for (var i = 0; i < destination.Length; i++)
+            {
+                var ticks = DecodeInt96Ticks(payload.Slice(i * 12, 12));
+                if (typeof(T) == typeof(DateTime))
+                    Unsafe.As<T, DateTime>(ref destination[i]) = new DateTime(ticks, DateTimeKind.Utc);
+                else
+                    Unsafe.As<T, DateTimeOffset>(ref destination[i]) = new DateTimeOffset(ticks, TimeSpan.Zero);
+            }
             return true;
         }
         if (typeof(T) == typeof(DateTimeOffset) && column.PhysicalType == ParquetPhysicalType.Int64)

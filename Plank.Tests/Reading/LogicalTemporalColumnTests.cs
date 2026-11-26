@@ -42,7 +42,8 @@ internal sealed class LogicalTemporalColumnTests
             instant.Serialize([7L]);
             clock.Serialize([0L]);
             count.Serialize([9L]);
-            legacy.Serialize([new byte[12]]);
+            byte[] epoch = [0, 0, 0, 0, 0, 0, 0, 0, 0x8c, 0x3d, 0x25, 0];
+            legacy.Serialize([epoch]);
             group.Write(number);
             group.Write(instant);
             group.Write(clock);
@@ -61,7 +62,7 @@ internal sealed class LogicalTemporalColumnTests
             AssertRejected(() => _ = rowGroup.Column<DateTimeOffset?>(2), "logical type 'Timestamp'");
             AssertRejected(() => _ = rowGroup.Column<DateTime>(3), "logical type 'Timestamp'");
             AssertRejected(() => _ = rowGroup.Column<DateOnly>(3), "physical type Int64");
-            AssertRejected(() => _ = rowGroup.Column<DateTime>(4), "physical type Int96");
+            AssertSingle(rowGroup.Column<DateTime>(4), DateTime.UnixEpoch);
             AssertSingle(rowGroup.Column<int>(0), 42);
             AssertSingle(rowGroup.Column<long>(1), 7L);
             AssertSingle(rowGroup.Column<long>(3), 9L);

@@ -23,6 +23,9 @@ public sealed class ParquetSchemaEvolutionOptions
     /// <summary>
     /// Gets or initializes how physical Parquet type changes are handled.
     /// </summary>
+    /// <remarks>AllowCompatible permits flat, unannotated INT96 columns for timestamp properties.
+    /// INT96 has no time zone and is read as UTC; pre-1582 hybrid Julian calendar dates are not rebased.
+    /// This physical conversion does not require enabling logical or materialized type evolution.</remarks>
     public SchemaTypeEvolutionBehavior PhysicalTypes { get; init; } = SchemaTypeEvolutionBehavior.Reject;
 
     /// <summary>
